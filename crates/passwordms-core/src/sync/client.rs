@@ -1,0 +1,242 @@
+//! Joiner 侧会话（架构文档 §3.2、§6.④）。
+//!
+//! 流程：扫码解析 → 校验 exp → 连接 Host → HELLO → 收 ACCEPT（含 VK 信封）+ 收 CONFIRM
+//! → 双向密钥确认 → 解出 Host 的 VK（**不自动采用**，交由会话层按 U1/U2 裁定处理）
+//! → 发起一次双向同步交换。
+
+use std::net::TcpStream;
+use std::time::Duration;
+
+use zeroize::Zeroizing;
+
+use crate::constants::{SYNC_TIME_WINDOW_SECS};
+use crate::crypto::keys;
+use crate::error::{CoreError, CoreResult};
+use crate::model::now_ms;
+use crate::model::sync_state::{DeviceSyncState, PairedDevice};
+use crate::store::repository::Repository;
+use crate::sync::handshake::{self, EphemeralKeypair, SessionKeys};
+use crate::sync::merge;
+use crate::sync::protocol::{
+    open_envelope, seal_envelope, Confirm, HandshakeMessage, Hello, QRPayload, SyncEnvelope,
+    SyncKind, SyncPayload,
+};
+use crate::sync::replay::ReplayGuard;
+use crate::sync::server::{device_key_aad, to_arr32};
+use crate::sync::transport;
+
+/// 配对完成后的会话上下文。
+pub struct JoinerSession {
+    stream: TcpStream,
+    keys: SessionKeys,
+    session_id: Vec<u8>,
+    host_id: String,
+    host_name: String,
+    host_fingerprint: String,
+    /// Host 的局域网地址与其持久重同步端口（供 `sync_now` 记录，D-11）。
+    host_ip: String,
+    host_sync_port: u16,
+    /// Host 下发的保险库密钥（**尚未采用**；采用需满足「Joiner 本地库为空」裁定）。
+    host_vault_key: Zeroizing<[u8; 32]>,
+}
+
+/// 一次同步交换结果。
+#[derive(Debug, Clone, Default)]
+pub struct JoinerSyncResult {
+    pub applied: usize,
+    pub conflicts: Vec<String>,
+}
+
+impl JoinerSession {
+    /// Host 设备 ID。
+    pub fn host_id(&self) -> &str {
+        &self.host_id
+    }
+
+    /// Host 展示名。
+    pub fn host_name(&self) -> &str {
+        &self.host_name
+    }
+
+    /// Host 身份指纹（供用户比对）。
+    pub fn host_fingerprint(&self) -> &str {
+        &self.host_fingerprint
+    }
+
+    /// Host 下发的 VK（供会话层决定是否采用）。
+    pub fn host_vault_key(&self) -> &[u8; 32] {
+        &self.host_vault_key
+    }
+
+    /// 持久化本端对 Host 的配对记录（`sync_key` 由本端 VK 包裹）。
+    ///
+    /// 前提：`repo` 已采用 Host 的 VK（否则包裹出的密钥无法被对端解出）。
+    pub fn persist_host_device(&self, repo: &mut Repository) -> CoreResult<()> {
+        let aad = device_key_aad(&self.host_id);
+        let wrapped = keys::wrap_item_key(repo.vault_key(), &self.keys.sync_key[..], &aad)?;
+        let peer_port = if self.host_sync_port == 0 {
+            None
+        } else {
+            Some(self.host_sync_port)
+        };
+        let device = PairedDevice {
+            device_id: self.host_id.clone(),
+            device_name: self.host_name.clone(),
+            fingerprint: self.host_fingerprint.clone(),
+            sync_key_wrapped: wrapped,
+            paired_at: now_ms(),
+            last_sync_at: None,
+            peer_ip: Some(self.host_ip.clone()),
+            peer_port,
+        };
+        repo.upsert_paired_device(device)
+    }
+
+    /// 执行一次双向同步交换：发 Push → 收 Host 变更并合并 → 发 Done。
+    ///
+    /// 序号在持久化的 `last_sent_seq` 基础上单调递增，以支持「配对后再同步」（D-11）。
+    pub fn push_and_sync(&mut self, repo: &mut Repository, now: i64) -> CoreResult<JoinerSyncResult> {
+        let mut state: DeviceSyncState = repo.sync_state(&self.host_id);
+        let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
+
+        // 单调推送序号。
+        let c1 = state.last_sent_seq + 1;
+        let c2 = c1 + 1;
+
+        // seq=c1：推送本端变更。
+        let push = SyncPayload {
+            kind: SyncKind::Push,
+            device_id: repo.device_id().to_string(),
+            cursor: 0,
+            changes: repo.export_changes(),
+            conflicts: Vec::new(),
+        };
+        let push_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, c1, now, &push)?;
+        transport::send_frame(&mut self.stream, &serde_json::to_vec(&push_env)?)?;
+
+        // 接收 Host 的 Push 并合并。
+        let reply_bytes = transport::recv_frame(&mut self.stream)?;
+        let reply_env: SyncEnvelope = serde_json::from_slice(&reply_bytes)?;
+        replay.accept(reply_env.seq, reply_env.ts, now)?;
+        let reply = open_envelope(&self.keys.sync_key[..], &self.session_id, &reply_env)?;
+        let report = merge::apply_changes(repo, &mut state, &reply.changes)?;
+
+        // seq=c2：发送 Done。
+        let done = SyncPayload {
+            kind: SyncKind::Done,
+            device_id: repo.device_id().to_string(),
+            cursor: state.last_recv_seq,
+            changes: Vec::new(),
+            conflicts: report.conflicts.clone(),
+        };
+        let done_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, c2, now, &done)?;
+        transport::send_frame(&mut self.stream, &serde_json::to_vec(&done_env)?)?;
+
+        state.last_recv_seq = replay.last_recv_seq();
+        state.last_sent_seq = c2;
+        repo.save_sync_state(state)?;
+        repo.touch_device_sync(&self.host_id, now)?;
+
+        Ok(JoinerSyncResult {
+            applied: report.applied,
+            conflicts: report.conflicts,
+        })
+    }
+}
+
+/// 与 Host 完成配对握手，返回会话上下文（含 Host 的 VK，但**尚未采用**）。
+///
+/// `joiner_sync_port` 为本机持久重同步监听端口（0 = 未提供），随 HELLO 通告给 Host。
+pub fn pair(
+    qr: &QRPayload,
+    joiner_id: &str,
+    joiner_name: &str,
+    joiner_sync_port: u16,
+    now: i64,
+) -> CoreResult<JoinerSession> {
+    if now > qr.exp {
+        return Err(CoreError::PairTokenExpired);
+    }
+    let mut stream = transport::connect(&qr.ip, qr.port)?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .map_err(|_| CoreError::SyncAborted)?;
+
+    let joiner_eph = EphemeralKeypair::generate()?;
+    let hello = Hello {
+        v: crate::constants::QR_PROTOCOL_VERSION,
+        token: qr.token.clone(),
+        joiner_id: joiner_id.to_string(),
+        joiner_name: joiner_name.to_string(),
+        joiner_pub: joiner_eph.public_bytes().to_vec(),
+        sync_port: joiner_sync_port,
+    };
+    let hello_frame = serde_json::to_vec(&HandshakeMessage::Hello(hello))?;
+    transport::send_frame(&mut stream, &hello_frame)?;
+
+    // 收 ACCEPT。
+    let accept_bytes = transport::recv_frame(&mut stream)?;
+    let accept = match serde_json::from_slice::<HandshakeMessage>(&accept_bytes)? {
+        HandshakeMessage::Accept(a) => a,
+        HandshakeMessage::Reject(r) => return Err(reject_to_error(&r.code)),
+        _ => return Err(CoreError::FingerprintMismatch),
+    };
+
+    // 收 Host 的 CONFIRM。
+    let confirm_bytes = transport::recv_frame(&mut stream)?;
+    let confirm_h = match serde_json::from_slice::<HandshakeMessage>(&confirm_bytes)? {
+        HandshakeMessage::Confirm(c) => c,
+        _ => return Err(CoreError::FingerprintMismatch),
+    };
+
+    // 派生会话密钥。
+    let host_pub = to_arr32(&accept.host_pub)?;
+    let shared = joiner_eph.shared_secret(&host_pub)?;
+    if accept.session_salt.len() != 32 {
+        return Err(CoreError::FingerprintMismatch);
+    }
+    let keys = handshake::derive_session_keys(&shared, &accept.session_salt)?;
+
+    // 双向密钥确认（拦截未持有 shared 的中间人）。
+    let transcript = handshake::transcript_hash(&[&hello_frame[..], &accept_bytes[..]]);
+    let expected_h = handshake::confirm_mac(&keys.confirm_key, handshake::ROLE_SERVER, &transcript)?;
+    if !handshake::verify_mac(&expected_h, &confirm_h.mac) {
+        return Err(CoreError::FingerprintMismatch);
+    }
+    let mac_j = handshake::confirm_mac(&keys.confirm_key, handshake::ROLE_CLIENT, &transcript)?;
+    transport::send_frame(
+        &mut stream,
+        &serde_json::to_vec(&HandshakeMessage::Confirm(Confirm { mac: mac_j }))?,
+    )?;
+
+    // 解出 Host 的 VK。
+    let host_vault_key = handshake::open_vault_key(
+        &keys.sync_key[..],
+        &accept.vk_nonce,
+        &accept.vk_ct,
+        &accept.session_id,
+    )?;
+
+    Ok(JoinerSession {
+        stream,
+        keys,
+        session_id: accept.session_id.clone(),
+        host_id: accept.host_id,
+        host_name: accept.host_name,
+        host_fingerprint: handshake::fingerprint_of(&host_pub),
+        host_ip: qr.ip.clone(),
+        host_sync_port: qr.sync_port,
+        host_vault_key,
+    })
+}
+
+/// REJECT code → CoreError。
+fn reject_to_error(code: &str) -> CoreError {
+    use crate::error::codes::*;
+    match code {
+        ERR_PAIR_TOKEN_USED => CoreError::PairTokenUsed,
+        ERR_PAIR_TOKEN_EXPIRED => CoreError::PairTokenExpired,
+        ERR_PAIR_TOKEN_INVALID => CoreError::PairTokenInvalid,
+        _ => CoreError::SyncAborted,
+    }
+}

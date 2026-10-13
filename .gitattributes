@@ -1,0 +1,41 @@
+# ===========================================================================
+# PasswordMS · 换行符规则
+# 策略：**仓库与工作区统一用 LF**（Git for Windows 下最省心，永不产生
+#       “整文件都在改”的假 diff，也不会每次 add 都刷一堆 CRLF 警告）。
+# 依据：本项目的 .sh / .ps1 脚本已实测在 LF 下正常运行（见 docs/03b-verification.md）。
+# ===========================================================================
+
+# 文本文件统一 LF
+* text=auto eol=lf
+
+# --- 二进制：禁止任何换行符转换 ---
+*.ico   binary
+*.icns  binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.bmp   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.exe   binary
+*.dll   binary
+*.msi   binary
+*.apk   binary
+*.so    binary
+*.dylib binary
+
+# --- 锁文件：由工具生成，折叠到 diff 之外 ---
+Cargo.lock         linguist-generated=true
+package-lock.json  linguist-generated=true
+
+# --- 文档不计入代码语言统计 ---
+docs/**  linguist-documentation
+*.md     linguist-documentation

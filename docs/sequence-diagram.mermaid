@@ -1,0 +1,105 @@
+%% PasswordMS 关键流程时序图（对应 docs/02-arch.md §6）
+%% ① 首启创建保险库  ② 解锁  ③ 新增条目并保存  ④ 二维码配对与首次同步（含冲突三选一）
+
+%% ============ ① 首启创建保险库 ============
+sequenceDiagram
+  autonumber
+  participant U as 用户
+  participant UI as CreateVaultWizard(Svelte)
+  participant API as ipc.api
+  participant ST as AppState
+  participant CORE as passwordms-core
+  U->>UI: 两次输入主密码
+  UI->>UI: 校验一致 & 长度>=8 & 强度提示
+  UI->>API: create_vault(master_password)
+  API->>ST: invoke #[tauri::command] create_vault
+  ST->>CORE: Session::create(master_password)
+  CORE->>CORE: getrandom 生成 salt/VK
+  CORE->>CORE: Argon2id -> MK -> HKDF -> KEK
+  CORE->>CORE: KEK 包裹 VK -> wrapped_vault_key; 计算 verify_mac
+  CORE->>CORE: container 初始化(header 明文 + 空记录区) 并落盘
+  CORE-->>ST: Session(Unlocked, VK in Zeroizing)
+  ST-->>API: StatusDto{has_vault:true,locked:false}
+  API-->>UI: 成功
+  UI-->>U: 进入主列表页 P-02
+
+%% ============ ② 解锁 ============
+sequenceDiagram
+  autonumber
+  participant U as 用户
+  participant UI as LockScreen
+  participant API as ipc.api
+  participant ST as AppState
+  participant CORE as passwordms-core
+  U->>UI: 输入主密码
+  UI->>API: unlock(master_password)
+  API->>ST: invoke #[tauri::command] unlock
+  ST->>CORE: Session::unlock(master_password)
+  CORE->>CORE: 读取 header(kdf params/salt)
+  CORE->>CORE: Argon2id -> MK -> KEK
+  CORE->>CORE: 常量时间校验 verify_mac
+  alt 校验失败
+    CORE-->>ST: Err(ERR_UNLOCK_FAILED) 统一错误
+    ST-->>API: IpcError{code:ERR_UNLOCK_FAILED}
+    API-->>UI: 统一失败提示
+  else 校验通过
+    CORE->>CORE: KEK 解包 VK; 扫描 record_area 建索引; 解密条目
+    CORE-->>ST: Session(Unlocked, 解密数据)
+    ST-->>API: StatusDto{locked:false}
+    API-->>UI: 进入主列表页
+  end
+
+%% ============ ③ 新增条目并保存（逐条加密落盘） ============
+sequenceDiagram
+  autonumber
+  participant U as 用户
+  participant ED as ItemEditor
+  participant API as ipc.api
+  participant CORE as passwordms-core
+  participant FS as 磁盘(passwordms.vault)
+  U->>ED: 填写字段(可唤起生成器)并点保存
+  ED->>API: create_item(draft)
+  API->>CORE: repository::create_item(draft)
+  CORE->>CORE: getrandom 生成 item_id + IK(32B)
+  CORE->>CORE: AEAD(IK, nonce, payload, aad=0x02||item_id)
+  CORE->>CORE: VK 包裹 IK -> wrapped_item_key
+  CORE->>CORE: 追加记录帧(type=0x02 Item)
+  CORE->>FS: pwrite 新增帧(仅该帧)
+  CORE-->>API: ItemDto
+  API-->>ED: 成功
+  ED-->>U: 列表出现新条目
+
+%% ============ ④ 二维码配对与首次同步（含冲突三选一） ============
+sequenceDiagram
+  autonumber
+  participant PC as Windows(Host)
+  participant PH as Android(Joiner)
+  participant U as 用户
+  PC->>PC: 生成一次性令牌+临时X25519, 绑定端口, 展示二维码
+  PH->>PH: 扫码得到 IP/端口/令牌/指纹; 生成临时X25519
+  PH->>PC: HELLO{token, joiner_pub}
+  PC->>PC: 校验令牌(未用&未过期&匹配)
+  alt 校验失败
+    PC-->>PH: REJECT{ERR_PAIR_TOKEN_*}
+  else 校验通过
+    PC-->>PH: ACCEPT{host_pub, session_id, session_salt}
+    PC->>PC: shared=X25519 -> sync_key/confirm_key
+    PH->>PH: shared=X25519 -> sync_key/confirm_key
+    PH->>PC: CONFIRM{mac_j}
+    PC->>PH: CONFIRM{mac_h}
+    PC->>PC: 校验通过 -> 配对成立, 下发 VK(用 sk 加密)
+    PH->>PH: 用同一 VK, 持久化配对设备
+    PH->>PC: PUSH changes(seq=1, 密文 ChangeRecord)
+    PC->>PC: merge: 检测双改
+    alt 存在冲突
+      PC-->>PH: conflict_notice{冲突 ID 清单}
+      PC->>PC: 写入 ConflictEntry(Local保留, Remote入箱)
+      PC-->>U: UI 三选一提示
+      U->>PC: 选择(保留本机/采用远端/两者都留)
+      PC->>PC: resolve_conflict(choice)
+    else 无冲突
+      PC->>PC: 应用变更, 推进 sync_state
+    end
+    PC-->>PH: done
+    PH-->>U: 同步完成提示
+  end

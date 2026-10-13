@@ -1,0 +1,318 @@
+%% PasswordMS 核心类图（对应 docs/02-arch.md §5）
+%% 说明：🔒 表示该字段落盘时必须处于 AEAD 密文内
+
+classDiagram
+  %% ===== 数据模型 =====
+  class Vault {
+    +String vault_id
+    +u16 format_version
+    +KdfParams kdf
+    +Vec~u8~ kdf_salt
+    +WrappedKey wrapped_vault_key
+    +Vec~u8~ verify_mac
+    +String encryption_scheme
+    +u32 item_count
+    +u32 folder_count
+    +i64 created_at
+    +i64 updated_at
+    +u16 auto_lock_minutes
+    +VaultSettings settings
+  }
+  class KdfParams {
+    +String algorithm
+    +u32 memory_kib
+    +u32 iterations
+    +u32 parallelism
+    +u16 salt_len
+  }
+  class WrappedKey {
+    +Vec~u8~ nonce
+    +Vec~u8~ ct
+  }
+  class VaultSettings {
+    +GeneratorOptions generator
+    +HealthConfig health
+    +u16 clipboard_clear_secs
+    +bool auto_sync
+    +bool sync_on_start
+  }
+
+  class Folder {
+    +String folder_id
+    +String name
+    +Option~String~ icon
+    +Option~String~ color
+    +i32 sort_order
+    +u64 rev
+    +i64 updated_at
+  }
+
+  class Item {
+    +String item_id
+    +ItemKind kind
+    +Option~String~ folder_id
+    +bool favorite
+    +i64 created_at
+    +i64 updated_at
+    +u64 rev
+    +String modified_by
+  }
+  class ItemKind {
+    <<enumeration>>
+    Login(LoginData)
+    SecureNote(SecureNoteData)
+    Attachment(AttachmentData)
+  }
+  class LoginData {
+    +String title
+    +Option~String~ url
+    +Option~String~ username
+    +Option~String~ password
+    +Option~String~ notes
+    +Option~String~ totp_secret
+    +Vec~CustomField~ custom_fields
+  }
+  class SecureNoteData {
+    +String title
+    +String body
+  }
+  class AttachmentData {
+    +String title
+    +String original_filename
+    +String mime_type
+    +u64 size_bytes
+    +String blob_ref
+    +u64 blob_size_bytes
+  }
+  class CustomField {
+    +String key
+    +String value
+    +bool hidden
+  }
+  class GeneratorOptions {
+    +u8 length
+    +bool uppercase
+    +bool lowercase
+    +bool digits
+    +bool symbols
+    +bool exclude_ambiguous
+  }
+  class HealthConfig {
+    +u8 weak_max_len = 8
+    +u32 stale_days = 180
+  }
+
+  class TrashEntry {
+    +String trash_id
+    +Item item_snapshot
+    +Option~String~ original_folder_id
+    +i64 deleted_at
+    +i64 expire_at
+  }
+
+  class ConflictEntry {
+    +String conflict_id
+    +String item_id
+    +Item local_snapshot
+    +Item remote_snapshot
+    +i64 local_updated_at
+    +i64 remote_updated_at
+    +i64 detected_at
+    +bool resolved
+  }
+  class ConflictChoice {
+    <<enumeration>>
+    KeepLocal
+    TakeRemote
+    KeepBoth
+  }
+
+  class PairedDevice {
+    +String device_id
+    +String device_name
+    +String fingerprint
+    +WrappedKey sync_key_wrapped
+    +i64 paired_at
+    +Option~i64~ last_sync_at
+  }
+  class DeviceSyncState {
+    +String device_id
+    +HashMap~String,BaseRev~ base
+    +u64 last_recv_seq
+    +u64 last_sent_seq
+  }
+  class BaseRev {
+    +u64 rev
+    +[u8;32] hash
+  }
+
+  %% ===== 服务 / 逻辑类 =====
+  class Session {
+    -State state
+    +create(password) Session
+    +unlock(password) Session
+    +lock()
+    +change_master_password(old, new)
+    +is_unlocked() bool
+  }
+  class Kdf {
+    +derive_master_key(password, salt, params) MK
+    +derive_kek(mk) KEK
+    +derive_verify(mk) VerifyKey
+  }
+  class Aead {
+    +seal(key, nonce, aad, pt) Vec~u8~
+    +open(key, nonce, aad, ct) Vec~u8~
+    +wrap_key(key, raw) WrappedKey
+    +unwrap_key(key, wrapped) Key
+  }
+  class Rng {
+    +random_bytes(n) Vec~u8~
+    +random_key() [u8;32]
+    +random_nonce() [u8;24]
+    +random_token() [u8;32]
+  }
+  class Container {
+    +read_header(path) Vault
+    +write_header(path, Vault)
+    +iter_frames(path) FrameIter
+    +append_frame(path, Frame)
+    +pwrite_frame(path, offset, Frame)
+    +compact(path)
+  }
+  class Repository {
+    +create_item(draft) Item
+    +update_item(id, draft) Item
+    +delete_item(id)
+    +list_items(filter) Vec~Item~
+    +folders CRUD
+    +trash CRUD
+    +conflicts CRUD
+  }
+  class Generator {
+    +generate(opts) String
+  }
+  class Health {
+    +check(items, cfg) HealthReport
+  }
+  class Totp {
+    +now(secret) TotpCode
+  }
+  class BitwardenImporter {
+    +preview(path, fmt) ImportPreview
+    +apply(path, fmt, token) ImportResult
+  }
+  class Handshake {
+    +start_pairing() PairingInfo
+    +join(qr_payload) PairResult
+    +verify_confirm(mac) bool
+  }
+  class Transport {
+    +listen(port) Listener
+    +connect(ip, port) Conn
+    +send_frame(conn, bytes)
+    +recv_frame(conn) Vec~u8~
+  }
+  class SyncServer {
+    +accept(conn)
+    +push(changes)
+    +pull(cursor)
+  }
+  class SyncClient {
+    +push(changes)
+    +pull(cursor)
+  }
+  class Merge {
+    +detect_conflicts(local, remote) Vec~Conflict~
+    +apply_changes(changes)
+    +advance_state(device_id, record_id)
+  }
+  class ReplayGuard {
+    +check_seq(seq) bool
+    +check_ts(ts) bool
+  }
+
+  class QRPayload {
+    +u32 v
+    +String ip
+    +u16 port
+    +Vec~u8~ token
+    +String host_id
+    +String host_name
+    +String fp
+    +i64 exp
+  }
+  class SyncEnvelope {
+    +Vec~u8~ session_id
+    +u64 seq
+    +i64 ts
+    +Vec~u8~ nonce
+    +Vec~u8~ ct
+  }
+  class SyncPayload {
+    +String kind
+    +String device_id
+    +u64 cursor
+    +Vec~ChangeRecord~ changes
+    +Vec~String~ conflicts
+  }
+  class ChangeRecord {
+    +u8 record_type
+    +String record_id
+    +u64 rev
+    +i64 updated_at
+    +String modified_by
+    +bool deleted
+    +Vec~u8~ wrapped_key
+    +Vec~u8~ ciphertext
+  }
+
+  %% ===== 关系 =====
+  Vault *-- KdfParams
+  Vault *-- WrappedKey
+  Vault *-- VaultSettings
+  VaultSettings *-- GeneratorOptions
+  VaultSettings *-- HealthConfig
+
+  Item *-- ItemKind
+  ItemKind *-- LoginData
+  ItemKind *-- SecureNoteData
+  ItemKind *-- AttachmentData
+  LoginData *-- CustomField
+  Item --> Folder : folder_id (单分组)
+
+  TrashEntry *-- Item
+  ConflictEntry *-- Item
+  PairedDevice *-- WrappedKey
+  DeviceSyncState *-- BaseRev
+  PairedDevice --> DeviceSyncState : device_id
+
+  Session --> Vault : holds
+  Session --> Kdf
+  Session --> Aead
+  Session --> Repository
+  Kdf --> Rng
+  Aead --> Rng
+  Repository --> Container
+  Repository --> Item
+  Repository --> Folder
+  Repository --> TrashEntry
+  Repository --> ConflictEntry
+  Repository --> Generator
+  Repository --> Health
+  Repository --> Totp
+  Repository --> BitwardenImporter
+
+  Handshake --> Transport
+  Handshake --> QRPayload
+  Handshake --> Rng
+  Handshake --> Aead
+  SyncServer --> Transport
+  SyncClient --> Transport
+  SyncServer --> Merge
+  SyncClient --> Merge
+  Merge --> ConflictEntry
+  Merge --> DeviceSyncState
+  Merge --> ReplayGuard
+  SyncPayload *-- ChangeRecord
+  SyncEnvelope --> SyncPayload : ct 解密后

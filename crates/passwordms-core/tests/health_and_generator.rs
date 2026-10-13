@@ -1,0 +1,140 @@
+//! 体检规则与生成器字符集（架构文档 §8.4、F-07、F-16）。
+//!
+//! 状态：已在本机实跑通过（`cargo test -p passwordms-core`，见 docs/03b-verification.md）。
+
+use passwordms_core::generator;
+use passwordms_core::health;
+use passwordms_core::model::item::{Item, ItemKind, LoginData};
+use passwordms_core::model::vault::{GeneratorOptions, HealthConfig};
+
+fn login(id: &str, password: &str, updated_at: i64, rev: u64) -> Item {
+    Item {
+        item_id: id.to_string(),
+        kind: ItemKind::Login(LoginData {
+            title: format!("qa_test_{id}"),
+            url: None,
+            username: None,
+            password: Some(password.to_string()),
+            notes: None,
+            totp_secret: None,
+            custom_fields: Vec::new(),
+        }),
+        folder_id: None,
+        favorite: false,
+        created_at: 0,
+        updated_at,
+        rev,
+        modified_by: "qa_test".to_string(),
+    }
+}
+
+#[test]
+fn generator_respects_charset_and_length() {
+    let opts = GeneratorOptions {
+        length: 16,
+        uppercase: true,
+        lowercase: true,
+        digits: true,
+        symbols: false,
+        exclude_ambiguous: true,
+    };
+    let pw = generator::generate(&opts).expect("gen");
+    assert_eq!(pw.chars().count(), 16);
+    assert!(pw.chars().all(|c| c.is_ascii_alphanumeric()));
+    // 排除易混字符。
+    for ch in ['0', 'O', '1', 'l', 'I'] {
+        assert!(!pw.contains(ch), "不应包含易混字符 {ch}");
+    }
+}
+
+#[test]
+fn generator_rejects_empty_charset_and_bad_length() {
+    let none = GeneratorOptions {
+        length: 16,
+        uppercase: false,
+        lowercase: false,
+        digits: false,
+        symbols: false,
+        exclude_ambiguous: false,
+    };
+    assert_eq!(generator::generate(&none).unwrap_err().code(), "ERR_VALIDATION");
+
+    let too_short = GeneratorOptions {
+        length: 4,
+        uppercase: true,
+        lowercase: true,
+        digits: true,
+        symbols: false,
+        exclude_ambiguous: false,
+    };
+    assert_eq!(generator::generate(&too_short).unwrap_err().code(), "ERR_VALIDATION");
+}
+
+#[test]
+fn generator_guarantees_each_selected_class() {
+    let opts = GeneratorOptions {
+        length: 32,
+        uppercase: true,
+        lowercase: true,
+        digits: true,
+        symbols: true,
+        exclude_ambiguous: false,
+    };
+    let pw = generator::generate(&opts).expect("gen");
+    assert!(pw.chars().any(|c| c.is_ascii_uppercase()));
+    assert!(pw.chars().any(|c| c.is_ascii_lowercase()));
+    assert!(pw.chars().any(|c| c.is_ascii_digit()));
+    assert!(pw.chars().any(|c| !c.is_ascii_alphanumeric()));
+}
+
+#[test]
+fn health_detects_weak_reused_and_stale() {
+    let cfg = HealthConfig {
+        weak_max_len: 8,
+        stale_days: 180,
+    };
+    let now = 10_000_000_000i64;
+    let day = 24 * 60 * 60 * 1000i64;
+
+    let items = vec![
+        // 弱口令：长度不足。
+        login("a", "short", now, 1),
+        // 弱口令：单一字符类型。
+        login("b", "aaaaaaaaaaaa", now, 1),
+        // 重复使用：与 c 同密码。
+        login("d", "qa_test_shared_pw_1", now, 1),
+        login("e", "qa_test_shared_pw_1", now, 1),
+        // 超期未改（200 天前）。
+        login("f", "qa_test_str0ng_Pw!", now - 200 * day, 1),
+    ];
+
+    let report = health::check(&items, &cfg, now);
+    assert!(report.weak.contains(&"a".to_string()));
+    assert!(report.weak.contains(&"b".to_string()));
+    assert!(report.reused.contains(&"d".to_string()));
+    assert!(report.reused.contains(&"e".to_string()));
+    assert!(report.stale.contains(&"f".to_string()));
+    assert!(report.total_score <= 100);
+    assert!(!report.suggestions.is_empty());
+}
+
+#[test]
+fn health_ignores_non_login_items() {
+    let cfg = HealthConfig::default();
+    let note = Item {
+        item_id: "n".to_string(),
+        kind: ItemKind::SecureNote(passwordms_core::model::item::SecureNoteData {
+            title: "qa_test_note".to_string(),
+            body: "qa_test_body".to_string(),
+        }),
+        folder_id: None,
+        favorite: false,
+        created_at: 0,
+        updated_at: 0,
+        rev: 1,
+        modified_by: "qa_test".to_string(),
+    };
+    let report = health::check(&[note], &cfg, 1_000_000);
+    assert_eq!(report.login_count, 0);
+    assert!(report.weak.is_empty());
+}

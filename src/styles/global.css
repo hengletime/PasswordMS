@@ -1,0 +1,176 @@
+/* PasswordMS 全局样式（T09）：设计令牌 + 共享控件类。
+ * 体积优先：无外部字体 / 无图标字体，全部使用系统字体与内联 SVG。 */
+
+:root {
+  --pms-font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  --pms-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --pms-bg: #f6f7f9;
+  --pms-surface: #ffffff;
+  --pms-fg: #1a1c21;
+  --pms-muted: #6b7280;
+  --pms-border: #e2e5ea;
+  --pms-hover: #f0f2f5;
+  --pms-accent: #2f6fed;
+  --pms-accent-soft: #e8f0fe;
+  --pms-danger: #d64545;
+  --pms-warning: #b7791f;
+  --pms-success: #2f9e6b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pms-bg: #14161b;
+    --pms-surface: #1c1f26;
+    --pms-fg: #e8e9ec;
+    --pms-muted: #9aa3b2;
+    --pms-border: #2b303a;
+    --pms-hover: #262b34;
+    --pms-accent: #5b8def;
+    --pms-accent-soft: #1e2a44;
+    --pms-danger: #e06c6c;
+    --pms-warning: #d4a24a;
+    --pms-success: #4fbf8b;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--pms-bg);
+  color: var(--pms-fg);
+  font-family: var(--pms-font-family);
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* 共享按钮 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--pms-border);
+  border-radius: 8px;
+  background: var(--pms-surface);
+  color: var(--pms-fg);
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  line-height: 1.2;
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.btn:hover:not(:disabled) {
+  background: var(--pms-hover);
+}
+.btn.primary {
+  background: var(--pms-accent);
+  border-color: var(--pms-accent);
+  color: #fff;
+}
+.btn.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.btn.danger {
+  background: var(--pms-danger);
+  border-color: var(--pms-danger);
+  color: #fff;
+}
+.btn.ghost {
+  background: transparent;
+}
+.btn.small {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.78rem;
+}
+.btn.block {
+  width: 100%;
+  margin-top: 0.9rem;
+}
+
+/* 共享图标按钮 */
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--pms-muted);
+  cursor: pointer;
+  padding: 0.25rem;
+  line-height: 0;
+}
+.icon-btn:hover {
+  color: var(--pms-fg);
+}
+
+/* 共享表单 */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+.field > span {
+  font-size: 0.78rem;
+  color: var(--pms-muted);
+}
+.field input,
+.field textarea,
+.field select {
+  width: 100%;
+  border: 1px solid var(--pms-border);
+  border-radius: 8px;
+  background: var(--pms-bg);
+  color: var(--pms-fg);
+  padding: 0.55rem 0.65rem;
+  font-size: 0.9rem;
+  font-family: inherit;
+  outline: none;
+}
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  border-color: var(--pms-accent);
+}
+.field textarea {
+  resize: vertical;
+  line-height: 1.55;
+  font-family: var(--pms-font-family);
+}
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.field-row input {
+  flex: 1;
+  border: 1px solid var(--pms-border);
+  border-radius: 8px;
+  background: var(--pms-bg);
+  color: var(--pms-fg);
+  padding: 0.55rem 0.65rem;
+  font-size: 0.9rem;
+  outline: none;
+}
+.field-row.custom {
+  margin-bottom: 0.35rem;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}

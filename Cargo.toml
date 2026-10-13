@@ -1,0 +1,43 @@
+# PasswordMS —— Cargo workspace 根
+# 成员：crates/passwordms-core（纯逻辑核心，零 Tauri 依赖）+ src-tauri（Tauri 外壳）
+[workspace]
+resolver = "2"
+members = ["crates/passwordms-core", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["PasswordMS"]
+rust-version = "1.77"
+
+# 统一依赖版本，见架构文档 §8.1（严格 23 个 crate，禁止超标）
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+argon2 = { version = "0.5", features = ["std"] }
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+hmac = "0.12"
+sha1 = "0.10"
+base32 = "0.5"
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+getrandom = "0.2"
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.6"
+uuid = { version = "1", features = ["v4", "serde"] }
+base64 = "0.22"
+# 仅启用纯矢量 SVG 渲染器，禁用 image/png 特性（体积红线）
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+url = "2"
+
+# 体积优化：release 全量裁剪 + LTO + strip
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+incremental = false

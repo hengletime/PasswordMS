@@ -1,0 +1,37 @@
+# PasswordMS 本地构建配置（仅影响显式指定 --target x86_64-pc-windows-gnullvm 时）
+#
+# ---------------------------------------------------------------------------
+# 为什么存在这个文件
+# ---------------------------------------------------------------------------
+# 本机（Commander168）：非管理员，装不了 Visual Studio Build Tools（需 UAC 提权）；
+# windows-gnu 目标的 getrandom 走 raw-dylib，编译期必须调用 dlltool 生成导入库，
+# 而 rustup 自带的那个 dlltool 是 LLVM 版，不认 rustc 传的 --64 参数，此路不通。
+# 因此改用 rustup 自带的 x86_64-pc-windows-gnullvm 目标（LLVM ABI，不需要 mingw），
+# 用工具链里的 rust-lld 当链接器，并手工补齐两个缺失的 CRT 符号。
+#
+# 换到有 MSVC（或完整 mingw-w64）的机器后，本文件可直接删除，
+# 用默认目标 `cargo test -p passwordms-core` 即可。
+#
+# 冒烟命令：
+#   cargo test  -p passwordms-core --target x86_64-pc-windows-gnullvm
+#   cargo check -p passwordms-core --target x86_64-pc-windows-gnullvm --all-targets
+#
+# 前置：rust-lld 与 llvm-tools 需在 PATH 上。若报 "linker rust-lld not found"，执行：
+#   rustup component add llvm-tools
+#   export PATH="$HOME/.rustup/toolchains/stable-x86_64-pc-windows-gnu/lib/rustlib/x86_64-pc-windows-gnu/bin:$PATH"
+#
+# 详见 docs/03b-verification.md
+# ---------------------------------------------------------------------------
+
+[target.x86_64-pc-windows-gnullvm]
+linker = "rust-lld"
+rustflags = [
+    "-L", "native=C:\\Users\\HUAWEI\\.rustup\\toolchains\\stable-x86_64-pc-windows-gnu\\lib\\rustlib\\x86_64-pc-windows-gnu\\lib\\self-contained",
+    "-L", "native=C:\\Users\\HUAWEI\\.workbuddy\\tools\\wsllibs",
+    "-C", "link-self-contained=yes",
+]
+
+# 本机实测：开着增量编译时，增量会话锁文件的清理会被「批量删除守卫」拦截
+# （报 os error 5 拒绝访问），偶发把 cargo 卡死。关掉增量最省心。
+[build]
+incremental = false
