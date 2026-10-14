@@ -82,7 +82,7 @@
               <span class="list-sub pms-meta">{typeLabel(item)}</span>
             </span>
             {#if item.favorite}
-              <span class="list-fav"><Icon name="star" size={14} /></span>
+              <span class="list-fav"><Icon name="star" size={14} filled /></span>
             {/if}
           </button>
         </li>

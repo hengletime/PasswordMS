@@ -1,8 +1,8 @@
 // 全局 UI 状态（Svelte 5 runes）。
 //
-// 仅存放**内存态**：路由、语言、Toast、确认框；不写入 localStorage/sessionStorage。
+// 路由、Toast、确认框为内存态；**语言持久化**到 localStorage（D-42：切语言重启即回中文的缺口）。
 
-import { DEFAULT_LOCALE, translate, type Locale } from '../i18n';
+import { DEFAULT_LOCALE, LOCALES, translate, type Locale } from '../i18n';
 
 /** Toast 类型。 */
 export type ToastKind = 'info' | 'success' | 'error';
@@ -29,10 +29,36 @@ export type RouteName = 'lock' | 'create' | 'main';
 /** 主界面分区。 */
 export type MainSection = 'items' | 'health' | 'trash' | 'settings' | 'sync';
 
+/** 语言持久化键名。 */
+const LOCALE_STORAGE_KEY = 'passwordms.locale';
+
+/** 读取持久化语言；非法值 / 隐私模式 / 无 localStorage 时兜底为默认语言。 */
+function readStoredLocale(): Locale {
+  try {
+    if (typeof localStorage === 'undefined') {
+      return DEFAULT_LOCALE;
+    }
+    const raw = localStorage.getItem(LOCALE_STORAGE_KEY);
+    return raw !== null && (LOCALES as readonly string[]).includes(raw) ? (raw as Locale) : DEFAULT_LOCALE;
+  } catch {
+    return DEFAULT_LOCALE;
+  }
+}
+
+function writeStoredLocale(locale: Locale): void {
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    }
+  } catch {
+    // 隐私模式 / 存储被禁：语言仅本次会话生效。
+  }
+}
+
 /** UI store。 */
 class UiStore {
-  /** 当前语言。 */
-  locale = $state<Locale>(DEFAULT_LOCALE);
+  /** 当前语言（持久化）。 */
+  locale = $state<Locale>(readStoredLocale());
   /** 当前路由。 */
   route = $state<RouteName>('lock');
   /** 当前主界面分区。 */
@@ -48,9 +74,10 @@ class UiStore {
     return translate(this.locale, key, params);
   }
 
-  /** 切换语言。 */
+  /** 切换语言（并持久化）。 */
   setLocale(locale: Locale): void {
     this.locale = locale;
+    writeStoredLocale(locale);
   }
 
   /** 切换路由。 */

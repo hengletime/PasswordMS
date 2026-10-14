@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 扫码配对（F-09）：WebView 里 getUserMedia 需要相机权限。
+         缺此声明时 wry 的运行时 requestPermissions 必被系统拒绝 → 前端收到 NotAllowedError。 -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

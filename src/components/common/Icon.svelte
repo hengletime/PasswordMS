@@ -4,8 +4,10 @@
     name: string;
     size?: number;
     stroke?: number;
+    /** 实心填充（D-39：收藏星的选中态）。仅对封闭路径图标有意义。 */
+    filled?: boolean;
   }
-  const { name, size = 18, stroke = 1.75 }: Props = $props();
+  const { name, size = 18, stroke = 1.75, filled = false }: Props = $props();
 
   const PATHS: Record<string, string> = {
     lock: 'M5 11h14v10H5zM8 11V7a4 4 0 0 1 8 0v4',
@@ -68,7 +70,7 @@
   width={size}
   height={size}
   viewBox="0 0 24 24"
-  fill="none"
+  fill={filled ? 'currentColor' : 'none'}
   stroke="currentColor"
   stroke-width={stroke}
   stroke-linecap="round"

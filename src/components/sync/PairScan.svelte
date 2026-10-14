@@ -17,16 +17,25 @@
       return;
     }
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      // 分辨率给 ideal 约束：桌面定焦摄像头拍手机屏幕时，高分辨率帧显著提高 jsQR 识别率（D-40）。
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+      });
       if (videoEl !== null) {
         videoEl.srcObject = stream;
         await videoEl.play();
       }
       scanning = true;
-      handle = window.setInterval(tick, 400);
-    } catch {
+      // 250ms：jsQR 单帧 720p 约 3-8ms，5fps 抓拍足够跟手。
+      handle = window.setInterval(tick, 250);
+    } catch (err) {
       scanning = false;
-      ui.toast('error', 'err.internal');
+      // 权限被拒 / 无摄像头给出可行动的提示，而不是笼统的「内部错误」。
+      const name = err instanceof DOMException ? err.name : '';
+      ui.toast('error', name === 'NotAllowedError' || name === 'NotFoundError' ? 'sync.camera_unavailable' : 'err.internal');
+      if (name !== 'NotAllowedError' && name !== 'NotFoundError') {
+        console.error('[pair-scan] getUserMedia failed', err);
+      }
     }
   }
 

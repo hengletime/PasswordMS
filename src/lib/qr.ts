@@ -31,6 +31,10 @@ export function isPairingPayload(text: string): boolean {
 
 /**
  * 从 `<video>` 当前帧抓取并解码（运行时环境无摄像头权限时返回 `null`）。
+ *
+ * 先解画面中心 75% 裁剪帧：二维码贴满整帧边缘时 jsQR 反而难解（官方建议二维码与画面边缘留白），
+ * 中心裁剪等效放大目标，对桌面定焦摄像头拍摄手机屏幕的场景尤其有效；
+ * 未命中再回退全帧——覆盖「贴太近、二维码占满整屏」的反向场景。
  */
 export function decodeQrFromVideo(video: HTMLVideoElement): string | null {
   const w = video.videoWidth;
@@ -38,14 +42,23 @@ export function decodeQrFromVideo(video: HTMLVideoElement): string | null {
   if (w <= 0 || h <= 0) {
     return null;
   }
+  const CROP = 0.75;
+  const cw = Math.round(w * CROP);
+  const ch = Math.round(h * CROP);
   const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
+  canvas.width = cw;
+  canvas.height = ch;
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     return null;
   }
+  ctx.drawImage(video, (w - cw) / 2, (h - ch) / 2, cw, ch, 0, 0, cw, ch);
+  const cropped = ctx.getImageData(0, 0, cw, ch);
+  const fromCrop = decodeQrFromImageData(cropped.data, cw, ch);
+  if (fromCrop !== null) {
+    return fromCrop;
+  }
   ctx.drawImage(video, 0, 0, w, h);
-  const image = ctx.getImageData(0, 0, w, h);
-  return decodeQrFromImageData(image.data, w, h);
+  const full = ctx.getImageData(0, 0, w, h);
+  return decodeQrFromImageData(full.data, w, h);
 }

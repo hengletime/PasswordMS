@@ -159,7 +159,16 @@ impl CoreError {
             CoreError::SyncAborted => "err.sync_aborted",
             CoreError::ConflictExists => "err.conflict",
             CoreError::VkAdoptRequiresEmpty { .. } => "err.vk_adopt_requires_empty",
-            CoreError::Io(_) => "err.io",
+            // io::Error 有两类来源：本机文件读写、TCP 同步链路（transport 的 read/write 超时、
+            // 对端拒绝/断开都走 From<std::io::Error>）。按 kind 细分文案——
+            // 把「网络问题」从笼统的「文件读写错误」里拆出来，避免把用户排查方向带偏（D-40 跟进）。
+            // 注意 UnexpectedEof 文件截断/网络断开两可，保守归 err.io。
+            CoreError::Io(kind) => match kind.as_str() {
+                "io:TimedOut" => "err.network_timeout",
+                "io:ConnectionRefused" => "err.network_refused",
+                "io:ConnectionReset" | "io:BrokenPipe" => "err.network_broken",
+                _ => "err.io",
+            },
             CoreError::Crypto(_) => "err.crypto",
             CoreError::Internal(_) => "err.internal",
         }

@@ -79,11 +79,24 @@ pub fn sync_join(
     state: tauri::State<'_, AppState>,
     qr_payload: String,
 ) -> IpcResult<PairResultDto> {
-    let qr = QRPayload::decode_string(&qr_payload)?;
+    let result = sync_join_impl(&app, &state, &qr_payload);
+    if let Err(e) = &result {
+        // 诊断留痕（桌面 stderr / Android logcat）：IpcError 的 Debug 只有 code + message_key，无隐私载荷。
+        eprintln!("[sync_join] failed: {e:?}");
+    }
+    result
+}
+
+fn sync_join_impl(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, AppState>,
+    qr_payload: &str,
+) -> IpcResult<PairResultDto> {
+    let qr = QRPayload::decode_string(qr_payload)?;
     let now = now_ms();
 
     // 确保持久重同步监听器在线，并把本机端口随 HELLO 通告给 Host（D-11）。
-    let sync_port = ensure_resync_listener(&app)?;
+    let sync_port = ensure_resync_listener(app)?;
 
     let mut session = state.session.lock().map_err(lock_err)?;
     let device_id = session.repo()?.device_id().to_string();
@@ -279,7 +292,16 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
 
             match outcome {
                 Ok(None) => continue,
-                Ok(Some(_)) | Err(_) => {
+                Ok(Some(result)) => {
+                    eprintln!("[pairing] host session completed: applied={}", result.applied);
+                    if let Ok(mut g) = state.pairing.lock() {
+                        *g = None;
+                    }
+                    break;
+                }
+                Err(e) => {
+                    // 诊断留痕：CoreError 的 Debug 只有错误码，无隐私载荷。
+                    eprintln!("[pairing] host session aborted: {e:?}");
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }

@@ -155,12 +155,14 @@
       </div>
       <div class="detail-tools">
         <button
-          class="pms-icon-btn"
+          class="pms-icon-btn fav-on"
+          class:fav-on-active={item.favorite}
           type="button"
           aria-label={item.favorite ? ui.t('item.unfavorite') : ui.t('item.favorite')}
+          aria-pressed={item.favorite}
           onclick={() => void toggleFavorite()}
         >
-          <Icon name="star" size={17} />
+          <Icon name="star" size={17} filled={item.favorite} />
         </button>
         <button class="pms-icon-btn" type="button" aria-label={ui.t('common.edit')} onclick={onedit}>
           <Icon name="settings" size={17} />
@@ -307,6 +309,10 @@
   .detail-tools {
     display: flex;
     gap: 0.15rem;
+  }
+  /* 收藏星选中态：金色实心（与列表行 .list-fav 的 --pms-warning 一致，D-39）。 */
+  .fav-on-active {
+    color: var(--pms-warning);
   }
   .detail-row {
     display: flex;
