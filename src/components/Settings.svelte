@@ -1,10 +1,15 @@
 <script lang="ts">
-  // 设置（PRD P-10 / O-03 / O-08）：安全、体检、生成器、同步、解除配对、导出。
-  // 设计规范 §5.4：分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作用 .pms-alert 提示。
+  // 设置（PRD P-10 / O-03 / O-08 / D-38 信息架构）：
+  // 分组自上而下按使用频率排布：外观（主题/语言）→ 安全 → 体检 → 同步 → 数据（导入/导出）
+  // → 设备 → 改密码 → 库文件。高频项置顶，低频/危险项沉底。
+  // 顶栏原来的「语言 / 导入」入口移到这里（D-38：顶栏只留高频动作）。
   import { save } from '@tauri-apps/plugin-dialog';
   import Icon from './common/Icon.svelte';
+  import ImportWizard from './ImportWizard.svelte';
+  import Modal from './common/Modal.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
   import { toAppError } from '../lib/errors';
+  import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
@@ -12,11 +17,15 @@
   import { ui } from '../lib/stores/ui.svelte';
   import type { VaultFileInfoDto, VaultSettings } from '../types';
 
+  // 语言分段钮的显示名：语言名用母语书写（中文/English），属于专有名词，不做翻译。
+  const LOCALE_NAMES: Record<Locale, string> = { 'zh-CN': '中文', 'en-US': 'English' };
+
   let draft = $state<VaultSettings>({ ...settings.value });
   let fileInfo = $state<VaultFileInfoDto | null>(null);
   let oldPassword = $state('');
   let newPassword = $state('');
   let newPassword2 = $state('');
+  let importOpen = $state(false);
   // 【已知缺口】`auto_lock_minutes` 位于 `Vault` 明文头部（PRD §4.1），当前 IPC 契约
   // （`get_settings` / `update_settings` 仅覆盖 `VaultSettings`）未提供其读写通道，
   // 故此处退化为「会话级本地偏好」，仅承载 UI 档位，待后端补充设置命令后接入持久化。
@@ -82,7 +91,7 @@
   <h2 class="set-title">{ui.t('settings.title')}</h2>
 
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_general')}</h3>
+    <h3>{ui.t('settings.group_appearance')}</h3>
     <div class="set-row">
       <span class="set-label">{ui.t('theme.label')}</span>
       <div class="set-seg" role="group" aria-label={ui.t('theme.label')}>
@@ -113,6 +122,22 @@
         >
           {ui.t('theme.dark')}
         </button>
+      </div>
+    </div>
+    <div class="set-row">
+      <span class="set-label">{ui.t('nav.language')}</span>
+      <div class="set-seg" role="group" aria-label={ui.t('nav.language')}>
+        {#each LOCALES as loc (loc)}
+          <button
+            class="pms-btn is-sm"
+            class:is-primary={ui.locale === loc}
+            type="button"
+            aria-pressed={ui.locale === loc}
+            onclick={() => ui.setLocale(loc)}
+          >
+            {LOCALE_NAMES[loc]}
+          </button>
+        {/each}
       </div>
     </div>
   </div>
@@ -162,24 +187,10 @@
   </button>
 
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.change_password')}</h3>
-    <p class="pms-alert is-warning">
-      <Icon name="alert" size={16} />
-      <span>{ui.t('create.warning_body')}</span>
-    </p>
-    <div class="set-row">
-      <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
-      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password" />
-    </div>
-    <div class="set-row">
-      <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
-      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password" />
-    </div>
-    <div class="set-row">
-      <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
-      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password" />
-    </div>
-    <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
+    <h3>{ui.t('import.title')}</h3>
+    <button class="pms-btn is-ghost" type="button" onclick={() => (importOpen = true)}>
+      <Icon name="upload" size={15} />{ui.t('import.title')}
+    </button>
   </div>
 
   <div class="pms-card set-card">
@@ -212,6 +223,27 @@
   </div>
 
   <div class="pms-card set-card">
+    <h3>{ui.t('settings.change_password')}</h3>
+    <p class="pms-alert is-warning">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('create.warning_body')}</span>
+    </p>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
+      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password" />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
+      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password" />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
+      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password" />
+    </div>
+    <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
+  </div>
+
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.vault_file')}</h3>
     {#if fileInfo}
       <p class="pms-meta set-mono">{fileInfo.path}</p>
@@ -221,6 +253,10 @@
     {/if}
   </div>
 </section>
+
+<Modal open={importOpen} titleKey="import.title" onclose={() => (importOpen = false)}>
+  <ImportWizard ondone={() => (importOpen = false)} />
+</Modal>
 
 <style>
   .set {

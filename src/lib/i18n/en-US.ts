@@ -231,6 +231,7 @@ export const enUS: Messages = {
   settings: {
     title: 'Settings',
     group_general: 'General',
+    group_appearance: 'Appearance',
     group_security: 'Security',
     group_generator: 'Generator defaults',
     group_health: 'Health thresholds',

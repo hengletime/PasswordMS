@@ -13,7 +13,6 @@
   import WindowControls from './common/WindowControls.svelte';
   import FolderSidebar from './FolderSidebar.svelte';
   import HealthCheck from './HealthCheck.svelte';
-  import ImportWizard from './ImportWizard.svelte';
   import ItemDetail from './ItemDetail.svelte';
   import ItemEditor from './ItemEditor.svelte';
   import ItemList from './ItemList.svelte';
@@ -24,16 +23,13 @@
   import PairScan from './sync/PairScan.svelte';
   import PairShow from './sync/PairShow.svelte';
   import SyncStatus from './sync/SyncStatus.svelte';
-  import Modal from './common/Modal.svelte';
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
   import { session } from '../lib/stores/session.svelte';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
-  import { theme } from '../lib/stores/theme.svelte';
   import { ui, type MainSection } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import { PANE_DETAIL, paneReducer, type PaneEvent, type PaneMode } from '../lib/pane-mode';
-  import { LOCALES, type Locale } from '../lib/i18n/index';
 
   type SyncTab = 'pair' | 'devices' | 'status' | 'conflicts';
 
@@ -41,7 +37,6 @@
   let pane = $state<PaneMode>(PANE_DETAIL);
   const editing = $derived(pane.view !== 'detail');
   let syncTab = $state<SyncTab>('pair');
-  let importOpen = $state(false);
   // 顶栏「生成密码」入口（客户反馈：生成器原先只藏在密码框的图标里，根本发现不了）。
   // 这里不带 onuse —— 只生成 + 复制，不写回任何条目。
   let genOpen = $state(false);
@@ -99,12 +94,6 @@
     settings.reset();
     sync.reset();
     ui.setRoute('lock');
-  }
-
-  function switchLocale(): void {
-    const index = LOCALES.indexOf(ui.locale);
-    const next: Locale = LOCALES[(index + 1) % LOCALES.length];
-    ui.setLocale(next);
   }
 
   /** 点击「⋯」菜单外部即关闭（菜单按钮本身也在容器内，故不会被误关）。 */
@@ -193,6 +182,8 @@
       {/each}
     </nav>
 
+    <!-- 右区只放高频动作（D-38 信息架构）：生成器 / 锁定。
+         低频项（语言 / 主题 / 导入）已移入「设置」页分组，不再挤顶栏。 -->
     <div class="topbar-right">
       <button
         class="pms-btn is-ghost is-sm"
@@ -200,20 +191,14 @@
         title={ui.t('gen.title')}
         onclick={() => (genOpen = true)}
       >
-        <Icon name="dice" size={15} />{ui.t('gen.title')}
+        <Icon name="dice" size={15} /><span class="btn-text">{ui.t('gen.title')}</span>
       </button>
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={switchLocale}>
-        <Icon name="globe" size={15} />{ui.locale}
-      </button>
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => (importOpen = true)}>
-        <Icon name="upload" size={15} />{ui.t('import.title')}
-      </button>
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void lockNow()}>
-        <Icon name="lock" size={15} />{ui.t('nav.lock')}
+      <button class="pms-btn is-ghost is-sm" type="button" title={ui.t('nav.lock')} onclick={() => void lockNow()}>
+        <Icon name="lock" size={15} /><span class="btn-text">{ui.t('nav.lock')}</span>
       </button>
     </div>
 
-    <!-- 移动端：把上面 4 个按钮收进一个「⋯」溢出菜单（桌面端隐藏）。 -->
+    <!-- 移动端（<768px）：把上面 2 个按钮收进一个「⋯」溢出菜单（桌面端隐藏）。 -->
     <div class="topbar-more-wrap" bind:this={menuEl}>
       <button
         class="pms-icon-btn topbar-more"
@@ -235,51 +220,6 @@
             }}
           >
             <Icon name="dice" size={15} />{ui.t('gen.title')}
-          </button>
-          <button class="pms-btn is-ghost is-sm menu-item" type="button" onclick={switchLocale}>
-            <Icon name="globe" size={15} />{ui.t('nav.language')} · {ui.locale}
-          </button>
-          <div class="menu-row">
-            <span class="menu-label">{ui.t('theme.label')}</span>
-            <div class="menu-seg" role="group" aria-label={ui.t('theme.label')}>
-              <button
-                class="pms-btn is-sm"
-                class:is-primary={theme.mode === 'system'}
-                type="button"
-                aria-pressed={theme.mode === 'system'}
-                onclick={() => theme.setMode('system')}
-              >
-                {ui.t('theme.system')}
-              </button>
-              <button
-                class="pms-btn is-sm"
-                class:is-primary={theme.mode === 'light'}
-                type="button"
-                aria-pressed={theme.mode === 'light'}
-                onclick={() => theme.setMode('light')}
-              >
-                {ui.t('theme.light')}
-              </button>
-              <button
-                class="pms-btn is-sm"
-                class:is-primary={theme.mode === 'dark'}
-                type="button"
-                aria-pressed={theme.mode === 'dark'}
-                onclick={() => theme.setMode('dark')}
-              >
-                {ui.t('theme.dark')}
-              </button>
-            </div>
-          </div>
-          <button
-            class="pms-btn is-ghost is-sm menu-item"
-            type="button"
-            onclick={() => {
-              importOpen = true;
-              menuOpen = false;
-            }}
-          >
-            <Icon name="upload" size={15} />{ui.t('import.title')}
           </button>
           <button
             class="pms-btn is-ghost is-sm menu-item"
@@ -406,10 +346,6 @@
     {/each}
   </nav>
 
-  <Modal open={importOpen} titleKey="import.title" onclose={() => (importOpen = false)}>
-    <ImportWizard ondone={() => (importOpen = false)} />
-  </Modal>
-
   <!-- 顶栏入口：只生成 + 复制，不传 onuse（不写回条目） -->
   <PasswordGeneratorModal open={genOpen} onclose={() => (genOpen = false)} />
 </div>
@@ -433,6 +369,13 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+  }
+  /* D-37：顶栏一律不许换行。英文文案比中文长一大截（Health check / Password generator），
+     之前 "All items" 在 1100px 窗口被折成两行、还把整页撑出横向滚动条 —— 根因就是这里没锁 nowrap。 */
+  .topbar-brand,
+  .topbar-tab,
+  .topbar-right .pms-btn {
+    white-space: nowrap;
   }
   /* 品牌标本体自带渐变方牌（Logo.svelte），这里只负责占位对齐，不再叠自己的底色 */
   .topbar-logo {
@@ -520,22 +463,6 @@
   .menu-item {
     width: 100%;
     justify-content: flex-start;
-  }
-  .menu-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding: 0.2rem 0.5rem;
-  }
-  .menu-label {
-    font-size: 0.8rem;
-    color: var(--pms-muted);
-  }
-  .menu-seg {
-    display: inline-flex;
-    gap: 0.25rem;
-    flex: 0 0 auto;
   }
   .body {
     flex: 1;
@@ -757,6 +684,38 @@
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
+    }
+  }
+
+  /* ================= 桌面收缩档（D-37/D-38，≥768px 才有） =================
+     右区只留「生成器 / 锁定」两个高频钮（低频项已移入设置页），仍需分档防英文长文案撑爆：
+     900–1199：tab 全文字，右区按钮图标化（title 悬停提示仍在）。
+     768–899 ：tab 也图标化。「⋯」菜单从桌面收缩序列中退役，仅移动端（<768px）使用。 */
+
+  @media (min-width: 900px) and (max-width: 1199px) {
+    .topbar-nav {
+      gap: 0.1rem;
+    }
+    .topbar-tab {
+      padding: 0 0.55rem;
+    }
+    .topbar-right .btn-text {
+      display: none;
+    }
+  }
+
+  @media (min-width: 768px) and (max-width: 899px) {
+    .topbar-nav {
+      gap: 0.1rem;
+    }
+    .topbar-tab {
+      padding: 0 0.55rem;
+    }
+    .topbar-tab span {
+      display: none;
+    }
+    .topbar-right .btn-text {
+      display: none;
     }
   }
 </style>

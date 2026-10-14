@@ -229,6 +229,7 @@ export const zhCN = {
   settings: {
     title: '设置',
     group_general: '通用',
+    group_appearance: '外观',
     group_security: '安全',
     group_generator: '生成器默认值',
     group_health: '体检阈值',
