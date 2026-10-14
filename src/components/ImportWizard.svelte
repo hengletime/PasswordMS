@@ -90,37 +90,37 @@
   }
 </script>
 
-<div class="wizard">
-  <div class="row">
-    <button class="btn" type="button" onclick={() => void choose()}>
+<div class="imp">
+  <div class="imp-row">
+    <button class="pms-btn" type="button" onclick={() => void choose()}>
       <Icon name="file" size={15} />{ui.t('import.choose_file')}
     </button>
-    {#if sourcePath}<code class="path">{sourcePath}</code>{/if}
+    {#if sourcePath}<code class="imp-path">{sourcePath}</code>{/if}
   </div>
 
-  <div class="row">
-    <span class="label">{ui.t('import.format')}</span>
-    <select bind:value={format}>
+  <div class="imp-row">
+    <label class="pms-label" for="imp-format">{ui.t('import.format')}</label>
+    <select id="imp-format" class="pms-input imp-format" bind:value={format}>
       <option value="json">{ui.t('import.format_json')}</option>
       <option value="csv">{ui.t('import.format_csv')}</option>
     </select>
-    <button class="btn ghost" type="button" onclick={() => void doPreview()} disabled={sourcePath.length === 0 || busy}>
+    <button class="pms-btn is-ghost" type="button" onclick={() => void doPreview()} disabled={sourcePath.length === 0 || busy}>
       {ui.t('import.preview')}
     </button>
   </div>
 
   {#if format === 'csv' && (mapped.length > 0 || customFields.length > 0)}
-    <div class="mapping">
-      <div class="group">
-        <span class="label">{ui.t('import.mapping_known')}</span>
-        <div class="chips">
-          {#each mapped as col (col)}<span class="chip">{col}</span>{/each}
+    <div class="imp-mapping">
+      <div class="imp-group">
+        <span class="pms-label">{ui.t('import.mapping_known')}</span>
+        <div class="imp-chips">
+          {#each mapped as col (col)}<span class="pms-badge is-accent">{col}</span>{/each}
         </div>
       </div>
-      <div class="group">
-        <span class="label">{ui.t('import.mapping_custom')}</span>
-        <div class="chips">
-          {#each customFields as col (col)}<span class="chip muted">{col}</span>{/each}
+      <div class="imp-group">
+        <span class="pms-label">{ui.t('import.mapping_custom')}</span>
+        <div class="imp-chips">
+          {#each customFields as col (col)}<span class="imp-badge-muted">{col}</span>{/each}
         </div>
       </div>
     </div>
@@ -131,109 +131,94 @@
   {/if}
 
   {#if preview}
-    <div class="counts">
-      <div><span>{ui.t('import.items')}</span><strong>{preview.item_count}</strong></div>
-      <div><span>{ui.t('import.folders')}</span><strong>{preview.folder_count}</strong></div>
-      <div><span>{ui.t('import.skipped')}</span><strong>{preview.skipped}</strong></div>
+    <div class="imp-counts">
+      <div><span class="pms-label">{ui.t('import.items')}</span><strong>{preview.item_count}</strong></div>
+      <div><span class="pms-label">{ui.t('import.folders')}</span><strong>{preview.folder_count}</strong></div>
+      <div><span class="pms-label">{ui.t('import.skipped')}</span><strong>{preview.skipped}</strong></div>
     </div>
     {#if preview.skipped > 0}
-      <div class="skips">
+      <div class="imp-chips">
         {#each Object.entries(preview.skipped_by_type) as [label, count] (label)}
-          <span class="chip muted">{label}: {count}</span>
+          <span class="imp-badge-muted">{label}: {count}</span>
         {/each}
       </div>
     {/if}
-    <button class="btn primary" type="button" onclick={() => void apply()} disabled={busy}>
+    <button class="pms-btn is-primary" type="button" onclick={() => void apply()} disabled={busy}>
       {ui.t('import.apply')}
     </button>
   {/if}
 
   {#if resultText}
-    <p class="result">{resultText}</p>
+    <p class="imp-result">{resultText}</p>
   {/if}
 </div>
 
 <style>
-  .wizard {
+  .imp {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.85rem;
   }
-  .row {
+  .imp-row {
     display: flex;
     align-items: center;
     gap: 0.5rem;
     flex-wrap: wrap;
   }
-  .label {
-    font-size: 0.78rem;
-    color: var(--pms-muted);
-  }
-  .path {
+  .imp-path {
     font-family: var(--pms-mono);
     font-size: 0.76rem;
     color: var(--pms-muted);
     word-break: break-all;
   }
-  select {
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    background: var(--pms-bg);
-    color: var(--pms-fg);
-    padding: 0.4rem 0.55rem;
-    font-size: 0.85rem;
+  .imp-format {
+    width: auto;
+    min-height: 34px;
+    flex: 0 0 auto;
   }
-  .mapping {
+  .imp-mapping {
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.6rem;
+    padding: 0.75rem;
     border: 1px solid var(--pms-border);
-    border-radius: 10px;
-    padding: 0.7rem;
+    border-radius: var(--pms-r);
+    background: var(--pms-surface);
   }
-  .group {
+  .imp-group {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
   }
-  .chips {
+  .imp-chips {
     display: flex;
     flex-wrap: wrap;
     gap: 0.3rem;
   }
-  .chip {
+  .imp-badge-muted {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.5rem;
+    border-radius: var(--pms-r-pill);
     font-size: 0.74rem;
-    padding: 0.15rem 0.45rem;
-    border-radius: 6px;
-    background: var(--pms-accent-soft);
-    color: var(--pms-accent);
-  }
-  .chip.muted {
-    background: var(--pms-hover);
+    font-weight: 600;
+    background: var(--pms-bg-2);
     color: var(--pms-muted);
   }
-  .counts {
+  .imp-counts {
     display: flex;
-    gap: 1.25rem;
+    gap: 1.5rem;
   }
-  .counts div {
+  .imp-counts div {
     display: flex;
     flex-direction: column;
+    gap: 0.15rem;
   }
-  .counts span {
-    font-size: 0.74rem;
-    color: var(--pms-muted);
+  .imp-counts strong {
+    font-size: 1.2rem;
+    font-weight: 700;
   }
-  .counts strong {
-    font-size: 1.15rem;
-  }
-  .skips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3rem;
-  }
-  .result {
-    font-size: 0.85rem;
+  .imp-result {
     color: var(--pms-success);
   }
 </style>

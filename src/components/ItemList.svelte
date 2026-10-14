@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 条目列表（PRD F-04 / F-08）。
+  // 条目列表（PRD F-04 / F-08）。设计规范 §5.4：行高 56px、选中左侧 2px 青绿竖条、空态居中图标+文案。
   import Icon from './common/Icon.svelte';
   import Spinner from './common/Spinner.svelte';
   import { vault } from '../lib/stores/vault.svelte';
@@ -38,148 +38,159 @@
   }
 </script>
 
-<section class="item-list">
-  <header>
-    <div class="search">
-      <Icon name="search" size={16} />
-      <input placeholder={ui.t('common.search')} value={query} oninput={onSearchInput} />
+<section class="list">
+  <header class="list-head">
+    <div class="pms-input-group list-search">
+      <span class="list-search-icon"><Icon name="search" size={16} /></span>
+      <input class="pms-input" placeholder={ui.t('common.search')} value={query} oninput={onSearchInput} />
     </div>
-    <div class="actions">
-      <button class="btn ghost" type="button" onclick={() => onnew('login')}>
+    <div class="list-actions">
+      <button class="pms-btn is-primary is-sm" type="button" onclick={() => onnew('login')}>
         <Icon name="plus" size={15} />{ui.t('item.new_login')}
       </button>
-      <button class="btn ghost" type="button" onclick={() => onnew('secure_note')}>
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => onnew('secure_note')}>
         <Icon name="plus" size={15} />{ui.t('item.new_note')}
       </button>
     </div>
   </header>
 
   {#if vault.busy}
-    <div class="center"><Spinner label={ui.t('common.loading')} /></div>
+    <div class="list-center"><Spinner label={ui.t('common.loading')} /></div>
   {:else if vault.items.length === 0}
-    <div class="center empty">{ui.t('item.empty')}</div>
+    <div class="list-center list-empty">
+      <Icon name="key" size={26} />
+      <p>{ui.t('item.empty')}</p>
+    </div>
   {:else}
-    <ul>
+    <ul class="list-items">
       {#each vault.items as item (item.item_id)}
         <li>
           <button
-            class="entry"
+            class="list-row"
             class:active={vault.selectedItemId === item.item_id}
             type="button"
             onclick={() => vault.selectItem(item.item_id)}
           >
-            <span class="icon"><Icon name={iconFor(item)} size={16} /></span>
-            <span class="meta">
-              <span class="title">{item.kind.title}</span>
-              <span class="sub">{typeLabel(item)}</span>
+            <span class="list-icon"><Icon name={iconFor(item)} size={16} /></span>
+            <span class="list-meta">
+              <span class="list-title">{item.kind.title}</span>
+              <span class="list-sub pms-meta">{typeLabel(item)}</span>
             </span>
             {#if item.favorite}
-              <span class="fav"><Icon name="star" size={14} /></span>
+              <span class="list-fav"><Icon name="star" size={14} /></span>
             {/if}
           </button>
         </li>
       {:else}
-        <li class="center empty">{ui.t('item.no_results')}</li>
+        <li class="list-center list-empty">{ui.t('item.no_results')}</li>
       {/each}
     </ul>
   {/if}
 </section>
 
 <style>
-  .item-list {
+  .list {
     width: 300px;
     flex-shrink: 0;
     border-right: 1px solid var(--pms-border);
+    background: var(--pms-surface);
     display: flex;
     flex-direction: column;
     min-height: 0;
   }
-  header {
+  .list-head {
     padding: 0.6rem;
     border-bottom: 1px solid var(--pms-border);
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
-  .search {
+  .list-search {
+    padding-left: 0.55rem;
+  }
+  .list-search-icon {
     display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    border: 1px solid var(--pms-border);
-    border-radius: 7px;
-    padding: 0 0.5rem;
-    color: var(--pms-muted);
+    color: var(--pms-faint);
   }
-  .search input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    color: var(--pms-fg);
-    padding: 0.45rem 0;
-    outline: none;
-    font-size: 0.85rem;
-  }
-  .actions {
+  .list-actions {
     display: flex;
     gap: 0.35rem;
   }
-  .actions .btn {
+  .list-actions .pms-btn {
     flex: 1;
   }
-  ul {
+  .list-items {
     list-style: none;
     margin: 0;
-    padding: 0.4rem;
+    padding: 0.35rem;
     overflow: auto;
     flex: 1;
   }
-  .entry {
+  .list-row {
+    position: relative;
     width: 100%;
+    min-height: 56px;
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    padding: 0.5rem;
+    padding: 0.4rem 0.55rem;
     border: none;
-    border-radius: 8px;
+    border-left: 2px solid transparent;
+    border-radius: var(--pms-r-sm);
     background: transparent;
     color: var(--pms-fg);
     cursor: pointer;
     text-align: left;
+    transition: background var(--pms-dur) var(--pms-ease);
   }
-  .entry:hover {
-    background: var(--pms-hover);
+  .list-row:hover {
+    background: var(--pms-bg-2);
   }
-  .entry.active {
+  .list-row.active {
     background: var(--pms-accent-soft);
+    border-left-color: var(--pms-accent);
   }
-  .meta {
+  .list-icon {
+    display: flex;
+    color: var(--pms-muted);
+  }
+  .list-row.active .list-icon {
+    color: var(--pms-accent);
+  }
+  .list-meta {
     display: flex;
     flex-direction: column;
     min-width: 0;
     flex: 1;
   }
-  .title {
+  .list-title {
     font-size: 0.88rem;
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .sub {
-    font-size: 0.72rem;
-    color: var(--pms-muted);
+  .list-sub {
+    margin: 0;
   }
-  .fav {
+  .list-fav {
     color: var(--pms-warning);
-    line-height: 0;
-  }
-  .center {
     display: flex;
+  }
+  .list-center {
+    display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    padding: 1.5rem;
+    gap: 0.4rem;
+    padding: 1.8rem 1rem;
+    flex: 1;
   }
-  .empty {
+  .list-empty {
     color: var(--pms-muted);
     font-size: 0.85rem;
+  }
+  .list-empty p {
+    margin: 0;
   }
 </style>

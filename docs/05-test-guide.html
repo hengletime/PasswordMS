@@ -1,0 +1,433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PasswordMS v0.1.0 · 测试指南</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --ink:#1c1f23; --ink2:#5b6470; --ink3:#8b949e;
+    --line:#e3e6ea; --accent:#2f6fed; --accent-soft:#eaf1ff;
+    --ok:#12855a; --ok-soft:#e6f6ef; --warn:#9a6200; --warn-soft:#fff5e0;
+    --danger:#c0392b; --danger-soft:#fdecea; --code-bg:#f2f4f7; --code-ink:#354152;
+    --shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#131518; --card:#1b1e23; --ink:#e9ecf1; --ink2:#a8b2bf; --ink3:#78828f;
+      --line:#2b3037; --accent:#6fa2ff; --accent-soft:#1d2735;
+      --ok:#4ecf9a; --ok-soft:#14291f; --warn:#e0ab55; --warn-soft:#2b2314;
+      --danger:#ef8074; --danger-soft:#2d1a18; --code-bg:#22262c; --code-ink:#cdd6e2;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 1px 3px rgba(0,0,0,.25);
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:920px;margin:0 auto;padding:32px 20px 96px}
+
+  header.top{margin-bottom:26px}
+  h1{font-size:26px;line-height:1.35;margin:0 0 6px;letter-spacing:-.01em}
+  .sub{color:var(--ink2);font-size:14px}
+  h2{font-size:19px;margin:38px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:24px 0 10px;color:var(--ink)}
+  p{margin:9px 0}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;box-shadow:var(--shadow);margin:14px 0}
+
+  table{border-collapse:collapse;width:100%;font-size:14px;margin:6px 0}
+  th,td{text-align:left;padding:9px 11px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink2);font-weight:600;font-size:13px;background:transparent}
+  tr:last-child td{border-bottom:none}
+  code{background:var(--code-bg);color:var(--code-ink);padding:1.5px 5px;border-radius:4px;font-size:13px;
+       font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+  pre{background:var(--code-bg);color:var(--code-ink);padding:13px 15px;border-radius:8px;overflow-x:auto;
+      font-size:12.5px;line-height:1.65;margin:10px 0;position:relative;
+      font-family:ui-monospace,SFMono-Regular,Consolas,"Liberation Mono",monospace}
+  pre code{background:none;padding:0;font-size:inherit;color:inherit}
+
+  .badge{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap}
+  .b-ok{background:var(--ok-soft);color:var(--ok)}
+  .b-warn{background:var(--warn-soft);color:var(--warn)}
+  .b-danger{background:var(--danger-soft);color:var(--danger)}
+
+  .note,.warn,.danger{border-radius:9px;padding:12px 15px;margin:12px 0;font-size:14px;border:1px solid transparent}
+  .note{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 25%,transparent)}
+  .warn{background:var(--warn-soft);border-color:color-mix(in srgb,var(--warn) 30%,transparent)}
+  .danger{background:var(--danger-soft);border-color:color-mix(in srgb,var(--danger) 30%,transparent)}
+  .note b,.warn b,.danger b{display:block;margin-bottom:3px}
+
+  ul.steps{list-style:none;padding:0;margin:10px 0}
+  ul.steps li{display:flex;gap:10px;padding:7px 0;border-bottom:1px dashed var(--line);align-items:flex-start}
+  ul.steps li:last-child{border-bottom:none}
+  ul.steps input[type=checkbox]{
+    margin:4px 0 0;width:17px;height:17px;flex:0 0 17px;accent-color:var(--accent);cursor:pointer;
+  }
+  ul.steps label{cursor:pointer;flex:1;-webkit-user-select:none;user-select:none}
+  ul.steps input:checked + label{color:var(--ink3);text-decoration:line-through;text-decoration-color:var(--ink3)}
+  .exp{display:block;color:var(--ink2);font-size:13px;margin-top:2px}
+  .exp b{color:var(--ok);font-weight:600}
+
+  .bar{position:sticky;top:0;z-index:20;background:var(--bg);padding:12px 0 10px;margin:-8px 0 6px;border-bottom:1px solid var(--line)}
+  .bar-row{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--ink2)}
+  .track{height:7px;background:var(--line);border-radius:6px;overflow:hidden;flex:1}
+  .fill{height:100%;width:0;background:var(--accent);border-radius:6px;transition:width .25s ease}
+  button.reset{
+    border:1px solid var(--line);background:var(--card);color:var(--ink2);border-radius:7px;
+    padding:5px 11px;font-size:12.5px;cursor:pointer;font-family:inherit;white-space:nowrap;
+  }
+  button.reset:hover{border-color:var(--accent);color:var(--accent)}
+
+  .pill{display:inline-block;background:var(--code-bg);border:1px solid var(--line);border-radius:6px;
+        padding:1px 7px;font-size:12.5px;color:var(--ink2);margin-right:5px}
+  footer{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.5px}
+  @media print{
+    .bar,button.reset{display:none}
+    body{background:#fff}
+    .card{box-shadow:none;break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>PasswordMS v0.1.0 · 测试指南</h1>
+  <div class="sub">本地优先 · 零知识密码管理器 &nbsp;|&nbsp; 生成于 2026-10-14 &nbsp;|&nbsp; 勾选状态自动保存在本机浏览器里</div>
+</header>
+
+<div class="bar">
+  <div class="bar-row">
+    <span id="pct" style="min-width:74px;font-variant-numeric:tabular-nums">0 / 0 项</span>
+    <div class="track"><div class="fill" id="fill"></div></div>
+    <button class="reset" id="resetBtn">重置全部勾选</button>
+  </div>
+</div>
+
+<h2>0 · 现在到底能不能测？</h2>
+
+<div class="card">
+<table>
+  <tr><th style="width:150px">测试线路</th><th style="width:110px">状态</th><th>说明</th></tr>
+  <tr>
+    <td><b>Windows 桌面</b></td>
+    <td><span class="badge b-ok">现在就能测</span></td>
+    <td>安装包已就绪，程序此刻已在运行（窗口标题 <code>PasswordMS</code>，响应正常，近 10 分钟无崩溃事件）。</td>
+  </tr>
+  <tr>
+    <td><b>Android 真机</b></td>
+    <td><span class="badge b-ok">现在就能测</span></td>
+    <td>APK 已用测试证书签名（v2 + v3 验签通过），<code>minSdk=24</code> → <b>Android 7.0 及以上</b>可装。</td>
+  </tr>
+  <tr>
+    <td><b>局域网同步</b></td>
+    <td><span class="badge b-warn">需两台设备</span></td>
+    <td>要两端都能跑起来（桌面 + 手机 / 或两台电脑）。同一 WiFi 下即可，<b>没有摄像头也能配对</b>（走"粘贴配对文本"）。</td>
+  </tr>
+</table>
+</div>
+
+<div class="note">
+  <b>建议的测试顺序</b>
+  先走完 <b>第 1 关（Windows）</b>——10 分钟，能覆盖绝大部分核心逻辑。确认没问题再上手机，最后才是跨设备同步。
+  不要一上来就折腾同步，同步失败时你会分不清是"同步坏了"还是"某一端的库里本来就没东西"。
+</div>
+
+<h2>1 · 第 1 关：Windows 桌面端</h2>
+
+<h3>1.0 启动</h3>
+<div class="card">
+  <p>程序已经在跑了。如果你想从安装包重新来一遍，用这两个之一：</p>
+  <table>
+    <tr><th style="width:120px">形式</th><th>路径</th><th style="width:90px">大小</th></tr>
+    <tr><td>安装包（推荐）</td><td><code>target\x86_64-pc-windows-gnullvm\release\bundle\nsis\PasswordMS_0.1.0_x64-setup.exe</code></td><td>1.48 MB</td></tr>
+    <tr><td>MSI</td><td><code>target\x86_64-pc-windows-gnullvm\release\bundle\msi\PasswordMS_0.1.0_x64_en-US.msi</code></td><td>2.11 MB</td></tr>
+    <tr><td>免安装</td><td><code>target\x86_64-pc-windows-gnullvm\release\passwordms.exe</code></td><td>3.93 MB</td></tr>
+  </table>
+  <p class="exp" style="color:var(--ink2)">三个都在仓库根目录下的 <code>target\...</code> 里（路径相对 <code>D:\Software\PasswordMS</code>）。</p>
+</div>
+
+<h3>1.1 创建保险库（把密码定下来，后面一直用）</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="w1"><label for="w1">启动后出现"创建保险库"界面，顶部有红字警告：主密码无法找回。<span class="exp">预期：<b>能看到</b>"主密码无法找回"的提示。</span></label></li>
+  <li><input type="checkbox" id="w2"><label for="w2">主密码故意只输 7 位，点"创建并解锁"。<span class="exp">预期：<b>报错</b>"主密码至少需要 8 位。"，不创建。</span></label></li>
+  <li><input type="checkbox" id="w3"><label for="w3">输 8 位以上，但"确认主密码"故意输得不一样。<span class="exp">预期：<b>报错</b>"两次输入的主密码不一致。"</span></label></li>
+  <li><input type="checkbox" id="w4"><label for="w4">两次输一致，但<b>不勾</b>"我已知晓并继续"。<span class="exp">预期：<b>"创建并解锁"按钮点不动</b>（灰的）。</span></label></li>
+  <li><input type="checkbox" id="w5"><label for="w5">勾上以后创建。<span class="exp">预期：<b>成功进入主界面</b>（左侧出现 全部条目 / 收藏 / 密码体检 / 回收站 / 同步 / 设置）。</span></label></li>
+</ul>
+<div class="warn">
+  <b>把这次的主密码记住</b>
+  后面第 1.9 节要测"锁定 → 解锁"和第 1.8 节"修改主密码"，忘了就得删库重来。
+  想重置：退出程序 → 删掉 <code>%APPDATA%\com.passwordms.app</code> 整个目录 → 重新启动。
+</div>
+</div>
+
+<h3>1.2 分组管理</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="f1"><label for="f1">左侧点"新建分组"，建两个：比如 <code>邮箱</code>、<code>银行</code>。<span class="exp">预期：<b>两个都出现在左侧列表里</b>。</span></label></li>
+  <li><input type="checkbox" id="f2"><label for="f2">把其中一个重命名。<span class="exp">预期：<b>名字当场变</b>，条目不受影响。</span></label></li>
+  <li><input type="checkbox" id="f3"><label for="f3">删掉一个分组。<span class="exp">预期：<b>弹窗让你选</b>两条路 —— "移出分组" 或 "移入回收站"。</span></label></li>
+  <li><input type="checkbox" id="f4"><label for="f4">选"移出分组"，再去"全部条目"看那个条目。<span class="exp">预期：<b>条目还在</b>，只是变成未分组。</span></label></li>
+</ul>
+</div>
+
+<h3>1.3 条目：一键直达网址 + 用户名密码</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="i1"><label for="i1">"新建登录"，把 标题 / 网址 / 用户名 / 密码 / 备注 / TOTP密钥 / 自定义字段 都填一遍，保存。<span class="exp">预期：<b>保存成功</b>，列表里出现这一条。</span></label></li>
+  <li><input type="checkbox" id="i2"><label for="i2">网址填 <code>https://example.com</code>，点"打开网址"。<span class="exp">预期：<b>默认浏览器打开该网址</b>。</span></label></li>
+  <li><input type="checkbox" id="i3"><label for="i3">把网址改成危险形式（比如 <code>javascript:alert(1)</code> 或 <code>http://</code> 开头的怪东西），再点"打开网址"。<span class="exp">预期：<b>被拦下</b>并提示"该网址不安全，已阻止打开。"，浏览器不开。</span></label></li>
+  <li><input type="checkbox" id="i4"><label for="i4">点"显示密码"。<span class="exp">预期：<b>先弹二次确认</b>："即将在屏幕上显示明文密码，请确认周围无人可见。" —— 确认后才显示明文。<b>这一步就是 A-10 二次确认</b>，重点看它有没有出现。</span></label></li>
+  <li><input type="checkbox" id="i5"><label for="i5">点"复制密码"，看提示，然后等 30 秒。
+    <span class="exp">预期：<b>提示</b>"剪贴板将在 30 秒后清空"，并且真的开始倒计时。30 秒后到记事本里粘贴 → <b>应该粘不出密码</b>。</span></label></li>
+  <li><input type="checkbox" id="i6"><label for="i6">编辑刚才那条，只改一下备注，保存，再看它的版本号。<span class="exp">预期：<b>版本号 +1</b>（创建时是 1，改完是 2）。</span></label></li>
+</ul>
+</div>
+
+<h3>1.4 条目：密钥文档（笔记 与 附件，两种都要测）</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="n1"><label for="n1">"新建笔记"，写一段文字保存。<span class="exp">预期：<b>能存能打开能改</b>。</span></label></li>
+  <li><input type="checkbox" id="n2"><label for="n2">"新建附件"，传一个小文件（截图 png / 一个 txt 都行）。<span class="exp">预期：<b>能上传、能重新打开/另存</b>。</span></label></li>
+  <li><input type="checkbox" id="n3"><label for="n3">传一个大于 20 MB 的文件。<span class="exp">预期：<b>被拒绝</b>，提示"附件超过大小上限。"</span></label></li>
+</ul>
+</div>
+
+<h3>1.5 搜索 与 收藏</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="s1"><label for="s1">搜索框输标题里的关键字。<span class="exp">预期：<b>实时筛选</b>出匹配项；输一个不存在的词 → "没有匹配的条目"。</span></label></li>
+  <li><input type="checkbox" id="s2"><label for="s2">给某条点收藏，然后点左侧"收藏"。<span class="exp">预期：<b>这条出现在收藏里</b>；取消收藏后消失。</span></label></li>
+</ul>
+</div>
+
+<h3>1.6 密码生成器</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="g1"><label for="g1">打开生成器，改长度和字符集（大小写/数字/符号），连点几次生成。<span class="exp">预期：<b>每次结果不同</b>；长度跟着设置走；强度条随复杂度变化。</span></label></li>
+  <li><input type="checkbox" id="g2"><label for="g2">把生成的密码直接用到新建登录里。<span class="exp">预期：<b>能一键填入</b>。</span></label></li>
+</ul>
+</div>
+
+<h3>1.7 密码体检 与 回收站</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="h1"><label for="h1">点"密码体检"→"开始体检"。<span class="exp">预期：<b>出健康分</b>，并统计 登录条目 / 弱口令 / 重复密码 / 超期未改 。</span></label></li>
+  <li><input type="checkbox" id="h2"><label for="h2">故意新建两条<b>用同一个密码</b>的登录，再体检一次。<span class="exp">预期：<b>"重复密码"数量增加</b>。</span></label></li>
+  <li><input type="checkbox" id="t1"><label for="t1">删掉一条条目，去"回收站"看。<span class="exp">预期：<b>它在回收站里</b>，显示删除时间和到期时间。</span></label></li>
+  <li><input type="checkbox" id="t2"><label for="t2">在回收站点"还原"。<span class="exp">预期：<b>条目回到原来的列表</b>。</span></label></li>
+  <li><input type="checkbox" id="t3"><label for="t3">再删一条 → 回收站点"彻底删除"。<span class="exp">预期：<b>弹二次确认</b>"此操作不可恢复…"，确认后才真删。</span></label></li>
+  <li><input type="checkbox" id="t4"><label for="t4">点"清空回收站"。<span class="exp">预期：<b>弹二次确认</b>，确认后清空。</span></label></li>
+</ul>
+</div>
+
+<h3>1.8 设置</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="st1"><label for="st1">把"剪贴板清空（秒）"从 30 改成 60，保存，回条目复制一次密码。<span class="exp">预期：<b>提示变成 60 秒</b>。说明设置真的生效了。</span></label></li>
+  <li><input type="checkbox" id="st2"><label for="st2">把"自动锁定（分钟）"设成 1，然后<b>什么都不点</b>，等 1 分多钟。<span class="exp">预期：<b>自动跳回解锁界面</b>。这是"离开电脑自动上锁"的关键行为，重点测。</span></label></li>
+  <li><input type="checkbox" id="st3"><label for="st3">"修改主密码"：先填当前主密码，再填新主密码。<span class="exp">预期：<b>改完能用新密码解锁</b>；用旧密码解锁 → "解锁失败，请重试。"</span></label></li>
+  <li><input type="checkbox" id="st4"><label for="st4">"导出保险库"。<span class="exp">预期：<b>先弹二次确认</b>，明确告知"导出后文件将以明文形式保存到磁盘，请确认存放位置安全。"；确认后生成文件。</span></label></li>
+  <li><input type="checkbox" id="st5"><label for="st5">改体检阈值（弱口令长度 / 超期天数），再体检一次。<span class="exp">预期：<b>统计结果跟着阈值变</b>。</span></label></li>
+</ul>
+<div class="danger">
+  <b>导出是明文</b>
+  导出的文件<b>不加密</b>。测完记得把导出文件删掉，别留在下载目录里。
+</div>
+</div>
+
+<h3>1.9 锁定 与 解锁</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="l1"><label for="l1">点右上角"锁定"。<span class="exp">预期：<b>立刻回到解锁界面</b>，看不到任何条目内容。</span></label></li>
+  <li><input type="checkbox" id="l2"><label for="l2">故意输错主密码。<span class="exp">预期：<b>"解锁失败，请重试。"</b>，不进入主界面。</span></label></li>
+  <li><input type="checkbox" id="l3"><label for="l3">输对主密码解锁。<span class="exp">预期：<b>回到主界面，之前的条目、分组、收藏都还在</b>。</span></label></li>
+  <li><input type="checkbox" id="l4"><label for="l4">锁屏界面点"显示密码"小眼睛。<span class="exp">预期：<b>能把输入框内容显示成明文</b>（方便核对自己有没有打错）。</span></label></li>
+</ul>
+</div>
+
+<h3>1.10 导入</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="im1"><label for="im1">点左侧/顶部"导入"，选刚才导出的那个文件。<span class="exp">预期：<b>能解析进来</b>，条目数对得上。</span></label></li>
+  <li><input type="checkbox" id="im2"><label for="im2">随便选一个非导出格式的文件（比如一张图片）导入。<span class="exp">预期：<b>报错</b>"导入文件解析失败。"，不崩。</span></label></li>
+</ul>
+</div>
+
+<h2>2 · 第 2 关：Android 真机</h2>
+
+<h3>2.1 安装</h3>
+<div class="card">
+<p>APK 在这儿（<b>在仓库外面</b>，是测试签名版）：</p>
+<pre><code>D:\AndroidDev\out\PasswordMS-0.1.0-arm64-test.apk    （6.35 MB）</code></pre>
+<p><b>方式 A · 用 adb 装（推荐）</b> —— 手机要打开「开发者选项 → USB 调试」，插上数据线：</p>
+<pre><code>"D:\AndroidDev\sdk\platform-tools\adb.exe" devices -l
+"D:\AndroidDev\sdk\platform-tools\adb.exe" install -r "D:\AndroidDev\out\PasswordMS-0.1.0-arm64-test.apk"</code></pre>
+<p><b>方式 B · 手动装</b> —— 把 apk 拷到手机（数据线/微信传文件都行），在手机上点开安装，系统会问"允许安装未知来源应用"，允许即可。</p>
+<div class="warn">
+  <b>装不上时先看这两条</b>
+  ① 手机安卓版本必须 <b>7.0 或更高</b>（这个包 <code>minSdk=24</code>）。<br>
+  ② 如果之前装过别的签名的同款，要先卸载旧版才能装（签名不一致，安卓会拒绝覆盖）。
+</div>
+</div>
+
+<h3>2.2 真机上要跑哪些</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="a1"><label for="a1">首次启动 → 创建保险库（主密码 ≥ 8 位 + 确认 + 勾选）。<span class="exp">预期：<b>和桌面端表现一致</b>。</span></label></li>
+  <li><input type="checkbox" id="a2"><label for="a2">新建一条登录（网址 + 用户名 + 密码），点"打开网址"。<span class="exp">预期：<b>跳转系统浏览器</b>打开该网址。</span></label></li>
+  <li><input type="checkbox" id="a3"><label for="a3">点"复制密码"，切到别的 App 粘贴。<span class="exp">预期：<b>能粘到</b>；等 30 秒后再粘 → <b>粘不出来</b>。</span></label></li>
+  <li><input type="checkbox" id="a4"><label for="a4">"显示密码"。<span class="exp">预期：<b>出现二次确认弹窗</b>后才显示。</span></label></li>
+  <li><input type="checkbox" id="a5"><label for="a5">新建笔记 + 传一个附件。<span class="exp">预期：<b>能存能打开</b>。</span></label></li>
+  <li><input type="checkbox" id="a6"><label for="a6">切到别的 App / 按 Home 键几分钟再回来。<span class="exp">预期：<b>按设置的时长自动锁定</b>，需要重新输主密码。</span></label></li>
+  <li><input type="checkbox" id="a7"><label for="a7">横屏竖屏来回转。<span class="exp">预期：<b>界面不崩、内容不丢</b>。</span></label></li>
+</ul>
+</div>
+
+<h2>3 · 第 3 关：局域网同步（需要两台设备）</h2>
+
+<div class="card">
+<p><b>前提：</b>两台设备连<b>同一个 WiFi</b>；两端都已经各自创建好保险库并解锁进入主界面。</p>
+<div class="note">
+  <b>没有摄像头也能配对，别被"扫码"两个字劝退</b>
+  配对界面提供了"粘贴配对文本"的入口。所以：<b>手机没摄像头、或者桌面端没摄像头，一样可以完成配对。</b>
+  发起端点"复制配对文本"，另一端把那串文本粘进去就行。
+</div>
+</div>
+
+<h3>3.1 发起端（比如桌面端）</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="p1"><label for="p1">左侧点"同步" → "配对" → 点"生成配对二维码"。<span class="exp">预期：<b>出二维码</b>，并显示"设备指纹"。</span></label></li>
+  <li><input type="checkbox" id="p2"><label for="p2">把这个"设备指纹"记下来（或截图）。<span class="exp">预期：稍后和另一端比对，必须<b>一模一样</b>。</span></label></li>
+  <li><input type="checkbox" id="p3"><label for="p3">点"复制配对文本"。<span class="exp">预期：<b>剪贴板拿到一串以 <code>PMS1:</code> 开头的文本</b>，稍后给另一端用。</span></label></li>
+</ul>
+</div>
+
+<h3>3.2 加入端（比如手机）</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="p4"><label for="p4">进"同步" → "配对" → 进"加入配对"。<span class="exp">预期：<b>看到扫码提示 + 一个"粘贴配对文本"的输入框</b>。</span></label></li>
+  <li><input type="checkbox" id="p5"><label for="p5">把发起端那串 <code>PMS1:...</code> 粘进输入框，点"加入并同步"。<span class="exp">预期：<b>开始配对</b>，显示"等待对端连接…"，随后变"配对成功"。</span></label></li>
+  <li><input type="checkbox" id="p6"><label for="p6">核对两端的"设备指纹"是否一致。<span class="exp">预期：<b>完全一致</b>。这一条是防中间人的关键，务必肉眼比对。</span></label></li>
+</ul>
+<div class="warn">
+  <b>如果加入端本来就有数据</b>
+  加入端保险库非空时，会明确拒绝："本机保险库非空（N 条），无法直接采用对端密钥。请先导出并清空，或改用对端重新创建保险库。"
+  <b>这是设计上的保护，不是 bug。</b>想测同步，就让加入端用<b>全新的空库</b>。
+</div>
+</div>
+
+<h3>3.3 验证同步结果</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="p7"><label for="p7">看加入端的"全部条目"。<span class="exp">预期：<b>能看到发起端的条目</b>，标题/用户名/密码都一致。</span></label></li>
+  <li><input type="checkbox" id="p8"><label for="p8">进"设备"标签页。<span class="exp">预期：<b>列出对端设备</b>；之前空库时显示"还没有已配对设备"。</span></label></li>
+  <li><input type="checkbox" id="p9"><label for="p9">进"状态"标签页。<span class="exp">预期：<b>"上次同步"有时间、"设备数"为 1、"待同步变更"有数字</b>。</span></label></li>
+  <li><input type="checkbox" id="p10"><label for="p10">在其中一端改一条（比如改备注），点"立即同步"，再看另一端。<span class="exp">预期：<b>另一端看到改动</b>。</span></label></li>
+</ul>
+</div>
+
+<h3>3.4 冲突仲裁</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="c1"><label for="c1">把两端<b>都断网</b>，各自把<b>同一条</b>的标题改成不同的值。<span class="exp">预期：两边都改得动（本地操作不等网络）。</span></label></li>
+  <li><input type="checkbox" id="c2"><label for="c2">两端都恢复网络，任一端点"立即同步"，再同步另一端。<span class="exp">预期：<b>出现冲突</b>，提示"产生 N 个冲突"。</span></label></li>
+  <li><input type="checkbox" id="c3"><label for="c3">进"冲突"标签页处理。<span class="exp">预期：<b>并排显示"本机版本 / 远端版本"</b>，可选 <b>保留本机 / 采用远端 / 两者都留</b>；处理完冲突数归零。</span></label></li>
+</ul>
+</div>
+
+<h3>3.5 解除配对</h3>
+<div class="card">
+<ul class="steps">
+  <li><input type="checkbox" id="u1"><label for="u1">"设备"页对某台点"解除配对"。<span class="exp">预期：<b>弹二次确认</b>"解除后需重新扫码配对。"；确认后设备列表移除该台。</span></label></li>
+</ul>
+</div>
+
+<h2>4 · 已知边界（这些不是 bug，先别急着报）</h2>
+<div class="card">
+<table>
+  <tr><th style="width:210px">现象</th><th>说明</th></tr>
+  <tr><td>扫码功能用不了</td><td>扫二维码需要真机摄像头 + 授权。没有摄像头请走"粘贴配对文本"，功能等价。</td></tr>
+  <tr><td>Android 6 及以下装不上</td><td>本包 <code>minSdk=24</code>（Android 7.0）。低版本系统安卓会直接拒绝安装。</td></tr>
+  <tr><td>用测试证书签名</td><td>证书在 <code>D:\AndroidDev\keystores\passwordms-test.jks</code>，口令是明文弱口令，<b>仅供测试</b>。正式发布要另建正式证书，否则以后无法升级（签名不一致）。</td></tr>
+  <tr><td><code>sync_accept_pair</code> 好像什么都没做</td><td>它目前是个空实现，且界面并没有调用它。你在日志里看到它没动作，属正常。</td></tr>
+  <tr><td>没有 UI 自动化测试</td><td>目前只有 37 个 Rust 单元/集成测试，界面部分<b>只能靠你手动点</b>。这也是这份指南存在的原因。</td></tr>
+  <tr><td>没有 <code>cargo fmt --check</code> 结果</td><td>本机没装 rustfmt 组件，格式化检查暂缺。</td></tr>
+  <tr><td>首次解锁要等 2 秒左右</td><td>主密码派生（Argon2id）故意做得慢，这是<b>安全特性</b>，不是卡顿。整数范围约 1.8–2.1 秒。</td></tr>
+</table>
+</div>
+
+<h2>5 · 出问题了怎么反馈</h2>
+<div class="card">
+<p>给我这三件事就够我定位了，不用长篇大论：</p>
+<table>
+  <tr><th style="width:110px">要什么</th><th>例子</th></tr>
+  <tr><td><b>在哪一步</b></td><td>"1.3 节第 3 条，打开网址"</td></tr>
+  <tr><td><b>你看到了什么</b></td><td>"浏览器弹了，但我期望它被拦住" / 直接甩截图</td></tr>
+  <tr><td><b>你期望什么</b></td><td>"应该提示该网址不安全"</td></tr>
+</table>
+<p style="margin-top:14px">如果有崩溃，顺手看一下事件查看器：<br>
+<code>Win + R</code> → 输 <code>eventvwr</code> → Windows 日志 → 应用程序 → 找来源为 <code>Application Error</code> 或 <code>.NET Runtime</code> 的红色记录。</p>
+<div class="note">
+  <b>数据和隐私提醒</b>
+  保险库数据在 <code>%APPDATA%\com.passwordms.app\passwordms.vault</code>。<br>
+  想重置：退出程序 → 删掉 <code>%APPDATA%\com.passwordms.app</code> 整个目录。<br>
+  <b>测试期间建议用假密码假网址</b>，别把真实的重要密码录进去——等你验收满意了再开始正式使用。
+</div>
+</div>
+
+<footer>
+  PasswordMS v0.1.0 · 测试指南 · 2026-10-14<br>
+  本页为单文件 HTML，可直接双击打开、可离线、可打印；勾选进度存在浏览器本地，换浏览器不会同步。
+</footer>
+
+</div>
+
+<script>
+(function(){
+  var KEY = 'pms-testguide-v1';
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('ul.steps input[type=checkbox]'));
+  var fill = document.getElementById('fill');
+  var pct  = document.getElementById('pct');
+
+  function load(){
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch(e){ saved = {}; }
+    boxes.forEach(function(b){ if (saved[b.id]) b.checked = true; });
+  }
+  function save(){
+    var o = {};
+    boxes.forEach(function(b){ if (b.checked) o[b.id] = 1; });
+    try { localStorage.setItem(KEY, JSON.stringify(o)); } catch(e){}
+  }
+  function update(){
+    var done = boxes.filter(function(b){ return b.checked; }).length;
+    var total = boxes.length;
+    var p = total ? Math.round(done * 100 / total) : 0;
+    fill.style.width = p + '%';
+    pct.textContent = done + ' / ' + total + ' 项';
+    pct.title = '完成度 ' + p + '%';
+  }
+
+  load(); update();
+
+  boxes.forEach(function(b){
+    b.addEventListener('change', function(){ save(); update(); });
+  });
+
+  document.getElementById('resetBtn').addEventListener('click', function(){
+    if (!confirm('确定清空全部勾选进度？')) return;
+    boxes.forEach(function(b){ b.checked = false; });
+    try { localStorage.removeItem(KEY); } catch(e){}
+    update();
+  });
+})();
+</script>
+</body>
+</html>

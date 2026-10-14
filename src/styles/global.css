@@ -1,176 +1,273 @@
-/* PasswordMS 全局样式（T09）：设计令牌 + 共享控件类。
- * 体积优先：无外部字体 / 无图标字体，全部使用系统字体与内联 SVG。 */
+/* PasswordMS 全局样式：设计令牌 + 共享控件类（设计规范 v1 · docs/06-ui-design.md）。
+ *
+ * 命名规定（D-19 根因修复）：
+ *   1. 共享类一律 `pms-` 前缀，且**只**存在于本文件；
+ *   2. 组件 <style> 内的局部类禁止与 `pms-` 共享类同名，请加组件前缀（lock-/wz-/item-/...）；
+ *   3. 列布局 = `.pms-field`（纵向），行布局 = `.pms-input-group`（横向），两者结构互不相同。
+ *
+ * 体积优先：无外部字体 / 无图标字体，字体用系统栈、图标走内联 SVG，纯 CSS 改动体积影响可忽略。 */
 
+/* ============================================================
+ * 1. 设计令牌
+ * ============================================================ */
 :root {
-  --pms-font-family: system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif;
+  /* —— 字体 —— */
+  --pms-font: system-ui, -apple-system, 'Segoe UI', 'Noto Sans SC', sans-serif;
   --pms-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-  --pms-bg: #f6f7f9;
-  --pms-surface: #ffffff;
-  --pms-fg: #1a1c21;
-  --pms-muted: #6b7280;
-  --pms-border: #e2e5ea;
-  --pms-hover: #f0f2f5;
-  --pms-accent: #2f6fed;
-  --pms-accent-soft: #e8f0fe;
-  --pms-danger: #d64545;
-  --pms-warning: #b7791f;
-  --pms-success: #2f9e6b;
+  /* —— 圆角 —— */
+  --pms-r-sm: 8px;
+  --pms-r: 12px;
+  --pms-r-lg: 16px;
+  --pms-r-pill: 999px;
+
+  /* —— 控件尺寸（桌面）—— */
+  --pms-ctl-h: 42px;      /* 单行输入 / 按钮 */
+  --pms-ctl-h-lg: 46px;   /* 主行动按钮 */
+  --pms-hit: 34px;        /* 图标按钮最小点击区 */
+
+  /* —— 动效 —— */
+  --pms-dur: 140ms;
+  --pms-ease: cubic-bezier(.4, 0, .2, 1);
+
+  /* —— 兼容老令牌名：惰性指向当前主题的 --pms-bg-2 —— */
+  --pms-hover: var(--pms-bg-2);
+
+  /* —— 浅色：默认基色（no-preference / 未知主题时也可用）—— */
+  --pms-bg:            #F3F5F8;
+  --pms-bg-2:          #EAEEF3;
+  --pms-surface:       #FFFFFF;
+  --pms-elevated:      #FFFFFF;
+  --pms-border:        #DFE5EC;
+  --pms-border-strong: #C3CDD9;
+  --pms-fg:            #0E1620;
+  --pms-muted:         #5A6B7E;
+  --pms-faint:         #8B9AAB;
+  --pms-accent:        #0D9488;
+  --pms-accent-2:      #2563EB;
+  --pms-accent-ink:    #FFFFFF;
+  --pms-accent-soft:   rgba(13, 148, 136, .10);
+  --pms-danger:        #D64545;
+  --pms-danger-soft:   rgba(214, 69, 69, .10);
+  --pms-warning:       #B7791F;
+  --pms-warning-soft:  rgba(183, 121, 31, .12);
+  --pms-success:       #17845A;
+  --pms-track:         #C3CDD9;
+  --pms-shadow:        0 1px 2px rgba(16,24,40,.06), 0 10px 26px -16px rgba(16,24,40,.22);
+  --pms-glow:          0 0 0 3px rgba(13,148,136,.20);
 }
 
+/* ========== 暗色：主打方向，科技感 ========== */
 @media (prefers-color-scheme: dark) {
   :root {
-    --pms-bg: #14161b;
-    --pms-surface: #1c1f26;
-    --pms-fg: #e8e9ec;
-    --pms-muted: #9aa3b2;
-    --pms-border: #2b303a;
-    --pms-hover: #262b34;
-    --pms-accent: #5b8def;
-    --pms-accent-soft: #1e2a44;
-    --pms-danger: #e06c6c;
-    --pms-warning: #d4a24a;
-    --pms-success: #4fbf8b;
+    --pms-bg:            #0A0E14;
+    --pms-bg-2:          #0E141C;
+    --pms-surface:       #121A24;
+    --pms-elevated:      #17212D;
+    --pms-border:        #1E2A38;
+    --pms-border-strong: #2C3E52;
+    --pms-fg:            #E6EEF7;
+    --pms-muted:         #8AA0B6;
+    --pms-faint:         #5C7186;
+    --pms-accent:        #2DD4BF;
+    --pms-accent-2:      #58A6FF;
+    --pms-accent-ink:    #04211D;
+    --pms-accent-soft:   rgba(45, 212, 191, .12);
+    --pms-danger:        #F87171;
+    --pms-danger-soft:   rgba(248, 113, 113, .12);
+    --pms-warning:       #F2B45C;
+    --pms-warning-soft:  rgba(242, 180, 92, .12);
+    --pms-success:       #3DDC97;
+    --pms-track:         #2C3E52;
+    --pms-shadow:        0 1px 2px rgba(0,0,0,.55), 0 10px 28px -14px rgba(0,0,0,.8);
+    --pms-glow:          0 0 0 1px rgba(45,212,191,.45), 0 0 26px -10px rgba(45,212,191,.55);
   }
 }
 
-* {
-  box-sizing: border-box;
+/* ========== 显式主题（预览 / 手动切换用，优先级高于媒体查询）========== */
+:root[data-theme='dark'] {
+  --pms-bg:            #0A0E14;
+  --pms-bg-2:          #0E141C;
+  --pms-surface:       #121A24;
+  --pms-elevated:      #17212D;
+  --pms-border:        #1E2A38;
+  --pms-border-strong: #2C3E52;
+  --pms-fg:            #E6EEF7;
+  --pms-muted:         #8AA0B6;
+  --pms-faint:         #5C7186;
+  --pms-accent:        #2DD4BF;
+  --pms-accent-2:      #58A6FF;
+  --pms-accent-ink:    #04211D;
+  --pms-accent-soft:   rgba(45, 212, 191, .12);
+  --pms-danger:        #F87171;
+  --pms-danger-soft:   rgba(248, 113, 113, .12);
+  --pms-warning:       #F2B45C;
+  --pms-warning-soft:  rgba(242, 180, 92, .12);
+  --pms-success:       #3DDC97;
+  --pms-track:         #2C3E52;
+  --pms-shadow:        0 1px 2px rgba(0,0,0,.55), 0 10px 28px -14px rgba(0,0,0,.8);
+  --pms-glow:          0 0 0 1px rgba(45,212,191,.45), 0 0 26px -10px rgba(45,212,191,.55);
+}
+:root[data-theme='light'] {
+  --pms-bg:            #F3F5F8;
+  --pms-bg-2:          #EAEEF3;
+  --pms-surface:       #FFFFFF;
+  --pms-elevated:      #FFFFFF;
+  --pms-border:        #DFE5EC;
+  --pms-border-strong: #C3CDD9;
+  --pms-fg:            #0E1620;
+  --pms-muted:         #5A6B7E;
+  --pms-faint:         #8B9AAB;
+  --pms-accent:        #0D9488;
+  --pms-accent-2:      #2563EB;
+  --pms-accent-ink:    #FFFFFF;
+  --pms-accent-soft:   rgba(13, 148, 136, .10);
+  --pms-danger:        #D64545;
+  --pms-danger-soft:   rgba(214, 69, 69, .10);
+  --pms-warning:       #B7791F;
+  --pms-warning-soft:  rgba(183, 121, 31, .12);
+  --pms-success:       #17845A;
+  --pms-track:         #C3CDD9;
+  --pms-shadow:        0 1px 2px rgba(16,24,40,.06), 0 10px 26px -16px rgba(16,24,40,.22);
+  --pms-glow:          0 0 0 3px rgba(13,148,136,.20);
 }
 
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: var(--pms-bg);
-  color: var(--pms-fg);
-  font-family: var(--pms-font-family);
-  font-size: 15px;
+/* ============================================================
+ * 2. 共享类（仅本文件定义，一律 pms- 前缀）
+ * ============================================================ */
+
+/* ---------- 基线 ---------- */
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--pms-bg); color: var(--pms-fg);
+  font-family: var(--pms-font); font-size: 15px; line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
+#app { min-height: 100vh; }
 
-#app {
-  min-height: 100vh;
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--pms-glow);
+  border-color: var(--pms-accent);
 }
 
-/* 共享按钮 */
-.btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.35rem;
-  padding: 0.5rem 0.85rem;
-  border: 1px solid var(--pms-border);
-  border-radius: 8px;
+/* ---------- 按钮 ---------- */
+.pms-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: .4rem; min-height: var(--pms-ctl-h); padding: 0 .95rem;
+  border: 1px solid var(--pms-border-strong);
+  border-radius: var(--pms-r); background: var(--pms-elevated);
+  color: var(--pms-fg); font-size: .875rem; font-family: inherit;
+  font-weight: 500; cursor: pointer; white-space: nowrap;
+  transition: background var(--pms-dur) var(--pms-ease),
+              border-color var(--pms-dur) var(--pms-ease),
+              transform var(--pms-dur) var(--pms-ease);
+}
+.pms-btn:hover:not(:disabled) { background: var(--pms-bg-2); border-color: var(--pms-accent); }
+.pms-btn:active:not(:disabled) { transform: translateY(1px); }
+.pms-btn:disabled { opacity: .5; cursor: not-allowed; }
+.pms-btn.is-primary {
+  background: var(--pms-accent); border-color: var(--pms-accent);
+  color: var(--pms-accent-ink); font-weight: 600;
+}
+.pms-btn.is-primary:hover:not(:disabled) { filter: brightness(1.07); border-color: var(--pms-accent); }
+.pms-btn.is-danger  { background: var(--pms-danger); border-color: var(--pms-danger); color: #fff; }
+.pms-btn.is-ghost   { background: transparent; border-color: transparent; color: var(--pms-muted); }
+.pms-btn.is-ghost:hover:not(:disabled) { background: var(--pms-bg-2); color: var(--pms-fg); }
+.pms-btn.is-sm      { min-height: 30px; padding: 0 .6rem; font-size: .8rem; border-radius: var(--pms-r-sm); }
+.pms-btn.is-block   { width: 100%; }
+.pms-btn.is-lg      { min-height: var(--pms-ctl-h-lg); font-size: .95rem; }
+
+/* ---------- 图标按钮：右端对齐、有热区 ---------- */
+.pms-icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--pms-hit); height: var(--pms-hit); flex: 0 0 var(--pms-hit);
+  border: none; background: transparent; color: var(--pms-faint);
+  border-radius: var(--pms-r-sm); cursor: pointer;
+  transition: color var(--pms-dur) var(--pms-ease), background var(--pms-dur) var(--pms-ease);
+}
+.pms-icon-btn:hover { color: var(--pms-fg); background: var(--pms-bg-2); }
+
+/* ---------- 输入族 ---------- */
+.pms-input {
+  width: 100%; min-height: var(--pms-ctl-h);
+  padding: 0 .75rem;
+  border: 1px solid var(--pms-border-strong);
+  border-radius: var(--pms-r);
+  background: var(--pms-bg-2); color: var(--pms-fg);
+  font-size: .93rem; font-family: inherit; outline: none;
+  transition: border-color var(--pms-dur) var(--pms-ease), box-shadow var(--pms-dur) var(--pms-ease);
+}
+.pms-input::placeholder { color: var(--pms-faint); }
+.pms-input:hover:not(:disabled) { border-color: var(--pms-accent); }
+.pms-input:disabled { opacity: .55; }
+textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; min-height: 96px; }
+
+/* 纵向：label 上、控件下 */
+.pms-field { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .9rem; }
+.pms-field > label,
+.pms-label { font-size: .8rem; font-weight: 500; color: var(--pms-muted); }
+
+/* 横向：输入框 + 尾部按钮（就是原来想要的那个"一行"结构） */
+.pms-input-group {
+  display: flex; flex-direction: row; align-items: center; gap: .25rem;
+  padding-right: .25rem;
+  border: 1px solid var(--pms-border-strong);
+  border-radius: var(--pms-r); background: var(--pms-bg-2);
+  transition: border-color var(--pms-dur) var(--pms-ease), box-shadow var(--pms-dur) var(--pms-ease);
+}
+.pms-input-group:focus-within { border-color: var(--pms-accent); box-shadow: var(--pms-glow); }
+.pms-input-group > .pms-input {
+  flex: 1 1 auto; border: none; background: transparent; min-width: 0;
+}
+.pms-input-group > .pms-input:focus-visible,
+.pms-input-group > .pms-input:hover { border-color: transparent; box-shadow: none; }
+
+/* ---------- 复选框行 ---------- */
+.pms-check {
+  display: flex; align-items: center; gap: .55rem;
+  font-size: .86rem; color: var(--pms-fg); cursor: pointer;
+  user-select: none;
+}
+.pms-check input[type='checkbox'] {
+  width: 17px; height: 17px; flex: 0 0 17px; margin: 0;
+  accent-color: var(--pms-accent); cursor: pointer;
+}
+
+/* ---------- 容器与文字 ---------- */
+.pms-card {
   background: var(--pms-surface);
-  color: var(--pms-fg);
-  font-size: 0.85rem;
-  font-family: inherit;
-  cursor: pointer;
-  line-height: 1.2;
-}
-.btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-.btn:hover:not(:disabled) {
-  background: var(--pms-hover);
-}
-.btn.primary {
-  background: var(--pms-accent);
-  border-color: var(--pms-accent);
-  color: #fff;
-}
-.btn.primary:hover:not(:disabled) {
-  filter: brightness(1.06);
-}
-.btn.danger {
-  background: var(--pms-danger);
-  border-color: var(--pms-danger);
-  color: #fff;
-}
-.btn.ghost {
-  background: transparent;
-}
-.btn.small {
-  padding: 0.3rem 0.55rem;
-  font-size: 0.78rem;
-}
-.btn.block {
-  width: 100%;
-  margin-top: 0.9rem;
-}
-
-/* 共享图标按钮 */
-.icon-btn {
-  background: transparent;
-  border: none;
-  color: var(--pms-muted);
-  cursor: pointer;
-  padding: 0.25rem;
-  line-height: 0;
-}
-.icon-btn:hover {
-  color: var(--pms-fg);
-}
-
-/* 共享表单 */
-.field {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-bottom: 0.75rem;
-}
-.field > span {
-  font-size: 0.78rem;
-  color: var(--pms-muted);
-}
-.field input,
-.field textarea,
-.field select {
-  width: 100%;
   border: 1px solid var(--pms-border);
-  border-radius: 8px;
-  background: var(--pms-bg);
-  color: var(--pms-fg);
-  padding: 0.55rem 0.65rem;
-  font-size: 0.9rem;
-  font-family: inherit;
-  outline: none;
+  border-radius: var(--pms-r-lg);
+  box-shadow: var(--pms-shadow);
 }
-.field input:focus,
-.field textarea:focus,
-.field select:focus {
-  border-color: var(--pms-accent);
-}
-.field textarea {
-  resize: vertical;
-  line-height: 1.55;
-  font-family: var(--pms-font-family);
-}
-.field-row {
-  display: flex;
-  align-items: center;
-  gap: 0.3rem;
-}
-.field-row input {
-  flex: 1;
-  border: 1px solid var(--pms-border);
-  border-radius: 8px;
-  background: var(--pms-bg);
-  color: var(--pms-fg);
-  padding: 0.55rem 0.65rem;
-  font-size: 0.9rem;
-  outline: none;
-}
-.field-row.custom {
-  margin-bottom: 0.35rem;
-}
+.pms-meta  { font-size: .8rem; color: var(--pms-muted); }
+.pms-hint  { font-size: .78rem; color: var(--pms-faint); margin: .1rem 0 0; }
+/* 就地内联错误/提示（设计规范 §4：小字内联，不弹大块红字） */
+.pms-hint.is-danger  { color: var(--pms-danger); }
+.pms-hint.is-warning { color: var(--pms-warning); }
 
-.check {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  font-size: 0.85rem;
-  cursor: pointer;
+.pms-badge {
+  display: inline-flex; align-items: center; gap: .25rem;
+  padding: .1rem .5rem; border-radius: var(--pms-r-pill);
+  font-size: .74rem; font-weight: 600;
+}
+.pms-badge.is-accent  { background: var(--pms-accent-soft);  color: var(--pms-accent); }
+.pms-badge.is-danger  { background: var(--pms-danger-soft);  color: var(--pms-danger); }
+.pms-badge.is-warning { background: var(--pms-warning-soft); color: var(--pms-warning); }
+
+/* ---------- 提示条 ---------- */
+.pms-alert {
+  display: flex; align-items: flex-start; gap: .55rem;
+  padding: .7rem .85rem; border-radius: var(--pms-r);
+  font-size: .82rem; line-height: 1.5;
+}
+.pms-alert.is-warning { background: var(--pms-warning-soft); color: var(--pms-warning); }
+.pms-alert.is-danger  { background: var(--pms-danger-soft);  color: var(--pms-danger); }
+.pms-alert > svg { flex: 0 0 auto; margin-top: .1rem; }
+
+/* ---------- 动效兜底 ---------- */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
 }

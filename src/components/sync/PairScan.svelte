@@ -68,27 +68,27 @@
   }
 </script>
 
-<div class="card">
+<div class="pms-card sync-card">
   <h3>{ui.t('sync.join_title')}</h3>
-  <p class="hint">{ui.t('sync.scan_hint')}</p>
+  <p class="pms-meta">{ui.t('sync.scan_hint')}</p>
 
-  <video bind:this={videoEl} class="preview" class:hidden={!scanning} muted playsinline></video>
+  <video bind:this={videoEl} class="sync-preview" class:hidden={!scanning} muted playsinline></video>
 
-  <div class="row">
+  <div class="sync-row">
     {#if scanning}
-      <button class="btn ghost" type="button" onclick={stopScan}>
+      <button class="pms-btn is-ghost" type="button" onclick={stopScan}>
         <Icon name="close" size={15} />{ui.t('common.cancel')}
       </button>
     {:else}
-      <button class="btn" type="button" onclick={() => void startScan()}>
+      <button class="pms-btn" type="button" onclick={() => void startScan()}>
         <Icon name="qr" size={15} />{ui.t('common.search')}
       </button>
     {/if}
   </div>
 
-  <form class="manual" onsubmit={onManualSubmit}>
-    <textarea rows="3" placeholder={ui.t('sync.paste_hint')} bind:value={manual}></textarea>
-    <button class="btn primary" type="submit" disabled={sync.busy || manual.trim().length === 0}>
+  <form class="sync-manual" onsubmit={onManualSubmit}>
+    <textarea class="pms-input sync-manual-input" rows="3" placeholder={ui.t('sync.paste_hint')} bind:value={manual}></textarea>
+    <button class="pms-btn is-primary" type="submit" disabled={sync.busy || manual.trim().length === 0}>
       {#if sync.busy}<Spinner size={15} />{/if}
       {ui.t('sync.join')}
     </button>
@@ -96,52 +96,38 @@
 </div>
 
 <style>
-  .card {
-    border: 1px solid var(--pms-border);
-    border-radius: 12px;
-    padding: 1rem;
+  .sync-card {
+    padding: 1.1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.65rem;
   }
   h3 {
     margin: 0;
-    font-size: 0.9rem;
-    color: var(--pms-muted);
+    font-size: 1rem;
+    font-weight: 600;
   }
-  .hint {
-    margin: 0;
-    font-size: 0.82rem;
-    color: var(--pms-muted);
-  }
-  .preview {
+  .sync-preview {
     width: 100%;
-    border-radius: 10px;
+    border-radius: var(--pms-r);
     background: #000;
     aspect-ratio: 4 / 3;
     object-fit: cover;
   }
-  .preview.hidden {
+  .sync-preview.hidden {
     display: none;
   }
-  .row {
+  .sync-row {
     display: flex;
     gap: 0.4rem;
   }
-  .manual {
+  .sync-manual {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
-  .manual textarea {
-    width: 100%;
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    background: var(--pms-bg);
-    color: var(--pms-fg);
-    padding: 0.5rem;
+  .sync-manual-input {
     font-family: var(--pms-mono);
     font-size: 0.76rem;
-    resize: vertical;
   }
 </style>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 左侧分组栏（PRD F-03）。
+  // 左侧分组栏（PRD F-03）。设计规范 §5.3：240px、底色 --pms-bg-2、40px 行、选中左侧 2px 青绿竖条。
   import Icon from './common/Icon.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import { ui } from '../lib/stores/ui.svelte';
@@ -44,10 +44,10 @@
   }
 </script>
 
-<aside class="sidebar">
-  <nav>
+<aside class="side">
+  <nav class="side-nav">
     <button
-      class="row"
+      class="side-row"
       class:active={vault.selectedFolderId === null && !vault.favoriteOnly}
       type="button"
       onclick={() => void vault.selectFolder(null)}
@@ -56,7 +56,7 @@
       <span>{ui.t('folder.all')}</span>
     </button>
     <button
-      class="row"
+      class="side-row"
       class:active={vault.favoriteOnly}
       type="button"
       onclick={() => void vault.toggleFavoriteOnly()}
@@ -66,17 +66,18 @@
     </button>
   </nav>
 
-  <div class="section-head">
+  <div class="side-head">
     <span>{ui.t('folder.all')}</span>
-    <button class="icon-btn" type="button" aria-label={ui.t('folder.new')} onclick={() => (creating = true)}>
+    <button class="pms-icon-btn side-add" type="button" aria-label={ui.t('folder.new')} onclick={() => (creating = true)}>
       <Icon name="plus" size={16} />
     </button>
   </div>
 
   {#if creating}
-    <form class="inline-form" onsubmit={submitNew}>
+    <form class="side-form" onsubmit={submitNew}>
       <!-- svelte-ignore a11y_autofocus -->
       <input
+        class="pms-input"
         autofocus
         placeholder={ui.t('folder.name_placeholder')}
         bind:value={newName}
@@ -85,27 +86,27 @@
     </form>
   {/if}
 
-  <ul class="folders">
+  <ul class="side-folders">
     {#each vault.folders as folder (folder.folder_id)}
       <li>
         {#if editingId === folder.folder_id}
-          <form class="inline-form" onsubmit={submitEdit}>
+          <form class="side-form" onsubmit={submitEdit}>
             <!-- svelte-ignore a11y_autofocus -->
-            <input autofocus bind:value={editingName} onblur={() => (editingId = null)} />
+            <input class="pms-input" autofocus bind:value={editingName} onblur={() => (editingId = null)} />
           </form>
         {:else}
           <button
-            class="row"
+            class="side-row"
             class:active={vault.selectedFolderId === folder.folder_id && !vault.favoriteOnly}
             type="button"
             ondblclick={() => startEdit(folder.folder_id, folder.name)}
             onclick={() => void vault.selectFolder(folder.folder_id)}
           >
             <Icon name="folder" size={16} />
-            <span class="name">{folder.name}</span>
+            <span class="side-name">{folder.name}</span>
           </button>
           <button
-            class="icon-btn subtle"
+            class="pms-icon-btn side-del"
             type="button"
             aria-label={ui.t('common.delete')}
             onclick={() => void removeFolder(folder.folder_id, folder.name)}
@@ -115,100 +116,110 @@
         {/if}
       </li>
     {:else}
-      <li class="empty">{ui.t('folder.empty')}</li>
+      <li class="side-empty">{ui.t('folder.empty')}</li>
     {/each}
   </ul>
 </aside>
 
 <style>
-  .sidebar {
-    width: 220px;
+  .side {
+    width: 240px;
     flex-shrink: 0;
     border-right: 1px solid var(--pms-border);
+    background: var(--pms-bg-2);
     padding: 0.75rem;
     overflow: auto;
   }
-  nav,
-  .folders {
+  .side-nav,
+  .side-folders {
     display: flex;
     flex-direction: column;
     gap: 0.15rem;
   }
-  .folders {
+  .side-folders {
     list-style: none;
     margin: 0;
     padding: 0;
   }
-  .folders li {
+  .side-folders li {
     display: flex;
     align-items: center;
   }
-  .row {
+  .side-row {
+    position: relative;
     flex: 1;
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 0.45rem 0.5rem;
+    min-height: 40px;
+    padding: 0 0.55rem;
     border: none;
-    border-radius: 7px;
+    border-radius: var(--pms-r-sm);
     background: transparent;
     color: var(--pms-fg);
     cursor: pointer;
     font-size: 0.88rem;
+    font-family: inherit;
     text-align: left;
+    transition: background var(--pms-dur) var(--pms-ease), color var(--pms-dur) var(--pms-ease);
   }
-  .row:hover {
-    background: var(--pms-hover);
+  .side-row:hover {
+    background: var(--pms-elevated);
   }
-  .row.active {
+  .side-row.active {
     background: var(--pms-accent-soft);
     color: var(--pms-accent);
   }
-  .name {
+  .side-row.active::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    border-radius: var(--pms-r-pill);
+    background: var(--pms-accent);
+  }
+  .side-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .section-head {
+  .side-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
     margin: 0.9rem 0 0.3rem;
+    padding-left: 0.55rem;
     font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--pms-muted);
   }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--pms-muted);
-    cursor: pointer;
-    padding: 0.2rem;
-    line-height: 0;
+  .side-add {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
   }
-  .icon-btn.subtle {
+  .side-del {
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
     opacity: 0;
   }
-  li:hover .icon-btn.subtle {
+  li:hover .side-del {
     opacity: 1;
   }
-  .inline-form {
+  .side-form {
     padding: 0.2rem 0.1rem;
   }
-  .inline-form input {
-    width: 100%;
-    box-sizing: border-box;
-    border: 1px solid var(--pms-accent);
-    border-radius: 6px;
-    background: var(--pms-bg);
-    color: var(--pms-fg);
-    padding: 0.35rem 0.5rem;
+  .side-form .pms-input {
+    min-height: 34px;
     font-size: 0.85rem;
   }
-  .empty {
-    color: var(--pms-muted);
+  .side-empty {
+    color: var(--pms-faint);
     font-size: 0.8rem;
-    padding: 0.4rem 0.5rem;
+    padding: 0.4rem 0.55rem;
   }
 </style>

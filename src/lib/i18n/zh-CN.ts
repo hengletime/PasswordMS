@@ -39,6 +39,7 @@ export const zhCN = {
   },
   lock: {
     title: '解锁保险库',
+    password_label: '主密码',
     password_placeholder: '请输入主密码',
     unlock: '解锁',
     create_new: '创建新保险库',
@@ -50,8 +51,11 @@ export const zhCN = {
   create: {
     title: '创建保险库',
     master_password: '主密码',
+    password_label: '主密码',
     confirm_password: '确认主密码',
+    confirm_placeholder: '再次输入主密码',
     password_placeholder: '至少 {n} 位',
+    hint: '8 位以上，建议混合大小写、数字与符号',
     mismatch: '两次输入的主密码不一致。',
     too_short: '主密码至少需要 {n} 位。',
     weak_hint: '主密码较短，建议使用更长的口令；继续请勾选确认。',
@@ -137,6 +141,12 @@ export const zhCN = {
     generate: '生成',
     copy: '复制',
     use: '使用此密码',
+  },
+  meter: {
+    weak: '弱',
+    fair: '一般',
+    strong: '强',
+    very_strong: '很强',
   },
   note: {
     title: '标题',

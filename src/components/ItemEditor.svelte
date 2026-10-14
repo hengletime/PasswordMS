@@ -1,5 +1,6 @@
 <script lang="ts">
   // 条目编辑器（PRD F-04 / F-13）：三种 kind 的表单 + 自定义字段增删 + URL 校验 + 生成器。
+  // 设计规范 §5.4：全部换用 .pms-field / .pms-input-group；自定义字段区用 .pms-card 内嵌；底部操作条 sticky。
   import Icon from './common/Icon.svelte';
   import PasswordGenerator from './PasswordGenerator.svelte';
   import { MAX_NOTE_BYTES } from '../lib/constants';
@@ -99,40 +100,46 @@
     void save();
   }}
 >
-  <label class="field">
-    <span>{ui.t('editor.field_title')}</span>
+  <div class="pms-field">
+    <label class="pms-label" for="ed-title">{ui.t('editor.field_title')}</label>
     <!-- svelte-ignore a11y_autofocus -->
-    <input bind:value={title} autofocus />
-  </label>
+    <input id="ed-title" class="pms-input" bind:value={title} autofocus />
+  </div>
 
   {#if kind === 'login'}
-    <label class="field">
-      <span>{ui.t('editor.field_url')}</span>
-      <input bind:value={url} type="url" placeholder="https://" aria-invalid={urlUnsafe} />
+    <div class="pms-field">
+      <label class="pms-label" for="ed-url">{ui.t('editor.field_url')}</label>
+      <input id="ed-url" class="pms-input" bind:value={url} type="url" placeholder="https://" aria-invalid={urlUnsafe} />
       {#if urlUnsafe}
-        <small class="err">{ui.t('err.unsafe_url')}</small>
+        <p class="pms-hint is-danger">{ui.t('err.unsafe_url')}</p>
       {/if}
-    </label>
+    </div>
 
-    <label class="field">
-      <span>{ui.t('editor.field_username')}</span>
-      <input bind:value={username} autocomplete="off" />
-    </label>
+    <div class="pms-field">
+      <label class="pms-label" for="ed-username">{ui.t('editor.field_username')}</label>
+      <input id="ed-username" class="pms-input" bind:value={username} autocomplete="off" />
+    </div>
 
-    <div class="field">
-      <span>{ui.t('editor.field_password')}</span>
-      <div class="field-row">
-        <input bind:value={password} type={showPassword ? 'text' : 'password'} autocomplete="new-password" />
+    <div class="pms-field">
+      <label class="pms-label" for="ed-password">{ui.t('editor.field_password')}</label>
+      <div class="pms-input-group">
+        <input
+          id="ed-password"
+          class="pms-input"
+          bind:value={password}
+          type={showPassword ? 'text' : 'password'}
+          autocomplete="new-password"
+        />
         <button
-          class="icon-btn"
+          class="pms-icon-btn"
           type="button"
           aria-label={showPassword ? ui.t('editor.hide_password') : ui.t('editor.show_password')}
           onclick={() => (showPassword = !showPassword)}
         >
-          <Icon name={showPassword ? 'eye_off' : 'eye'} size={16} />
+          <Icon name={showPassword ? 'eye' : 'eye_off'} size={16} />
         </button>
         <button
-          class="icon-btn"
+          class="pms-icon-btn"
           type="button"
           aria-label={ui.t('gen.title')}
           onclick={() => (showGenerator = !showGenerator)}
@@ -141,7 +148,7 @@
         </button>
       </div>
       {#if showGenerator}
-        <div class="generator-box">
+        <div class="editor-gen">
           <PasswordGenerator
             onuse={(value: string): void => {
               password = value;
@@ -152,95 +159,123 @@
       {/if}
     </div>
 
-    <label class="field">
-      <span>{ui.t('editor.field_totp')}</span>
-      <input bind:value={totp} autocomplete="off" placeholder="BASE32" />
-    </label>
+    <div class="pms-field">
+      <label class="pms-label" for="ed-totp">{ui.t('editor.field_totp')}</label>
+      <input id="ed-totp" class="pms-input" bind:value={totp} autocomplete="off" placeholder="BASE32" />
+    </div>
 
-    <div class="field">
-      <span>{ui.t('editor.custom_fields')}</span>
-      {#each fields as field, index (index)}
-        <div class="field-row custom">
-          <input class="key" placeholder={ui.t('editor.field_key')} bind:value={field.key} />
-          <input class="value" placeholder={ui.t('editor.field_value')} bind:value={field.value} />
-          <button
-            class="icon-btn"
-            type="button"
-            aria-label={ui.t('common.remove')}
-            onclick={() => removeField(index)}
-          >
-            <Icon name="close" size={14} />
-          </button>
-        </div>
-      {/each}
-      <button class="btn ghost small" type="button" onclick={addField}>
-        <Icon name="plus" size={14} />{ui.t('editor.add_field')}
-      </button>
+    <div class="pms-field">
+      <span class="pms-label">{ui.t('editor.custom_fields')}</span>
+      <div class="pms-card editor-custom">
+        {#each fields as field, index (index)}
+          <div class="editor-custom-row">
+            <input
+              class="pms-input editor-key"
+              placeholder={ui.t('editor.field_key')}
+              aria-label={ui.t('editor.field_key')}
+              bind:value={field.key}
+            />
+            <input
+              class="pms-input editor-val"
+              placeholder={ui.t('editor.field_value')}
+              aria-label={ui.t('editor.field_value')}
+              bind:value={field.value}
+            />
+            <button
+              class="pms-icon-btn"
+              type="button"
+              aria-label={ui.t('common.remove')}
+              onclick={() => removeField(index)}
+            >
+              <Icon name="close" size={14} />
+            </button>
+          </div>
+        {/each}
+        <button class="pms-btn is-ghost is-sm editor-add" type="button" onclick={addField}>
+          <Icon name="plus" size={14} />{ui.t('editor.add_field')}
+        </button>
+      </div>
     </div>
   {:else}
-    <label class="field">
-      <span>{ui.t('note.body')}</span>
+    <div class="pms-field">
+      <label class="pms-label" for="ed-body">{ui.t('note.body')}</label>
       <textarea
+        id="ed-body"
+        class="pms-input"
         rows="12"
         placeholder={ui.t('note.placeholder')}
         bind:value={body}
         aria-invalid={bodyTooLong}
       ></textarea>
       {#if bodyTooLong}
-        <small class="err">{ui.t('note.too_long', { n: Math.floor(MAX_NOTE_BYTES / 1024) })}</small>
+        <p class="pms-hint is-danger">{ui.t('note.too_long', { n: Math.floor(MAX_NOTE_BYTES / 1024) })}</p>
       {/if}
-    </label>
+    </div>
   {/if}
 
-  <label class="field">
-    <span>{ui.t('editor.folder')}</span>
-    <select bind:value={folderId}>
+  <div class="pms-field">
+    <label class="pms-label" for="ed-folder">{ui.t('editor.folder')}</label>
+    <select id="ed-folder" class="pms-input" bind:value={folderId}>
       <option value={null}>{ui.t('folder.ungrouped')}</option>
       {#each vault.folders as folder (folder.folder_id)}
         <option value={folder.folder_id}>{folder.name}</option>
       {/each}
     </select>
-  </label>
+  </div>
 
-  <label class="check">
+  <label class="pms-check">
     <input type="checkbox" bind:checked={favorite} />
     <span>{ui.t('editor.favorite')}</span>
   </label>
 
-  <div class="actions">
-    <button class="btn ghost" type="button" onclick={oncancel}>{ui.t('editor.cancel')}</button>
-    <button class="btn primary" type="submit" disabled={!canSave}>{ui.t('editor.save')}</button>
+  <div class="editor-actions">
+    <button class="pms-btn is-ghost" type="button" onclick={oncancel}>{ui.t('editor.cancel')}</button>
+    <button class="pms-btn is-primary" type="submit" disabled={!canSave}>{ui.t('editor.save')}</button>
   </div>
 </form>
 
 <style>
   .editor {
-    padding: 1rem;
+    padding: 1.1rem;
     overflow: auto;
+    display: flex;
+    flex-direction: column;
   }
-  .generator-box {
+  .editor-gen {
     margin-top: 0.6rem;
-    border: 1px solid var(--pms-border);
-    border-radius: 10px;
     padding: 0.85rem;
-    background: var(--pms-surface);
   }
-  .actions {
+  .editor-custom {
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .editor-custom-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .editor-key {
+    flex: 0 0 34%;
+    min-height: 34px;
+  }
+  .editor-val {
+    flex: 1;
+    min-height: 34px;
+  }
+  .editor-add {
+    align-self: flex-start;
+  }
+  .editor-actions {
+    position: sticky;
+    bottom: 0;
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
-    margin-top: 1rem;
-    padding-top: 0.85rem;
+    margin-top: 0.5rem;
+    padding: 0.85rem 0 0.2rem;
     border-top: 1px solid var(--pms-border);
-  }
-  .err {
-    color: var(--pms-danger);
-    font-size: 0.76rem;
-  }
-  .field-row.custom .key {
-    flex: 0 0 34%;
-  }
-  .field-row.custom .value {
-    flex: 1;
+    background: var(--pms-bg);
   }
 </style>

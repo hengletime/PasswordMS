@@ -1,16 +1,16 @@
 <script lang="ts">
-  // Toast 容器：渲染 `ui.toasts`。
+  // Toast 容器：渲染 `ui.toasts`。设计规范 §5.4：右下角；--pms-r；左侧 3px 状态色竖条。
   import Icon from './Icon.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
 </script>
 
 <div class="toast-stack" aria-live="polite">
   {#each ui.toasts as toast (toast.id)}
-    <div class="toast {toast.kind}">
+    <div class="toast" class:is-error={toast.kind === 'error'} class:is-success={toast.kind === 'success'}>
       <Icon name={toast.kind === 'error' ? 'alert' : toast.kind === 'success' ? 'check' : 'shield'} size={16} />
-      <span>{ui.t(toast.messageKey, toast.params)}</span>
+      <span class="toast-msg">{ui.t(toast.messageKey, toast.params)}</span>
       <button
-        class="dismiss"
+        class="toast-dismiss"
         type="button"
         aria-label={ui.t('common.close')}
         onclick={() => ui.dismiss(toast.id)}
@@ -35,29 +35,41 @@
   .toast {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
-    padding: 0.6rem 0.75rem;
-    border-radius: 8px;
-    background: var(--pms-surface);
+    gap: 0.55rem;
+    padding: 0.6rem 0.7rem;
+    border-radius: var(--pms-r);
+    background: var(--pms-elevated);
     color: var(--pms-fg);
     border: 1px solid var(--pms-border);
-    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+    border-left: 3px solid var(--pms-accent);
+    box-shadow: var(--pms-shadow);
     font-size: 0.875rem;
   }
-  .toast.error {
-    border-color: var(--pms-danger);
-    color: var(--pms-danger);
+  .toast.is-error {
+    border-left-color: var(--pms-danger);
   }
-  .toast.success {
-    border-color: var(--pms-success);
-    color: var(--pms-success);
+  .toast.is-success {
+    border-left-color: var(--pms-success);
   }
-  .dismiss {
+  .toast-msg {
+    flex: 1;
+    min-width: 0;
+  }
+  .toast-dismiss {
     margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     background: transparent;
     border: none;
-    color: inherit;
+    color: var(--pms-faint);
     cursor: pointer;
+    padding: 0.15rem;
     line-height: 0;
+    border-radius: var(--pms-r-sm);
+  }
+  .toast-dismiss:hover {
+    color: var(--pms-fg);
+    background: var(--pms-bg-2);
   }
 </style>

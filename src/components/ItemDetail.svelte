@@ -137,12 +137,15 @@
 
 <section class="detail">
   {#if item === null}
-    <div class="empty"><Icon name="key" size={28} /><p>{ui.t('common.none')}</p></div>
+    <div class="detail-empty">
+      <Icon name="key" size={30} />
+      <p class="pms-meta">{ui.t('common.none')}</p>
+    </div>
   {:else}
-    <header>
-      <div class="titles">
+    <header class="detail-head">
+      <div class="detail-titles">
         <h2>{item.kind.title}</h2>
-        <span class="badge">
+        <span class="pms-badge is-accent">
           {item.kind.type === 'login'
             ? ui.t('item.type_login')
             : item.kind.type === 'secure_note'
@@ -150,19 +153,19 @@
               : ui.t('item.type_attachment')}
         </span>
       </div>
-      <div class="tools">
+      <div class="detail-tools">
         <button
-          class="icon-btn"
+          class="pms-icon-btn"
           type="button"
           aria-label={item.favorite ? ui.t('item.unfavorite') : ui.t('item.favorite')}
           onclick={() => void toggleFavorite()}
         >
           <Icon name="star" size={17} />
         </button>
-        <button class="icon-btn" type="button" aria-label={ui.t('common.edit')} onclick={onedit}>
+        <button class="pms-icon-btn" type="button" aria-label={ui.t('common.edit')} onclick={onedit}>
           <Icon name="settings" size={17} />
         </button>
-        <button class="icon-btn" type="button" aria-label={ui.t('item.delete')} onclick={() => void remove()}>
+        <button class="pms-icon-btn" type="button" aria-label={ui.t('item.delete')} onclick={() => void remove()}>
           <Icon name="trash" size={17} />
         </button>
       </div>
@@ -170,21 +173,21 @@
 
     {#if item.kind.type === 'login'}
       {#if item.kind.url}
-        <div class="row">
-          <span class="label">{ui.t('editor.field_url')}</span>
-          <span class="value link">{item.kind.url}</span>
-          <button class="icon-btn" type="button" aria-label={ui.t('item.open_url')} onclick={() => void openUrl()}>
+        <div class="detail-row">
+          <span class="pms-label detail-key">{ui.t('editor.field_url')}</span>
+          <span class="detail-value detail-link">{item.kind.url}</span>
+          <button class="pms-icon-btn" type="button" aria-label={ui.t('item.open_url')} onclick={() => void openUrl()}>
             <Icon name="external" size={16} />
           </button>
         </div>
       {/if}
 
       {#if item.kind.username}
-        <div class="row">
-          <span class="label">{ui.t('editor.field_username')}</span>
-          <span class="value">{item.kind.username}</span>
+        <div class="detail-row">
+          <span class="pms-label detail-key">{ui.t('editor.field_username')}</span>
+          <span class="detail-value">{item.kind.username}</span>
           <button
-            class="icon-btn"
+            class="pms-icon-btn"
             type="button"
             aria-label={ui.t('item.copy_username')}
             onclick={() => void copyText(item.kind.type === 'login' ? item.kind.username ?? '' : '', false)}
@@ -195,19 +198,19 @@
       {/if}
 
       {#if item.kind.password}
-        <div class="row">
-          <span class="label">{ui.t('editor.field_password')}</span>
-          <span class="value mono">{revealed ? item.kind.password : '••••••••'}</span>
+        <div class="detail-row">
+          <span class="pms-label detail-key">{ui.t('editor.field_password')}</span>
+          <span class="detail-value detail-mono">{revealed ? item.kind.password : '••••••••'}</span>
           <button
-            class="icon-btn"
+            class="pms-icon-btn"
             type="button"
             aria-label={revealed ? ui.t('editor.hide_password') : ui.t('editor.show_password')}
             onclick={() => void revealPassword()}
           >
-            <Icon name={revealed ? 'eye_off' : 'eye'} size={16} />
+            <Icon name={revealed ? 'eye' : 'eye_off'} size={16} />
           </button>
           <button
-            class="icon-btn"
+            class="pms-icon-btn"
             type="button"
             aria-label={ui.t('item.copy_password')}
             onclick={() => void copyText(item.kind.type === 'login' ? item.kind.password ?? '' : '', true)}
@@ -216,32 +219,32 @@
           </button>
         </div>
         {#if copyCountdown > 0}
-          <p class="countdown">{ui.t('common.copied_countdown', { n: copyCountdown })}</p>
+          <p class="pms-hint is-warning">{ui.t('common.copied_countdown', { n: copyCountdown })}</p>
         {/if}
       {/if}
 
       {#if totpSecret}
-        <div class="totp">
-          <span class="label">{ui.t('editor.totp_now')}</span>
-          <strong class="mono">{formatCode(totpCode)}</strong>
-          <span class="remain">{ui.t('common.seconds', { n: totpRemaining })}</span>
+        <div class="detail-totp">
+          <span class="pms-label">{ui.t('editor.totp_now')}</span>
+          <strong class="detail-mono detail-totp-code">{formatCode(totpCode)}</strong>
+          <span class="pms-meta">{ui.t('common.seconds', { n: totpRemaining })}</span>
         </div>
       {/if}
 
       {#if item.kind.notes}
-        <div class="block">
-          <span class="label">{ui.t('editor.field_notes')}</span>
-          <p class="notes">{item.kind.notes}</p>
+        <div class="detail-block">
+          <span class="pms-label">{ui.t('editor.field_notes')}</span>
+          <p class="detail-notes">{item.kind.notes}</p>
         </div>
       {/if}
 
       {#if item.kind.custom_fields.length > 0}
-        <div class="block">
-          <span class="label">{ui.t('editor.custom_fields')}</span>
+        <div class="detail-block">
+          <span class="pms-label">{ui.t('editor.custom_fields')}</span>
           {#each item.kind.custom_fields as field (field.key)}
-            <div class="row">
-              <span class="label">{field.key}</span>
-              <span class="value">{field.hidden ? '••••••••' : field.value}</span>
+            <div class="detail-row">
+              <span class="pms-label detail-key">{field.key}</span>
+              <span class="detail-value">{field.hidden ? '••••••••' : field.value}</span>
             </div>
           {/each}
         </div>
@@ -252,7 +255,7 @@
       <AttachmentView {item} />
     {/if}
 
-    <footer>
+    <footer class="detail-foot">
       <span>{ui.t('item.updated')}: {formatDateTime(item.updated_at, ui.locale)}</span>
       <span>{ui.t('item.rev')}: {item.rev}</span>
     </footer>
@@ -265,10 +268,10 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
-    padding: 1rem;
+    padding: 1.1rem;
     overflow: auto;
   }
-  .empty {
+  .detail-empty {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -277,14 +280,17 @@
     gap: 0.5rem;
     color: var(--pms-muted);
   }
-  header {
+  .detail-empty p {
+    margin: 0;
+  }
+  .detail-head {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 1rem;
     margin-bottom: 1rem;
   }
-  .titles {
+  .detail-titles {
     display: flex;
     align-items: center;
     gap: 0.6rem;
@@ -292,82 +298,64 @@
   }
   h2 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1.15rem;
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .badge {
-    font-size: 0.7rem;
-    color: var(--pms-accent);
-    background: var(--pms-accent-soft);
-    border-radius: 6px;
-    padding: 0.15rem 0.45rem;
-    white-space: nowrap;
-  }
-  .tools {
+  .detail-tools {
     display: flex;
     gap: 0.15rem;
   }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.6rem;
-    padding: 0.55rem 0;
-    border-bottom: 1px solid var(--pms-border);
-  }
-  .label {
-    flex: 0 0 22%;
-    font-size: 0.78rem;
-    color: var(--pms-muted);
-  }
-  .value {
-    flex: 1;
-    font-size: 0.9rem;
-    word-break: break-all;
-  }
-  .value.mono,
-  .mono {
-    font-family: var(--pms-mono);
-    letter-spacing: 0.02em;
-  }
-  .link {
-    color: var(--pms-accent);
-  }
-  .countdown {
-    margin: 0.35rem 0 0;
-    font-size: 0.76rem;
-    color: var(--pms-warning);
-  }
-  .totp {
+  .detail-row {
     display: flex;
     align-items: center;
     gap: 0.6rem;
     padding: 0.6rem 0;
     border-bottom: 1px solid var(--pms-border);
   }
-  .totp strong {
-    font-size: 1.25rem;
+  .detail-key {
+    flex: 0 0 24%;
   }
-  .remain {
-    font-size: 0.76rem;
-    color: var(--pms-muted);
+  .detail-value {
+    flex: 1;
+    font-size: 0.9rem;
+    word-break: break-all;
   }
-  .block {
-    margin-top: 0.85rem;
+  .detail-mono {
+    font-family: var(--pms-mono);
+    letter-spacing: 0.02em;
   }
-  .block > .label {
+  .detail-link {
+    color: var(--pms-accent);
+  }
+  .detail-totp {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.65rem 0;
+    border-bottom: 1px solid var(--pms-border);
+  }
+  .detail-totp-code {
+    font-size: 1.3rem;
+    font-weight: 700;
+  }
+  .detail-block {
+    margin-top: 0.9rem;
+  }
+  .detail-block > .pms-label {
     display: block;
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.4rem;
   }
-  .notes {
+  .detail-notes {
     white-space: pre-wrap;
     word-break: break-word;
     margin: 0;
     font-size: 0.88rem;
     line-height: 1.6;
   }
-  footer {
+  .detail-foot {
     margin-top: auto;
     padding-top: 1rem;
     display: flex;

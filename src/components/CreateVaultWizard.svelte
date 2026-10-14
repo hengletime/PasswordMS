@@ -1,5 +1,7 @@
 <script lang="ts">
   // 创建保险库向导（PRD F-01 / U6）：< 8 位硬拦截；≥ 8 位仅强度提示。
+  // 设计规范 §5.2：品牌区 + 警告条(.pms-alert.is-warning) + 两个**完全同构**的密码框（都带眼睛）。
+  // 注意：MIN_MASTER_PASSWORD_LEN 硬拦截、acknowledged 门禁、canSubmit/tooShort/mismatch 逻辑一律未改。
   import Icon from './common/Icon.svelte';
   import StrengthMeter from './common/StrengthMeter.svelte';
   import Spinner from './common/Spinner.svelte';
@@ -32,64 +34,94 @@
   }
 </script>
 
-<main class="wizard">
-  <div class="card">
-    <h1>{ui.t('create.title')}</h1>
-    <p class="warning">
+<main class="wz-screen">
+  <div class="pms-card wz-card">
+    <header class="wz-head">
+      <span class="wz-logo"><Icon name="shield" size={24} /></span>
+      <h1>{ui.t('create.title')}</h1>
+      <p class="pms-meta">{ui.t('app.tagline')}</p>
+    </header>
+
+    <p class="pms-alert is-warning">
       <Icon name="alert" size={16} />
       <span>{ui.t('create.warning_body')}</span>
     </p>
 
-    <form onsubmit={submit}>
-      <label for="create-password">{ui.t('create.master_password')}</label>
-      <div class="field">
-        <input
-          id="create-password"
-          type={showPassword ? 'text' : 'password'}
-          autocomplete="new-password"
-          placeholder={ui.t('create.password_placeholder', { n: MIN_MASTER_PASSWORD_LEN })}
-          bind:value={password}
-          disabled={session.busy}
-        />
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
-          onclick={() => (showPassword = !showPassword)}
-        >
-          <Icon name={showPassword ? 'eye_off' : 'eye'} />
-        </button>
+    <form class="wz-form" onsubmit={submit}>
+      <div class="pms-field">
+        <label class="pms-label" for="create-password">{ui.t('create.password_label')}</label>
+        <div class="pms-input-group">
+          <input
+            id="create-password"
+            class="pms-input"
+            type={showPassword ? 'text' : 'password'}
+            autocomplete="new-password"
+            placeholder={ui.t('create.password_placeholder', { n: MIN_MASTER_PASSWORD_LEN })}
+            bind:value={password}
+            disabled={session.busy}
+          />
+          <button
+            class="pms-icon-btn"
+            type="button"
+            aria-label={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
+            onclick={() => (showPassword = !showPassword)}
+          >
+            <Icon name={showPassword ? 'eye' : 'eye_off'} />
+          </button>
+        </div>
+        <StrengthMeter {password} />
+        <p class="pms-hint">{ui.t('create.hint')}</p>
+        {#if tooShort}
+          <p class="pms-hint is-danger" role="alert">{ui.t('create.too_short', { n: MIN_MASTER_PASSWORD_LEN })}</p>
+        {/if}
       </div>
-      <StrengthMeter {password} />
-      {#if tooShort}
-        <p class="error" role="alert">{ui.t('create.too_short', { n: MIN_MASTER_PASSWORD_LEN })}</p>
-      {/if}
 
-      <label for="create-confirm">{ui.t('create.confirm_password')}</label>
-      <input
-        id="create-confirm"
-        type={showPassword ? 'text' : 'password'}
-        autocomplete="new-password"
-        bind:value={confirm}
-        disabled={session.busy}
-      />
-      {#if mismatch}
-        <p class="error" role="alert">{ui.t('create.mismatch')}</p>
-      {/if}
+      <div class="pms-field">
+        <label class="pms-label" for="create-confirm">{ui.t('create.confirm_password')}</label>
+        <div class="pms-input-group">
+          <input
+            id="create-confirm"
+            class="pms-input"
+            type={showPassword ? 'text' : 'password'}
+            autocomplete="new-password"
+            placeholder={ui.t('create.confirm_placeholder')}
+            bind:value={confirm}
+            disabled={session.busy}
+          />
+          <button
+            class="pms-icon-btn"
+            type="button"
+            aria-label={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
+            onclick={() => (showPassword = !showPassword)}
+          >
+            <Icon name={showPassword ? 'eye' : 'eye_off'} />
+          </button>
+        </div>
+        {#if mismatch}
+          <p class="pms-hint is-danger" role="alert">{ui.t('create.mismatch')}</p>
+        {/if}
+      </div>
 
-      <label class="check">
-        <input type="checkbox" bind:checked={acknowledged} disabled={session.busy} />
-        <span>{ui.t('create.acknowledge')}</span>
-      </label>
+      <div class="wz-ack">
+        <label class="pms-check">
+          <input type="checkbox" bind:checked={acknowledged} disabled={session.busy} />
+          <span>{ui.t('create.acknowledge')}</span>
+        </label>
+      </div>
 
-      <button class="btn primary block" type="submit" disabled={!canSubmit}>
+      <button class="pms-btn is-primary is-block is-lg" type="submit" disabled={!canSubmit}>
         {#if session.busy}
           <Spinner size={16} />
         {:else}
           {ui.t('create.submit')}
         {/if}
       </button>
-      <button class="link" type="button" onclick={() => ui.setRoute('lock')} disabled={session.busy}>
+      <button
+        class="pms-btn is-ghost is-block wz-back"
+        type="button"
+        onclick={() => ui.setRoute('lock')}
+        disabled={session.busy}
+      >
         {ui.t('common.back')}
       </button>
     </form>
@@ -97,91 +129,56 @@
 </main>
 
 <style>
-  .wizard {
+  .wz-screen {
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 1.5rem;
+    background:
+      radial-gradient(52rem 34rem at 50% -12%, var(--pms-accent-soft), transparent 62%),
+      var(--pms-bg);
   }
-  .card {
-    width: min(420px, 100%);
-    background: var(--pms-surface);
-    border: 1px solid var(--pms-border);
-    border-radius: 14px;
-    padding: 1.75rem;
-  }
-  h1 {
-    font-size: 1.2rem;
-    margin: 0 0 0.75rem;
-  }
-  .warning {
+  .wz-card {
+    width: min(460px, 100%);
+    padding: 2rem;
     display: flex;
-    gap: 0.5rem;
-    align-items: flex-start;
-    color: var(--pms-warning);
-    font-size: 0.82rem;
-    line-height: 1.45;
-    margin: 0 0 1rem;
+    flex-direction: column;
+    gap: 1rem;
   }
-  label {
-    display: block;
-    font-size: 0.8rem;
-    color: var(--pms-muted);
-    margin: 0.75rem 0 0.35rem;
+  .wz-head {
+    text-align: center;
   }
-  .field {
-    display: flex;
+  .wz-logo {
+    display: inline-flex;
     align-items: center;
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    background: var(--pms-bg);
-    padding-right: 0.25rem;
-  }
-  .field input,
-  #create-confirm {
-    width: 100%;
-    box-sizing: border-box;
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    background: var(--pms-bg);
-    color: var(--pms-fg);
-    padding: 0.6rem 0.75rem;
-    font-size: 0.95rem;
-    outline: none;
-  }
-  .field input {
-    border: none;
-  }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--pms-muted);
-    cursor: pointer;
-    padding: 0.35rem;
-    line-height: 0;
-  }
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin: 0.9rem 0;
-    font-size: 0.85rem;
-    color: var(--pms-fg);
-  }
-  .error {
-    color: var(--pms-danger);
-    font-size: 0.82rem;
-    margin: 0.5rem 0 0;
-  }
-  .link {
-    display: block;
-    width: 100%;
-    margin-top: 0.75rem;
-    background: transparent;
-    border: none;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--pms-r);
+    background: var(--pms-accent-soft);
     color: var(--pms-accent);
-    cursor: pointer;
-    font-size: 0.85rem;
+  }
+  .wz-head h1 {
+    font-size: 1.35rem;
+    font-weight: 600;
+    margin: 0.6rem 0 0.2rem;
+  }
+  .wz-head p {
+    margin: 0;
+  }
+  .wz-form {
+    display: flex;
+    flex-direction: column;
+  }
+  .wz-ack {
+    background: var(--pms-bg-2);
+    border: 1px solid var(--pms-border);
+    border-radius: var(--pms-r);
+    padding: 0.7rem 0.85rem;
+    margin-bottom: 0.9rem;
+  }
+  .wz-back {
+    margin-top: 0.4rem;
   }
 </style>

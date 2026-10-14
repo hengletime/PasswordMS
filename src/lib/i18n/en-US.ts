@@ -41,6 +41,7 @@ export const enUS: Messages = {
   },
   lock: {
     title: 'Unlock vault',
+    password_label: 'Master password',
     password_placeholder: 'Enter master password',
     unlock: 'Unlock',
     create_new: 'Create new vault',
@@ -52,8 +53,11 @@ export const enUS: Messages = {
   create: {
     title: 'Create vault',
     master_password: 'Master password',
+    password_label: 'Master password',
     confirm_password: 'Confirm master password',
+    confirm_placeholder: 'Re-enter master password',
     password_placeholder: 'At least {n} characters',
+    hint: '8+ characters; mixing upper/lower case, digits and symbols is recommended',
     mismatch: 'The passwords do not match.',
     too_short: 'Master password must be at least {n} characters.',
     weak_hint: 'The password is short. A longer passphrase is recommended; check to continue.',
@@ -139,6 +143,12 @@ export const enUS: Messages = {
     generate: 'Generate',
     copy: 'Copy',
     use: 'Use this password',
+  },
+  meter: {
+    weak: 'Weak',
+    fair: 'Fair',
+    strong: 'Strong',
+    very_strong: 'Very strong',
   },
   note: {
     title: 'Title',

@@ -1,5 +1,6 @@
 <script lang="ts">
   // 设置（PRD P-10 / O-03 / O-08）：安全、体检、生成器、同步、解除配对、导出。
+  // 设计规范 §5.4：分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作用 .pms-alert 提示。
   import { save } from '@tauri-apps/plugin-dialog';
   import Icon from './common/Icon.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
@@ -76,87 +77,95 @@
   }
 </script>
 
-<section class="settings">
-  <h2>{ui.t('settings.title')}</h2>
+<section class="set">
+  <h2 class="set-title">{ui.t('settings.title')}</h2>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.group_security')}</h3>
-    <label class="field">
-      <span>{ui.t('settings.auto_lock')}</span>
-      <select bind:value={autoLockMinutes}>
+    <div class="set-row">
+      <label class="set-label" for="set-autolock">{ui.t('settings.auto_lock')}</label>
+      <select id="set-autolock" class="pms-input set-ctl" bind:value={autoLockMinutes}>
         {#each AUTO_LOCK_OPTIONS as minutes (minutes)}
           <option value={minutes}>{ui.t('common.minutes', { n: minutes })}</option>
         {/each}
       </select>
-    </label>
-    <label class="field">
-      <span>{ui.t('settings.clipboard_ttl')}</span>
-      <input type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs} />
-    </label>
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-ttl">{ui.t('settings.clipboard_ttl')}</label>
+      <input id="set-ttl" class="pms-input set-ctl" type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs} />
+    </div>
   </div>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.group_health')}</h3>
-    <label class="field">
-      <span>{ui.t('settings.weak_max_len')}</span>
-      <input type="number" min="4" max="16" bind:value={draft.health.weak_max_len} />
-    </label>
-    <label class="field">
-      <span>{ui.t('settings.stale_days')}</span>
-      <input type="number" min="30" max="365" bind:value={draft.health.stale_days} />
-    </label>
+    <div class="set-row">
+      <label class="set-label" for="set-weak">{ui.t('settings.weak_max_len')}</label>
+      <input id="set-weak" class="pms-input set-ctl" type="number" min="4" max="16" bind:value={draft.health.weak_max_len} />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-stale">{ui.t('settings.stale_days')}</label>
+      <input id="set-stale" class="pms-input set-ctl" type="number" min="30" max="365" bind:value={draft.health.stale_days} />
+    </div>
   </div>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.group_sync')}</h3>
-    <label class="check">
-      <input type="checkbox" bind:checked={draft.auto_sync} />
-      <span>{ui.t('settings.auto_sync')}</span>
-    </label>
-    <label class="check">
-      <input type="checkbox" bind:checked={draft.sync_on_start} />
-      <span>{ui.t('settings.sync_on_start')}</span>
-    </label>
+    <div class="set-row">
+      <span class="set-label">{ui.t('settings.auto_sync')}</span>
+      <label class="pms-check"><input type="checkbox" bind:checked={draft.auto_sync} /></label>
+    </div>
+    <div class="set-row">
+      <span class="set-label">{ui.t('settings.sync_on_start')}</span>
+      <label class="pms-check"><input type="checkbox" bind:checked={draft.sync_on_start} /></label>
+    </div>
   </div>
 
-  <button class="btn primary" type="button" onclick={() => void saveSettings()}>
+  <button class="pms-btn is-primary" type="button" onclick={() => void saveSettings()}>
     {ui.t('common.save')}
   </button>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.change_password')}</h3>
-    <label class="field">
-      <span>{ui.t('settings.change_password_old')}</span>
-      <input type="password" bind:value={oldPassword} autocomplete="current-password" />
-    </label>
-    <label class="field">
-      <span>{ui.t('settings.change_password_new')}</span>
-      <input type="password" bind:value={newPassword} autocomplete="new-password" />
-    </label>
-    <label class="field">
-      <span>{ui.t('create.confirm_password')}</span>
-      <input type="password" bind:value={newPassword2} autocomplete="new-password" />
-    </label>
-    <button class="btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
+    <p class="pms-alert is-warning">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('create.warning_body')}</span>
+    </p>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
+      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password" />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
+      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password" />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
+      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password" />
+    </div>
+    <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
   </div>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.export_vault')}</h3>
-    <button class="btn ghost" type="button" onclick={() => void exportVault()}>
+    <p class="pms-alert is-warning">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('settings.export_confirm_body')}</span>
+    </p>
+    <button class="pms-btn is-ghost" type="button" onclick={() => void exportVault()}>
       <Icon name="download" size={15} />{ui.t('settings.export_vault')}
     </button>
   </div>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('sync.devices')}</h3>
     {#if sync.devices.length === 0}
-      <p class="muted">{ui.t('sync.no_devices')}</p>
+      <p class="pms-meta">{ui.t('sync.no_devices')}</p>
     {:else}
-      <ul>
+      <ul class="set-list">
         {#each sync.devices as device (device.device_id)}
-          <li>
-            <span class="name">{device.device_name}</span>
-            <button class="btn ghost small danger-text" type="button" onclick={() => void unpair(device.device_id)}>
+          <li class="set-list-row">
+            <span class="set-name">{device.device_name}</span>
+            <button class="pms-btn is-ghost is-sm set-danger" type="button" onclick={() => void unpair(device.device_id)}>
               {ui.t('sync.unpair')}
             </button>
           </li>
@@ -165,11 +174,11 @@
     {/if}
   </div>
 
-  <div class="card">
+  <div class="pms-card set-card">
     <h3>{ui.t('settings.vault_file')}</h3>
     {#if fileInfo}
-      <p class="muted mono">{fileInfo.path}</p>
-      <p class="muted">
+      <p class="pms-meta set-mono">{fileInfo.path}</p>
+      <p class="pms-meta">
         {ui.t('settings.size')}: {formatBytes(fileInfo.size_bytes)}
       </p>
     {/if}
@@ -177,36 +186,47 @@
 </section>
 
 <style>
-  .settings {
+  .set {
     flex: 1;
-    padding: 1rem;
+    padding: 1.1rem;
     overflow: auto;
-    max-width: 640px;
+    max-width: 680px;
   }
-  h2 {
+  .set-title {
     margin: 0 0 1rem;
-    font-size: 1.1rem;
+    font-size: 1.2rem;
+    font-weight: 600;
   }
-  .card {
-    border: 1px solid var(--pms-border);
-    border-radius: 12px;
-    padding: 0.9rem;
-    margin-bottom: 0.9rem;
+  .set-card {
+    padding: 1rem;
+    margin-bottom: 1rem;
   }
   h3 {
-    margin: 0 0 0.6rem;
-    font-size: 0.9rem;
+    margin: 0 0 0.7rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--pms-fg);
+  }
+  .set-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.35rem 0;
+  }
+  .set-label {
+    font-size: 0.86rem;
     color: var(--pms-muted);
   }
-  .muted {
-    color: var(--pms-muted);
-    font-size: 0.82rem;
+  .set-ctl {
+    width: 160px;
+    flex: 0 0 auto;
+  }
+  .set-mono {
+    font-family: var(--pms-mono);
     word-break: break-all;
   }
-  .mono {
-    font-family: var(--pms-mono);
-  }
-  ul {
+  .set-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -214,16 +234,19 @@
     flex-direction: column;
     gap: 0.4rem;
   }
-  li {
+  .set-list-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
   }
-  .name {
+  .set-name {
     font-size: 0.88rem;
   }
-  .danger-text {
+  .set-danger {
     color: var(--pms-danger);
+  }
+  .set-card .pms-alert {
+    margin: 0 0 0.75rem;
   }
 </style>

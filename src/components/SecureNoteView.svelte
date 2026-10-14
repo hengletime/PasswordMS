@@ -23,7 +23,7 @@
 
 <div class="note">
   <article>{body}</article>
-  <button class="btn ghost" type="button" onclick={() => void copyBody()}>
+  <button class="pms-btn is-ghost note-copy" type="button" onclick={() => void copyBody()}>
     <Icon name="copy" size={15} />{ui.t('common.copy')}
   </button>
 </div>
@@ -37,15 +37,15 @@
   article {
     white-space: pre-wrap;
     word-break: break-word;
-    background: var(--pms-bg);
+    background: var(--pms-bg-2);
     border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    padding: 0.75rem;
+    border-radius: var(--pms-r);
+    padding: 0.85rem;
     font-size: 0.9rem;
     line-height: 1.6;
     min-height: 120px;
   }
-  .btn {
+  .note-copy {
     align-self: flex-start;
   }
 </style>

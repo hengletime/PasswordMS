@@ -14,44 +14,44 @@
   }
 </script>
 
-<div class="card">
-  <header>
+<div class="pms-card sync-card">
+  <header class="sync-head">
     <h3>{ui.t('conflict.title')}</h3>
-    <button class="btn ghost small" type="button" onclick={() => void sync.loadConflicts()}>
+    <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void sync.loadConflicts()}>
       <Icon name="refresh" size={14} />{ui.t('common.retry')}
     </button>
   </header>
 
   {#if sync.conflicts.length === 0}
-    <p class="empty">{ui.t('conflict.none')}</p>
+    <p class="pms-meta">{ui.t('conflict.none')}</p>
   {:else}
-    <ul>
+    <ul class="conflict-list">
       {#each sync.conflicts as conflict (conflict.conflict_id)}
-        <li>
-          <div class="head">
-            <span class="id mono">{conflict.item_id}</span>
-            <span class="sub">
+        <li class="conflict-item">
+          <div class="conflict-head">
+            <span class="conflict-id">{conflict.item_id}</span>
+            <span class="pms-meta">
               {ui.t('conflict.detected_at')} {formatDateTime(conflict.detected_at, ui.locale)}
             </span>
           </div>
 
-          <div class="sides">
-            <div class="side">
-              <span class="label">{ui.t('conflict.local_title')}</span>
-              <span class="value">{conflict.local_title}</span>
-              <span class="sub">{formatDateTime(conflict.local_updated_at, ui.locale)}</span>
+          <div class="conflict-sides">
+            <div class="conflict-side">
+              <span class="pms-label">{ui.t('conflict.local_title')}</span>
+              <span class="conflict-value">{conflict.local_title}</span>
+              <span class="pms-meta">{formatDateTime(conflict.local_updated_at, ui.locale)}</span>
             </div>
-            <div class="side">
-              <span class="label">{ui.t('conflict.remote_title')}</span>
-              <span class="value">{conflict.remote_title}</span>
-              <span class="sub">{formatDateTime(conflict.remote_updated_at, ui.locale)}</span>
+            <div class="conflict-side">
+              <span class="pms-label">{ui.t('conflict.remote_title')}</span>
+              <span class="conflict-value">{conflict.remote_title}</span>
+              <span class="pms-meta">{formatDateTime(conflict.remote_updated_at, ui.locale)}</span>
             </div>
           </div>
 
-          <div class="choices" role="radiogroup" aria-label={ui.t('conflict.choose')}>
+          <div class="conflict-choices" role="radiogroup" aria-label={ui.t('conflict.choose')}>
             {#each CONFLICT_CHOICES as choice (choice)}
               <button
-                class="choice"
+                class="conflict-choice"
                 class:active={sync.choiceOf(conflict.conflict_id) === choice}
                 type="button"
                 role="radio"
@@ -64,7 +64,7 @@
           </div>
 
           <button
-            class="btn primary small"
+            class="pms-btn is-primary is-sm"
             type="button"
             disabled={sync.choiceOf(conflict.conflict_id) === null}
             onclick={() => void sync.resolve(conflict.conflict_id)}
@@ -78,27 +78,21 @@
 </div>
 
 <style>
-  .card {
-    border: 1px solid var(--pms-border);
-    border-radius: 12px;
-    padding: 1rem;
+  .sync-card {
+    padding: 1.1rem;
   }
-  header {
+  .sync-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.85rem;
   }
   h3 {
     margin: 0;
-    font-size: 0.9rem;
-    color: var(--pms-muted);
+    font-size: 1rem;
+    font-weight: 600;
   }
-  .empty {
-    color: var(--pms-muted);
-    font-size: 0.82rem;
-  }
-  ul {
+  .conflict-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -106,70 +100,65 @@
     flex-direction: column;
     gap: 0.75rem;
   }
-  li {
+  .conflict-item {
     border: 1px solid var(--pms-border);
-    border-radius: 10px;
-    padding: 0.75rem;
+    border-radius: var(--pms-r);
+    padding: 0.8rem;
+    background: var(--pms-surface);
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.65rem;
   }
-  .head {
+  .conflict-head {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
   }
-  .id {
+  .conflict-id {
+    font-family: var(--pms-mono);
     font-size: 0.72rem;
     color: var(--pms-muted);
     word-break: break-all;
   }
-  .mono {
-    font-family: var(--pms-mono);
-  }
-  .sub {
-    font-size: 0.72rem;
-    color: var(--pms-muted);
-  }
-  .sides {
+  .conflict-sides {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.6rem;
   }
-  .side {
+  .conflict-side {
     display: flex;
     flex-direction: column;
-    gap: 0.15rem;
+    gap: 0.2rem;
     border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    padding: 0.5rem;
+    border-radius: var(--pms-r-sm);
+    padding: 0.55rem;
+    background: var(--pms-bg-2);
   }
-  .label {
-    font-size: 0.72rem;
-    color: var(--pms-muted);
-  }
-  .value {
+  .conflict-value {
     font-size: 0.85rem;
     word-break: break-word;
   }
-  .choices {
+  .conflict-choices {
     display: flex;
     gap: 0.35rem;
     flex-wrap: wrap;
   }
-  .choice {
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
+  .conflict-choice {
+    border: 1px solid var(--pms-border-strong);
+    border-radius: var(--pms-r-sm);
     background: transparent;
     color: var(--pms-fg);
     cursor: pointer;
     padding: 0.35rem 0.7rem;
     font-size: 0.82rem;
+    font-family: inherit;
+    transition: background var(--pms-dur) var(--pms-ease), border-color var(--pms-dur) var(--pms-ease),
+      color var(--pms-dur) var(--pms-ease);
   }
-  .choice:hover {
-    background: var(--pms-hover);
+  .conflict-choice:hover {
+    background: var(--pms-bg-2);
   }
-  .choice.active {
+  .conflict-choice.active {
     border-color: var(--pms-accent);
     background: var(--pms-accent-soft);
     color: var(--pms-accent);

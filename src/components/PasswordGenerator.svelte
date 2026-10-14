@@ -1,5 +1,6 @@
 <script lang="ts">
   // 密码生成器（PRD F-07）。生成在 Rust 侧完成（CSPRNG），前端只做参数与展示。
+  // 设计规范 §5.4：结果用 --pms-mono 大字 + .pms-input-group 承载复制/刷新按钮；选项区两列网格。
   import Icon from './common/Icon.svelte';
   import { copySecretWithAutoClear } from '../lib/clipboard';
   import { GENERATOR_MAX_LEN, GENERATOR_MIN_LEN } from '../lib/constants';
@@ -63,20 +64,21 @@
   ];
 </script>
 
-<div class="generator">
-  <div class="output">
+<div class="gen">
+  <div class="pms-input-group gen-output">
     <code>{password}</code>
-    <button class="icon-btn" type="button" aria-label={ui.t('gen.copy')} onclick={() => void copy()}>
+    <button class="pms-icon-btn" type="button" aria-label={ui.t('gen.copy')} onclick={() => void copy()}>
       <Icon name="copy" size={16} />
     </button>
-    <button class="icon-btn" type="button" aria-label={ui.t('gen.generate')} onclick={() => void generate()}>
+    <button class="pms-icon-btn" type="button" aria-label={ui.t('gen.generate')} onclick={() => void generate()}>
       <Icon name="refresh" size={16} />
     </button>
   </div>
 
-  <label class="length">
-    <span>{ui.t('gen.length')}: {opts.length}</span>
+  <label class="gen-length" for="gen-range">
+    <span class="pms-label">{ui.t('gen.length')}: {opts.length}</span>
     <input
+      id="gen-range"
       type="range"
       min={GENERATOR_MIN_LEN}
       max={GENERATOR_MAX_LEN}
@@ -87,9 +89,9 @@
     />
   </label>
 
-  <div class="toggles">
+  <div class="gen-toggles">
     {#each toggles as toggle (toggle.key)}
-      <label class="check">
+      <label class="pms-check">
         <input
           type="checkbox"
           checked={opts[toggle.key] as boolean}
@@ -103,60 +105,42 @@
   </div>
 
   {#if onuse}
-    <button class="btn primary" type="button" onclick={() => onuse(password)}>
+    <button class="pms-btn is-primary" type="button" onclick={() => onuse(password)}>
       {ui.t('gen.use')}
     </button>
   {/if}
 </div>
 
 <style>
-  .generator {
+  .gen {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.85rem;
   }
-  .output {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    background: var(--pms-bg);
-    padding: 0.5rem 0.6rem;
+  .gen-output {
+    padding-left: 0.8rem;
   }
-  .output code {
+  .gen-output code {
     flex: 1;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.95rem;
+    min-width: 0;
+    font-family: var(--pms-mono);
+    font-size: 1.05rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
     word-break: break-all;
   }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--pms-muted);
-    cursor: pointer;
-    padding: 0.2rem;
-    line-height: 0;
-  }
-  .length {
+  .gen-length {
     display: flex;
     flex-direction: column;
-    gap: 0.3rem;
-    font-size: 0.82rem;
-    color: var(--pms-muted);
+    gap: 0.35rem;
   }
-  .length input {
+  .gen-length input {
     width: 100%;
+    accent-color: var(--pms-accent);
   }
-  .toggles {
+  .gen-toggles {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.4rem;
-  }
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-size: 0.85rem;
+    gap: 0.5rem 0.85rem;
   }
 </style>

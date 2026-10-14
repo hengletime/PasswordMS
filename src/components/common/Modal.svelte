@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 通用模态框（遮罩 + 居中对话框）。
+  // 通用模态框（遮罩 + 居中对话框）。设计规范 §5.4：遮罩 rgba(0,0,0,.55) + 轻微模糊；卡片 r-lg + shadow。
   import type { Snippet } from 'svelte';
   import Icon from './Icon.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
@@ -27,21 +27,21 @@
     }}
   >
     <div
-      class="dialog"
+      class="pms-card dialog"
       role="dialog"
       aria-modal="true"
       aria-label={ui.t(titleKey)}
       tabindex="-1"
     >
-      <header>
+      <header class="dialog-head">
         <h2>{ui.t(titleKey)}</h2>
-        <button class="icon-btn" type="button" aria-label={ui.t('common.close')} onclick={() => onclose?.()}>
+        <button class="pms-icon-btn" type="button" aria-label={ui.t('common.close')} onclick={() => onclose?.()}>
           <Icon name="close" />
         </button>
       </header>
-      <div class="body">{@render children?.()}</div>
+      <div class="dialog-body">{@render children?.()}</div>
       {#if footer}
-        <footer>{@render footer()}</footer>
+        <footer class="dialog-foot">{@render footer()}</footer>
       {/if}
     </div>
   </div>
@@ -51,7 +51,8 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -59,17 +60,12 @@
     z-index: 100;
   }
   .dialog {
-    background: var(--pms-surface);
-    color: var(--pms-fg);
-    border: 1px solid var(--pms-border);
-    border-radius: 12px;
     width: min(560px, 100%);
     max-height: 85vh;
     display: flex;
     flex-direction: column;
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.25);
   }
-  header {
+  .dialog-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -78,28 +74,18 @@
   }
   h2 {
     font-size: 1rem;
+    font-weight: 600;
     margin: 0;
   }
-  .body {
+  .dialog-body {
     padding: 1rem;
     overflow: auto;
   }
-  footer {
+  .dialog-foot {
     padding: 0.75rem 1rem;
     border-top: 1px solid var(--pms-border);
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
-  }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--pms-muted);
-    cursor: pointer;
-    padding: 0.25rem;
-    line-height: 0;
-  }
-  .icon-btn:hover {
-    color: var(--pms-fg);
   }
 </style>

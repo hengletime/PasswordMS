@@ -1,5 +1,6 @@
 <script lang="ts">
   // 密码体检（PRD F-16）：弱口令 / 重复使用 / 超期三类统计与整改建议。
+  // 设计规范 §5.4：健康分做大字 + 4 个统计卡，弱项用 .pms-badge.is-danger。
   import Icon from './common/Icon.svelte';
   import Spinner from './common/Spinner.svelte';
   import { HEALTH_STALE_DAYS } from '../lib/constants';
@@ -29,66 +30,72 @@
 </script>
 
 <section class="health">
-  <header>
+  <header class="health-head">
     <h2>{ui.t('health.title')}</h2>
-    <button class="btn primary" type="button" onclick={() => void run()} disabled={busy}>
+    <button class="pms-btn is-primary" type="button" onclick={() => void run()} disabled={busy}>
       {#if busy}<Spinner size={15} />{:else}<Icon name="refresh" size={15} />{/if}
       {ui.t('health.run')}
     </button>
   </header>
 
   {#if report === null}
-    <p class="hint">{ui.t('health.logins')}: {vault.items.length}</p>
+    <p class="pms-meta">{ui.t('health.logins')}: {vault.items.length}</p>
   {:else}
-    <div class="score" data-score={report.total_score}>
+    <div class="pms-card health-score" data-score={report.total_score}>
       <strong>{report.total_score}</strong>
-      <span>{ui.t('health.score')}</span>
+      <span class="pms-label">{ui.t('health.score')}</span>
     </div>
 
-    <div class="grid">
-      <div class="cell">
-        <span class="label">{ui.t('health.logins')}</span>
+    <div class="health-grid">
+      <div class="pms-card health-cell">
+        <span class="pms-label">{ui.t('health.logins')}</span>
         <strong>{report.login_count}</strong>
       </div>
-      <div class="cell danger">
-        <span class="label">{ui.t('health.weak')}</span>
+      <div class="pms-card health-cell is-danger">
+        <span class="pms-label">{ui.t('health.weak')}</span>
         <strong>{report.weak.length}</strong>
       </div>
-      <div class="cell warning">
-        <span class="label">{ui.t('health.reused')}</span>
+      <div class="pms-card health-cell is-warning">
+        <span class="pms-label">{ui.t('health.reused')}</span>
         <strong>{report.reused.length}</strong>
       </div>
-      <div class="cell warning">
-        <span class="label">{ui.t('health.stale')} ({HEALTH_STALE_DAYS})</span>
+      <div class="pms-card health-cell is-warning">
+        <span class="pms-label">{ui.t('health.stale')} ({HEALTH_STALE_DAYS})</span>
         <strong>{report.stale.length}</strong>
       </div>
     </div>
 
     {#if report.weak.length > 0 || report.reused.length > 0 || report.stale.length > 0}
-      <div class="lists">
+      <div class="health-lists">
         {#if report.weak.length > 0}
-          <div class="list">
-            <span class="label">{ui.t('health.weak')}</span>
-            {#each report.weak as id (id)}<span class="item">{titleOf(id)}</span>{/each}
+          <div class="health-list">
+            <span class="pms-label">{ui.t('health.weak')}</span>
+            <div class="health-chips">
+              {#each report.weak as id (id)}<span class="pms-badge is-danger">{titleOf(id)}</span>{/each}
+            </div>
           </div>
         {/if}
         {#if report.reused.length > 0}
-          <div class="list">
-            <span class="label">{ui.t('health.reused')}</span>
-            {#each report.reused as id (id)}<span class="item">{titleOf(id)}</span>{/each}
+          <div class="health-list">
+            <span class="pms-label">{ui.t('health.reused')}</span>
+            <div class="health-chips">
+              {#each report.reused as id (id)}<span class="pms-badge is-warning">{titleOf(id)}</span>{/each}
+            </div>
           </div>
         {/if}
         {#if report.stale.length > 0}
-          <div class="list">
-            <span class="label">{ui.t('health.stale')}</span>
-            {#each report.stale as id (id)}<span class="item">{titleOf(id)}</span>{/each}
+          <div class="health-list">
+            <span class="pms-label">{ui.t('health.stale')}</span>
+            <div class="health-chips">
+              {#each report.stale as id (id)}<span class="pms-badge is-warning">{titleOf(id)}</span>{/each}
+            </div>
           </div>
         {/if}
       </div>
     {/if}
 
-    <div class="suggestions">
-      <span class="label">{ui.t('health.suggestions')}</span>
+    <div class="health-suggestions">
+      <span class="pms-label">{ui.t('health.suggestions')}</span>
       <ul>
         {#each report.suggestions as suggestion (suggestion)}
           <li>{suggestion}</li>
@@ -101,10 +108,10 @@
 <style>
   .health {
     flex: 1;
-    padding: 1rem;
+    padding: 1.1rem;
     overflow: auto;
   }
-  header {
+  .health-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -112,74 +119,67 @@
   }
   h2 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1.2rem;
+    font-weight: 600;
   }
-  .hint {
-    color: var(--pms-muted);
-    font-size: 0.85rem;
-  }
-  .score {
-    display: flex;
+  .health-score {
+    display: inline-flex;
     align-items: baseline;
-    gap: 0.4rem;
+    gap: 0.5rem;
+    padding: 0.6rem 1rem;
     margin-bottom: 1rem;
   }
-  .score strong {
-    font-size: 2.4rem;
+  .health-score strong {
+    font-size: 2.6rem;
+    font-weight: 700;
     color: var(--pms-accent);
+    line-height: 1;
   }
-  .score[data-score='0'] strong,
-  .score[data-score='1'] strong,
-  .score[data-score='2'] strong {
+  .health-score[data-score='0'] strong,
+  .health-score[data-score='1'] strong,
+  .health-score[data-score='2'] strong {
     color: var(--pms-danger);
   }
-  .grid {
+  .health-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: 0.75rem;
     margin-bottom: 1rem;
   }
-  .cell {
-    border: 1px solid var(--pms-border);
-    border-radius: 10px;
-    padding: 0.7rem;
+  .health-cell {
+    padding: 0.8rem;
     display: flex;
     flex-direction: column;
-    gap: 0.25rem;
+    gap: 0.3rem;
   }
-  .cell strong {
-    font-size: 1.3rem;
+  .health-cell strong {
+    font-size: 1.4rem;
+    font-weight: 700;
   }
-  .cell.danger strong {
+  .health-cell.is-danger strong {
     color: var(--pms-danger);
   }
-  .cell.warning strong {
+  .health-cell.is-warning strong {
     color: var(--pms-warning);
   }
-  .label {
-    font-size: 0.76rem;
-    color: var(--pms-muted);
-  }
-  .lists {
+  .health-lists {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.9rem;
     margin-bottom: 1rem;
   }
-  .list {
+  .health-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+  .health-chips {
     display: flex;
     flex-wrap: wrap;
-    align-items: center;
     gap: 0.35rem;
   }
-  .item {
-    font-size: 0.78rem;
-    padding: 0.15rem 0.5rem;
-    border-radius: 6px;
-    background: var(--pms-hover);
-  }
-  .suggestions ul {
-    margin: 0.35rem 0 0;
+  .health-suggestions ul {
+    margin: 0.4rem 0 0;
     padding-left: 1.1rem;
     font-size: 0.88rem;
     line-height: 1.6;

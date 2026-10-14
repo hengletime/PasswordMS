@@ -37,62 +37,58 @@
   }
 </script>
 
-<div class="attachment">
-  <div class="rows">
-    <div class="row">
-      <span class="label">{ui.t('attach.filename')}</span>
-      <span class="value">{info.original_filename}</span>
+<div class="attach">
+  <div class="attach-rows">
+    <div class="attach-row">
+      <span class="pms-label">{ui.t('attach.filename')}</span>
+      <span class="attach-value">{info.original_filename}</span>
     </div>
-    <div class="row">
-      <span class="label">{ui.t('attach.mime')}</span>
-      <span class="value">{info.mime_type || ui.t('common.unknown')}</span>
+    <div class="attach-row">
+      <span class="pms-label">{ui.t('attach.mime')}</span>
+      <span class="attach-value">{info.mime_type || ui.t('common.unknown')}</span>
     </div>
-    <div class="row">
-      <span class="label">{ui.t('attach.size')}</span>
-      <span class="value">{formatBytes(info.size_bytes)}</span>
+    <div class="attach-row">
+      <span class="pms-label">{ui.t('attach.size')}</span>
+      <span class="attach-value">{formatBytes(info.size_bytes)}</span>
     </div>
   </div>
 
   {#if info.size_bytes > MAX_ATTACHMENT_BYTES}
-    <p class="warn">{ui.t('attach.too_large', { n: MAX_ATTACHMENT_BYTES / MB })}</p>
+    <p class="pms-alert is-danger">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('attach.too_large', { n: MAX_ATTACHMENT_BYTES / MB })}</span>
+    </p>
   {/if}
 
-  <button class="btn ghost" type="button" onclick={() => void exportFile()}>
+  <button class="pms-btn is-ghost attach-export" type="button" onclick={() => void exportFile()}>
     <Icon name="download" size={15} />{ui.t('attach.export')}
   </button>
 </div>
 
 <style>
-  .attachment {
+  .attach {
     display: flex;
     flex-direction: column;
-    gap: 0.75rem;
+    gap: 0.85rem;
   }
-  .rows {
+  .attach-rows {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
-  .row {
+  .attach-row {
     display: flex;
     justify-content: space-between;
     gap: 1rem;
     font-size: 0.88rem;
     border-bottom: 1px solid var(--pms-border);
-    padding-bottom: 0.4rem;
+    padding-bottom: 0.45rem;
   }
-  .label {
-    color: var(--pms-muted);
-  }
-  .value {
+  .attach-value {
     word-break: break-all;
     text-align: right;
   }
-  .warn {
-    color: var(--pms-danger);
-    font-size: 0.82rem;
-  }
-  .btn {
+  .attach-export {
     align-self: flex-start;
   }
 </style>

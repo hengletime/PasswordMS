@@ -1,5 +1,6 @@
 <script lang="ts">
   // 回收站（PRD F-15）：还原 / 彻底删除 / 清空（二次确认）。
+  // 设计规范 §5.4：与 ItemList 同构；到期时间用 .pms-badge.is-warning。
   import Icon from './common/Icon.svelte';
   import { formatDateTime } from '../lib/constants';
   import { toAppError } from '../lib/errors';
@@ -64,10 +65,10 @@
 </script>
 
 <section class="trash">
-  <header>
+  <header class="trash-head">
     <h2>{ui.t('trash.title')}</h2>
     <button
-      class="btn danger"
+      class="pms-btn is-danger"
       type="button"
       onclick={() => void emptyAll()}
       disabled={entries.length === 0 || busy}
@@ -77,23 +78,23 @@
   </header>
 
   {#if entries.length === 0}
-    <p class="empty">{ui.t('trash.none')}</p>
+    <p class="pms-meta">{ui.t('trash.none')}</p>
   {:else}
-    <ul>
+    <ul class="trash-list">
       {#each entries as entry (entry.trash_id)}
-        <li>
-          <div class="meta">
-            <span class="title">{entry.title}</span>
-            <span class="sub">
+        <li class="trash-row">
+          <div class="trash-meta">
+            <span class="trash-title">{entry.title}</span>
+            <span class="trash-sub">
               {ui.t('trash.deleted_at')} {formatDateTime(entry.deleted_at, ui.locale)} ·
-              {ui.t('trash.expire_at')} {formatDateTime(entry.expire_at, ui.locale)}
+              <span class="pms-badge is-warning">{ui.t('trash.expire_at')} {formatDateTime(entry.expire_at, ui.locale)}</span>
             </span>
           </div>
-          <div class="actions">
-            <button class="btn ghost small" type="button" onclick={() => void restore(entry)}>
+          <div class="trash-actions">
+            <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void restore(entry)}>
               {ui.t('trash.restore')}
             </button>
-            <button class="btn ghost small danger-text" type="button" onclick={() => void purge(entry)}>
+            <button class="pms-btn is-ghost is-sm trash-danger" type="button" onclick={() => void purge(entry)}>
               {ui.t('trash.purge')}
             </button>
           </div>
@@ -106,10 +107,10 @@
 <style>
   .trash {
     flex: 1;
-    padding: 1rem;
+    padding: 1.1rem;
     overflow: auto;
   }
-  header {
+  .trash-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -117,13 +118,10 @@
   }
   h2 {
     margin: 0;
-    font-size: 1.1rem;
+    font-size: 1.2rem;
+    font-weight: 600;
   }
-  .empty {
-    color: var(--pms-muted);
-    font-size: 0.85rem;
-  }
-  ul {
+  .trash-list {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -131,32 +129,39 @@
     flex-direction: column;
     gap: 0.4rem;
   }
-  li {
+  .trash-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
     padding: 0.6rem 0.75rem;
     border: 1px solid var(--pms-border);
-    border-radius: 10px;
+    border-radius: var(--pms-r);
+    background: var(--pms-surface);
   }
-  .meta {
+  .trash-meta {
     display: flex;
     flex-direction: column;
+    gap: 0.25rem;
     min-width: 0;
   }
-  .title {
+  .trash-title {
     font-size: 0.9rem;
+    font-weight: 600;
   }
-  .sub {
-    font-size: 0.72rem;
+  .trash-sub {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    font-size: 0.74rem;
     color: var(--pms-muted);
   }
-  .actions {
+  .trash-actions {
     display: flex;
     gap: 0.35rem;
   }
-  .danger-text {
+  .trash-danger {
     color: var(--pms-danger);
   }
 </style>

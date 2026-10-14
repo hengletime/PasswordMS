@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 加载指示器（纯 CSS 动画）。
+  // 加载指示器（纯 CSS 动画）。设计规范 §5.4：使用 currentColor，随宿主文字色走。
   interface Props {
     size?: number;
     label?: string;
@@ -17,18 +17,19 @@
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    color: inherit;
   }
   .ring {
     width: var(--size);
     height: var(--size);
-    border: 2px solid var(--pms-border);
-    border-top-color: var(--pms-accent);
+    border: 2px solid currentColor;
+    border-top-color: transparent;
     border-radius: 50%;
+    opacity: 0.85;
     animation: pms-spin 0.8s linear infinite;
   }
   .label {
     font-size: 0.85rem;
-    color: var(--pms-muted);
   }
   @keyframes pms-spin {
     to {

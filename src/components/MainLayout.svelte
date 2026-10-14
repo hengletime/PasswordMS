@@ -84,14 +84,14 @@
 
 <div class="layout">
   <header class="topbar">
-    <div class="brand">
-      <Icon name="shield" size={20} />
-      <span>{ui.t('app.title')}</span>
+    <div class="topbar-brand">
+      <span class="topbar-logo"><Icon name="shield" size={18} /></span>
+      <span class="topbar-title">{ui.t('app.title')}</span>
     </div>
-    <nav class="sections">
+    <nav class="topbar-nav">
       {#each NAV as entry (entry.key)}
         <button
-          class="tab"
+          class="topbar-tab"
           class:active={ui.section === entry.key}
           type="button"
           onclick={() => ui.setSection(entry.key)}
@@ -101,14 +101,14 @@
         </button>
       {/each}
     </nav>
-    <div class="right">
-      <button class="btn ghost small" type="button" onclick={switchLocale}>
+    <div class="topbar-right">
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={switchLocale}>
         <Icon name="globe" size={15} />{ui.locale}
       </button>
-      <button class="btn ghost small" type="button" onclick={() => (importOpen = true)}>
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => (importOpen = true)}>
         <Icon name="upload" size={15} />{ui.t('import.title')}
       </button>
-      <button class="btn ghost small" type="button" onclick={() => void lockNow()}>
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void lockNow()}>
         <Icon name="lock" size={15} />{ui.t('nav.lock')}
       </button>
     </div>
@@ -136,12 +136,17 @@
       <Settings />
     {:else}
       <section class="sync-view">
-        <nav class="subtabs">
-          <button class="subtab" class:active={syncTab === 'pair'} type="button" onclick={() => (syncTab = 'pair')}>
+        <nav class="sync-tabs">
+          <button
+            class="sync-tab"
+            class:active={syncTab === 'pair'}
+            type="button"
+            onclick={() => (syncTab = 'pair')}
+          >
             {ui.t('sync.tab_pair')}
           </button>
           <button
-            class="subtab"
+            class="sync-tab"
             class:active={syncTab === 'devices'}
             type="button"
             onclick={() => (syncTab = 'devices')}
@@ -149,7 +154,7 @@
             {ui.t('sync.tab_devices')}
           </button>
           <button
-            class="subtab"
+            class="sync-tab"
             class:active={syncTab === 'status'}
             type="button"
             onclick={() => (syncTab = 'status')}
@@ -157,7 +162,7 @@
             {ui.t('sync.tab_status')}
           </button>
           <button
-            class="subtab"
+            class="sync-tab"
             class:active={syncTab === 'conflicts'}
             type="button"
             onclick={() => (syncTab = 'conflicts')}
@@ -198,40 +203,68 @@
     align-items: center;
     gap: 1rem;
     padding: 0.5rem 0.85rem;
+    min-height: 56px;
     border-bottom: 1px solid var(--pms-border);
     background: var(--pms-surface);
   }
-  .brand {
+  .topbar-brand {
     display: flex;
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.5rem;
+  }
+  .topbar-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--pms-r-sm);
+    background: var(--pms-accent-soft);
     color: var(--pms-accent);
+  }
+  .topbar-title {
+    font-size: 1rem;
     font-weight: 600;
   }
-  .sections {
+  .topbar-nav {
     display: flex;
     gap: 0.2rem;
   }
-  .tab {
+  .topbar-tab {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 0.35rem;
-    padding: 0.4rem 0.6rem;
+    min-height: 40px;
+    padding: 0 0.7rem;
     border: none;
-    border-radius: 7px;
+    border-radius: var(--pms-r-sm);
     background: transparent;
     color: var(--pms-muted);
     cursor: pointer;
     font-size: 0.84rem;
+    font-family: inherit;
+    transition: background var(--pms-dur) var(--pms-ease), color var(--pms-dur) var(--pms-ease);
   }
-  .tab:hover {
-    background: var(--pms-hover);
+  .topbar-tab:hover {
+    background: var(--pms-bg-2);
+    color: var(--pms-fg);
   }
-  .tab.active {
+  .topbar-tab.active {
     background: var(--pms-accent-soft);
     color: var(--pms-accent);
   }
-  .right {
+  .topbar-tab.active::after {
+    content: '';
+    position: absolute;
+    left: 0.4rem;
+    right: 0.4rem;
+    bottom: -0.5rem;
+    height: 2px;
+    border-radius: var(--pms-r-pill);
+    background: var(--pms-accent);
+  }
+  .topbar-right {
     margin-left: auto;
     display: flex;
     gap: 0.35rem;
@@ -240,6 +273,7 @@
     flex: 1;
     display: flex;
     min-height: 0;
+    background: var(--pms-bg);
   }
   .sync-view {
     flex: 1;
@@ -248,23 +282,31 @@
     min-height: 0;
     overflow: auto;
   }
-  .subtabs {
+  .sync-tabs {
     display: flex;
-    gap: 0.2rem;
-    padding: 0.6rem 0.85rem;
+    gap: 0.3rem;
+    padding: 0.7rem 0.85rem;
     border-bottom: 1px solid var(--pms-border);
   }
-  .subtab {
-    padding: 0.35rem 0.7rem;
-    border: 1px solid var(--pms-border);
-    border-radius: 7px;
+  .sync-tab {
+    min-height: 34px;
+    padding: 0 0.8rem;
+    border: 1px solid var(--pms-border-strong);
+    border-radius: var(--pms-r-sm);
     background: transparent;
     color: var(--pms-muted);
     cursor: pointer;
     font-size: 0.82rem;
+    font-family: inherit;
+    transition: background var(--pms-dur) var(--pms-ease), border-color var(--pms-dur) var(--pms-ease),
+      color var(--pms-dur) var(--pms-ease);
   }
-  .subtab.active {
+  .sync-tab:hover {
+    background: var(--pms-bg-2);
+  }
+  .sync-tab.active {
     border-color: var(--pms-accent);
+    background: var(--pms-accent-soft);
     color: var(--pms-accent);
   }
   .sync-grid {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // 全局确认对话框：由 `ui.confirm(...)` 驱动。
+  // 全局确认对话框：由 `ui.confirm(...)` 驱动。设计规范 §5.4：卡片 r-lg + shadow；确认按钮危险态用 is-danger。
   import { ui } from '../../lib/stores/ui.svelte';
 
   let request = $derived(ui.confirmRequest);
@@ -18,19 +18,19 @@
     }}
   >
     <div
-      class="dialog"
+      class="pms-card dialog"
       role="alertdialog"
       aria-modal="true"
       aria-label={ui.t(request.titleKey)}
       tabindex="-1"
     >
       <h2>{ui.t(request.titleKey)}</h2>
-      <p>{ui.t(request.messageKey, request.params)}</p>
-      <div class="actions">
-        <button class="btn ghost" type="button" onclick={() => ui.resolveConfirm(false)}>
+      <p class="dialog-msg">{ui.t(request.messageKey, request.params)}</p>
+      <div class="dialog-actions">
+        <button class="pms-btn is-ghost" type="button" onclick={() => ui.resolveConfirm(false)}>
           {ui.t('common.cancel')}
         </button>
-        <button class="btn danger" type="button" onclick={() => ui.resolveConfirm(true)}>
+        <button class="pms-btn is-danger" type="button" onclick={() => ui.resolveConfirm(true)}>
           {ui.t('common.confirm')}
         </button>
       </div>
@@ -42,7 +42,8 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -50,24 +51,21 @@
     z-index: 150;
   }
   .dialog {
-    background: var(--pms-surface);
-    color: var(--pms-fg);
-    border: 1px solid var(--pms-border);
-    border-radius: 12px;
     width: min(440px, 100%);
     padding: 1.25rem;
   }
   h2 {
     margin: 0 0 0.5rem;
     font-size: 1rem;
+    font-weight: 600;
   }
-  p {
+  .dialog-msg {
     margin: 0 0 1rem;
     color: var(--pms-muted);
     font-size: 0.9rem;
     line-height: 1.5;
   }
-  .actions {
+  .dialog-actions {
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;

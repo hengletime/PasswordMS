@@ -1,5 +1,6 @@
 <script lang="ts">
   // 解锁界面（PRD F-01）。解锁失败统一提示，不区分原因（A-05）。
+  // 设计规范 §5.1：品牌区 + .pms-field（纵向）⇒ .pms-input-group（横向，眼睛固定右端）。
   import Icon from './common/Icon.svelte';
   import Spinner from './common/Spinner.svelte';
   import { session } from '../lib/stores/session.svelte';
@@ -22,39 +23,45 @@
 </script>
 
 <main class="lock-screen">
-  <div class="card">
-    <div class="brand">
-      <Icon name="shield" size={30} />
+  <div class="pms-card lock-card">
+    <div class="lock-brand">
+      <span class="lock-logo"><Icon name="shield" size={24} /></span>
       <h1>{ui.t('app.title')}</h1>
-      <p>{ui.t('app.tagline')}</p>
+      <p class="pms-meta">{ui.t('app.tagline')}</p>
     </div>
 
-    <form onsubmit={submit}>
-      <label for="master-password">{ui.t('lock.password_placeholder')}</label>
-      <div class="field">
-        <input
-          id="master-password"
-          type={showPassword ? 'text' : 'password'}
-          autocomplete="current-password"
-          placeholder={ui.t('lock.password_placeholder')}
-          bind:value={password}
-          disabled={session.busy}
-        />
-        <button
-          class="icon-btn"
-          type="button"
-          aria-label={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
-          onclick={() => (showPassword = !showPassword)}
-        >
-          <Icon name={showPassword ? 'eye_off' : 'eye'} />
-        </button>
+    <form class="lock-form" onsubmit={submit}>
+      <div class="pms-field">
+        <label class="pms-label" for="master-password">{ui.t('lock.password_label')}</label>
+        <div class="pms-input-group">
+          <input
+            id="master-password"
+            class="pms-input"
+            type={showPassword ? 'text' : 'password'}
+            autocomplete="current-password"
+            placeholder={ui.t('lock.password_placeholder')}
+            bind:value={password}
+            disabled={session.busy}
+          />
+          <button
+            class="pms-icon-btn"
+            type="button"
+            aria-label={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
+            onclick={() => (showPassword = !showPassword)}
+          >
+            <Icon name={showPassword ? 'eye' : 'eye_off'} />
+          </button>
+        </div>
+        {#if session.unlockError}
+          <p class="pms-hint is-danger" role="alert">{ui.t('lock.error')}</p>
+        {/if}
       </div>
 
-      {#if session.unlockError}
-        <p class="error" role="alert">{ui.t('lock.error')}</p>
-      {/if}
-
-      <button class="btn primary block" type="submit" disabled={session.busy || password.length === 0}>
+      <button
+        class="pms-btn is-primary is-block is-lg"
+        type="submit"
+        disabled={session.busy || password.length === 0}
+      >
         {#if session.busy}
           <Spinner size={16} label={ui.t('lock.busy')} />
         {:else}
@@ -63,7 +70,7 @@
       </button>
     </form>
 
-    <button class="link" type="button" onclick={() => ui.setRoute('create')}>
+    <button class="pms-btn is-ghost is-block lock-create" type="button" onclick={() => ui.setRoute('create')}>
       {ui.t('lock.create_new')}
     </button>
   </div>
@@ -76,71 +83,41 @@
     align-items: center;
     justify-content: center;
     padding: 1.5rem;
+    /* 极淡的青绿径向光晕，呼应暗色科技感。 */
+    background:
+      radial-gradient(52rem 34rem at 50% -12%, var(--pms-accent-soft), transparent 62%),
+      var(--pms-bg);
   }
-  .card {
-    width: min(380px, 100%);
-    background: var(--pms-surface);
-    border: 1px solid var(--pms-border);
-    border-radius: 14px;
-    padding: 1.75rem;
+  .lock-card {
+    width: min(400px, 100%);
+    padding: 2rem;
   }
-  .brand {
+  .lock-brand {
     text-align: center;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1.4rem;
   }
-  .brand h1 {
-    font-size: 1.25rem;
-    margin: 0.5rem 0 0.25rem;
-  }
-  .brand p {
-    margin: 0;
-    color: var(--pms-muted);
-    font-size: 0.85rem;
-  }
-  label {
-    display: block;
-    font-size: 0.8rem;
-    color: var(--pms-muted);
-    margin-bottom: 0.35rem;
-  }
-  .field {
-    display: flex;
+  .lock-logo {
+    display: inline-flex;
     align-items: center;
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    background: var(--pms-bg);
-    padding-right: 0.25rem;
-  }
-  .field input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    color: var(--pms-fg);
-    padding: 0.6rem 0.75rem;
-    font-size: 0.95rem;
-    outline: none;
-  }
-  .icon-btn {
-    background: transparent;
-    border: none;
-    color: var(--pms-muted);
-    cursor: pointer;
-    padding: 0.35rem;
-    line-height: 0;
-  }
-  .error {
-    color: var(--pms-danger);
-    font-size: 0.82rem;
-    margin: 0.5rem 0 0;
-  }
-  .link {
-    display: block;
-    width: 100%;
-    margin-top: 1rem;
-    background: transparent;
-    border: none;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--pms-r);
+    background: var(--pms-accent-soft);
     color: var(--pms-accent);
-    cursor: pointer;
-    font-size: 0.85rem;
+  }
+  .lock-brand h1 {
+    font-size: 1.35rem;
+    font-weight: 600;
+    margin: 0.6rem 0 0.2rem;
+  }
+  .lock-brand p {
+    margin: 0;
+  }
+  .lock-form {
+    margin-top: 1.2rem;
+  }
+  .lock-create {
+    margin-top: 0.5rem;
   }
 </style>

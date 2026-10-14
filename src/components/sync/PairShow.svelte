@@ -29,83 +29,67 @@
   }
 </script>
 
-<div class="card">
+<div class="pms-card sync-card">
   <h3>{ui.t('sync.tab_pair')}</h3>
 
   {#if sync.pairing === null}
-    <button class="btn primary" type="button" onclick={() => void start()} disabled={sync.busy}>
+    <button class="pms-btn is-primary" type="button" onclick={() => void start()} disabled={sync.busy}>
       {#if sync.busy}<Spinner size={15} />{:else}<Icon name="qr" size={15} />{/if}
       {ui.t('sync.start_pairing')}
     </button>
   {:else}
-    <p class="hint">{ui.t('sync.qr_hint')}</p>
-    <div class="qr">
+    <p class="pms-meta">{ui.t('sync.qr_hint')}</p>
+    <div class="pms-card sync-qr">
       <!-- 后端返回受信的纯矢量 SVG（无脚本）。 -->
       {@html sync.pairing.qr_svg}
     </div>
 
-    <p class="hint">{ui.t('sync.manual_hint')}</p>
-    <div class="code-row">
+    <p class="pms-meta">{ui.t('sync.manual_hint')}</p>
+    <div class="pms-input-group sync-code">
       <code>{sync.pairing.qr_text}</code>
-      <button class="icon-btn" type="button" aria-label={ui.t('sync.copy_code')} onclick={() => void copyCode()}>
+      <button class="pms-icon-btn" type="button" aria-label={ui.t('sync.copy_code')} onclick={() => void copyCode()}>
         <Icon name="copy" size={16} />
       </button>
     </div>
-    <p class="expires">{ui.t('common.expires')}: {formatDateTime(sync.pairing.expires_at, ui.locale)}</p>
+    <p class="pms-hint">{ui.t('common.expires')}: {formatDateTime(sync.pairing.expires_at, ui.locale)}</p>
 
-    <button class="btn ghost" type="button" onclick={() => void cancel()}>{ui.t('sync.cancel')}</button>
+    <button class="pms-btn is-ghost" type="button" onclick={() => void cancel()}>{ui.t('sync.cancel')}</button>
   {/if}
 </div>
 
 <style>
-  .card {
-    border: 1px solid var(--pms-border);
-    border-radius: 12px;
-    padding: 1rem;
+  .sync-card {
+    padding: 1.1rem;
     display: flex;
     flex-direction: column;
-    gap: 0.6rem;
+    gap: 0.65rem;
   }
   h3 {
     margin: 0;
-    font-size: 0.9rem;
-    color: var(--pms-muted);
+    font-size: 1rem;
+    font-weight: 600;
   }
-  .hint {
-    margin: 0;
-    font-size: 0.82rem;
-    color: var(--pms-muted);
-  }
-  .qr {
+  .sync-qr {
     align-self: center;
     background: #fff;
     padding: 0.6rem;
-    border-radius: 10px;
+    border-radius: var(--pms-r);
     line-height: 0;
   }
-  .qr :global(svg) {
+  .sync-qr :global(svg) {
     width: 220px;
     height: 220px;
   }
-  .code-row {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    border: 1px solid var(--pms-border);
-    border-radius: 8px;
-    padding: 0.4rem 0.55rem;
+  .sync-code {
+    padding-left: 0.7rem;
   }
-  .code-row code {
+  .sync-code code {
     flex: 1;
+    min-width: 0;
     font-family: var(--pms-mono);
     font-size: 0.72rem;
     word-break: break-all;
     max-height: 3.6rem;
     overflow: auto;
-  }
-  .expires {
-    margin: 0;
-    font-size: 0.74rem;
-    color: var(--pms-muted);
   }
 </style>
