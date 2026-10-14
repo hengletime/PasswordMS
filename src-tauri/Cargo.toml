@@ -11,18 +11,18 @@ description = "PasswordMS 应用外壳（Tauri 2，桌面 + Android 共用）"
 # crate-type 说明（重要，改动前先读完）：
 #   - rlib      : 桌面二进制 `main.rs` 通过它链接本库（桌面构建必需）
 #   - staticlib : 静态库产物，供外部/移动端链接
-#   - cdylib    : **仅移动端（Android / iOS）需要**，用于产出 .so / .dylib
+#   - cdylib    : **移动端（Android / iOS）必需**，用于产出 .so / .dylib；
+#                 桌面目标下也会生成，但桌面 exe 实际经 rlib 链接，不依赖其导出表。
 #
-# 这里在非移动目标上刻意**不含 cdylib**：windows-gnu / windows-gnullvm 下为
-# 本 crate 生成 dll 导出表时，会因 Tauri 依赖树过大而超出 PE 导出上限——
-#   rust-lld: error: too many exported symbols (got 69529, max 65535)
-# 桌面构建完全不需要 cdylib。
-#
-# ⚠️ 将来做 Android 构建时，请为 aarch64-linux-android 目标恢复 cdylib，
-#    例如临时改回 ["staticlib", "cdylib", "rlib"] 再执行移动端打包。
+# 历史坑（已解决）：windows-gnu / windows-gnullvm 下生成 DLL 导出表时，GNU 版 ld
+#   默认开启 `--export-all-symbols`，会把整棵依赖树的全局符号全部导出，超过 PE 导出上限：
+#   rust-lld: error: too many exported symbols (got 120869, max 65535)
+# 现已在 `build.rs` 中**按目标**（仅 x86_64-pc-windows-gnullvm）注入
+#   `-C link-arg=--exclude-all-symbols` 关闭该默认行为，使「桌面 + Android」
+#   可长期共存，无需在移动端打包前后临时增删 cdylib。
 [lib]
 name = "passwordms_lib"
-crate-type = ["staticlib", "rlib"]
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

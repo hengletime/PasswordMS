@@ -1,0 +1,19 @@
+// 国内加速：`plugins { id(...) }` 解析插件 marker 走 pluginManagement 仓库，
+// 若缺省会回落到 Gradle Plugin Portal + Maven Central 直连（实测 ~18KB/s，不可用）。
+// 这里把阿里云 / 腾讯镜像放到最前，官方源仅作最后兜底。
+pluginManagement {
+    repositories {
+        maven { url "https://maven.aliyun.com/repository/gradle-plugin" }
+        maven { url "https://maven.aliyun.com/repository/google" }
+        maven { url "https://maven.aliyun.com/repository/public" }
+        maven { url "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/" }
+        maven { url "https://repo.huaweicloud.com/repository/maven/" }
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+
+include ':app'
+
+apply from: 'tauri.settings.gradle'

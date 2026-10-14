@@ -1,0 +1,48 @@
+# ===========================================================================
+# PasswordMS · 本地构建配置模板
+# ===========================================================================
+# 用法：把本文件复制为同目录下的 `config.toml`，再把下面标注的
+#       <占位符> 换成你自己机器上的真实路径。
+#       `config.toml` 已被 .gitignore 排除，不会被提交（它是机器专属的）。
+#
+#   Windows:  copy .cargo\config.toml.example .cargo\config.toml
+#   Linux/macOS:  cp .cargo/config.toml.example .cargo/config.toml
+#
+# ---------------------------------------------------------------------------
+# 这个文件是干什么的
+# ---------------------------------------------------------------------------
+# 默认情况下 **不需要** 它。只有在「没有 MSVC / 没有完整 mingw-w64」的
+# Windows 机器上编译，才需要按下面的办法绕行。有 Visual Studio Build Tools
+# 的机器直接用默认目标即可：`cargo test -p passwordms-core`
+#
+# 背景（踩坑记录详见 docs/03b-verification.md §8）：
+#   1. 无 MSVC 时只能走 windows-gnu 目标，而它的 getrandom 依赖走 raw-dylib，
+#      编译期必须调用 dlltool 生成导入库；rustup 自带的 dlltool 找不到配套的
+#      `as` 汇编器，此路不通。
+#   2. 因此改用 rustup 自带的 `x86_64-pc-windows-gnullvm` 目标（LLVM ABI），
+#      用工具链里的 rust-lld 当链接器，并手工补齐两个缺失的 CRT 符号。
+#   3. 还需要 mingw-w64 的 `as.exe` / `dlltool.exe` / `windres.exe`（Tauri 嵌入
+#      图标要用 windres）。这些不在 rustup 里，需自行准备。
+# ---------------------------------------------------------------------------
+
+[target.x86_64-pc-windows-gnullvm]
+linker = "rust-lld"
+rustflags = [
+    # ↓↓↓ 把 <RUSTUP_TOOLCHAIN_ROOT> 换成你的 rustup 工具链根目录 ↓↓↓
+    #     典型值（Windows）:  C:\Users\<你的用户名>\.rustup\toolchains\stable-x86_64-pc-windows-gnu
+    #     典型值（Linux）  :  /home/<你的用户名>/.rustup/toolchains/stable-x86_64-unknown-linux-gnu
+    #     不确定就先运行 `rustup show home` 看 .rustup 在哪。
+    "-L", "native=<RUSTUP_TOOLCHAIN_ROOT>/lib/rustlib/x86_64-pc-windows-gnu/lib/self-contained",
+
+    # ↓↓↓ 把你自备的 mingw-w64 静态库目录换成真实路径 ↓↓↓
+    #     里面至少要能链接到 kernel32 / msvcrt 等基础导入库。
+    #     若你装了完整的 mingw-w64，可以指向它的 <前缀>/x86_64-w64-mingw32/lib
+    "-L", "native=<MINGW_W64_LIB_DIR>",
+
+    "-C", "link-self-contained=yes",
+]
+
+# 关掉增量编译最省心：开着时，增量会话锁文件的清理会被「批量删除守卫」拦截
+# （报 os error 5 拒绝访问），偶发把 cargo 卡死。
+[build]
+incremental = false

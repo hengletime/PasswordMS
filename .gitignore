@@ -16,8 +16,15 @@
 *.local
 
 # --- Tauri 生成物 ---
-/src-tauri/gen/
-/src-tauri/gen/android/app/build/
+# `gen/schemas/` 是 tauri-build 每次编译重新生成的 JSON schema，不入库。
+/src-tauri/gen/schemas/
+#
+# 注意：`gen/android/` 里的 **Android 工程源码要入库**（AndroidManifest.xml / gradle 脚本 /
+# MainActivity.kt / 图标 / res 资源）。否则换机器或重新克隆后必须重跑
+# `tauri android init`，会丢掉对 manifest 和图标做过的任何定制。
+# 其中真正的编译产物由 Tauri 自带的两层嵌套 .gitignore 自动挡掉，无需在此重复：
+#   gen/android/.gitignore      → build / .gradle / local.properties / key.properties / .tauri
+#   gen/android/app/.gitignore  → src/main/**/generated / jniLibs/**/*.so / assets/tauri.conf.json
 
 # --- Tauri 打包器下载的外部工具缓存（NSIS / WiX）---
 WixTools*/
@@ -55,3 +62,11 @@ desktop.ini
 # 默认**纳入**仓库；若你不想把这些内部过程笔记推到 GitHub，取消下一行注释。
 # ===========================================================================
 # .workbuddy/
+
+# ===========================================================================
+# 机器专属的构建配置
+# `.cargo/config.toml` 里写着本机的绝对路径（rustup 工具链位置、mingw 库目录），
+# 换机器/上 CI 必然失效，所以不入库。
+# 模板见 `.cargo/config.toml.example` —— 新机器上复制一份改名即可。
+# ===========================================================================
+.cargo/config.toml

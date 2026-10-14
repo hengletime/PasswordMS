@@ -104,12 +104,32 @@ impl Session {
     }
 
     /// 解锁已有保险库（F-01）。失败统一返回 [`CoreError::UnlockFailed`]。
+    ///
+    /// **A-05 / D-10 统一化**：除 [`CoreError::NoVault`] 外，**任何**失败——密码错误、头部
+    /// 结构性损坏（magic / version / header_len / JSON 反序列化 / 读截断）——都返回同一个
+    /// [`CoreError::UnlockFailed`]；且结构性损坏路径在返回前会**刻意消耗一次等价 KDF**，
+    /// 使耗时与密码错误路径相当，消除时序侧信道。
+    ///
+    /// [`CoreError::NoVault`] **不折叠**（主理人裁定）：它是本地 UI 状态而非机密
+    /// （能访问该路径者本就知道文件是否存在），且前端要靠它区分「首次使用 → 创建向导」
+    /// 与「已有库 → 解锁页」，折叠会打乱首次启动逻辑；A-05 针对的是「密码错 vs 数据损坏」，
+    /// `NoVault` 不属于这两者。
     pub fn unlock(path: &Path, master_password: &str) -> CoreResult<Self> {
         if !path.exists() {
             return Err(CoreError::NoVault);
         }
-        // 仅读取头部（KDF 参数 / 盐），随后丢弃容器句柄。
-        let container = Container::open(path)?;
+        // 仅读取头部（KDF 参数 / 盐）。此处把 `Container::open` 的失败折叠为统一错误码。
+        let container = match Container::open(path) {
+            Ok(c) => c,
+            // NoVault 原样返回（裁定见上）。
+            Err(CoreError::NoVault) => return Err(CoreError::NoVault),
+            // 结构性损坏：先花掉一次等价 KDF，再统一报 UnlockFailed，
+            // 避免「错误码一致但耗时差上千倍」的时序侧信道（A-05 / D-10）。
+            Err(_) => {
+                burn_unlock_kdf(master_password);
+                return Err(CoreError::UnlockFailed);
+            }
+        };
         let (salt, params, verify_mac, wrapped) = {
             let header = container.header();
             (
@@ -229,6 +249,25 @@ impl Session {
     /// 当前保险库文件路径（已解锁时）。
     pub fn vault_path(&self) -> CoreResult<PathBuf> {
         Ok(self.repo()?.path())
+    }
+}
+
+/// 在「头部结构性损坏」的早退路径上**刻意**跑一次与正常解锁等价的 Argon2id。
+///
+/// 目的（A-05 / D-10）：结构性损坏（magic / version / header_len / JSON 反序列化 / 读截断）
+/// 原本会在 KDF **之前**毫秒级返回，而正常失败要跑满 Argon2id(m=64MiB,t=3)（本机数秒级）。
+/// 即使错误码已统一，耗时仍差上千倍 → 依旧可区分。故这里先用 [`KdfParams::default()`]
+/// （与 [`Session::create`] 写入的默认参数一致）派生一次 MK 并**丢弃结果**。
+///
+/// 返回值是 [`zeroize::Zeroizing`]，`drop` 时自动清零；再用 [`std::hint::black_box`]
+/// 确保该计算不会被编译器优化掉。**这是刻意的等价消耗，不是冗余代码。**
+fn burn_unlock_kdf(master_password: &str) {
+    // 固定 16 字节盐：仅为消耗等价算力，不参与任何真实密钥派生。
+    const BURN_SALT: [u8; 16] = [0u8; 16];
+    let params = KdfParams::default();
+    if let Ok(mk) = kdf::derive_master_key(master_password, &BURN_SALT, &params) {
+        std::hint::black_box(&mk[..]);
+        drop(mk); // Zeroizing：即刻清零
     }
 }
 

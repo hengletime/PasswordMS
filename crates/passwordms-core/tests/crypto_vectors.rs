@@ -84,6 +84,19 @@ fn unlock_failure_is_unified_error() {
     let err3 = verify::unlock_check(&kek, &verify_key, &mac, &bad_wrapped).unwrap_err();
     assert_eq!(err3.code(), "ERR_UNLOCK_FAILED");
 
+    // A-05 原文（01-security-req.md:155）要求的是「**文案一致**」——因此不仅错误码要相同，
+    // 面向用户的 i18n key 也必须完全相同。Phase 4c 补强：逐条断言 message_key 一致。
+    assert_eq!(err.message_key(), "err.unlock_failed", "错误密码的文案 key 应统一");
+    assert_eq!(err2.message_key(), "err.unlock_failed", "数据损坏的文案 key 应统一");
+    assert_eq!(err3.message_key(), "err.unlock_failed", "密文被替换的文案 key 应统一");
+    assert_eq!(
+        CoreError::UnlockFailed.message_key(),
+        "err.unlock_failed",
+        "统一错误变体的文案 key 应固定"
+    );
+    // 手写 Debug 只输出错误码（不得泄露内部上下文）。
+    assert_eq!(format!("{err:?}"), "CoreError(\"ERR_UNLOCK_FAILED\")");
+
     // AAD 常量存在且固定。
     assert_eq!(AAD_VAULT_KEY, b"passwordms/v1/vault-key");
     assert_eq!(AEAD_NONCE_LEN, 24);

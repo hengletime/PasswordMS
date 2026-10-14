@@ -8,6 +8,12 @@
 # 文本文件统一 LF
 * text=auto eol=lf
 
+# --- ⚠️ Windows 批处理必须保持 CRLF ---
+# cmd.exe 解析 .bat/.cmd 的多行块与 goto 标签时依赖 CRLF，转成 LF 会出诡异错误。
+# 典型受影响文件：src-tauri/gen/android/gradlew.bat（Gradle wrapper，第三方生成，不能改）
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
 # --- 二进制：禁止任何换行符转换 ---
 *.ico   binary
 *.icns  binary
@@ -29,6 +35,8 @@
 *.dll   binary
 *.msi   binary
 *.apk   binary
+*.aab   binary
+*.jar   binary
 *.so    binary
 *.dylib binary
 
