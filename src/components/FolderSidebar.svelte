@@ -4,6 +4,12 @@
   import { vault } from '../lib/stores/vault.svelte';
   import { ui } from '../lib/stores/ui.svelte';
 
+  interface Props {
+    /** 移动端抽屉：选中分组/收藏后回调，用于自动关闭抽屉（桌面端不传）。 */
+    onpicked?: () => void;
+  }
+  const { onpicked }: Props = $props();
+
   let creating = $state(false);
   let newName = $state('');
   let editingId = $state<string | null>(null);
@@ -42,6 +48,18 @@
       await vault.deleteFolder(folderId, 'to_ungrouped');
     }
   }
+
+  /** 选中分组（可传 null = 全部）：完成后通知父级（移动端据此关闭抽屉）。 */
+  function pickFolder(folderId: string | null): void {
+    void vault.selectFolder(folderId);
+    onpicked?.();
+  }
+
+  /** 切换「仅收藏」：完成后通知父级关闭抽屉。 */
+  function pickFavorite(): void {
+    void vault.toggleFavoriteOnly();
+    onpicked?.();
+  }
 </script>
 
 <aside class="side">
@@ -50,7 +68,7 @@
       class="side-row"
       class:active={vault.selectedFolderId === null && !vault.favoriteOnly}
       type="button"
-      onclick={() => void vault.selectFolder(null)}
+      onclick={() => pickFolder(null)}
     >
       <Icon name="key" size={16} />
       <span>{ui.t('folder.all')}</span>
@@ -59,7 +77,7 @@
       class="side-row"
       class:active={vault.favoriteOnly}
       type="button"
-      onclick={() => void vault.toggleFavoriteOnly()}
+      onclick={() => pickFavorite()}
     >
       <Icon name="star" size={16} />
       <span>{ui.t('nav.favorites')}</span>
@@ -100,7 +118,7 @@
             class:active={vault.selectedFolderId === folder.folder_id && !vault.favoriteOnly}
             type="button"
             ondblclick={() => startEdit(folder.folder_id, folder.name)}
-            onclick={() => void vault.selectFolder(folder.folder_id)}
+            onclick={() => pickFolder(folder.folder_id)}
           >
             <Icon name="folder" size={16} />
             <span class="side-name">{folder.name}</span>
@@ -221,5 +239,13 @@
     color: var(--pms-faint);
     font-size: 0.8rem;
     padding: 0.4rem 0.55rem;
+  }
+  /* 移动端：分组栏被收进抽屉，占满抽屉宽高，否则会留下 240px 固定宽度的留白。 */
+  @media (max-width: 767px) {
+    .side {
+      width: 100%;
+      height: 100%;
+      border-right: none;
+    }
   }
 </style>

@@ -3,8 +3,11 @@
   // 设计规范 §5.2：品牌区 + 警告条(.pms-alert.is-warning) + 两个**完全同构**的密码框（都带眼睛）。
   // 注意：MIN_MASTER_PASSWORD_LEN 硬拦截、acknowledged 门禁、canSubmit/tooShort/mismatch 逻辑一律未改。
   import Icon from './common/Icon.svelte';
+  import Logo from './common/Logo.svelte';
+  import WindowControls from './common/WindowControls.svelte';
   import StrengthMeter from './common/StrengthMeter.svelte';
   import Spinner from './common/Spinner.svelte';
+  import ThemeToggle from './common/ThemeToggle.svelte';
   import { MIN_MASTER_PASSWORD_LEN } from '../lib/constants';
   import { session } from '../lib/stores/session.svelte';
   import { ui } from '../lib/stores/ui.svelte';
@@ -34,10 +37,15 @@
   }
 </script>
 
-<main class="wz-screen">
+<main class="wz-screen" data-tauri-drag-region>
+  <!-- 去掉原生标题栏后的自绘顶条：拖动区 + 主题切换 + 窗口三钮 -->
+  <div class="win-chrome" data-tauri-drag-region>
+    <ThemeToggle />
+    <WindowControls />
+  </div>
   <div class="pms-card wz-card">
     <header class="wz-head">
-      <span class="wz-logo"><Icon name="shield" size={24} /></span>
+      <span class="wz-logo"><Logo size={44} /></span>
       <h1>{ui.t('create.title')}</h1>
       <p class="pms-meta">{ui.t('app.tagline')}</p>
     </header>
@@ -149,15 +157,13 @@
   .wz-head {
     text-align: center;
   }
+  /* 品牌标本体自带渐变方牌（Logo.svelte），这里只负责占位对齐，不再叠自己的底色 */
   .wz-logo {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 44px;
     height: 44px;
-    border-radius: var(--pms-r);
-    background: var(--pms-accent-soft);
-    color: var(--pms-accent);
   }
   .wz-head h1 {
     font-size: 1.35rem;
@@ -180,5 +186,20 @@
   }
   .wz-back {
     margin-top: 0.4rem;
+  }
+  /* 右上角常驻主题切换（未进主界面也能切）。 */
+  /* 去掉原生标题栏后的自绘顶条（与 LockScreen 同款）：兼作窗口拖动区 */
+  .win-chrome {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    padding-right: 2px;
   }
 </style>

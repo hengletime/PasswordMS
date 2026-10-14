@@ -46,3 +46,31 @@ rustflags = [
 # （报 os error 5 拒绝访问），偶发把 cargo 卡死。
 [build]
 incremental = false
+
+# ---------------------------------------------------------------------------
+# 关于 `windres`（Tauri 嵌入图标 / manifest 用）—— **这里什么都不用配**
+# ---------------------------------------------------------------------------
+# 事故 D-33（2026-10-14）：只跑 `npx tauri build` 时炸在
+#     tauri-winres-0.3.6/src/lib.rs:543
+#     panicked ... NotAttempted("windres")
+# 根因是 `tauri-winres` → `embed-resource 3.x` 在 Windows+GNU 宿主上把编译器探测
+# 写死成 `Command::new("windres")`（只认 PATH），而本机没有 MSVC、也没有系统级
+# mingw-w64，`windres` 只在用户自备目录里，且那条 `export PATH` 从未固化。
+#
+# **不要在 `.cargo/config.toml` 里用 `[env] PATH = { prepend = true }` 来修** ——
+# 实测在 Windows 上对 build script 无效：系统注入的环境变量名是 `Path`，cargo 又把
+# `PATH` 当新条目塞进去，两条并存，build script 读到的仍是旧值。同份 config 里的
+# 自定义变量能传进 build script，**只有 PATH 传不进去**。
+#
+# 正解在 `src-tauri/build.rs` 的 `ensure_windres_on_path()`：PATH 上找不到
+# `windres` 时自动按下面的顺序探测并把命中目录前置进本进程 PATH，
+# 因此不依赖任何人工 export，也不依赖由哪个入口起构建。
+#
+#   1. 环境变量 `PMS_WINRES_DIR`  ← 换机器请设这个，指向含 windres.exe 的目录
+#   2. `%USERPROFILE%\.workbuddy\tools\mingw-bin\`
+#   3. `C:\msys64\mingw64\bin\` / `C:\mingw64\bin\`
+#
+# 装了完整 mingw-w64 或 Visual Studio Build Tools 的机器，PATH 上本来就有
+# `windres`，无需任何设置（也就不需要本文件）。
+#
+# 详述与踩坑见 docs/03b-verification.md §8.1 / §8.2。

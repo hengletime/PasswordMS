@@ -8,6 +8,7 @@
   import { api } from '../lib/ipc';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
+  import { theme } from '../lib/stores/theme.svelte';
   import { ui } from '../lib/stores/ui.svelte';
   import type { VaultFileInfoDto, VaultSettings } from '../types';
 
@@ -79,6 +80,42 @@
 
 <section class="set">
   <h2 class="set-title">{ui.t('settings.title')}</h2>
+
+  <div class="pms-card set-card">
+    <h3>{ui.t('settings.group_general')}</h3>
+    <div class="set-row">
+      <span class="set-label">{ui.t('theme.label')}</span>
+      <div class="set-seg" role="group" aria-label={ui.t('theme.label')}>
+        <button
+          class="pms-btn is-sm"
+          class:is-primary={theme.mode === 'system'}
+          type="button"
+          aria-pressed={theme.mode === 'system'}
+          onclick={() => theme.setMode('system')}
+        >
+          {ui.t('theme.system')}
+        </button>
+        <button
+          class="pms-btn is-sm"
+          class:is-primary={theme.mode === 'light'}
+          type="button"
+          aria-pressed={theme.mode === 'light'}
+          onclick={() => theme.setMode('light')}
+        >
+          {ui.t('theme.light')}
+        </button>
+        <button
+          class="pms-btn is-sm"
+          class:is-primary={theme.mode === 'dark'}
+          type="button"
+          aria-pressed={theme.mode === 'dark'}
+          onclick={() => theme.setMode('dark')}
+        >
+          {ui.t('theme.dark')}
+        </button>
+      </div>
+    </div>
+  </div>
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_security')}</h3>
@@ -222,6 +259,12 @@
     width: 160px;
     flex: 0 0 auto;
   }
+  /* 分段控件：跟随系统 / 浅色 / 深色。 */
+  .set-seg {
+    display: inline-flex;
+    gap: 0.3rem;
+    flex: 0 0 auto;
+  }
   .set-mono {
     font-family: var(--pms-mono);
     word-break: break-all;
@@ -248,5 +291,22 @@
   }
   .set-card .pms-alert {
     margin: 0 0 0.75rem;
+  }
+  /* 移动端：每行由「label 左 / 控件右」改为上下堆叠，控件占满整宽，避免 160px 固定宽控件 + 长文案溢出。 */
+  @media (max-width: 767px) {
+    .set {
+      padding: 0.9rem;
+    }
+    .set-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.35rem;
+    }
+    .set-ctl {
+      width: 100%;
+    }
+    .set-seg {
+      align-self: flex-start;
+    }
   }
 </style>

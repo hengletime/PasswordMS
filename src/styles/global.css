@@ -44,10 +44,13 @@
   --pms-muted:         #5A6B7E;
   --pms-faint:         #8B9AAB;
   --pms-accent:        #0D9488;
+  --pms-accent-hover:  #0F766E;
   --pms-accent-2:      #2563EB;
   --pms-accent-ink:    #FFFFFF;
   --pms-accent-soft:   rgba(13, 148, 136, .10);
   --pms-danger:        #D64545;
+  --pms-danger-hover:  #B93A3A;
+  --pms-danger-ink:    #FFFFFF;
   --pms-danger-soft:   rgba(214, 69, 69, .10);
   --pms-warning:       #B7791F;
   --pms-warning-soft:  rgba(183, 121, 31, .12);
@@ -70,10 +73,13 @@
     --pms-muted:         #8AA0B6;
     --pms-faint:         #5C7186;
     --pms-accent:        #2DD4BF;
+    --pms-accent-hover:  #5EEAD4;
     --pms-accent-2:      #58A6FF;
     --pms-accent-ink:    #04211D;
     --pms-accent-soft:   rgba(45, 212, 191, .12);
     --pms-danger:        #F87171;
+    --pms-danger-hover:  #FCA5A5;
+    --pms-danger-ink:    #2A0A0A;
     --pms-danger-soft:   rgba(248, 113, 113, .12);
     --pms-warning:       #F2B45C;
     --pms-warning-soft:  rgba(242, 180, 92, .12);
@@ -96,10 +102,13 @@
   --pms-muted:         #8AA0B6;
   --pms-faint:         #5C7186;
   --pms-accent:        #2DD4BF;
+  --pms-accent-hover:  #5EEAD4;
   --pms-accent-2:      #58A6FF;
   --pms-accent-ink:    #04211D;
   --pms-accent-soft:   rgba(45, 212, 191, .12);
   --pms-danger:        #F87171;
+  --pms-danger-hover:  #FCA5A5;
+  --pms-danger-ink:    #2A0A0A;
   --pms-danger-soft:   rgba(248, 113, 113, .12);
   --pms-warning:       #F2B45C;
   --pms-warning-soft:  rgba(242, 180, 92, .12);
@@ -119,10 +128,13 @@
   --pms-muted:         #5A6B7E;
   --pms-faint:         #8B9AAB;
   --pms-accent:        #0D9488;
+  --pms-accent-hover:  #0F766E;
   --pms-accent-2:      #2563EB;
   --pms-accent-ink:    #FFFFFF;
   --pms-accent-soft:   rgba(13, 148, 136, .10);
   --pms-danger:        #D64545;
+  --pms-danger-hover:  #B93A3A;
+  --pms-danger-ink:    #FFFFFF;
   --pms-danger-soft:   rgba(214, 69, 69, .10);
   --pms-warning:       #B7791F;
   --pms-warning-soft:  rgba(183, 121, 31, .12);
@@ -152,7 +164,13 @@ html, body {
   border-color: var(--pms-accent);
 }
 
-/* ---------- 按钮 ---------- */
+/* ---------- 按钮 ----------
+ * 不变量（事故 D-27，由 scripts/check-css-contract.mjs 守门）：
+ *   通用规则 `.pms-btn:hover:not(:disabled)` 特异性 (0,3,0) 会抢走 background；
+ *   因此**每个颜色变体都必须自带 `:hover:not(:disabled)` 规则，并把
+ *   background / border-color / color 三项全部显式钉死**。
+ *   只补其中一两项 = 悬停时文字压在与字色同明度的底色上 → 按钮"一片空白"。
+ *   新增变体时请同步更新检查脚本的 CASES 矩阵。 */
 .pms-btn {
   display: inline-flex; align-items: center; justify-content: center;
   gap: .4rem; min-height: var(--pms-ctl-h); padding: 0 .95rem;
@@ -167,14 +185,27 @@ html, body {
 .pms-btn:hover:not(:disabled) { background: var(--pms-bg-2); border-color: var(--pms-accent); }
 .pms-btn:active:not(:disabled) { transform: translateY(1px); }
 .pms-btn:disabled { opacity: .5; cursor: not-allowed; }
+
 .pms-btn.is-primary {
   background: var(--pms-accent); border-color: var(--pms-accent);
   color: var(--pms-accent-ink); font-weight: 600;
 }
-.pms-btn.is-primary:hover:not(:disabled) { filter: brightness(1.07); border-color: var(--pms-accent); }
-.pms-btn.is-danger  { background: var(--pms-danger); border-color: var(--pms-danger); color: #fff; }
-.pms-btn.is-ghost   { background: transparent; border-color: transparent; color: var(--pms-muted); }
-.pms-btn.is-ghost:hover:not(:disabled) { background: var(--pms-bg-2); color: var(--pms-fg); }
+.pms-btn.is-primary:hover:not(:disabled) {
+  background: var(--pms-accent-hover); border-color: var(--pms-accent-hover);
+  color: var(--pms-accent-ink);
+}
+.pms-btn.is-danger {
+  background: var(--pms-danger); border-color: var(--pms-danger);
+  color: var(--pms-danger-ink); font-weight: 600;
+}
+.pms-btn.is-danger:hover:not(:disabled) {
+  background: var(--pms-danger-hover); border-color: var(--pms-danger-hover);
+  color: var(--pms-danger-ink);
+}
+.pms-btn.is-ghost { background: transparent; border-color: transparent; color: var(--pms-muted); }
+.pms-btn.is-ghost:hover:not(:disabled) {
+  background: var(--pms-bg-2); border-color: transparent; color: var(--pms-fg);
+}
 .pms-btn.is-sm      { min-height: 30px; padding: 0 .6rem; font-size: .8rem; border-radius: var(--pms-r-sm); }
 .pms-btn.is-block   { width: 100%; }
 .pms-btn.is-lg      { min-height: var(--pms-ctl-h-lg); font-size: .95rem; }
@@ -183,7 +214,7 @@ html, body {
 .pms-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: var(--pms-hit); height: var(--pms-hit); flex: 0 0 var(--pms-hit);
-  border: none; background: transparent; color: var(--pms-faint);
+  border: none; background: transparent; color: var(--pms-muted);
   border-radius: var(--pms-r-sm); cursor: pointer;
   transition: color var(--pms-dur) var(--pms-ease), background var(--pms-dur) var(--pms-ease);
 }
@@ -203,6 +234,11 @@ html, body {
 .pms-input:hover:not(:disabled) { border-color: var(--pms-accent); }
 .pms-input:disabled { opacity: .55; }
 textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; min-height: 96px; }
+
+/* 隐藏 Edge/WebView2 原生密码揭示按钮（D-30）：
+   否则 password 输入框会同时出现原生眼睛与我们自己的 .pms-icon-btn 眼睛。 */
+input[type='password']::-ms-reveal,
+input[type='password']::-ms-clear { display: none; }
 
 /* 纵向：label 上、控件下 */
 .pms-field { display: flex; flex-direction: column; gap: .4rem; margin-bottom: .9rem; }

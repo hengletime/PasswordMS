@@ -2,6 +2,8 @@
 
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
+>
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · **v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）**
 
 ---
 
@@ -75,10 +77,13 @@ Svelte 给局部样式加 hash 抬优先级，所以 `display`、`align-items` �
     --pms-muted:         #8AA0B6;
     --pms-faint:         #5C7186;
     --pms-accent:        #2DD4BF;
+    --pms-accent-hover:  #5EEAD4;   /* 修正 v1.2：悬停必须显式给色，不能靠 filter: brightness() */
     --pms-accent-2:      #58A6FF;
     --pms-accent-ink:    #04211D;
     --pms-accent-soft:   rgba(45, 212, 191, .12);
     --pms-danger:        #F87171;
+    --pms-danger-hover:  #FCA5A5;
+    --pms-danger-ink:    #2A0A0A;   /* 修正 v1.2：原固定 #fff 压浅红 #F87171 只有 2.77:1 */
     --pms-danger-soft:   rgba(248, 113, 113, .12);
     --pms-warning:       #F2B45C;
     --pms-warning-soft:  rgba(242, 180, 92, .12);
@@ -102,10 +107,13 @@ Svelte 给局部样式加 hash 抬优先级，所以 `display`、`align-items` �
     --pms-muted:         #5A6B7E;
     --pms-faint:         #8B9AAB;
     --pms-accent:        #0D9488;
+    --pms-accent-hover:  #0F766E;
     --pms-accent-2:      #2563EB;
     --pms-accent-ink:    #FFFFFF;
     --pms-accent-soft:   rgba(13, 148, 136, .10);
     --pms-danger:        #D64545;
+    --pms-danger-hover:  #B93A3A;
+    --pms-danger-ink:    #FFFFFF;
     --pms-danger-soft:   rgba(214, 69, 69, .10);
     --pms-warning:       #B7791F;
     --pms-warning-soft:  rgba(183, 121, 31, .12);
@@ -140,7 +148,15 @@ html, body {
   border-color: var(--pms-accent);
 }
 
-/* ---------- 按钮 ---------- */
+/* ---------- 按钮 ----------
+ * 【硬性不变量 · D-27】通用规则 `.pms-btn:hover:not(:disabled)` 的特异性是 (0,3,0)，
+ * 会抢走任何特异性更低的选择器所设的 background。因此：
+ *   ① 每个颜色变体（is-primary / is-danger / is-ghost）必须自带 `:hover:not(:disabled)` 规则；
+ *   ② 该规则必须把 background / border-color / color **三项全部显式写出**；
+ *   ③ 不要用 filter: brightness() 表达悬停 —— 它同时创建层叠上下文，且无法被本规范校验。
+ * 违反后果实测：主按钮悬停时 background 被抢成 --pms-bg-2，白字压浅灰，
+ * 浅色 1.17:1 / 暗色 1.09:1 —— 按钮"一片空白"，且两个主题全中招。
+ * 由 scripts/check-css-contract.mjs 的 INV-1 守门，新增变体需同步其 CASES 矩阵。 */
 .pms-btn {
   display: inline-flex; align-items: center; justify-content: center;
   gap: .4rem; min-height: var(--pms-ctl-h); padding: 0 .95rem;
@@ -155,14 +171,27 @@ html, body {
 .pms-btn:hover:not(:disabled) { background: var(--pms-bg-2); border-color: var(--pms-accent); }
 .pms-btn:active:not(:disabled) { transform: translateY(1px); }
 .pms-btn:disabled { opacity: .5; cursor: not-allowed; }
+
 .pms-btn.is-primary {
   background: var(--pms-accent); border-color: var(--pms-accent);
   color: var(--pms-accent-ink); font-weight: 600;
 }
-.pms-btn.is-primary:hover:not(:disabled) { filter: brightness(1.07); border-color: var(--pms-accent); }
-.pms-btn.is-danger  { background: var(--pms-danger); border-color: var(--pms-danger); color: #fff; }
-.pms-btn.is-ghost   { background: transparent; border-color: transparent; color: var(--pms-muted); }
-.pms-btn.is-ghost:hover:not(:disabled) { background: var(--pms-bg-2); color: var(--pms-fg); }
+.pms-btn.is-primary:hover:not(:disabled) {
+  background: var(--pms-accent-hover); border-color: var(--pms-accent-hover);
+  color: var(--pms-accent-ink);
+}
+.pms-btn.is-danger {
+  background: var(--pms-danger); border-color: var(--pms-danger);
+  color: var(--pms-danger-ink); font-weight: 600;
+}
+.pms-btn.is-danger:hover:not(:disabled) {
+  background: var(--pms-danger-hover); border-color: var(--pms-danger-hover);
+  color: var(--pms-danger-ink);
+}
+.pms-btn.is-ghost { background: transparent; border-color: transparent; color: var(--pms-muted); }
+.pms-btn.is-ghost:hover:not(:disabled) {
+  background: var(--pms-bg-2); border-color: transparent; color: var(--pms-fg);
+}
 .pms-btn.is-sm      { min-height: 30px; padding: 0 .6rem; font-size: .8rem; border-radius: var(--pms-r-sm); }
 .pms-btn.is-block   { width: 100%; }
 .pms-btn.is-lg      { min-height: var(--pms-ctl-h-lg); font-size: .95rem; }
@@ -171,7 +200,7 @@ html, body {
 .pms-icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: var(--pms-hit); height: var(--pms-hit); flex: 0 0 var(--pms-hit);
-  border: none; background: transparent; color: var(--pms-faint);
+  border: none; background: transparent; color: var(--pms-muted);
   border-radius: var(--pms-r-sm); cursor: pointer;
   transition: color var(--pms-dur) var(--pms-ease), background var(--pms-dur) var(--pms-ease);
 }
@@ -269,6 +298,10 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | **错误提示** | 就地内联小字（`.pms-hint` 形态 + `--pms-danger` 色），**不要**弹大块红字。 |
 | **触控目标** | 所有可点元素 ≥ 40px（移动端 ≥ 44px）。 |
 | **动效** | 只做 background / border-color / transform / opacity，≤160ms；尊重 `prefers-reduced-motion`。 |
+| **原生控件的干涉（D-30）** | WebView2/Blink 会为 `input[type=password]` **渲染一个原生密码揭示按钮**（`::-ms-reveal`）。它和我们自己的 `.pms-icon-btn` 眼睛会**同时出现**，用户看到两个眼睛。**凡是自绘了眼睛的密码框，必须一并关掉原生那个**（见 §3 `::-ms-reveal` 段）。同理，`::-ms-clear`（原生清除叉）也要关。 |
+| **右侧详情面板的状态机（D-31）** | 右侧面板只有三种态：`detail`（看）/ `create`（新建）/ `edit`（编辑）。**`select`（点击列表项）、`done`（保存完成）、`section`（点顶栏分区）三个事件都必须强制回到 `detail`**。绝对禁止把"是否处于新建态"与"当前选中了哪一项"拆成两个互不相关的布尔/字符串来各自维护 —— 那正是 D-31 的成因。逻辑收敛在 `src/lib/pane-mode.ts` 的纯 reducer 里，有 `pane-mode.test.ts` 8 例守门（含 `create + select → detail` 回归用例）。 |
+| **窗口标题栏主题（D-32）** | 原生标题栏（`tauri.conf.json` 的 `app.windows[0].theme`）与应用主题**必须同步**。默认窗口主题是 `Dark`；用户把主题改成 `light` / `dark` 时，由 `theme.svelte.ts` 的 `syncWindowChrome()` 调 `getCurrentWindow().setTheme()` 跟随；选 `system` 时传 `null` 交还系统。**不这么做的话，浅色系统上会出现"白色标题栏 + 深色应用"的硬切缝**（实测 y=0~56 是 `rgb(242,242,242)`，y=60 起是 `#121A24`，无过渡）。 |
+| **生成器必须"能被发现"** | 密码生成器是核心卖点功能，**必须有两个入口**：① 密码输入框右侧的骰子图标（`.pms-icon-btn` + `title` 提示）；② 顶栏的「生成密码」按钮（只生成+复制，不写回条目）。**禁止**把它藏在一个无 tooltip 的 `⟳` 图标里 —— 客户实测反馈"根本找不到"。弹窗形态用 `PasswordGeneratorModal.svelte`（Modal 内部 `{#if open}` 包裹 → 关闭即卸载，不残留请求/toast）。 |
 
 ---
 
@@ -331,7 +364,10 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 - 品牌区：小号 logo 方块 + "PasswordMS"（1rem / 600）。
 - 主导航项：40px 高，圆角 `--pms-r-sm`；**选中态 = `--pms-accent-soft` 底 + `--pms-accent` 文字 + 左侧 2px 青绿竖条**；悬停 = `--pms-bg-2`。
 - 底部分区：导入 / 锁定，用分隔线隔开。
-- 顶部工具条：搜索框（`.pms-input`，带 search 图标）+ 右侧"新建"主按钮。
+- 顶部工具条（`.topbar`，`background: var(--pms-surface)`，`min-height: 56px`）：
+  - **左**：搜索框（`.pms-input`，带 search 图标）+ "新建"主按钮。
+  - **右**（`.topbar-right`，按此顺序）：**「生成密码」ghost 小按钮（骰子图标，D-30/D-33 客户反馈新增）** → 主题切换 `ThemeToggle` → 语言切换 → 导入 → 锁定。
+  - 判据：**顶栏右区必须能一眼看到"生成密码"**。它不带 `onuse`，只生成 + 复制，绝不写回任何条目。
 
 ### 5.4 其余面板（同一套语言，逐条过）
 
@@ -341,7 +377,8 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `ItemDetail.svelte` | 字段用"标签 + 值 + 行尾复制按钮"三段式；密码值用 `--pms-mono`；复制按钮是 `.pms-icon-btn` |
 | `ItemEditor.svelte` | 全部换成 `.pms-field` / `.pms-input-group`；自定义字段区用 .pms-card 内嵌浅底块；底部操作条 sticky |
 | `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示 |
-| `PasswordGenerator.svelte` | 结果用 `--pms-mono` 大字 + `.pms-input-group` 承载复制/刷新按钮；选项区两列网格 |
+| `PasswordGenerator.svelte` / `PasswordGeneratorModal.svelte` | 结果用 `--pms-mono` 大字 + `.pms-input-group` 承载复制/刷新按钮；选项区两列网格。**一律以弹窗形态出现**（`PasswordGeneratorModal` 内 Modal 自带 `{#if open}` 包裹 → 关闭即卸载，不残留请求/toast）。位数用**数字输入框**（输入中不钳制，失焦/回车才 clamp 到 8–64）；四类字符复选；**一类都不选时生成按钮 `disabled` 并给出提示**；结果下方带 `StrengthMeter`。 |
+| `common/ThemeToggle.svelte` | 三态循环（系统 → 浅色 → 暗色），图标用 `sun` / `moon`，并带 `title`。切换时**同时**更新 `document.documentElement` 的 `data-theme` **和**原生窗口标题栏（见 §4 D-32）。挂载点：解锁页右上角、主界面顶栏右区。 |
 | `HealthCheck.svelte` | 健康分做大字环形/大数字 + 4 个统计卡（弱口令/重复/超期/总数），弱项用 `.pms-badge.is-danger` |
 | `Trash.svelte` | 与 ItemList 同构；到期时间用 `.pms-badge.is-warning` |
 | `sync/*.svelte` | 4 个 tab 统一；配对二维码容器加 `.pms-card` 与留白；设备行 = 图标 + 名称 + 指纹 `.pms-meta` + 解绑 ghost 按钮 |
@@ -352,7 +389,123 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 
 ---
 
-## 6. 本次必须修的缺陷
+## 6. 移动端布局（<768px）
+
+> 客户拍板 **方案 A：单栏推进 + 底部导航**。目标机型：安卓 APK（手机竖屏，视口 ≈ 390×844）。
+> 缺陷背景见 §7 D-35：改动前三栏写死、零断点，手机视口下**最小内容宽度 785px**、**82 个元素横向溢出**，主界面不可用。
+
+### 6.1 断点约定（硬约束）
+
+- `@media (max-width: 767px)` = **移动端布局**。
+- `@media (min-width: 768px)` / 默认 = **桌面端，必须完全不变**（验收红线：1100×720 逐像素对比）。
+- 桌面三栏宽度（分组 240 / 列表 300 / 详情 `flex:1`）**一个字都不改**；所有移动端规则一律只写在 `<768px` 块内。
+
+### 6.2 顶栏改造（`MainLayout.svelte`）
+
+| 元素 | 桌面（≥768px） | 移动（<768px） |
+|---|---|---|
+| `.topbar-nav`（5 个 tab） | 显示 | **隐藏**（移到 §6.3 底部导航） |
+| `.topbar-right`（生成密码 / 语言 / 导入 / 锁定） | 显示 | **隐藏**，收进「⋯」溢出菜单 |
+| 左侧按钮 `.topbar-lead` | 隐藏 | 显示：列表态 = ☰（打开分组抽屉）；详情/编辑态 = ←（返回） |
+| 标题 | `app.title` | 当前分区名（`NAV` 里按 `ui.section` 取 `ui.t(entry.label)`） |
+| 「⋯」菜单 `.topbar-more` | 隐藏 | 显示，`z-index: 70` 高于内容 |
+
+- 「⋯」下拉菜单项依次：**生成密码**（`genOpen=true`）/ **语言**（显示当前 locale，`switchLocale()`）/ **主题**（三态：系统·浅色·暗色，复用 `theme` store 的 `mode` + `setMode()`，同 `Settings.svelte` 写法）/ **导入**（`importOpen=true`）/ **锁定**（`lockNow()`）。
+- **点菜单外部即关闭**（`<svelte:window onclick>` 判定点击是否落在菜单容器外）。
+- 左侧按钮仅在 `ui.section === 'items'` 渲染；health / trash / sync / settings 四个分区**不显示**它。
+
+### 6.3 底部导航栏（移动端 only）
+
+- `position: fixed; bottom: 0; left: 0; right: 0`，高度 `56px`，**并加 `padding-bottom: env(safe-area-inset-bottom)`**（安卓手势条 / 刘海机型）。
+- 背景 `var(--pms-surface)`，顶部 1px `var(--pms-border)`，`z-index: 50`。
+- **5 个 tab**，与顶栏 `NAV` 数组一一对应（items / health / trash / sync / settings），每个 `flex: 1` 平分，**图标在上、文字在下**（小字号）。
+- **选中态（v1.5 定稿）：胶囊 + 柔光，不给整格铺色。**
+  - 图标必须先包一层 `<span class="tab-glyph">`（46×26，`border-radius: var(--pms-r-pill)`），柔光加在这层上才有形状；直接加在 `<button>` 上又会变成"整格铺色"。
+  - 选中：`.bottom-nav-tab.active` 只改文字/图标颜色为 `var(--pms-accent)`（按钮自身 `background: transparent`）；
+    `.bottom-nav-tab.active .tab-glyph { background: var(--pms-accent-soft); box-shadow: 0 0 16px -6px var(--pms-accent); transform: translateY(-1px); }`
+  - 悬停：`.bottom-nav-tab:hover .tab-glyph { background: var(--pms-bg-2); }`
+  - **`.tab-glyph` 上不能有 `overflow: hidden`**（由 `.tab-label` 单独承担省略号），否则柔光会被裁掉。
+  - 理由：原先 `.active` 是整格 `--pms-accent-soft` 铺底，底栏被切成 5 个色块，方块感重、视线被"框住"；改为胶囊后**底栏始终是一条干净的横线**，当前分区靠一颗亮起的胶囊 + 柔光表达。
+- 点击行为与桌面顶栏**完全一致**：`ui.setSection(key)` 然后 `dispatch({ type: 'section' })`。
+- **短标签**：底部格子仅约 78px 宽，塞不下「全部条目」「密码体检」这类长文案，故新增短标签键（`nav.tab_items` / `nav.tab_health` / `nav.tab_trash` / `nav.tab_sync` / `nav.tab_settings`）。
+- 因为底栏固定，**主内容区 `.body` 移动端预留 `padding-bottom: calc(56px + env(safe-area-inset-bottom))`**，否则最后一条会被挡住。
+- 桌面端 `display: none`。
+
+### 6.4 分组抽屉（移动端 only）
+
+`FolderSidebar` 由 `.drawer` 包裹层 + `.drawer-backdrop` 遮罩承载：
+
+- **桌面端**：`.drawer { display: contents }` —— 包裹层在布局上「透明」，三栏布局**一个字都不变**。
+- **移动端**：
+  ```css
+  .drawer { position: fixed; top: 0; bottom: 0; left: 0;
+            width: min(84vw, 300px); z-index: 60;
+            transform: translateX(-100%);
+            transition: transform var(--pms-dur) var(--pms-ease); }
+  .drawer.open { transform: none; }
+  .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 55; }
+  ```
+- 点遮罩关闭抽屉；在抽屉里选了分组 / 收藏后**自动关闭**（`FolderSidebar` 新增可选 `onpicked?: () => void` prop）。
+- `FolderSidebar.svelte` 自身在 `<768px` 把 `width: 240px` 改为 `width: 100%; height: 100%`，否则抽屉里会留白。
+
+### 6.5 单栏推进（移动端 only）—— 关键设计决策
+
+**列表与详情两栏在移动端同屏只显示一栏**，用「已选条目」作唯一真相推进：
+
+- 给 `<main class="body">` 加动态 class：`class:showing-detail={vault.selectedItemId !== null || editing}`。
+- 列表与详情各包一层 `.pane`：桌面端 `.pane { display: contents }`（保证三栏布局不变）；移动端：
+  ```css
+  @media (max-width: 767px) {
+    .pane { display: flex; flex: 1; min-width: 0; }
+    .body:not(.showing-detail) .pane-detail { display: none; }
+    .body.showing-detail .pane-list { display: none; }
+  }
+  ```
+- 移动端 `.body` 本身保持 `display: flex`（横向），因为同一时刻只显示一栏。
+- **返回**：`editing` → `finishEdit()`（回只读详情；新建态因 `selectedItemId` 为 null 自然落到列表）；`!editing && selectedItemId !== null` → `vault.selectItem(null)`（回列表）。
+
+> **设计决策与理由（务必遵守）**：单栏切换**只用 `vault.selectedItemId`（配合派生于单一 `pane` reducer 的 `editing`）作为唯一真相**，**禁止**新增任何「当前是列表还是详情」的独立布尔/媒体查询状态变量。
+> 理由：本项目出过一次 **D-31 事故** —— 用两个独立状态分别描述「是否新建态」与「选中了哪一项」，二者不同步，导致点条目右侧毫无反应。**同一件事只能有一个状态源**；`selectItem(itemId: string | null)` 本就支持传 `null`，`selectedItem` 是 getter，`selectedItemId === null` 时返回 `null`，足以表达全部状态。
+
+### 6.6 子组件宽度适配（各自加 `@media (max-width: 767px)`）
+
+| 文件 | 移动端改动 |
+|---|---|
+| `ItemList.svelte` | `width: 300px` → `width: auto; flex: 1; border-right: none;` |
+| `ItemDetail.svelte` | 已具备 `flex: 1; min-width: 0`，无需改动 |
+| `ItemEditor.svelte` | 加 `flex: 1; min-width: 0`（独占整屏）；底部 sticky 操作条因 `.body` 预留了底栏高度而不会被遮挡 |
+| `Settings.svelte` | `.set-row` 由「label 左 / 控件右」改为上下堆叠，`.set-ctl` 占满整宽（避免 160px 固定宽控件 + 长文案溢出） |
+| `Trash.svelte` | `.trash-row` 允许换行，动作按钮落到下一行 |
+| `MainLayout.svelte` `.sync-grid` | `minmax(300px, 1fr)` 在 390px 下会溢出 → 改单列 `grid-template-columns: 1fr` |
+
+### 6.7 新增图标与 i18n
+
+- `common/Icon.svelte` 新增 `menu`（汉堡）、`arrow_left`（返回）、`more`（⋯）三个内联 SVG（24×24 viewBox、`fill="none"`、`stroke="currentColor"`，与既有条目同构，零外部依赖）。
+- 新增 i18n 键（zh-CN / en-US 双份）：`nav.tab_items`、`nav.tab_health`、`nav.tab_trash`、`nav.tab_sync`、`nav.tab_settings`、`nav.more`、`nav.open_folders`、`nav.language`。
+
+### 6.8 移动端类名契约（供自动化断言，不得随意改名）
+
+| 元素 | 类名 | 选中/打开态 |
+|---|---|---|
+| 底部导航栏容器 | `.bottom-nav` | — |
+| 底栏每个 tab | `.bottom-nav-tab` | 选中加 `.active` |
+| 底栏 tab 的图标胶囊层 | `.tab-glyph` | 随父级 `.active` 亮起（背景 + 柔光） |
+| 底栏 tab 的文字层 | `.tab-label` | — |
+| 分组抽屉容器 | `.drawer` | 打开加 `.open` |
+| 抽屉遮罩 | `.drawer-backdrop` | 打开加 `.open` |
+| 顶栏左侧「☰ / ←」按钮 | `.topbar-lead` | — |
+| 顶栏右侧「⋯」按钮 | `.topbar-more` | — |
+| 「⋯」弹出的菜单容器 | `.topbar-more-menu` | — |
+
+可断言行为（硬性）：
+
+1. **桌面（≥768px）**：`.bottom-nav` 的 computed `display` = `none`；`.drawer` 的 computed `display` = `contents`；`.topbar-tab` 共 5 个且可见。
+2. **移动（<768px）**：`.bottom-nav` 可见；`.topbar-tab` 不可见（本实现**显式**给 `.topbar-tab { display: none }`，故 computed `display` 直接为 `none`，不依赖父级链）；`.topbar-more` 可见。
+3. 移动端点 `.bottom-nav-tab` 能切换 `ui.section`（与桌面顶栏 tab 等效，同为 `pickSection(key)`）。
+
+---
+
+## 7. 本次必须修的缺陷
 
 | 编号 | 级别 | 内容 | 位置 |
 |---|---|---|---|
@@ -361,13 +514,47 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | **D-21** | P1 文案 | label 与 placeholder 用了**同一条 key** `lock.password_placeholder`，界面出现两遍"请输入主密码" | `LockScreen.svelte:33 / :39` |
 | **D-22** | P1 体验 | 眼睛无固定位置、热区偏小（`padding:.35rem` 且居中） | 同上两处，随 `.pms-input-group` 一并解决 |
 | **D-23** | P2 一致性 | 全 app 视觉语言不统一（字号/圆角/间距/阴影各写各的） | 全组件，随设计令牌统一 |
+| **D-27** | **P0 不可用** | **本规范 §3 自带的缺陷**：`.is-primary:hover` 只补了 `filter`/`border-color`，**漏了 `background`** → 被通用 `:hover` (0,3,0) 抢走 → 悬停时文字压同明度底色，**浅色 1.17:1 / 暗色 1.09:1，按钮"一片空白"**。`.is-danger` 同病；`.is-ghost` 悬停时 `border-color` 被抢成青色，平白多出一圈描边 | 规范 §3 按钮段 + `global.css:155-178`，v1.2 已修 |
+| **D-28** | P1 可读性 | `.pms-btn.is-danger` 写死 `color:#fff`，暗色下 `#fff` 压 `#F87171` 只有 **2.77:1**（低于控件底线 3.0）。同一 bug 此前无人察觉，因为危险按钮只在确认框/彻底删除里出现 | v1.2 引入 `--pms-danger-ink`（浅 `#FFFFFF` / 暗 `#2A0A0A`）→ 6.62:1 |
+| **D-29** | P1 可读性 | `.pms-icon-btn` 静止色用 `--pms-faint`，浅色下 `#8B9AAB` 压白底仅 **2.87:1**（眼睛图标、可见性开关全是这个色） | v1.2 改用 `--pms-muted` → 浅 5.47:1 / 暗 6.49:1 |
+| **D-30** | **P0 观感** | **密码框出现两个眼睛**：WebView2/Blink 会给 `input[type=password]` 渲染**原生密码揭示按钮**（`::-ms-reveal`），与我们自己的 `.pms-icon-btn` 眼睛并存。客户截图实测：一个 42px 高的密码框里挤了 **4 个图标**（3 个原生 + 1 个自绘） | `global.css` 新增 `input[type='password']::-ms-reveal, ::-ms-clear { display:none }`（v1.3） |
+| **D-31** | **P0 功能不可用** | **点击已保存条目，右侧不显示详情**：`MainLayout` 把「是否处于新建/编辑态」（`editing` / `creatingKind`）与「当前选中项」（`vault.selectedItem`）**当成两个独立状态各自维护**，二者完全解耦。用户一旦点过"新建笔记"，`editing` 就恒为 `true`，此后点列表项只改 `selectedItem`，右侧渲染分支仍停在新建表单 → **右侧毫无变化** | 抽成纯 reducer `src/lib/pane-mode.ts`（`detail` / `create` / `edit` 三态），**`select` / `done` / `section` 三个事件一律强制回 `detail`**；`MainLayout` 改为 `pane` 单一状态源 + `dispatch()`；有 8 例单测守门（v1.3） |
+| **D-32** | P1 观感 | **顶部白色标题栏与应用暗色界面硬切**：`tauri.conf.json` 的窗口配置里没有 `theme` 字段，原生标题栏跟随系统（浅色），而应用是暗色。逐像素实测：y=0~56 为 `rgb(242,242,242)`（99% 浅色像素），y=60 起为 `#121A24`（99% 深色），**中间无过渡** | ① `tauri.conf.json` 加 `"theme": "Dark"`；② `capabilities/default.json` 加 `core:window:allow-set-theme`；③ `theme.svelte.ts` 新增 `syncWindowChrome()`，主题切 `light`/`dark` 时调 `getCurrentWindow().setTheme()`，选 `system` 传 `null`（v1.3） |
+| **D-33** | **P0 构建** | **不是 UI 缺陷，但让上面所有 UI 改动无法出包**：`tauri-winres` → `embed-resource` 在 Windows+GNU 宿主上写死 `Command::new("windres")`（只认 PATH），而本机 windres 在自备目录里、那条 `export PATH` 从未固化 → 一换构建入口就 `NotAttempted("windres")` panic。已知无效的修法：`.cargo/config.toml` 的 `[env] PATH prepend`（Windows 下被系统注入的 `Path` 吃掉）、`RC` 环境变量、`set_windres_path()`（no-op）、`~/bin`（不在 Windows PATH 上） | `src-tauri/build.rs` 新增 `ensure_windres_on_path()`，按 `PMS_WINRES_DIR` → `%USERPROFILE%\.workbuddy\tools\mingw-bin` → 常见 mingw 路径 探测并前置进本进程 PATH（v1.3，详见 `03b-verification.md` §8.2） |
+| **D-34** | P1 可发现性 | **密码生成器"根本找不到"**：功能早已实现（位数 8–64 + 四类字符 + 排除易混），但入口是密码框右侧一个**无 tooltip 的 `⟳` 刷新图标**、行内展开 | ① 图标换成骰子 `dice` 并加 `title`；② 改为 `PasswordGeneratorModal.svelte` 弹窗；③ 顶栏新增「生成密码」入口；④ 补数字输入框、强度条、"至少选一类字符"约束（v1.3） |
+| **D-35** | **P0 不可用** | **手机端主界面横向溢出 / 不可用**：全项目零响应式断点（`global.css` 仅 `prefers-color-scheme` / `prefers-reduced-motion` 两条 `@media`，组件 `@media` 数量为 0），三栏宽度写死（`FolderSidebar.svelte` `width:240px` / `ItemList.svelte` `width:300px`）。390×844 手机视口实测：**最小内容宽度 785px、82 个元素横向溢出**（顶栏合计需 785px = 品牌区 159 + `nav.topbar-nav` 286 + `div.topbar-right` 324）—— 顶栏导航文字被压成**竖排单字**，顶栏右侧 4 个按钮被**整个挤出屏幕**，分组栏吃掉近半屏，详情面板在屏幕外，生成器弹窗被挤到右下角且内容裁切。桌面 1100px 窗口一切正常，故长期未暴露 | 见 §6：移动端单栏推进 + 底部导航（v1.4）。实测（无头 Edge，390×844，注入假 IPC 经真实解锁进入主界面）：改后 `documentElement.scrollWidth = 390`、溢出元素 `0`；桌面 1100px 下 `side=240 / list=300` 等逐项不变 |
+| **D-36** | P1 观感 | **原生标题栏与页面品牌重复**：原生标题栏（图标 + `PasswordMS`）紧贴页面顶栏（品牌标 + `PasswordMS`），上下两套标题；且原生图标长期是 Tauri 默认假图标（`icon.ico` 仅 390 B）。另查明：桌面/标题栏图标"没改过来"实为**装了旧包**——20:24 前的 exe 内嵌的还是旧图标（已用 ico 内 PNG 指纹在 exe 二进制中命中 1 次证明新 exe 嵌入了新图标），装新包 + 刷新 Windows 图标缓存（`ie4uinit -show`）即可 | 见 §8：`decorations:false` + `WindowControls.svelte` + `data-tauri-drag-region`（v1.6）。原生标题条整条消失，重复不复存在；桌面/任务栏/安装包图标统一为新 LOGO |
 
 ---
 
-## 7. 验收清单
+## 8. 自绘标题栏（decorations:false，v1.6）
+
+> 起因（D-36）：原生标题栏的图标 + `PasswordMS` 与页面内顶栏的品牌标 + `PasswordMS` **上下重复**，观感怪。
+> 主人裁定：**去掉原生标题栏**，右上角三钮与窗口拖动自己实现。
+
+- `src-tauri/tauri.conf.json` 主窗口加 **`"decorations": false`**；`resizable` 保持 `true`
+  （tao 在 Windows 上对无边框窗口仍做边缘命中测试，可拖边缩放；**此项必须真机验收**）。
+- `src-tauri/capabilities/default.json` 新增：`core:window:allow-minimize` / `allow-toggle-maximize` / `allow-close` / `allow-start-dragging`。
+- **窗口控制**：`common/WindowControls.svelte`（最小化 / 最大化·还原 / 关闭），46×40 命中区，
+  悬停 `--pms-bg-2`，**关闭钮悬停转 `--pms-danger` + `--pms-danger-ink`**（与 Windows 习惯一致）。
+  安卓上**整个不渲染**（UA 判 `Android`）—— ⚠️ 不能改用 `<768px` 媒体查询：桌面窗口缩到 360px 时
+  若按钮也消失，窗口就关不掉了。
+- **拖动区** = 各屏头部容器挂 `data-tauri-drag-region`（Tauri 运行时内置处理，**双击即最大化/还原**）：
+  `MainLayout` 的 `.topbar`、`LockScreen` 的 `.lock-screen` + `.win-chrome`、`CreateVaultWizard` 同款。
+  该属性只在「点中的正是带属性的元素」时生效，子级按钮/输入框不受影响。
+- **顶条 `.win-chrome`**（锁屏 / 建库向导）：`position:fixed; top:0; left:0; right:0; height:40px`，
+  右对齐放 `ThemeToggle` + `WindowControls`，背景透明（底下就是页面背景）。
+- `WindowControls` 在主界面**必须是 `.topbar` 的直接子级、且排在最后**——绝不能塞进 `.topbar-right`：
+  那条在 `<768px` 会被 `display:none`，而桌面窗口缩窄时恰恰最需要关闭钮。
+  右对齐靠既有单数 `margin-left:auto`（桌面 `.topbar-right` / 移动 `.topbar-more-wrap`，同一时刻只有一个可见）。
+- **品牌标单一事实源**：`common/Logo.svelte`（A · 盾与钥匙孔）与应用图标同一份矢量；
+  改形状只改它一处，再跑 `npx tauri icon` 重出全套图标。
+
+## 9. 验收清单
 
 - [ ] `npm run test` 全绿（含 i18n 键位校验；新增 key 已同步 zh-CN 与 en-US）
 - [ ] `npm run check`（svelte-check）零 error
+- [ ] `npm run check:css`（`scripts/check-css-contract.mjs`）**0 FAIL**
 - [ ] `npm run build` 成功
 - [ ] **暗色与浅色两套都截图检查**（用浏览器打开 `dist/`，不依赖 Tauri）
 - [ ] 解锁页与创建页：**输入框是一行**，眼睛在最右端；输入框高度正常（≈42px）
@@ -375,4 +562,12 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 - [ ] 两页的 label 与 placeholder 文案**不相同**
 - [ ] 确认主密码框与主密码框**外观同构**
 - [ ] 全局搜索无残留旧类名：`.field` / `.icon-btn` / `.btn`（无前缀那批）已全部清除
+- [ ] **D-30** 密码框内**只有一个眼睛**（原生的 `::-ms-reveal` 已关掉）
+- [ ] **D-31** 点任意已保存条目，右侧**立即切到详情**；**点过"新建笔记"之后再点条目，也必须切过去**（回归重点）
+- [ ] **D-32** 原生标题栏颜色**跟随应用主题**，标题栏与内容之间无硬切缝；切到"浅色"时标题栏也变浅
+- [ ] **D-34** 生成器能从**两个入口**打开（密码框右侧骰子图标 / 顶栏「生成密码」）；位数可自定义；**四类字符全不勾时生成按钮禁用**
+- [ ] **出包**：exe 三条硬验证通过（产物比源码新 · 新哈希名在包内且旧哈希名消失 · 体积门禁 EXIT=0）
 - [ ] 无任何外部资源引用（`grep -r "http" src/` 只应命中 schema 或注释）
+- [ ] **D-35** 移动端（390×844 视口）：主界面 `documentElement.scrollWidth ≤ 390` 且无横向溢出元素；底部导航 5 个 tab 可切换且与顶栏行为一致；分组抽屉可开、可点遮罩关、选分组后自动关；点列表条目进入详情屏、返回箭头回列表屏（单栏推进）；「⋯」菜单可开、点菜单外可关
+- [ ] **D-36** 自绘标题栏（**真机验收，无头环境测不了原生窗口行为**）：窗口无原生标题条；顶栏/锁屏空白处按住可拖动窗口、双击可最大化还原；右上角三钮可用、关闭钮悬停变红；拖窗口四边可缩放；桌面窗口缩到 360px 宽时三钮仍在；锁屏与建库向导顶部同样有三钮；安卓 APK 里不出现三钮
+- [ ] **桌面端红线**（1100×720）：三栏布局（分组 240 / 列表 300 / 详情 flex）与移动端改造前**逐像素一致**；顶栏导航与右区按钮照旧、无底部导航、无汉堡按钮

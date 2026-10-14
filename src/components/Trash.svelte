@@ -164,4 +164,10 @@
   .trash-danger {
     color: var(--pms-danger);
   }
+  /* 移动端：条目行允许换行，动作按钮落到下一行，避免标题 + 两个按钮横向溢出。 */
+  @media (max-width: 767px) {
+    .trash-row {
+      flex-wrap: wrap;
+    }
+  }
 </style>

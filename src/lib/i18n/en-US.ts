@@ -73,6 +73,16 @@ export const enUS: Messages = {
     settings: 'Settings',
     sync: 'Sync',
     lock: 'Lock',
+    // Mobile bottom-nav short labels.
+    tab_items: 'Items',
+    tab_health: 'Health',
+    tab_trash: 'Trash',
+    tab_sync: 'Sync',
+    tab_settings: 'Settings',
+    // Mobile topbar overflow menu + leading drawer/back button.
+    more: 'More',
+    open_folders: 'Open folders',
+    language: 'Language',
   },
   folder: {
     all: 'All',
@@ -143,6 +153,7 @@ export const enUS: Messages = {
     generate: 'Generate',
     copy: 'Copy',
     use: 'Use this password',
+    need_one: 'Select at least one character set',
   },
   meter: {
     weak: 'Weak',
@@ -208,6 +219,14 @@ export const enUS: Messages = {
     deleted_at: 'Deleted',
     expire_at: 'Expires',
     none: 'Trash is empty',
+  },
+  theme: {
+    label: 'Theme',
+    system: 'System',
+    light: 'Light',
+    dark: 'Dark',
+    to_light: 'Switch to light',
+    to_dark: 'Switch to dark',
   },
   settings: {
     title: 'Settings',

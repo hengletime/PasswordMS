@@ -2,7 +2,10 @@
   // 解锁界面（PRD F-01）。解锁失败统一提示，不区分原因（A-05）。
   // 设计规范 §5.1：品牌区 + .pms-field（纵向）⇒ .pms-input-group（横向，眼睛固定右端）。
   import Icon from './common/Icon.svelte';
+  import Logo from './common/Logo.svelte';
+  import WindowControls from './common/WindowControls.svelte';
   import Spinner from './common/Spinner.svelte';
+  import ThemeToggle from './common/ThemeToggle.svelte';
   import { session } from '../lib/stores/session.svelte';
   import { ui } from '../lib/stores/ui.svelte';
 
@@ -22,10 +25,15 @@
   }
 </script>
 
-<main class="lock-screen">
+<main class="lock-screen" data-tauri-drag-region>
+  <!-- 去掉原生标题栏后的自绘顶条：拖动区 + 主题切换 + 窗口三钮 -->
+  <div class="win-chrome" data-tauri-drag-region>
+    <ThemeToggle />
+    <WindowControls />
+  </div>
   <div class="pms-card lock-card">
     <div class="lock-brand">
-      <span class="lock-logo"><Icon name="shield" size={24} /></span>
+      <span class="lock-logo"><Logo size={44} /></span>
       <h1>{ui.t('app.title')}</h1>
       <p class="pms-meta">{ui.t('app.tagline')}</p>
     </div>
@@ -47,6 +55,7 @@
             class="pms-icon-btn"
             type="button"
             aria-label={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
+            title={showPassword ? ui.t('lock.hide_password') : ui.t('lock.show_password')}
             onclick={() => (showPassword = !showPassword)}
           >
             <Icon name={showPassword ? 'eye' : 'eye_off'} />
@@ -96,15 +105,13 @@
     text-align: center;
     margin-bottom: 1.4rem;
   }
+  /* 品牌标本体自带渐变方牌（Logo.svelte），这里只负责占位对齐，不再叠自己的底色 */
   .lock-logo {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 44px;
     height: 44px;
-    border-radius: var(--pms-r);
-    background: var(--pms-accent-soft);
-    color: var(--pms-accent);
   }
   .lock-brand h1 {
     font-size: 1.35rem;
@@ -119,5 +126,21 @@
   }
   .lock-create {
     margin-top: 0.5rem;
+  }
+  /* 右上角常驻主题切换（未进主界面也能切）。 */
+  /* 去掉原生标题栏后的自绘顶条：兼作窗口拖动区（含双击最大化）。
+     背景透明 —— 底下就是锁屏的渐变背景，不需要再铺一层。 */
+  .win-chrome {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 40px;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.35rem;
+    padding-right: 2px;
   }
 </style>

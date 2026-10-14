@@ -186,6 +186,8 @@
   <li><input type="checkbox" id="i5"><label for="i5">点"复制密码"，看提示，然后等 30 秒。
     <span class="exp">预期：<b>提示</b>"剪贴板将在 30 秒后清空"，并且真的开始倒计时。30 秒后到记事本里粘贴 → <b>应该粘不出密码</b>。</span></label></li>
   <li><input type="checkbox" id="i6"><label for="i6">编辑刚才那条，只改一下备注，保存，再看它的版本号。<span class="exp">预期：<b>版本号 +1</b>（创建时是 1，改完是 2）。</span></label></li>
+  <li><input type="checkbox" id="i7"><label for="i7">看密码框的右端。<span class="exp">预期：<b>只有一个眼睛</b>。以前会同时冒出两个眼睛（一个是系统自带的），本轮已修掉。</span></label></li>
+  <li><input type="checkbox" id="i8"><label for="i8">先点"新建笔记"进入新建表单（<b>不要保存</b>），然后直接去左侧列表点一条<b>已保存的条目</b>。<span class="exp">预期：<b>右侧立刻切换成那条的详情</b>，不会"点了没反应"。这是本轮修掉的重点缺陷，请务必回归一次。</span></label></li>
 </ul>
 </div>
 
@@ -209,8 +211,10 @@
 <h3>1.6 密码生成器</h3>
 <div class="card">
 <ul class="steps">
-  <li><input type="checkbox" id="g1"><label for="g1">打开生成器，改长度和字符集（大小写/数字/符号），连点几次生成。<span class="exp">预期：<b>每次结果不同</b>；长度跟着设置走；强度条随复杂度变化。</span></label></li>
-  <li><input type="checkbox" id="g2"><label for="g2">把生成的密码直接用到新建登录里。<span class="exp">预期：<b>能一键填入</b>。</span></label></li>
+  <li><input type="checkbox" id="g0"><label for="g0">从<b>两个入口</b>各打开一次生成器：① 顶栏右侧的「生成密码」；② 在"新建登录"里点密码框右端的<b>骰子图标</b>。<span class="exp">预期：<b>两个入口都能打开</b>同一个生成器弹窗。（以前它藏在一个没有提示文字的刷新图标里，根本发现不了，本轮已改。）</span></label></li>
+  <li><input type="checkbox" id="g1"><label for="g1">改长度和字符集（大小写/数字/符号），连点几次生成。<span class="exp">预期：<b>每次结果不同</b>；长度跟着设置走（8–64，也可以直接往数字框里输）；强度条随复杂度变化。</span></label></li>
+  <li><input type="checkbox" id="g3"><label for="g3">把<b>四类字符全部取消勾选</b>。<span class="exp">预期：<b>"生成"按钮变灰不可点</b>，并提示至少选一类 —— 不会生成出一个空密码。</span></label></li>
+  <li><input type="checkbox" id="g2"><label for="g2">从密码框里的入口打开，点"使用"把生成的密码填进去。<span class="exp">预期：<b>能一键填入</b>密码框并关闭弹窗。<br>（顶栏那个入口只生成 + 复制，<b>不会</b>写回任何条目 —— 这是刻意设计的，别当成 bug。）</span></label></li>
 </ul>
 </div>
 

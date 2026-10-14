@@ -8,8 +8,10 @@
 
   interface Props {
     onnew: (kind: 'login' | 'secure_note') => void;
+    /** 用户在列表里点选了某条目（D-31：用于让右侧面板退出编辑态）。 */
+    onselect?: () => void;
   }
-  const { onnew }: Props = $props();
+  const { onnew, onselect }: Props = $props();
 
   let query = $state('');
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -69,7 +71,10 @@
             class="list-row"
             class:active={vault.selectedItemId === item.item_id}
             type="button"
-            onclick={() => vault.selectItem(item.item_id)}
+            onclick={() => {
+              vault.selectItem(item.item_id);
+              onselect?.();
+            }}
           >
             <span class="list-icon"><Icon name={iconFor(item)} size={16} /></span>
             <span class="list-meta">
@@ -192,5 +197,13 @@
   }
   .list-empty p {
     margin: 0;
+  }
+  /* 移动端：列表独占整屏，宽度自适应（桌面的固定 300px + 右边框在单栏下无意义）。 */
+  @media (max-width: 767px) {
+    .list {
+      width: auto;
+      flex: 1;
+      border-right: none;
+    }
   }
 </style>

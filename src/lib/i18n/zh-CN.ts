@@ -71,6 +71,16 @@ export const zhCN = {
     settings: '设置',
     sync: '同步',
     lock: '锁定',
+    // 移动端底部导航的**短标签**：78px 宽的格子塞不下「全部条目」这类长文案。
+    tab_items: '条目',
+    tab_health: '体检',
+    tab_trash: '回收站',
+    tab_sync: '同步',
+    tab_settings: '设置',
+    // 移动端顶栏「⋯」溢出菜单与左侧抽屉/返回按钮。
+    more: '更多',
+    open_folders: '打开分组',
+    language: '语言',
   },
   folder: {
     all: '全部',
@@ -141,6 +151,7 @@ export const zhCN = {
     generate: '生成',
     copy: '复制',
     use: '使用此密码',
+    need_one: '至少选择一类字符',
   },
   meter: {
     weak: '弱',
@@ -206,6 +217,14 @@ export const zhCN = {
     deleted_at: '删除于',
     expire_at: '到期',
     none: '回收站为空',
+  },
+  theme: {
+    label: '主题',
+    system: '跟随系统',
+    light: '浅色',
+    dark: '深色',
+    to_light: '切换到浅色',
+    to_dark: '切换到深色',
   },
   settings: {
     title: '设置',

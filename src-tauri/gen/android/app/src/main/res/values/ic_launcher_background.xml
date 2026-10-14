@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- 自适应图标底色：前景是青绿渐变方牌（四周留了安全区透明边），
+       底色用暗色主题基色 #0A0E14，圆/方遮罩下不会出现白边，且与 App 暗色气质一致。
+       （tauri icon 默认给的是 #FFFFFF，这里按品牌定稿改掉） -->
+  <color name="ic_launcher_background">#0A0E14</color>
+</resources>

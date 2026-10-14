@@ -2,7 +2,7 @@
   // 条目编辑器（PRD F-04 / F-13）：三种 kind 的表单 + 自定义字段增删 + URL 校验 + 生成器。
   // 设计规范 §5.4：全部换用 .pms-field / .pms-input-group；自定义字段区用 .pms-card 内嵌；底部操作条 sticky。
   import Icon from './common/Icon.svelte';
-  import PasswordGenerator from './PasswordGenerator.svelte';
+  import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
   import { MAX_NOTE_BYTES } from '../lib/constants';
   import { isSafeUrl } from '../lib/url-safety';
   import { ui } from '../lib/stores/ui.svelte';
@@ -133,6 +133,7 @@
         <button
           class="pms-icon-btn"
           type="button"
+          title={showPassword ? ui.t('editor.hide_password') : ui.t('editor.show_password')}
           aria-label={showPassword ? ui.t('editor.hide_password') : ui.t('editor.show_password')}
           onclick={() => (showPassword = !showPassword)}
         >
@@ -141,22 +142,21 @@
         <button
           class="pms-icon-btn"
           type="button"
+          title={ui.t('gen.title')}
           aria-label={ui.t('gen.title')}
-          onclick={() => (showGenerator = !showGenerator)}
+          onclick={() => (showGenerator = true)}
         >
-          <Icon name="refresh" size={16} />
+          <Icon name="dice" size={16} />
         </button>
       </div>
-      {#if showGenerator}
-        <div class="editor-gen">
-          <PasswordGenerator
-            onuse={(value: string): void => {
-              password = value;
-              showGenerator = false;
-            }}
-          />
-        </div>
-      {/if}
+      <PasswordGeneratorModal
+        open={showGenerator}
+        onclose={() => (showGenerator = false)}
+        onuse={(value: string): void => {
+          password = value;
+          showGenerator = false;
+        }}
+      />
     </div>
 
     <div class="pms-field">
@@ -241,10 +241,6 @@
     display: flex;
     flex-direction: column;
   }
-  .editor-gen {
-    margin-top: 0.6rem;
-    padding: 0.85rem;
-  }
   .editor-custom {
     padding: 0.75rem;
     display: flex;
@@ -277,5 +273,12 @@
     padding: 0.85rem 0 0.2rem;
     border-top: 1px solid var(--pms-border);
     background: var(--pms-bg);
+  }
+  /* 移动端：编辑器独占整屏（`flex:1` 撑满单栏 pane），避免内容宽度按内容收缩。 */
+  @media (max-width: 767px) {
+    .editor {
+      flex: 1;
+      min-width: 0;
+    }
   }
 </style>

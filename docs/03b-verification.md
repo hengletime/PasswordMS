@@ -622,6 +622,36 @@ cargo check --workspace --target x86_64-pc-windows-gnullvm   # EXIT=0
 
 工具目录 `mingw-bin` 仅含 4 个文件：`as.exe`、`dlltool.exe`、`windres-real.exe`、`windres.exe`（+ `src/`）。
 
+### 8.2 补记（2026-10-14）：这条 PATH 没固化，一周后原地复发 —— **D-33**
+
+**现象**：改完 `tauri.conf.json` / `capabilities/` 后跑 `npx tauri build --target x86_64-pc-windows-gnullvm`，直接炸：
+
+```
+thread 'main' panicked at tauri-winres-0.3.6\src\lib.rs:543:14:
+called `Result::unwrap()` on an `Err` value: NotAttempted("windres")
+```
+
+**根因不是缺工具** —— 工具 10-13 就备好放在 `~/.workbuddy/tools/mingw-bin/` 了。是把 §8.1 那条 `export PATH=...` **只写进了文档和几个终端会话**，从未落到任何构建入口。于是：
+
+- `cargo check` 在"我记得先 export 过"的终端里能过；
+- 换成 `npm`/`npx` 起的进程、或任何干净 shell，`PATH` 里没有 `mingw-bin`，构建必炸。
+
+**踩过一遍的错路（留给后来者省时间）**：
+
+| 尝试 | 结果 |
+|---|---|
+| 在 `.cargo/config.toml` 里写 `[env] PATH = { value = "...mingw-bin", prepend = true }` | ❌ **无效**。对照探针证明 `[env]` 段确实被读到了（同段自定义变量 `PMS_CFG_PROBE=yes` 成功传进 build script），**只有 PATH 传不进去**：Windows 环境变量名大小写不敏感，环境块里系统注入的是 `Path`，cargo 又把 `PATH` 当成新条目塞进去，两条并存，build script 读到的仍是旧值 |
+| 设 `RC` / `RC_<target>` 环境变量 | ❌ **无效**。`embed-resource 3.0.12` 的 `env_target_and_rc()` 只在 **msvc 分支**被消费；Windows+GNU 宿主走 `windows_not_msvc.rs`，`Compiler::choose()` 写死 `Command::new("windres")` |
+| `WindowsResource::set_windres_path()` | ❌ **无效**。`tauri-winres` 0.1.1 起就是 deprecated 的 no-op（"handled by the embed-resource crate"），参数名是 `_path` |
+| 把工具放进 `~/bin` | ❌ **无效**。`C:\Users\HUAWEI\bin` 并不在 Windows 用户 PATH 里，它只是 Git Bash 自己加的 `$HOME/bin`，Windows 原生进程（cargo）看不到 |
+| 把工具放进 `~/.cargo/bin` | ⚠️ 能生效（该目录在用户 PATH 上），但污染 rustup 管理的目录，且换机器不通用 —— 不采纳 |
+
+**最终方案（随仓库提交、机器无关）**：在 `src-tauri/build.rs` 里加 `ensure_windres_on_path()`。PATH 上找不到 `windres` 时，按 `PMS_WINRES_DIR` → `%USERPROFILE%\.workbuddy\tools\mingw-bin` → `C:\msys64\mingw64\bin` → `C:\mingw64\bin` 顺序探测，命中就把该目录**前置进本进程的环境块**（`env::set_var`，不是 `Command::env` —— 资源编译是 `tauri_build::build()` 内部另起的子进程，只有前者会被继承）。
+
+放在 `build.rs` 的理由与文件头「附加职责一」完全一致：**build script 必须自己保证前置条件**，而不是指望操作者记得 export。换机器只需设一个 `PMS_WINRES_DIR`。
+
+**验证方式**：PATH 上**只保留** `~/.cargo/bin`（确认 `mingw-bin` 不在其中），直接 `npx tauri build`；成不成完全取决于 build.rs 的兜底是否生效。
+
 ---
 
 ## 9. 移交 Phase 4（QA 严过关）的清单
