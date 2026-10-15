@@ -157,6 +157,15 @@ impl SyncServer {
         match accepted {
             Ok((stream, peer)) => {
                 let peer_ip = peer.ip().to_string();
+                // D-46（关键平台差异）：**Windows 上 accept 出来的 socket 会继承监听
+                // socket 的非阻塞模式**（Unix 不会）。本方法刚把 listener 短暂设为
+                // 非阻塞做轮询，若不显式改回阻塞，后续 recv 在对端数据尚未到达时
+                // 立即返回 WouldBlock——真机配对必炸（日志实证：
+                // `hello_recv|io:operation would block`）；而 127.0.0.1 回环投递
+                // 零延迟、数据总先于 recv 到达，竞态从不触发，测试因此漏过。
+                stream
+                    .set_nonblocking(false)
+                    .map_err(|_| CoreError::SyncAborted)?;
                 Ok(Some(self.handle_stream(stream, &peer_ip, repo, now)?))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),

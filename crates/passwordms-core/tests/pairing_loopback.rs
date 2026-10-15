@@ -81,3 +81,110 @@ fn pairing_loopback_handshake_and_sync() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// D-46 回归测试：`poll_accept_and_sync` 接受的连接必须是**阻塞模式**。
+///
+/// 平台缺陷（仅 Windows 触发）：accept 出的 socket 继承 listener 的非阻塞模式，
+/// 后续 recv 在对端数据未到达时立即返回 WouldBlock → 配对必败。
+/// 复现手法：客户端连接后**延迟 600ms** 才发帧——
+///   - 有缺陷：host recv 立即 WouldBlock（错误里含 "would block"）；
+///   - 已修复：host 阻塞等待 600ms，收到的是垃圾帧 → serde 错误（Internal/Validation），
+///     且从 accept 到出错的耗时 ≥ 500ms（证明真的阻塞等待了）。
+/// 回环投递零延迟，所以既有回环测试从不触发此竞态——本测试用人为延迟补上这个盲区。
+#[test]
+fn poll_accept_stream_is_blocking_after_accept() {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    let dir = std::env::temp_dir().join(format!("pms-nonblock-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let host_vault = dir.join("host.vault");
+
+    let host_session = Session::create(&host_vault, "NonBlock#Master1", true).unwrap();
+    let host_id = host_session.repo().unwrap().device_id().to_string();
+    let identity = HostIdentity::generate().unwrap();
+
+    let mut server = SyncServer::start(0, host_id, "NonBlockHost".to_string(), identity, 0, now_ms())
+        .unwrap();
+    let port = server.local_port().unwrap();
+
+    // Host：poll 路径（真实 App 用的就是这个）放独立线程。
+    // ⚠️ poll_accept_and_sync 是**单次**轮询（无连接时返回 Ok(None)），真实 App 的 worker
+    // 外层有循环；测试同样必须循环，否则 server 被立即 drop、监听关闭，客户端必被拒。
+    let host_handle = {
+        let mut host_session = host_session;
+        std::thread::spawn(move || {
+            let repo = host_session.repo_mut().unwrap();
+            loop {
+                match server.poll_accept_and_sync(repo, now_ms()) {
+                    Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                    other => return other,
+                }
+            }
+        })
+    };
+
+    // 客户端：连上后睡 600ms 再发一个垃圾帧，随后关闭。
+    // 带重试：容忍 host 线程尚未调度到位的启动竞态。
+    let client_handle = std::thread::spawn(move || {
+        // 等待 host 进入 poll（监听已在 start 里就绪，直接连即可）。
+        let mut stream = None;
+        for _ in 0..60 {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => panic!("连接失败（非拒绝类）: {e:?}"),
+            }
+        }
+        let mut stream = stream.expect("重试 3 秒仍被拒绝：监听端口不可达");
+        std::thread::sleep(Duration::from_millis(600));
+        // 长度前缀帧（u32 LE）+ 垃圾载荷：不是合法 JSON。
+        let payload = b"not-a-valid-frame";
+        stream.write_all(&(payload.len() as u32).to_le_bytes()).unwrap();
+        stream.write_all(payload).unwrap();
+        stream.flush().unwrap();
+        // 保持连接片刻再关，避免 host 读 Done 时收到对端关闭混淆断言。
+        std::thread::sleep(Duration::from_millis(200));
+    });
+
+    let started = Instant::now();
+    let host_result = match host_handle.join() {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            panic!("Host 线程 panic：{msg}");
+        }
+    };
+    client_handle.join().unwrap();
+    let elapsed = started.elapsed();
+
+    match host_result {
+        // 有缺陷时的直接证据：WouldBlock 立即返回（几乎无耗时）。
+        Err(e) => {
+            let debug = format!("{e:?}");
+            assert!(
+                !debug.contains("would block"),
+                "D-46 回归：poll_accept 后的 stream 仍是非阻塞模式（recv 返回 WouldBlock）。错误：{debug}"
+            );
+            assert!(
+                elapsed >= Duration::from_millis(500),
+                "host 未阻塞等待数据就出错（耗时 {elapsed:?}），疑似非阻塞残留"
+            );
+            // 收到垃圾帧 → serde 反序列化错误（Internal("json")），这是预期分支。
+        }
+        Ok(_) => panic!("垃圾帧不应被当成成功配对"),
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

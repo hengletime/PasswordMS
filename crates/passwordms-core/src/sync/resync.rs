@@ -265,7 +265,14 @@ impl ResyncServer {
         let accepted = self.listener.accept();
         let _ = self.listener.set_nonblocking(false);
         match accepted {
-            Ok((stream, _peer)) => Ok(Some(self.handle(stream, repo, now)?)),
+            Ok((stream, _peer)) => {
+                // D-46：Windows 上 accept 出的 socket 继承 listener 的非阻塞模式
+                //（Unix 不会），必须显式改回阻塞，否则 recv 立即 WouldBlock。
+                stream
+                    .set_nonblocking(false)
+                    .map_err(|_| CoreError::SyncAborted)?;
+                Ok(Some(self.handle(stream, repo, now)?))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(_) => Err(CoreError::SyncAborted),
         }
