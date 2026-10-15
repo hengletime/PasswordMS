@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 use crate::constants::{PAIR_TOKEN_TTL_SECS, QR_PROTOCOL_VERSION, SYNC_TIME_WINDOW_SECS};
 use crate::crypto::keys::{self, VaultKey};
 use crate::crypto::rng;
-use crate::error::{CoreError, CoreResult};
+use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
@@ -115,11 +115,14 @@ impl SyncServer {
         self.token
     }
 
-    /// 构造二维码载荷。
-    pub fn qr_payload(&self, ip: String) -> CoreResult<QRPayload> {
+    /// 构造二维码载荷（D-44：携带全部候选 IP，主选排最前）。
+    pub fn qr_payload(&self, mut ips: Vec<String>) -> CoreResult<QRPayload> {
+        if ips.is_empty() {
+            ips.push("127.0.0.1".to_string());
+        }
         Ok(QRPayload {
             v: QR_PROTOCOL_VERSION,
-            ip,
+            ip: ips[0].clone(),
             port: self.local_port()?,
             token: self.token.to_vec(),
             host_id: self.host_id.clone(),
@@ -127,6 +130,7 @@ impl SyncServer {
             fp: self.identity.fingerprint(),
             exp: self.exp,
             sync_port: self.sync_port,
+            ips,
         })
     }
 
@@ -172,7 +176,7 @@ impl SyncServer {
             .set_read_timeout(Some(Duration::from_secs(30)))
             .map_err(|_| CoreError::SyncAborted)?;
         // 1) HELLO + 令牌校验。
-        let hello_bytes = transport::recv_frame(&mut stream)?;
+        let hello_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
         let hello = match serde_json::from_slice::<HandshakeMessage>(&hello_bytes)? {
             HandshakeMessage::Hello(h) => h,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -211,7 +215,7 @@ impl SyncServer {
             vk_ct,
         };
         let accept_frame = serde_json::to_vec(&HandshakeMessage::Accept(accept))?;
-        transport::send_frame(&mut stream, &accept_frame)?;
+        transport::send_frame(&mut stream, &accept_frame).map_err(|e| stage_io(e, "accept_send"))?;
 
         // 4) 双向密钥确认。
         let transcript = handshake::transcript_hash(&[&hello_bytes[..], &accept_frame[..]]);
@@ -219,9 +223,10 @@ impl SyncServer {
         transport::send_frame(
             &mut stream,
             &serde_json::to_vec(&HandshakeMessage::Confirm(Confirm { mac: mac_h }))?,
-        )?;
+        )
+        .map_err(|e| stage_io(e, "confirm_send"))?;
 
-        let joiner_confirm = transport::recv_frame(&mut stream)?;
+        let joiner_confirm = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "confirm_recv"))?;
         let mac_j = match serde_json::from_slice::<HandshakeMessage>(&joiner_confirm)? {
             HandshakeMessage::Confirm(c) => c.mac,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -315,7 +320,7 @@ fn run_exchange(
     now: i64,
 ) -> CoreResult<(usize, Vec<String>)> {
     // 收 Joiner 的 Push。
-    let push_bytes = transport::recv_frame(stream)?;
+    let push_bytes = transport::recv_frame(stream).map_err(|e| stage_io(e, "push_recv"))?;
     let push_env: SyncEnvelope = serde_json::from_slice(&push_bytes)?;
     replay.accept(push_env.seq, push_env.ts, now)?;
     let push_payload = open_envelope(&keys.sync_key[..], session_id, &push_env)?;
@@ -331,10 +336,10 @@ fn run_exchange(
         conflicts: report.conflicts.clone(),
     };
     let reply_env = seal_envelope(&keys.sync_key[..], session_id, out_seq, now, &reply)?;
-    transport::send_frame(stream, &serde_json::to_vec(&reply_env)?)?;
+    transport::send_frame(stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
 
     // 收 Done。
-    let done_bytes = transport::recv_frame(stream)?;
+    let done_bytes = transport::recv_frame(stream).map_err(|e| stage_io(e, "done_recv"))?;
     let done_env: SyncEnvelope = serde_json::from_slice(&done_bytes)?;
     replay.accept(done_env.seq, done_env.ts, now)?;
     let _ = open_envelope(&keys.sync_key[..], session_id, &done_env)?;

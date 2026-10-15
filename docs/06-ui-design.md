@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· **v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置**
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · **v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知**
 
 ---
 
@@ -556,6 +556,9 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | **D-39** | P2 状态可视 | **已收藏项目的五角星仍是空心**：列表行与详情页的收藏星用同一个 outline 图标，选中与否毫无区分，扫一眼分不清哪些收藏过（客户截图反馈） | `Icon.svelte` 新增 `filled` prop（`fill: currentColor` 覆盖全局 `fill="none"`）；列表星恒实心（仅在收藏时渲染）+ 详情星 `filled={item.favorite}` 且选中态整钮转 `--pms-warning` 金色、补 `aria-pressed`（v1.8） |
 | **D-40** | **P0 功能不可用（Android）** | **手机端扫码必报「发生内部错误」**：`AndroidManifest.xml` 未声明 `CAMERA` 权限，而 wry 的运行时 `requestPermissions` 对未在 manifest 声明的权限**必被系统拒绝** → `getUserMedia` 抛 `NotAllowedError` → 前端兜底 toast 笼统的 `err.internal`。电脑端摄像头可开但识别率低：jsQR 全帧解码 + 400ms 抓拍间隔，定焦前摄拍手机屏困难 | ① manifest 加 `<uses-permission android:name="android.permission.CAMERA"/>`（wry 0.57 授权链已通：onPermissionRequest → 运行时请求 → grant）；② PairScan 错误分类：`NotAllowedError/NotFoundError` → 专用可行动文案 `sync.camera_unavailable`，其余留 `err.internal` + console.error 留痕；③ 相机约束 `width/height ideal 1280×720`、抓拍 400→250ms；④ `decodeQrFromVideo` 中心裁剪 75%（jsQR 建议二维码与画面边缘留白，裁剪等效放大目标） |
 | **D-41** | **P0 不可用（Android）** | **系统状态栏压住应用顶栏，汉堡按钮点不到**（客户真机截图：状态栏时间「23:04」与顶栏 ☰ 重叠）：`MainActivity.kt` 里 Tauri 模板显式 `enableEdgeToEdge()` → WebView 铺满全屏，而 wry 0.57 **不处理 window insets** → 状态栏悬浮于前端顶栏之上，抢占其点击热区 | `MainActivity.kt` 给 `android.R.id.content` 根视图挂 `ViewCompat.setOnApplyWindowInsetsListener`：按 `systemBars` insets 打 padding（top/left/right/bottom），把 WebView 推到系统条之内；返回原 insets 不消费，键盘 IME insets 继续下传。前端零改动（桌面 WebView2 不经过此路径，不受影响） |
+| **D-42** | P1 体验 | **界面语言重启后丢失**：`ui.locale` 仅存内存，重启回退中文 | localStorage 键 `passwordms.locale` 持久化（try/catch 兜底），`setLocale` 写入（v1.8） |
+| **D-43** | **P0 可诊断性** | **Windows GUI 无 stderr，配对诊断全部丢失**：`eprintln!` 在无控制台的 GUI 进程里被丢弃，配对失败只能看到前端笼统报错，无从取证 | `state.rs` 新增 `append_log()`：落盘数据目录 `passwordms.log`（>1MB 截断重建）；`sync_join` 失败与 pairing worker 的 completed/aborted 全部留痕（v1.8） |
+| **D-44** | **P0 功能不可用（配对）** | **手机配对必败且报错误导**（客户真机：扫码报「文件读写错误」、粘贴挂 ~21s 后报「同步已中止」；Host 日志仅 `CoreError("ERR_IO")`）。回环测试（`pairing_loopback.rs`，127.0.0.1 全链路）通过 → 协议无错，根因在网络层四处叠加：①多网卡机器（WSL2/Hyper-V）UDP 选路探测只广播**一个** IP，选中手机路由不到的虚拟网卡即必败；②Android `EHOSTUNREACH` 在 stable Rust 折叠为 `Uncategorized` → 文案落到「文件读写错误」；③`TcpStream::connect` 失败一律折叠成 `SyncAborted` 且无超时（SYN 被静默丢弃要挂 ~21s）；④会话死后二维码仍挂着，Host 侧 io 错误无阶段信息 | ①`QRPayload` 新增 `ips: Vec<String>`（`serde(default)` 兼容旧码），`local_ipv4s()` 枚举全部非回环 IPv4、主选排最前，Joiner 逐个尝试（各 4s 超时）；②`connect_with_timeout` 保留 io kind（超时/不可达 → 专用文案 `err.network_unreachable` 等）；③`CoreError::Io` Debug 放出 `stage\|io:Kind`（server.rs 各阶段标注 hello_recv/accept_send/…），日志可定位断开点；④worker 结束时 emit `pairing://ended`，前端收二维码 + 提示「请重新生成二维码」（`sync.pair_ended`）；⑤配对页显示本机地址 + 防火墙放行提示（v1.9） |
 
 ---
 

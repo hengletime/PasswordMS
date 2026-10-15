@@ -32,6 +32,8 @@ base64 = "0.22"
 # 仅启用纯矢量 SVG 渲染器，禁用 image/png 特性（体积红线）
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 url = "2"
+# 多网卡机器枚举全部候选局域网 IPv4（D-44：二维码携带全部候选地址）
+if-addrs = "0.13"
 
 # 体积优化：release 全量裁剪 + LTO + strip
 [profile.release]

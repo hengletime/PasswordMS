@@ -181,6 +181,8 @@ export interface PairingDto {
   qr_svg: string;
   qr_text: string;
   ip: string;
+  /** 全部候选局域网 IPv4（多网卡时主选在前，D-44）。 */
+  ips: string[];
   port: number;
   expires_at: number;
 }

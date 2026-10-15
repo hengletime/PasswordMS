@@ -33,6 +33,9 @@
   <h3>{ui.t('sync.tab_pair')}</h3>
 
   {#if sync.pairing === null}
+    {#if sync.pairEnded}
+      <p class="pms-hint pair-ended" role="alert">{ui.t('sync.pair_ended')}</p>
+    {/if}
     <button class="pms-btn is-primary" type="button" onclick={() => void start()} disabled={sync.busy}>
       {#if sync.busy}<Spinner size={15} />{:else}<Icon name="qr" size={15} />{/if}
       {ui.t('sync.start_pairing')}
@@ -44,6 +47,8 @@
       {@html sync.pairing.qr_svg}
     </div>
 
+    <p class="pms-meta">{ui.t('sync.pair_ip', { ip: sync.pairing.ip })}</p>
+    <p class="pms-hint">{ui.t('sync.firewall_hint')}</p>
     <p class="pms-meta">{ui.t('sync.manual_hint')}</p>
     <div class="pms-input-group sync-code">
       <code>{sync.pairing.qr_text}</code>
@@ -91,5 +96,8 @@
     word-break: break-all;
     max-height: 3.6rem;
     overflow: auto;
+  }
+  .pair-ended {
+    color: var(--pms-warning);
   }
 </style>

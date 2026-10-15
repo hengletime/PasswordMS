@@ -205,6 +205,8 @@ pub struct PairingDto {
     /// 二维码文本（`PMS1:base64url(JSON)`），支持手动输入兜底（U3）。
     pub qr_text: String,
     pub ip: String,
+    /// 全部候选局域网 IPv4（多网卡时主选在前，D-44）。
+    pub ips: Vec<String>,
     pub port: u16,
     pub expires_at: i64,
 }

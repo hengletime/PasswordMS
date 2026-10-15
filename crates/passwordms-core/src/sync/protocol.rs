@@ -74,6 +74,10 @@ pub struct QRPayload {
     /// Host 的持久重同步监听端口（0 = 未提供）。供 Joiner 记录后用于 `sync_now`（D-11）。
     #[serde(default)]
     pub sync_port: u16,
+    /// Host 的全部候选局域网 IPv4（D-44）：多网卡机器上逐个尝试，第一个 `ip` 为主选。
+    /// `serde(default)` 兼容旧版二维码文本（无此字段时回退到 `ip`）。
+    #[serde(default)]
+    pub ips: Vec<String>,
 }
 
 impl QRPayload {
@@ -272,4 +276,48 @@ pub fn qr_svg(text: &str) -> CoreResult<String> {
         .render::<qrcode::render::svg::Color>()
         .min_dimensions(240, 240)
         .build())
+}
+
+#[cfg(test)]
+mod qr_ips_tests {
+    use super::*;
+
+    fn sample(ips: Vec<String>) -> QRPayload {
+        QRPayload {
+            v: QR_PROTOCOL_VERSION,
+            ip: ips.first().cloned().unwrap_or_default(),
+            port: 40001,
+            token: vec![7u8; 32],
+            host_id: "host-id".to_string(),
+            host_name: "host-name".to_string(),
+            fp: "fp".to_string(),
+            exp: 1_700_000_000_000,
+            sync_port: 40002,
+            ips,
+        }
+    }
+
+    #[test]
+    fn ips_roundtrip_preserves_order() {
+        let p = sample(vec!["192.168.1.10".to_string(), "172.25.16.1".to_string()]);
+        let text = p.encode_string().unwrap();
+        let back = QRPayload::decode_string(&text).unwrap();
+        assert_eq!(back.ips, vec!["192.168.1.10", "172.25.16.1"]);
+        assert_eq!(back.ip, "192.168.1.10");
+    }
+
+    #[test]
+    fn legacy_payload_without_ips_decodes() {
+        // 旧版二维码文本没有 ips 字段 → 解码为空列表，Joiner 回退到 ip（D-44 向后兼容）。
+        let mut v = serde_json::to_value(&sample(vec!["192.168.1.10".to_string()])).unwrap();
+        v.as_object_mut().unwrap().remove("ips");
+        let text = format!(
+            "{}{}",
+            QR_PREFIX,
+            URL_SAFE_NO_PAD.encode(v.to_string().as_bytes())
+        );
+        let back = QRPayload::decode_string(&text).unwrap();
+        assert!(back.ips.is_empty());
+        assert_eq!(back.ip, "192.168.1.10");
+    }
 }

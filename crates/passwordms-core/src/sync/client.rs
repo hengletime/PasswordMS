@@ -157,7 +157,31 @@ pub fn pair(
     if now > qr.exp {
         return Err(CoreError::PairTokenExpired);
     }
-    let mut stream = transport::connect(&qr.ip, qr.port)?;
+    // D-44：多候选 IP 逐个尝试（主选在前）。多网卡 Host 广播的第一个地址可能
+    // 手机根本路由不到（如 WSL/Hyper-V 虚拟网卡）；每个候选 4 秒短超时，
+    // 全部失败时抛出**最后一个**连接错误（保留 io kind → 对应网络文案），
+    // 不再折叠成「同步已中止」。
+    let mut candidates: Vec<String> = Vec::new();
+    for ip in qr.ips.iter().chain(std::iter::once(&qr.ip)) {
+        if !candidates.contains(ip) {
+            candidates.push(ip.clone());
+        }
+    }
+    let mut connected: Option<TcpStream> = None;
+    let mut last_err: Option<CoreError> = None;
+    for ip in &candidates {
+        match transport::connect_with_timeout(ip, qr.port, Duration::from_secs(4)) {
+            Ok(stream) => {
+                connected = Some(stream);
+                break;
+            }
+            Err(e) => last_err = Some(e),
+        }
+    }
+    let mut stream = match connected {
+        Some(s) => s,
+        None => return Err(last_err.unwrap_or(CoreError::SyncAborted)),
+    };
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|_| CoreError::SyncAborted)?;

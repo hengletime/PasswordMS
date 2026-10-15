@@ -45,13 +45,16 @@ pub fn sync_start_pairing(
     let host_name = host_display_name(&host_id);
     let port = random_port();
     let server = SyncServer::start(port, host_id, host_name, identity, sync_port, now_ms())?;
-    let qr = server.qr_payload(local_ip())?;
+    // D-44：二维码携带全部候选局域网 IPv4（多网卡机器上主选地址可能手机路由不到）。
+    let ips = passwordms_core::sync::transport::local_ipv4s();
+    let qr = server.qr_payload(ips.clone())?;
     let qr_text = qr.encode_string()?;
     let qr_markup = qr_svg(&qr_text)?;
     let dto = PairingDto {
         qr_svg: qr_markup,
         qr_text,
         ip: qr.ip.clone(),
+        ips,
         port: qr.port,
         expires_at: qr.exp,
     };
@@ -250,11 +253,6 @@ fn random_port() -> u16 {
     }
 }
 
-/// 尽力获取本机局域网 IPv4，失败时回退回环地址。
-fn local_ip() -> String {
-    passwordms_core::sync::transport::local_ipv4().unwrap_or_else(|_| "127.0.0.1".to_string())
-}
-
 /// 后台轮询线程：非阻塞等待 Joiner 连接，处理一次配对 + 同步后退出。
 fn spawn_pairing_worker(app: tauri::AppHandle) {
     std::thread::spawn(move || {
@@ -302,15 +300,18 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }
+                    // D-44：通知前端会话已结束，收回二维码（否则"二维码还挂着但会话已死"）。
+                    let _ = tauri::Emitter::emit(&app, "pairing://ended", "completed");
                     break;
                 }
                 Err(e) => {
-                    // 诊断留痕：CoreError 的 Debug 只有错误码，无隐私载荷。落盘到数据目录 passwordms.log。
+                    // 诊断留痕：CoreError 的 Debug 只有错误码（Io 额外带 stage|kind），无隐私载荷。落盘到数据目录 passwordms.log。
                     eprintln!("[pairing] host session aborted: {e:?}");
                     crate::state::append_log(&app, &format!("[pairing] host session aborted: {e:?}"));
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }
+                    let _ = tauri::Emitter::emit(&app, "pairing://ended", "aborted");
                     break;
                 }
             }

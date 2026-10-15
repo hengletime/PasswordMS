@@ -163,12 +163,22 @@ impl CoreError {
             // 对端拒绝/断开都走 From<std::io::Error>）。按 kind 细分文案——
             // 把「网络问题」从笼统的「文件读写错误」里拆出来，避免把用户排查方向带偏（D-40 跟进）。
             // 注意 UnexpectedEof 文件截断/网络断开两可，保守归 err.io。
-            CoreError::Io(kind) => match kind.as_str() {
-                "io:TimedOut" => "err.network_timeout",
-                "io:ConnectionRefused" => "err.network_refused",
-                "io:ConnectionReset" | "io:ConnectionAborted" | "io:BrokenPipe" => "err.network_broken",
-                _ => "err.io",
-            },
+            CoreError::Io(kind) => {
+                // 载荷格式："io:Kind" 或带阶段前缀的 "stage|io:Kind"（server.rs 标注失败阶段，D-44）。
+                // 取最后一个 '|' 之后的部分（无前缀时即整体）。
+                let k = kind.rsplit('|').next().unwrap_or(kind.as_str());
+                match k {
+                    "io:TimedOut" => "err.network_timeout",
+                    "io:ConnectionRefused" => "err.network_refused",
+                    "io:ConnectionReset" | "io:ConnectionAborted" | "io:BrokenPipe" => "err.network_broken",
+                    // Android 上无路由/不可达（EHOSTUNREACH/ENETUNREACH）在 stable Rust
+                    // 折叠为 Uncategorized——配对场景几乎必然是「两台设备不通」，单独给文案（D-44）。
+                    "io:Uncategorized" | "io:NetworkUnreachable" | "io:HostUnreachable" => {
+                        "err.network_unreachable"
+                    }
+                    _ => "err.io",
+                }
+            }
             CoreError::Crypto(_) => "err.crypto",
             CoreError::Internal(_) => "err.internal",
         }
@@ -176,10 +186,82 @@ impl CoreError {
 }
 
 /// 手写 `Debug`：**不输出**内部诊断字符串，避免意外把上下文写进日志。
+///
+/// 例外（D-44）：`Io` 的载荷**只含** `stage|io:Kind`（阶段名 + io kind，均无敏感信息），
+/// 把它打出来——否则真机日志只剩 `ERR_IO`，网络故障无从定位。
 impl fmt::Debug for CoreError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // 仅输出错误码，绝不输出可能包含上下文的字符串载荷。
-        f.debug_tuple("CoreError").field(&self.code()).finish()
+        match self {
+            CoreError::Io(kind) => f
+                .debug_tuple("CoreError")
+                .field(&self.code())
+                .field(kind)
+                .finish(),
+            _ => f.debug_tuple("CoreError").field(&self.code()).finish(),
+        }
+    }
+}
+
+/// 供 server.rs 给 io 错误标注失败阶段（`stage|io:Kind`，D-44）。
+///
+/// 阶段名是静态字符串（hello_recv / accept_send / …），不携带任何用户数据。
+pub fn stage_io(err: CoreError, stage: &'static str) -> CoreError {
+    match err {
+        CoreError::Io(kind) => CoreError::Io(format!("{stage}|{kind}")),
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn io_message_keys_by_kind() {
+        assert_eq!(CoreError::Io("io:TimedOut".into()).message_key(), "err.network_timeout");
+        assert_eq!(
+            CoreError::Io("io:ConnectionRefused".into()).message_key(),
+            "err.network_refused"
+        );
+        assert_eq!(
+            CoreError::Io("io:ConnectionReset".into()).message_key(),
+            "err.network_broken"
+        );
+        assert_eq!(CoreError::Io("io:Uncategorized".into()).message_key(), "err.network_unreachable");
+        assert_eq!(CoreError::Io("io:OutOfMemory".into()).message_key(), "err.io");
+    }
+
+    #[test]
+    fn staged_io_message_key_ignores_prefix() {
+        assert_eq!(
+            CoreError::Io("hello_recv|io:TimedOut".into()).message_key(),
+            "err.network_timeout"
+        );
+        assert_eq!(
+            CoreError::Io("exchange_done_recv|io:Uncategorized".into()).message_key(),
+            "err.network_unreachable"
+        );
+    }
+
+    #[test]
+    fn stage_io_wraps_only_io_variant() {
+        let staged = stage_io(CoreError::Io("io:TimedOut".into()), "hello_recv");
+        assert!(matches!(staged, CoreError::Io(ref k) if k == "hello_recv|io:TimedOut"));
+        // 非 io 变体原样穿透。
+        assert!(matches!(
+            stage_io(CoreError::SyncAborted, "hello_recv"),
+            CoreError::SyncAborted
+        ));
+    }
+
+    #[test]
+    fn debug_prints_io_kind_but_not_other_payloads() {
+        // Io：kind 可见（无隐私）。
+        assert!(
+            format!("{:?}", CoreError::Io("hello_recv|io:TimedOut".into())).contains("hello_recv|io:TimedOut")
+        );
+        // 其它带载荷变体：仅错误码，载荷不出现在 Debug 里。
+        assert_eq!(format!("{:?}", CoreError::Validation("secret-ish".into())), r#"CoreError("ERR_VALIDATION")"#);
     }
 }
 

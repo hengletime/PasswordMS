@@ -1,6 +1,7 @@
 // 同步状态（Svelte 5 runes）：配对、设备、状态与冲突仲裁。
 
 import type { ConflictChoice, ConflictDto, DeviceDto, PairingDto, SyncStatusDto } from '../../types';
+import { listen } from '@tauri-apps/api/event';
 import { DEFAULT_CONFLICT_CHOICE } from '../conflict';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
@@ -10,6 +11,8 @@ import { ui } from './ui.svelte';
 class SyncStore {
   /** 当前 Host 配对信息（null = 未在配对）。 */
   pairing = $state<PairingDto | null>(null);
+  /** 配对会话已被后端终止（D-44）：提示用户重新生成二维码。 */
+  pairEnded = $state<boolean>(false);
   /** 已配对设备。 */
   devices = $state<DeviceDto[]>([]);
   /** 同步状态。 */
@@ -24,6 +27,7 @@ class SyncStore {
   /** 发起配对（生成二维码）。 */
   async startPairing(): Promise<void> {
     this.busy = true;
+    this.pairEnded = false;
     try {
       this.pairing = await api.sync.startPairing();
     } catch (err) {
@@ -163,6 +167,7 @@ class SyncStore {
   /** 重置（锁定时调用）。 */
   reset(): void {
     this.pairing = null;
+    this.pairEnded = false;
     this.devices = [];
     this.status = { last_sync_at: null, pending_changes: 0, device_count: 0 };
     this.conflicts = [];
@@ -172,3 +177,15 @@ class SyncStore {
 
 /** 单例。 */
 export const sync = new SyncStore();
+
+// D-44：配对会话结束后端主动通知（worker 在 completed/aborted 时清理 pairing 并 emit）。
+// 前端收回二维码，aborted 时在配对页提示「请重新生成二维码」。
+// 仅在 Tauri WebView 环境注册监听（Node 测试环境无 window/@tauri-apps API）。
+if (typeof window !== 'undefined') {
+  void listen('pairing://ended', (ev) => {
+    sync.pairing = null;
+    if (ev.payload === 'aborted') {
+      sync.pairEnded = true;
+    }
+  });
+}

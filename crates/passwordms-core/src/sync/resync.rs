@@ -12,7 +12,8 @@
 //! 5. 同步游标（`last_sent_seq` / `last_recv_seq`）持久化，支持反复同步。
 //!
 //! **失败路径**：未配对 → [`CoreError::NotPaired`]；密钥确认失败 → [`CoreError::FingerprintMismatch`]；
-//! 序号/时间窗异常 → [`CoreError::ReplayDetected`]；连接/协议中断 → [`CoreError::SyncAborted`]。
+//! 序号/时间窗异常 → [`CoreError::ReplayDetected`]；协议中断 → [`CoreError::SyncAborted`]。
+//! 连接失败自 D-44 起保留 io kind（映射到具体网络文案），不再一律折叠为 SyncAborted。
 
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
