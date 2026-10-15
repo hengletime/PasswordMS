@@ -363,12 +363,38 @@ else
   fi
 fi
 
-# ---------- 7. 体积核验 ----------
+# ---------- 7. 签名（D-45）----------
+# 根因：Android 12+ 拒装未签名包，报「解析软件包时出现问题 / packageinfo is null」。
+# 上一版脚本到此收尾，交付的 app-universal-release-unsigned.apk 未签名 → 主人真机必装不上。
+# keystore/口令可用环境变量覆盖：PMS_KEYSTORE / PMS_KEY_ALIAS / PMS_KEY_PASS。
+log "APK 签名（未签名包 Android 12+ 必报解析错误，D-45）"
+BT_DIR="$(ls -d "${ANDROID_HOME:-D:/AndroidDev/sdk}"/build-tools/* 2>/dev/null | sort -V | tail -n 1)"
+if [ -z "$BT_DIR" ]; then
+  die "未找到 build-tools（签名需要 apksigner）。请确认 ANDROID_HOME 下已安装 build-tools。"
+fi
+APKSIGNER="$BT_DIR/apksigner.bat"
+KS="${PMS_KEYSTORE:-D:/AndroidDev/keystores/passwordms-test.jks}"
+KS_ALIAS="${PMS_KEY_ALIAS:-passwordms}"
+KS_PASS="${PMS_KEY_PASS:-PmsTest2026Key}"
+if [ ! -f "$KS" ]; then
+  die "签名 keystore 不存在：$KS（可用环境变量 PMS_KEYSTORE 指定其他 keystore）"
+fi
+APP_VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+SIGNED_APK="target/PasswordMS-${APP_VERSION}-arm64.apk"
+"$APKSIGNER" sign --ks "$KS" --ks-key-alias "$KS_ALIAS" \
+  --ks-pass "pass:$KS_PASS" --key-pass "pass:$KS_PASS" \
+  --out "$SIGNED_APK" "$APK" || die "apksigner sign 失败"
+"$APKSIGNER" verify "$SIGNED_APK" || die "签名后验证失败：$SIGNED_APK"
+"$BT_DIR/zipalign.exe" -c 4 "$SIGNED_APK" || die "zipalign 对齐校验失败：$SIGNED_APK"
+ok "签名 + 验证 + 对齐校验通过：$SIGNED_APK"
+APK="$SIGNED_APK"
+
+# ---------- 8. 体积核验 ----------
 SIZE_BYTES="$(wc -c < "$APK" | tr -d '[:space:]')"
 SIZE_MB="$(awk "BEGIN { printf \"%.2f\", $SIZE_BYTES/1048576 }")"
 log "APK：$APK（${SIZE_MB} MB / ${SIZE_BYTES} 字节）"
 awk "BEGIN { exit !($SIZE_MB <= $APK_LIMIT_MB) }" || die "APK 体积 ${SIZE_MB} MB 超出上限 ${APK_LIMIT_MB} MB"
 ok "体积核验通过（≤ ${APK_LIMIT_MB} MB）。"
 
-# ---------- 8. 成功收尾 ----------
-log "构建完成：$APK（${SIZE_MB} MB）；包内 .so 已通过「存在性 / 非空 / ELF magic」校验。"
+# ---------- 9. 成功收尾 ----------
+log "构建完成：$APK（${SIZE_MB} MB）；包内 .so 已通过四条断言校验，已签名（apksigner V3）并通过 zipalign 对齐校验。"

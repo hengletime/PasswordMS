@@ -427,7 +427,7 @@ PowerShell 版（`scripts\check-size.ps1 -Target all` → `PS_EXIT=0`）输出�
 
 | # | 限制 | 影响 | 现状 |
 |---|------|------|------|
-| A-1 | **APK 未签名** | 无法直接装到真机；也无法上架 | 已复核：`META-INF/` 下**无任何签名条目**，文件名本身即 `-unsigned`。**未配置 keystore，未跑 `apksigner`**。装真机需先配签名，或改用 debug 构建（`npx tauri android build --apk -d`）—— debug 版的 debug keystore 由 Gradle 自动生成 |
+| A-1 | **APK 未签名** | ~~无法直接装到真机~~ **已闭合（2026-10-15，D-45）**：主人真机装未签名包报「解析软件包时出现问题 / packageinfo is null」。根因即 A-1——`build-android.sh` 无签名步骤，交付的是 `app-universal-release-unsigned.apk`。修复：脚本新增 §7 签名步骤（`apksigner sign` 用测试 keystore `D:/AndroidDev/keystores/passwordms-test.jks` + `apksigner verify` + `zipalign -c 4`，产物改名为 `target/PasswordMS-<ver>-arm64.apk`，keystore 路径/口令可用 `PMS_KEYSTORE`/`PMS_KEY_ALIAS`/`PMS_KEY_PASS` 覆盖）。签名前取证：`apksigner verify` → `DOES NOT VERIFY: Missing META-INF/MANIFEST.MF`；签名后 V3.0 验证通过。正式上架仍需换正式 keystore | 详见本表上方 D-17 修复链路；未签名包在 Android 12+ 的表现就是「解析错误」而非明确的「未签名」，极易误判为包损坏 |
 | A-2 | **真机 / 模拟器未运行过** | "能编译出 APK" ≠ "App 能启动、能解锁、能同步" | 本机无可用设备，**启动与功能全部未验证** |
 | A-3 | **局域网同步端到端未做** | P1 的核心卖点未被验证 | 需要第二台设备（另一部手机或 PC），见 §7 |
 | A-4 | **仅 arm64-v8a** | 32 位 ARM 老机型装不上 | 本轮只出 aarch64；如需覆盖老机型再加 `armv7-linux-androideabi` 目标重出 |
