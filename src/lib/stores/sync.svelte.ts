@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { DEFAULT_CONFLICT_CHOICE } from '../conflict';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
+import { vault } from './vault.svelte';
 import { ui } from './ui.svelte';
 
 /** 同步 store。 */
@@ -60,6 +61,8 @@ class SyncStore {
       if (result.conflicts.length > 0) {
         ui.toast('info', 'sync.result_conflicts', { n: result.conflicts.length });
       }
+      // D-47：同步进来的数据立即上屏（否则要切页才刷新）。
+      await vault.load();
       await this.loadDevices();
       await this.loadConflicts();
       return true;
@@ -128,6 +131,8 @@ class SyncStore {
       if (result.conflicts.length > 0) {
         ui.toast('info', 'sync.result_conflicts', { n: result.conflicts.length });
       }
+      // D-47：同步进来的数据立即上屏。
+      await vault.load();
       await this.loadStatus();
       await this.loadConflicts();
     } catch (err) {

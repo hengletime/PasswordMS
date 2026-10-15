@@ -284,7 +284,7 @@ export const zhCN = {
     device_count: '设备数',
     result_applied: '已合并 {n} 条',
     result_conflicts: '产生 {n} 个冲突',
-    adopt_requires_empty: '本机保险库非空（{n} 条），无法直接采用对端密钥。请先导出并清空，或改用对端重新创建保险库。',
+    adopt_requires_empty: '本机保险库非空（{n} 条），无法直接采用对端密钥。若两台设备此前已配对，请改用「设备 → 立即同步」；若各自是独立保险库，则无法直接合并，请先导出并清空一方，或改用对端重新创建保险库。',
     never: '从未',
   },
   conflict: {

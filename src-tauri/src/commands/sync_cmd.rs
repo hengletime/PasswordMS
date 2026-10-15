@@ -110,7 +110,17 @@ fn sync_join_impl(
     let mut joiner = client::pair(&qr, &device_id, &device_name, sync_port, now)?;
 
     // 2) 采用 Host 的 VK（U1/U2 裁定：本地库非空则拒绝，由前端处理提示）。
-    session.adopt_vault_key(joiner.host_vault_key())?;
+    //    D-47：**同组重配对豁免**——本机已与该 Host 配对 = 本地 VK 已在首次配对时采纳
+    //    （与对端一致）。此时重复扫码（重装、重复操作、想手动触发反向同步）不应再被
+    //    「非空即拒」拦下，直接复用既有密钥完成本次交换；真正的异组保险库仍被拒绝。
+    let already_paired = session
+        .repo()?
+        .list_paired_devices()
+        .iter()
+        .any(|d| d.device_id == joiner.host_id().to_string());
+    if !already_paired {
+        session.adopt_vault_key(joiner.host_vault_key())?;
+    }
 
     // 3) 持久化配对关系（含对端地址）并执行双向同步交换。
     let repo = session.repo_mut()?;

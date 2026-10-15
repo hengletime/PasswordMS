@@ -188,3 +188,99 @@ fn poll_accept_stream_is_blocking_after_accept() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// D-47 回归：**同组重配对**——两端首次配对并同步后（Joiner 本地库已非空、VK 已采纳），
+/// 再次完整走一遍「Host 起会话 → Joiner 握手 → 持久化 → 双向同步」，**全程不调用
+/// adopt_vault_key**，协议层必须成功。对应真实场景：已配对设备重复扫码触发反向同步
+/// （此前被 U1/U2「非空即拒」拦下，见 sync_cmd 的 already_paired 豁免）。
+#[test]
+fn repair_already_paired_vault_without_adopt() {
+    let dir = std::env::temp_dir().join(format!("pms-repair-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let host_vault = dir.join("host.vault");
+    let joiner_vault = dir.join("joiner.vault");
+
+    // ---- 第一次配对（与 pairing_loopback_handshake_and_sync 相同流程）----
+    let host_session = Session::create(&host_vault, "Repair#Master1", true).unwrap();
+    let host_id = host_session.repo().unwrap().device_id().to_string();
+    let identity = HostIdentity::generate().unwrap();
+    let mut server = SyncServer::start(0, host_id.clone(), "RepairHost".to_string(), identity, 0, now_ms())
+        .unwrap();
+    let qr = server.qr_payload(vec!["127.0.0.1".to_string()]).unwrap();
+    let host_handle = {
+        let mut host_session = host_session;
+        std::thread::spawn(move || {
+            let repo = host_session.repo_mut().unwrap();
+            server.accept_and_sync(repo, now_ms())
+        })
+    };
+    let mut joiner_session = Session::create(&joiner_vault, "Repair#Joiner1", true).unwrap();
+    let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
+    {
+        let mut joiner = client::pair(&qr, &joiner_id, "RepairJoiner", 0, now_ms()).unwrap();
+        joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+        let repo = joiner_session.repo_mut().unwrap();
+        joiner.persist_host_device(repo).unwrap();
+        joiner.push_and_sync(repo, now_ms()).unwrap();
+    }
+    let first = host_handle.join().unwrap().expect("首次配对失败");
+
+    // ---- 第二次配对：Joiner 本地库**非空**（有首次同步进来的数据），不走采纳 ----
+    let identity2 = HostIdentity::generate().unwrap();
+    let mut server2 = SyncServer::start(
+        0,
+        // ⚠️ 必须用 Host 自己的 device_id（HostSyncResult.device_id 是对端 Joiner 的 id）。
+        // 传错会导致 Joiner 的 sync_state 查错 key → seq 重置 → 正确地触发重放判定。
+        host_id.clone(),
+        "RepairHost".to_string(),
+        identity2,
+        0,
+        now_ms(),
+    )
+    .unwrap();
+    let qr2 = server2.qr_payload(vec!["127.0.0.1".to_string()]).unwrap();
+    let host_handle2 = std::thread::spawn(move || {
+        let mut host_session = Session::unlock(&host_vault, "Repair#Master1").unwrap();
+        let repo = host_session.repo_mut().unwrap();
+        server2.accept_and_sync(repo, now_ms())
+    });
+
+    let mut joiner2_session = Session::unlock(&joiner_vault, "Repair#Joiner1").unwrap();
+    let joiner2_id = joiner2_session.repo().unwrap().device_id().to_string();
+    // Joiner 侧全流程（配对 → 持久化 → 双向同步）必须**先于** join(Host) 完成：
+    // Host 的 accept_and_sync 在 run_exchange 里等 Joiner 的 Push（30s 超时），
+    // 若先把线程 join 了就构成测试自身的死锁（不是被测代码的问题）。
+    let joiner_result = (|| -> Result<(), passwordms_core::CoreError> {
+        let mut joiner2 = client::pair(&qr2, &joiner2_id, "RepairJoiner", 0, now_ms())?;
+        // ⚠️ 关键：这里**故意不调用** adopt_vault_key（等价于后端 already_paired 豁免）。
+        let repo = joiner2_session.repo_mut().unwrap();
+        joiner2.persist_host_device(repo)?;
+        joiner2.push_and_sync(repo, now_ms())?;
+        Ok(())
+    })();
+
+    let second = match host_handle2.join() {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            panic!("Host 线程 panic：{msg}");
+        }
+    };
+    assert!(
+        second.is_ok(),
+        "重配对（已配对保险库、跳过采纳）Host 侧失败: {:?}",
+        second.err()
+    );
+    assert!(
+        joiner_result.is_ok(),
+        "重配对（已配对保险库、跳过采纳）Joiner 侧失败: {:?}",
+        joiner_result.err()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -286,7 +286,7 @@ export const enUS: Messages = {
     device_count: 'Devices',
     result_applied: 'Merged {n} items',
     result_conflicts: '{n} conflicts created',
-    adopt_requires_empty: 'The local vault is not empty ({n} items), so the peer key cannot be adopted directly. Export and clear it first, or re-create the vault from the peer.',
+    adopt_requires_empty: 'The local vault is not empty ({n} items), so the peer key cannot be adopted directly. If these devices were paired before, use "Devices → Sync now" instead; if they are separate vaults, they cannot be merged directly — export and clear one side first, or re-create the vault from the peer.',
     never: 'Never',
   },
   conflict: {
