@@ -14,7 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use passwordms_core::import::ImportPreview;
+use passwordms_core::paths::portable_data_dir;
 use passwordms_core::session::Session;
+use passwordms_core::model::now_ms;
 use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::resync::ResyncServer;
 use passwordms_core::sync::server::SyncServer;
@@ -62,24 +64,56 @@ impl Default for AppState {
     }
 }
 
-/// 保险库文件路径（应用数据目录 / `passwordms.vault`）。
-pub fn vault_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
+/// 数据目录（便携模式优先）：exe 同目录存在 `passwordms.portable` 标记时，
+/// 全部数据文件随 exe 走（绿色版/便携发布渠道）；否则使用系统应用数据目录
+/// （Windows: `%APPDATA%\com.passwordms.app`）。
+pub fn data_dir(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()));
+    if let Some(dir) = portable_data_dir(exe_dir.as_deref()) {
+        // 便携目录即 exe 所在目录，必定存在。
+        return Ok(dir);
+    }
     let dir = app
         .path()
         .app_data_dir()
         .map_err(|_| IpcError::io("app_data_dir"))?;
     std::fs::create_dir_all(&dir).map_err(|_| IpcError::io("create_app_data_dir"))?;
-    Ok(dir.join("passwordms.vault"))
+    Ok(dir)
+}
+
+/// 保险库文件路径（数据目录 / `passwordms.vault`）。
+pub fn vault_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
+    Ok(data_dir(app)?.join("passwordms.vault"))
+}
+
+/// 轻量文件日志（数据目录 / `passwordms.log`）。
+///
+/// 为什么落盘：Windows GUI 程序没有 stderr，`eprintln!` 直接被丢弃——
+/// 配对失败这类疑难问题只有文件日志才能事后取证（D-43）。
+/// 内容仅限错误码/错误消息（`Debug` 已脱敏，无任何密钥或明文）；超过 1 MB 自动重建。
+pub fn append_log(app: &tauri::AppHandle, msg: &str) {
+    use std::io::Write;
+    let Ok(dir) = data_dir(app) else { return };
+    let path = dir.join("passwordms.log");
+    let ts = now_ms();
+    let line = format!("[{ts}] {msg}\n");
+    // 超 1MB：截断重建（保留最后可见问题，不追求日志轮转完备性）。
+    let need_truncate = std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false);
+    let open = if need_truncate {
+        std::fs::File::create(&path)
+    } else {
+        std::fs::OpenOptions::new().create(true).append(true).open(&path)
+    };
+    if let Ok(mut f) = open {
+        let _ = f.write_all(line.as_bytes());
+    }
 }
 
 /// Host 身份密钥文件路径。
 pub fn identity_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|_| IpcError::io("app_data_dir"))?;
-    std::fs::create_dir_all(&dir).map_err(|_| IpcError::io("create_app_data_dir"))?;
-    Ok(dir.join("passwordms.identity"))
+    Ok(data_dir(app)?.join("passwordms.identity"))
 }
 
 /// 启动（或复用）持久重同步监听器，返回其监听端口。

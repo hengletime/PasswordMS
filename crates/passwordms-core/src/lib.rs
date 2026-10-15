@@ -28,6 +28,7 @@ pub mod generator;
 pub mod health;
 pub mod import;
 pub mod model;
+pub mod paths;
 pub mod securemem;
 pub mod session;
 pub mod store;

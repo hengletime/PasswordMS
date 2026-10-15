@@ -166,7 +166,7 @@ impl CoreError {
             CoreError::Io(kind) => match kind.as_str() {
                 "io:TimedOut" => "err.network_timeout",
                 "io:ConnectionRefused" => "err.network_refused",
-                "io:ConnectionReset" | "io:BrokenPipe" => "err.network_broken",
+                "io:ConnectionReset" | "io:ConnectionAborted" | "io:BrokenPipe" => "err.network_broken",
                 _ => "err.io",
             },
             CoreError::Crypto(_) => "err.crypto",

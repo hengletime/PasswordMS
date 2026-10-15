@@ -81,8 +81,9 @@ pub fn sync_join(
 ) -> IpcResult<PairResultDto> {
     let result = sync_join_impl(&app, &state, &qr_payload);
     if let Err(e) = &result {
-        // 诊断留痕（桌面 stderr / Android logcat）：IpcError 的 Debug 只有 code + message_key，无隐私载荷。
+        // 诊断留痕（数据目录 passwordms.log + stderr）：IpcError 的 Debug 只有 code + message_key，无隐私载荷。
         eprintln!("[sync_join] failed: {e:?}");
+        crate::state::append_log(&app, &format!("[sync_join] failed: {e:?}"));
     }
     result
 }
@@ -282,8 +283,11 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                         };
                         match session.repo_mut() {
                             Ok(repo) => server.poll_accept_and_sync(repo, now_ms()),
-                            // 会话已锁定 → 终止等待。
-                            Err(_) => break,
+                            // 会话已锁定 → 终止等待。落盘留痕：这类静默退出曾让"二维码还挂着但会话已死"无从排查。
+                            Err(_) => {
+                                crate::state::append_log(&app, "[pairing] worker exiting: session lock busy");
+                                break;
+                            }
                         }
                     }
                     None => break,
@@ -294,14 +298,16 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                 Ok(None) => continue,
                 Ok(Some(result)) => {
                     eprintln!("[pairing] host session completed: applied={}", result.applied);
+                    crate::state::append_log(&app, &format!("[pairing] host session completed: applied={}", result.applied));
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }
                     break;
                 }
                 Err(e) => {
-                    // 诊断留痕：CoreError 的 Debug 只有错误码，无隐私载荷。
+                    // 诊断留痕：CoreError 的 Debug 只有错误码，无隐私载荷。落盘到数据目录 passwordms.log。
                     eprintln!("[pairing] host session aborted: {e:?}");
+                    crate::state::append_log(&app, &format!("[pairing] host session aborted: {e:?}"));
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }
