@@ -116,7 +116,18 @@ pub const AMBIGUOUS_CHARS: &str = "0O1lI";
 pub const CHARSET_LOWERCASE: &str = "abcdefghijklmnopqrstuvwxyz";
 pub const CHARSET_UPPERCASE: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 pub const CHARSET_DIGITS: &str = "0123456789";
-pub const CHARSET_SYMBOLS: &str = "!@#$%^&*()-_=+[]{};:,.?/";
+/// 符号字符集（**D-49 精编**）：只保留在常见语境中**无语法含义**的标点，
+/// 避免生成的密码被粘贴进命令行 / 代码 / URL 时被特殊解释。
+///
+/// 被排除的高危符号及其原因：
+/// - `=@`：赋值 / 环境变量 / URL 查询串 / 装饰器（主人点名）
+/// - `` " ' ` \ ``：字符串定界与转义
+/// - `$ & | ; < > ( )`：shell 变量、管道、语句分隔、重定向、子命令
+/// - `* ? [ ] { }`：glob 通配、大括号展开、格式化占位
+/// - `# % ! / ^`：注释、批处理变量、历史展开、路径分隔、行锚 / 转义
+///
+/// 熵代价：池从 24 → 6（每符号位约少 2 bit），可由长度补偿；换取「任何场景可直贴」。
+pub const CHARSET_SYMBOLS: &str = "+-_.,:";
 
 // ===== 体检（§3.3 F-16）=====
 pub const HEALTH_WEAK_MAX_LEN: u8 = 8;

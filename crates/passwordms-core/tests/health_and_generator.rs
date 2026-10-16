@@ -138,3 +138,27 @@ fn health_ignores_non_login_items() {
     assert_eq!(report.login_count, 0);
     assert!(report.weak.is_empty());
 }
+
+/// D-49 回归：符号集精编后，生成结果**不得**再出现任何 shell / 编程语法高危符号。
+/// 200 次 × 32 位扫描，任一命中即失败——防止将来有人把符号集改回去而无人察觉。
+#[test]
+fn generated_symbols_exclude_syntax_meaningful_chars() {
+    let hazardous: Vec<char> = "=@$&^;#%!?*/\\'\"`()[]{}<>|~`".chars().collect();
+    let opts = GeneratorOptions {
+        length: 32,
+        uppercase: true,
+        lowercase: true,
+        digits: true,
+        symbols: true,
+        exclude_ambiguous: false,
+    };
+    for _ in 0..200 {
+        let pw = generator::generate(&opts).expect("gen");
+        for c in &hazardous {
+            assert!(
+                !pw.contains(*c),
+                "生成结果出现高危符号 {c:?}（D-49 精编被破坏）：{pw}"
+            );
+        }
+    }
+}
