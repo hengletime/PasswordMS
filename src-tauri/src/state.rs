@@ -120,6 +120,11 @@ pub fn identity_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
 ///
 /// 该监听器用于「已配对设备」的直连重同步（D-11）：对端在配对时记录本端口，
 /// 之后调用 `sync_now` 即可直连本机完成增量同步。
+///
+/// **D-48 端口稳定性**：此前 `bind(0)` 每次启动随机分配端口——本机一旦重启
+/// （如升级重装），对端持久化的地址即失效，`sync_now` 必败且只能重新配对。
+/// 现在把选定的端口写入数据目录 `resync.port`，后续启动优先绑定同一端口；
+/// 被占用时回退随机端口并更新文件（此时对端需重新配对，罕见路径留日志）。
 pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
     let state = app.state::<AppState>();
     {
@@ -129,9 +134,27 @@ pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
         }
     }
 
-    // 绑定临时端口（0）由系统分配，随后持久通告给对端。
-    let server = ResyncServer::start(0, "PasswordMS".to_string())?;
+    let port_file = data_dir(app)?.join("resync.port");
+    let mut fell_back = false;
+    let server = match std::fs::read_to_string(&port_file)
+        .ok()
+        .and_then(|t| t.trim().parse::<u16>().ok())
+        .filter(|p| *p != 0)
+        .and_then(|saved| ResyncServer::start(saved, "PasswordMS".to_string()).ok())
+    {
+        Some(s) => s,
+        None => {
+            let s = ResyncServer::start(0, "PasswordMS".to_string())?;
+            fell_back = true;
+            s
+        }
+    };
     let port = server.port();
+    if fell_back {
+        let _ = std::fs::write(&port_file, port.to_string());
+        append_log(app, &format!("[resync] saved port unavailable, rebound to {port} (peers must re-pair)"));
+    }
+
     let stop = Arc::new(AtomicBool::new(false));
     {
         let mut guard = state.resync.lock().map_err(lock_err)?;
@@ -183,9 +206,17 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
         // 会话若已锁定则本轮跳过（等待解锁或停止信号）。
         match session.repo_mut() {
             Ok(repo) => {
-                let _ = handle
-                    .server
-                    .poll_once(repo, passwordms_core::model::now_ms());
+                // D-48：错误必须留痕——此前 `let _ =` 把断连原因全部吞掉，
+                // 对端只看到笼统的「文件读写错误」，PC 侧却无线索可查。
+                match handle.server.poll_once(repo, now_ms()) {
+                    Ok(Some(outcome)) => {
+                        append_log(&app, &format!("[resync] completed: applied={}", outcome.applied));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        append_log(&app, &format!("[resync] aborted: {e:?}"));
+                    }
+                }
             }
             Err(_) => continue,
         }

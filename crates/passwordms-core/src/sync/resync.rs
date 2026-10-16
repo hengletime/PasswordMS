@@ -24,7 +24,7 @@ use zeroize::Zeroizing;
 
 use crate::constants::{QR_PROTOCOL_VERSION, SYNC_TIME_WINDOW_SECS};
 use crate::crypto::{keys, rng};
-use crate::error::{CoreError, CoreResult};
+use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::sync_state::DeviceSyncState;
 use crate::store::repository::Repository;
 use crate::sync::handshake::{self, ROLE_CLIENT, ROLE_SERVER};
@@ -154,10 +154,10 @@ pub fn resync_with_peer(
         client_name: device_display_name(&client_id),
         nonce_c: nonce_c.clone(),
     });
-    transport::send_frame(&mut stream, &serde_json::to_vec(&hello)?)?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&hello)?).map_err(|e| stage_io(e, "hello_send"))?;
 
     // 5) CHALLENGE。
-    let challenge_bytes = transport::recv_frame(&mut stream)?;
+    let challenge_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "challenge_recv"))?;
     let challenge = match serde_json::from_slice::<ResyncMessage>(&challenge_bytes)? {
         ResyncMessage::Challenge(c) => c,
         ResyncMessage::Reject(r) => return Err(reject_to_error(&r.code)),
@@ -178,7 +178,7 @@ pub fn resync_with_peer(
     // 7) 回送本端确认。
     let mac_c = handshake::confirm_mac(&sk, ROLE_CLIENT, &transcript)?;
     let confirm = ResyncMessage::Confirm(ResyncConfirm { mac: mac_c });
-    transport::send_frame(&mut stream, &serde_json::to_vec(&confirm)?)?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&confirm)?).map_err(|e| stage_io(e, "confirm_send"))?;
 
     let session_id = session_id_of(&transcript);
     let mut state: DeviceSyncState = repo.sync_state(peer_device_id);
@@ -195,10 +195,10 @@ pub fn resync_with_peer(
         conflicts: Vec::new(),
     };
     let push_env = seal_envelope(&sk[..], &session_id, c1, now, &push)?;
-    transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?)?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?).map_err(|e| stage_io(e, "push_send"))?;
 
     // 9) 收对端 Push 并合并。
-    let reply_bytes = transport::recv_frame(&mut stream)?;
+    let reply_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "reply_recv"))?;
     let reply_env: SyncEnvelope = serde_json::from_slice(&reply_bytes)?;
     replay.accept(reply_env.seq, reply_env.ts, now)?;
     let reply = open_envelope(&sk[..], &session_id, &reply_env)?;
@@ -213,7 +213,7 @@ pub fn resync_with_peer(
         conflicts: report.conflicts.clone(),
     };
     let done_env = seal_envelope(&sk[..], &session_id, c2, now, &done)?;
-    transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?)?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?).map_err(|e| stage_io(e, "done_send"))?;
 
     // 11) 持久化游标。
     state.last_recv_seq = replay.last_recv_seq();
@@ -290,7 +290,7 @@ impl ResyncServer {
             .map_err(|_| CoreError::SyncAborted)?;
 
         // 1) HELLO。
-        let hello_bytes = transport::recv_frame(&mut stream)?;
+        let hello_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
         let hello = match serde_json::from_slice::<ResyncMessage>(&hello_bytes)? {
             ResyncMessage::Hello(h) => h,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -328,10 +328,10 @@ impl ResyncServer {
             nonce_s: nonce_s.clone(),
             mac: mac_s,
         });
-        transport::send_frame(&mut stream, &serde_json::to_vec(&challenge)?)?;
+        transport::send_frame(&mut stream, &serde_json::to_vec(&challenge)?).map_err(|e| stage_io(e, "challenge_send"))?;
 
         // 5) 校验发起方确认。
-        let confirm_bytes = transport::recv_frame(&mut stream)?;
+        let confirm_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "confirm_recv"))?;
         let confirm = match serde_json::from_slice::<ResyncMessage>(&confirm_bytes)? {
             ResyncMessage::Confirm(c) => c,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -346,7 +346,7 @@ impl ResyncServer {
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
         // 6) 收发起方 Push 并合并。
-        let push_bytes = transport::recv_frame(&mut stream)?;
+        let push_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "push_recv"))?;
         let push_env: SyncEnvelope = serde_json::from_slice(&push_bytes)?;
         replay.accept(push_env.seq, push_env.ts, now)?;
         let push = open_envelope(&sk[..], &session_id, &push_env)?;
@@ -362,10 +362,10 @@ impl ResyncServer {
             conflicts: report.conflicts.clone(),
         };
         let reply_env = seal_envelope(&sk[..], &session_id, s1, now, &reply)?;
-        transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?)?;
+        transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
 
         // 8) 收 Done。
-        let done_bytes = transport::recv_frame(&mut stream)?;
+        let done_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "done_recv"))?;
         let done_env: SyncEnvelope = serde_json::from_slice(&done_bytes)?;
         replay.accept(done_env.seq, done_env.ts, now)?;
         let _ = open_envelope(&sk[..], &session_id, &done_env)?;

@@ -76,17 +76,22 @@ pub fn sync_cancel_pairing(state: tauri::State<'_, AppState>) -> IpcResult<()> {
 }
 
 /// F-09 Joiner：扫码/粘贴二维码文本后发起配对并执行首次同步。
+///
+/// D-48：**async 命令 + spawn_blocking**——同步命令默认在主线程执行，
+/// 直接做 30s 级网络等待会把整个 UI 冻住（手机实测：点其它全部无响应）。
 #[tauri::command(rename_all = "snake_case")]
-pub fn sync_join(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    qr_payload: String,
-) -> IpcResult<PairResultDto> {
-    let result = sync_join_impl(&app, &state, &qr_payload);
+pub async fn sync_join(app: tauri::AppHandle, qr_payload: String) -> IpcResult<PairResultDto> {
+    let app_log = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        sync_join_impl(&app, &state, &qr_payload)
+    })
+    .await
+    .map_err(|e| IpcError::internal(&format!("spawn_blocking join: {e}")))?;
     if let Err(e) = &result {
         // 诊断留痕（数据目录 passwordms.log + stderr）：IpcError 的 Debug 只有 code + message_key，无隐私载荷。
         eprintln!("[sync_join] failed: {e:?}");
-        crate::state::append_log(&app, &format!("[sync_join] failed: {e:?}"));
+        crate::state::append_log(&app_log, &format!("[sync_join] failed: {e:?}"));
     }
     result
 }
@@ -166,15 +171,27 @@ pub fn unpair(state: tauri::State<'_, AppState>, device_id: String) -> IpcResult
 ///
 /// 失败路径映射到既定错误码：未配对 → `ERR_NOT_PAIRED`；密钥确认失败 → `ERR_FINGERPRINT_MISMATCH`；
 /// 序号/时间窗异常 → `ERR_REPLAY_DETECTED`；连接/协议中断 → `ERR_SYNC_ABORTED`。
+/// D-48：async + spawn_blocking，同 `sync_join`——网络 I/O 不进主线程。
 #[tauri::command(rename_all = "snake_case")]
-pub fn sync_now(state: tauri::State<'_, AppState>, device_id: String) -> IpcResult<SyncResultDto> {
-    let mut session = state.session.lock().map_err(lock_err)?;
-    let repo = session.repo_mut()?;
-    let outcome = resync::resync_with_peer(repo, &device_id, now_ms())?;
-    Ok(SyncResultDto {
-        applied: outcome.applied,
-        conflicts: outcome.conflicts,
+pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<SyncResultDto> {
+    let app_log = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut session = state.session.lock().map_err(lock_err)?;
+        let repo = session.repo_mut()?;
+        let outcome = resync::resync_with_peer(repo, &device_id, now_ms())?;
+        Ok(SyncResultDto {
+            applied: outcome.applied,
+            conflicts: outcome.conflicts,
+        })
     })
+    .await
+    .map_err(|e| IpcError::internal(&format!("spawn_blocking sync_now: {e}")))?;
+    if let Err(e) = &result {
+        eprintln!("[sync_now] failed: {e:?}");
+        crate::state::append_log(&app_log, &format!("[sync_now] failed: {e:?}"));
+    }
+    result
 }
 
 /// F-09 同步状态查询。
