@@ -23,6 +23,9 @@
   let draft = $state<VaultSettings>({ ...settings.value });
   let fileInfo = $state<VaultFileInfoDto | null>(null);
   let oldPassword = $state('');
+  // D-51：导出保险库需要单独输入当前主密码（后端 repo.export_vault 会用它做 unlock_check 后再 copy 库文件）。
+  // 旧实现误用「修改主密码」卡片的 oldPassword，而导出卡片根本没有输入框 → 空密码必报「解锁失败，请重试。」
+  let exportPassword = $state('');
   let newPassword = $state('');
   let newPassword2 = $state('');
   let importOpen = $state(false);
@@ -66,6 +69,11 @@
   }
 
   async function exportVault(): Promise<void> {
+    // D-51：为空时**不发 IPC**（空密码到后端必 UnlockFailed →「解锁失败，请重试。」误导用户），直接就地提示。
+    if (exportPassword.length === 0) {
+      ui.toast('error', 'settings.export_password_required');
+      return;
+    }
     const ok = await ui.confirm('settings.export_confirm_title', 'settings.export_confirm_body');
     if (!ok) {
       return;
@@ -75,7 +83,8 @@
       return;
     }
     try {
-      await api.vault.exportVault(dest, oldPassword);
+      await api.vault.exportVault(dest, exportPassword);
+      exportPassword = ''; // 导出成功后清空，避免明文主密码残留在组件状态里
       ui.toast('success', 'common.ok');
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
@@ -199,6 +208,18 @@
       <Icon name="alert" size={16} />
       <span>{ui.t('settings.export_confirm_body')}</span>
     </p>
+    <!-- D-51：导出同样需要当前主密码（文案复用 settings.change_password_old「当前主密码」，语义一致）。
+         id 不能复用 set-pw-old，否则与「修改主密码」卡片的输入框重复。 -->
+    <div class="set-row">
+      <label class="set-label" for="set-pw-export">{ui.t('settings.change_password_old')}</label>
+      <input
+        id="set-pw-export"
+        class="pms-input set-ctl"
+        type="password"
+        bind:value={exportPassword}
+        autocomplete="current-password"
+      />
+    </div>
     <button class="pms-btn is-ghost" type="button" onclick={() => void exportVault()}>
       <Icon name="download" size={15} />{ui.t('settings.export_vault')}
     </button>

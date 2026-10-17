@@ -245,6 +245,7 @@ export const zhCN = {
     export_vault: '导出保险库',
     export_confirm_title: '导出保险库',
     export_confirm_body: '导出后文件将以明文形式保存到磁盘，请确认存放位置安全。',
+    export_password_required: '请先输入当前主密码再导出。',
     vault_file: '保险库文件',
     size: '大小',
     weak_max_len: '弱口令长度阈值',

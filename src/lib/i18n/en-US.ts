@@ -247,6 +247,7 @@ export const enUS: Messages = {
     export_vault: 'Export vault',
     export_confirm_title: 'Export vault',
     export_confirm_body: 'The exported file will be written to disk in plaintext. Confirm the location is safe.',
+    export_password_required: 'Enter the current master password before exporting.',
     vault_file: 'Vault file',
     size: 'Size',
     weak_max_len: 'Weak length threshold',

@@ -3,9 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{
-    AUTO_LOCK_MINUTES, CLIPBOARD_TTL_SECS, ENCRYPTION_SCHEME, FORMAT_VERSION, GENERATOR_DEFAULT_LEN,
-    HEALTH_STALE_DAYS, HEALTH_WEAK_MAX_LEN, KDF_ALGORITHM, KDF_ITERATIONS, KDF_MEMORY_KIB,
-    KDF_PARALLELISM, KDF_SALT_LEN,
+    AUTO_LOCK_MINUTES, CHARSET_SYMBOLS, CLIPBOARD_TTL_SECS, ENCRYPTION_SCHEME, FORMAT_VERSION,
+    GENERATOR_DEFAULT_LEN, HEALTH_STALE_DAYS, HEALTH_WEAK_MAX_LEN, KDF_ALGORITHM, KDF_ITERATIONS,
+    KDF_MEMORY_KIB, KDF_PARALLELISM, KDF_SALT_LEN,
 };
 
 /// KDF 参数（随库存储，解锁时按文件内参数执行）。
@@ -89,7 +89,9 @@ impl Default for GeneratorOptions {
             digits: true,
             symbols: true,
             exclude_ambiguous: true,
-            symbol_set: None,
+            // D-52：默认自描述为精编集（None 在核心层等价回退默认集，但序列化出去的设置
+            // 应能自描述，避免前端/旧版本把「未设置」与「显式全选精编集」混淆）。
+            symbol_set: Some(CHARSET_SYMBOLS.to_string()),
         }
     }
 }

@@ -12,25 +12,17 @@
   import { copySecretWithAutoClear } from '../lib/clipboard';
   import { GENERATOR_MAX_LEN, GENERATOR_MIN_LEN } from '../lib/constants';
   import { toAppError } from '../lib/errors';
+  import { SAFE_SYMBOLS, resolveGeneratorOptions } from '../lib/generator-defaults';
   import { api } from '../lib/ipc';
+  import { settings } from '../lib/stores/settings.svelte';
   import { ui } from '../lib/stores/ui.svelte';
-  import type { GeneratorOptions } from '../types';
+  import type { GeneratorOptions, VaultSettings } from '../types';
 
   interface Props {
     initial?: GeneratorOptions;
     onuse?: (password: string) => void;
   }
   const { initial, onuse }: Props = $props();
-
-  const DEFAULTS: GeneratorOptions = {
-    length: 16,
-    uppercase: true,
-    lowercase: true,
-    digits: true,
-    symbols: true,
-    exclude_ambiguous: true,
-    symbol_set: '+-_.,:',
-  };
 
   // D-50：可选符号目录（全部可打印 ASCII 特殊符号，「常用的」一屏列全）。
   // 与核心层约定一致：字母/数字/空格等非符号字符即使混入也会被后端过滤。
@@ -40,11 +32,13 @@
     '(', ')', '[', ']', '{', '}', '<', '>', '=', '|', ';', '/',
     '\\', "'", '"', '`',
   ];
-  const SAFE_SYMBOLS = '+-_.,:';
 
-  // 仅在打开时快照一次初始参数（有意为之：后续父组件变化不覆盖用户已调参数）。
+  // D-52：初始参数优先级 = initial（调用方显式传入，如条目表单）>
+  //       settings.value.generator（跨会话持久化的用户偏好）> 内置默认值；
+  //       symbol_set 为 null/undefined/空串时回退精编集 +-_.,:。
+  // 仅在打开时快照一次（有意为之：后续父组件/store 变化不覆盖用户已调参数）。
   // svelte-ignore state_referenced_locally
-  let opts = $state<GeneratorOptions>({ ...(initial ?? DEFAULTS) });
+  let opts = $state<GeneratorOptions>(resolveGeneratorOptions(initial, settings.value.generator));
   let password = $state('');
   // 数字输入框的"正在编辑文本"：与 opts.length 解耦，避免中途输入（如先敲 "1"）被立刻钳制回写成 "8"。
   // svelte-ignore state_referenced_locally
@@ -60,6 +54,28 @@
       ? selectedSymbols.filter((s) => s !== c)
       : [...selectedSymbols, c];
     opts.symbol_set = selectedSymbols.length === 0 ? null : selectedSymbols.join('');
+    schedulePersist();
+  }
+
+  // D-52：参数变更 → 防抖 300ms 后**静默**写回设置 store（不弹 toast），实现跨会话持久化。
+  // 用显式变更点触发（而非 $effect），天然不会在组件初始化时把未变更的默认值写回；
+  // 拖滑块 / 连点符号芯片只会归并成停止 300ms 后的一次 IPC。
+  const PERSIST_DEBOUNCE_MS = 300;
+  let persistTimer: ReturnType<typeof setTimeout> | undefined = undefined;
+
+  function schedulePersist(): void {
+    if (persistTimer !== undefined) {
+      clearTimeout(persistTimer);
+    }
+    persistTimer = setTimeout((): void => {
+      persistTimer = undefined;
+      // 只替换 generator 字段，其余设置项以 store 里**当前**持久化值为准，避免覆盖他人改动。
+      const next: VaultSettings = {
+        ...$state.snapshot(settings.value),
+        generator: $state.snapshot(opts),
+      };
+      void settings.saveQuiet(next);
+    }, PERSIST_DEBOUNCE_MS);
   }
 
   /** 4 类字符至少选一类（exclude_ambiguous 不计入）。 */
@@ -78,6 +94,7 @@
     }
     opts.length = clampLength(n);
     lengthText = String(opts.length);
+    schedulePersist();
   }
 
   /**
@@ -92,6 +109,7 @@
       return;
     }
     opts.length = Math.round(n);
+    schedulePersist();
   }
 
   /** 数字框提交（失焦 / 回车）：越界值钳制到范围内并回写；非法输入还原为当前值。 */
@@ -103,6 +121,7 @@
     }
     opts.length = clampLength(n);
     lengthText = String(opts.length);
+    schedulePersist();
   }
 
   async function generate(): Promise<void> {
@@ -202,6 +221,7 @@
           checked={opts[toggle.key] as boolean}
           onchange={(event: Event): void => {
             (opts[toggle.key] as boolean) = (event.target as HTMLInputElement).checked;
+            schedulePersist();
           }}
         />
         <span>{ui.t(toggle.labelKey)}</span>

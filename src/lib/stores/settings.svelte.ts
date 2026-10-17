@@ -15,6 +15,9 @@ export function defaultSettings(): VaultSettings {
       digits: true,
       symbols: true,
       exclude_ambiguous: true,
+      // D-52：与 Rust `GeneratorOptions::default()`（`Some(CHARSET_SYMBOLS)`）对齐，
+      // 保证序列化出去的设置自描述，前端初始符号选择也能取到非空集。
+      symbol_set: '+-_.,:',
     },
     health: { weak_max_len: 8, stale_days: 180 },
     clipboard_clear_secs: 30,
@@ -51,6 +54,22 @@ class SettingsStore {
       return true;
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
+      return false;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /**
+   * 静默保存（D-52）：与 `save` 同逻辑但**不弹任何 toast**——供生成器参数变更后即时持久化，
+   * 避免拖滑块 / 点符号芯片时被连续的成功/失败提示刷屏。失败不提示，下一次变更会再次尝试。
+   */
+  async saveQuiet(next: VaultSettings): Promise<boolean> {
+    this.busy = true;
+    try {
+      this.value = await api.settings.update(next);
+      return true;
+    } catch {
       return false;
     } finally {
       this.busy = false;
