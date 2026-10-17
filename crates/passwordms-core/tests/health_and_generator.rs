@@ -37,6 +37,7 @@ fn generator_respects_charset_and_length() {
         digits: true,
         symbols: false,
         exclude_ambiguous: true,
+        symbol_set: None,
     };
     let pw = generator::generate(&opts).expect("gen");
     assert_eq!(pw.chars().count(), 16);
@@ -56,6 +57,7 @@ fn generator_rejects_empty_charset_and_bad_length() {
         digits: false,
         symbols: false,
         exclude_ambiguous: false,
+        symbol_set: None,
     };
     assert_eq!(generator::generate(&none).unwrap_err().code(), "ERR_VALIDATION");
 
@@ -66,6 +68,7 @@ fn generator_rejects_empty_charset_and_bad_length() {
         digits: true,
         symbols: false,
         exclude_ambiguous: false,
+        symbol_set: None,
     };
     assert_eq!(generator::generate(&too_short).unwrap_err().code(), "ERR_VALIDATION");
 }
@@ -79,6 +82,7 @@ fn generator_guarantees_each_selected_class() {
         digits: true,
         symbols: true,
         exclude_ambiguous: false,
+        symbol_set: None,
     };
     let pw = generator::generate(&opts).expect("gen");
     assert!(pw.chars().any(|c| c.is_ascii_uppercase()));
@@ -151,6 +155,7 @@ fn generated_symbols_exclude_syntax_meaningful_chars() {
         digits: true,
         symbols: true,
         exclude_ambiguous: false,
+        symbol_set: None,
     };
     for _ in 0..200 {
         let pw = generator::generate(&opts).expect("gen");
@@ -161,4 +166,47 @@ fn generated_symbols_exclude_syntax_meaningful_chars() {
             );
         }
     }
+}
+
+/// D-50：用户自选符号集生效——自定义集内的符号参与生成，集外符号绝不出现。
+#[test]
+fn custom_symbol_set_restricts_output() {
+    let opts = GeneratorOptions {
+        length: 32,
+        uppercase: true,
+        lowercase: true,
+        digits: true,
+        symbols: true,
+        exclude_ambiguous: false,
+        symbol_set: Some("=@#".to_string()),
+    };
+    let allowed: Vec<char> = "=@#".chars().collect();
+    for _ in 0..200 {
+        let pw = generator::generate(&opts).expect("gen");
+        assert!(pw.chars().any(|c| allowed.contains(&c)), "自选集内符号应参与生成：{pw}");
+        for c in pw.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || allowed.contains(&c),
+                "出现自选集外字符 {c:?}：{pw}"
+            );
+        }
+    }
+}
+
+/// D-50：自选集的过滤与兜底——字母数字/空格被滤掉、去重保持稳定；空集回退默认精编集。
+#[test]
+fn symbol_set_filter_and_fallback() {
+    use passwordms_core::model::vault::GeneratorOptions as Opts;
+
+    // 字母/数字/空格被过滤，重复去重：'@@aa 5' → 生效集 = {'@'}。
+    let o = Opts { symbol_set: Some("@@aa 5".to_string()), ..Opts::default() };
+    assert_eq!(o.effective_symbol_set(), "@");
+
+    // 空字符串 → 回退默认精编集。
+    let o = Opts { symbol_set: Some(String::new()), ..Opts::default() };
+    assert_eq!(o.effective_symbol_set(), "+-_.,:");
+
+    // None → 默认精编集。
+    let o = Opts { symbol_set: None, ..Opts::default() };
+    assert_eq!(o.effective_symbol_set(), "+-_.,:");
 }

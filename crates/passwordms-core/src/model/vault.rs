@@ -49,6 +49,35 @@ pub struct GeneratorOptions {
     pub digits: bool,
     pub symbols: bool,
     pub exclude_ambiguous: bool,
+    /// 用户自选的符号集（D-50）：`None` / 空 = 用默认精编集 [`crate::constants::CHARSET_SYMBOLS`]。
+    /// 仅接受可打印 ASCII 非字母数字字符，其余字符在生效时被过滤（见 [`Self::effective_symbol_set`]）。
+    /// `serde(default)` 兼容旧库文件 / 旧前端（无此字段 = 默认集）。
+    #[serde(default)]
+    pub symbol_set: Option<String>,
+}
+
+impl GeneratorOptions {
+    /// 生效的符号集（D-50）：自选集去重、过滤为「可打印 ASCII 且非字母数字」，
+    /// 过滤后非空则采用；否则回退默认精编集 [`crate::constants::CHARSET_SYMBOLS`]。
+    pub fn effective_symbol_set(&self) -> String {
+        let filtered: String = match &self.symbol_set {
+            Some(s) if !s.is_empty() => {
+                let mut seen: Vec<char> = Vec::new();
+                for c in s.chars() {
+                    if c.is_ascii_graphic() && !c.is_ascii_alphanumeric() && !seen.contains(&c) {
+                        seen.push(c);
+                    }
+                }
+                seen.into_iter().collect()
+            }
+            _ => String::new(),
+        };
+        if filtered.is_empty() {
+            crate::constants::CHARSET_SYMBOLS.to_string()
+        } else {
+            filtered
+        }
+    }
 }
 
 impl Default for GeneratorOptions {
@@ -60,6 +89,7 @@ impl Default for GeneratorOptions {
             digits: true,
             symbols: true,
             exclude_ambiguous: true,
+            symbol_set: None,
         }
     }
 }

@@ -149,6 +149,7 @@ export const enUS: Messages = {
     lowercase: 'Lowercase',
     digits: 'Digits',
     symbols: 'Symbols',
+    symbol_pick: 'Tap to choose which symbols may appear (none = default safe set + - _ . , :)',
     exclude_ambiguous: 'Exclude ambiguous',
     generate: 'Generate',
     copy: 'Copy',

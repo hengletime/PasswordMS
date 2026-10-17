@@ -3,8 +3,8 @@
 //! 随机源为 CSPRNG（§2.4）；保证结果至少包含每个被选中字符集的一个字符，并做均匀洗牌。
 
 use crate::constants::{
-    AMBIGUOUS_CHARS, CHARSET_DIGITS, CHARSET_LOWERCASE, CHARSET_SYMBOLS, CHARSET_UPPERCASE,
-    GENERATOR_MAX_LEN, GENERATOR_MIN_LEN,
+    AMBIGUOUS_CHARS, CHARSET_DIGITS, CHARSET_LOWERCASE, CHARSET_UPPERCASE, GENERATOR_MAX_LEN,
+    GENERATOR_MIN_LEN,
 };
 use crate::crypto::rng;
 use crate::error::{CoreError, CoreResult};
@@ -30,7 +30,9 @@ pub fn generate(opts: &GeneratorOptions) -> CoreResult<String> {
         pools.push(pool(CHARSET_DIGITS, opts.exclude_ambiguous));
     }
     if opts.symbols {
-        pools.push(pool(CHARSET_SYMBOLS, opts.exclude_ambiguous));
+        // D-50：符号池改用「生效符号集」——用户自选集（过滤/去重后非空）优先，
+        // 否则回退默认精编集。见 GeneratorOptions::effective_symbol_set。
+        pools.push(pool(&opts.effective_symbol_set(), opts.exclude_ambiguous));
     }
     if pools.iter().any(|p| p.is_empty()) {
         return Err(CoreError::Validation("charset_empty".to_string()));

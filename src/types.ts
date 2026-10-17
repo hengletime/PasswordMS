@@ -120,6 +120,8 @@ export interface GeneratorOptions {
   digits: boolean;
   symbols: boolean;
   exclude_ambiguous: boolean;
+  /** 自选符号集（D-50）：null/undefined = 默认安全集（+-_.,:）。 */
+  symbol_set?: string | null;
 }
 
 /** 体检配置。 */

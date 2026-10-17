@@ -147,6 +147,7 @@ export const zhCN = {
     lowercase: '小写字母',
     digits: '数字',
     symbols: '符号',
+    symbol_pick: '点选允许参与生成的符号（全不选 = 用默认安全集 + - _ . , :）',
     exclude_ambiguous: '排除易混字符',
     generate: '生成',
     copy: '复制',

@@ -29,7 +29,18 @@
     digits: true,
     symbols: true,
     exclude_ambiguous: true,
+    symbol_set: '+-_.,:',
   };
+
+  // D-50：可选符号目录（全部可打印 ASCII 特殊符号，「常用的」一屏列全）。
+  // 与核心层约定一致：字母/数字/空格等非符号字符即使混入也会被后端过滤。
+  const SYMBOL_CATALOG: string[] = [
+    '-', '_', '.', ',', ':', '+', '~',
+    '?', '!', '*', '@', '#', '$', '%', '^', '&',
+    '(', ')', '[', ']', '{', '}', '<', '>', '=', '|', ';', '/',
+    '\\', "'", '"', '`',
+  ];
+  const SAFE_SYMBOLS = '+-_.,:';
 
   // 仅在打开时快照一次初始参数（有意为之：后续父组件变化不覆盖用户已调参数）。
   // svelte-ignore state_referenced_locally
@@ -38,6 +49,18 @@
   // 数字输入框的"正在编辑文本"：与 opts.length 解耦，避免中途输入（如先敲 "1"）被立刻钳制回写成 "8"。
   // svelte-ignore state_referenced_locally
   let lengthText = $state<string>(String(opts.length));
+
+  // D-50：已选符号集合（初始 = 当前 symbol_set 与目录的交集，目录外字符丢弃）。
+  const initialSet = new Set((opts.symbol_set ?? SAFE_SYMBOLS).split(''));
+  let selectedSymbols = $state<string[]>(SYMBOL_CATALOG.filter((c) => initialSet.has(c)));
+
+  /** 已选符号回写进 opts（空 = null → 后端回退默认精编集）。 */
+  function toggleSymbol(c: string): void {
+    selectedSymbols = selectedSymbols.includes(c)
+      ? selectedSymbols.filter((s) => s !== c)
+      : [...selectedSymbols, c];
+    opts.symbol_set = selectedSymbols.length === 0 ? null : selectedSymbols.join('');
+  }
 
   /** 4 类字符至少选一类（exclude_ambiguous 不计入）。 */
   let hasCharset = $derived(opts.uppercase || opts.lowercase || opts.digits || opts.symbols);
@@ -190,6 +213,25 @@
     <p class="pms-hint is-danger">{ui.t('gen.need_one')}</p>
   {/if}
 
+  {#if opts.symbols}
+    <div class="gen-symbol-pick">
+      <p class="pms-hint">{ui.t('gen.symbol_pick')}</p>
+      <div class="symbol-chips" role="group" aria-label={ui.t('gen.symbol_pick')}>
+        {#each SYMBOL_CATALOG as sym (sym)}
+          <button
+            class="symbol-chip"
+            type="button"
+            class:is-on={selectedSymbols.includes(sym)}
+            aria-pressed={selectedSymbols.includes(sym)}
+            onclick={() => toggleSymbol(sym)}
+          >
+            {sym}
+          </button>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if onuse}
     <button class="pms-btn is-primary" type="button" disabled={!hasCharset} onclick={() => onuse(password)}>
       {ui.t('gen.use')}
@@ -239,5 +281,39 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.5rem 0.85rem;
+  }
+  .gen-symbol-pick {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .symbol-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .symbol-chip {
+    min-width: 1.9rem;
+    height: 1.9rem;
+    padding: 0 0.4rem;
+    border: 1px solid var(--pms-border);
+    border-radius: var(--pms-r-sm);
+    background: transparent;
+    color: var(--pms-muted);
+    font-family: var(--pms-mono);
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+    transition: background var(--pms-dur) var(--pms-ease), color var(--pms-dur) var(--pms-ease),
+      border-color var(--pms-dur) var(--pms-ease);
+  }
+  .symbol-chip:hover {
+    border-color: var(--pms-accent);
+    color: var(--pms-fg);
+  }
+  .symbol-chip.is-on {
+    background: var(--pms-accent);
+    border-color: var(--pms-accent);
+    color: var(--pms-accent-ink);
   }
 </style>
