@@ -144,5 +144,6 @@ bash scripts/check-size.sh android   # ≤12 MB（扫 src-tauri/gen 与 gen）
 | A-05 release 构建时序分布 | timing_sidechannel 为 **debug** 构建，绝对值不可外推 release | release profile 复测 |
 | APK 签名与真机安装 | signed APK 已产出（断言①~④过） | 真机安装走查 |
 | check:css 6 WARN（浅色主/危险按钮对比度） | 已知既有项，过控件底线未达 AA 正文 | 设计决策（改色 or 维持） |
+| `cargo fmt` 代码格式统一 | rustfmt 已装（2026-10-18）；实测 **215 处格式偏差 / 约 30+ 文件**（纯换行/空行，零语义）。**主人拍板 B 案：暂缓**——待下一次出包构建窗口一并执行 `cargo fmt --all`，并把 `cargo fmt --all -- --check` 加入 gate-all.sh 成为第 8 门；届时须同步刷新 §1.4 的 file:line 映射（行号会漂移） | 下一个出包构建窗口 |
 
 > 引用 `docs/03b-verification.md` 综合判定：CONDITIONAL PASS，剩余阻塞项已收敛为环境类。**任何一项上表内容的验证完成，须回写本文档并更新对应判定。**
