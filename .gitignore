@@ -19,6 +19,12 @@
 # `gen/schemas/` 是 tauri-build 每次编译重新生成的 JSON schema，不入库。
 /src-tauri/gen/schemas/
 #
+# icons 里的 macOS / iOS 图标（主人拍板 B 案，2026-10-18）：
+# icns 与 ios/ 由 `tauri icon` 生成、可再生，且本项目当前只做 Windows + Android，
+# 没有对应设备做验证，不入库制造噪音。真做 macOS/iOS 端时删掉这两行即可。
+/src-tauri/icons/icon.icns
+/src-tauri/icons/ios/
+#
 # 注意：`gen/android/` 里的 **Android 工程源码要入库**（AndroidManifest.xml / gradle 脚本 /
 # MainActivity.kt / 图标 / res 资源）。否则换机器或重新克隆后必须重跑
 # `tauri android init`，会丢掉对 manifest 和图标做过的任何定制。

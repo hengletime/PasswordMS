@@ -53,6 +53,9 @@ exe 三条硬验证：
 
 ## 约定
 
+- **P2 backlog 排期**（主人拍板 2026-10-18）：HLC 时钟 / Done base 回执 / 到达序不对称文档化 → 统一排在 **#530 质量门与端到端回归之后**，勿提前插队。
+- **icons 策略**：`/src-tauri/icons/icon.icns` 与 `/src-tauri/icons/ios/` 已入 `.gitignore`（B 案，2026-10-18）；真做 macOS/iOS 端时删掉那两行。
+
 - 缺陷编号用 `D-nn`，事故同时写进 `docs/06-ui-design.md` §6 缺陷表与对应章节。
 - **改 UI 必须同步 `docs/06-ui-design.md`** —— 它是界面样式的**唯一权威**。
   规范与代码不一致会直接制造 bug（D-27 就是规范本身写错，工程师照抄）。
