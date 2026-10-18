@@ -18,6 +18,12 @@ npx tauri build --target x86_64-pc-windows-gnullvm
   换机器只需设 `PMS_WINRES_DIR`。详见 `docs/03b-verification.md` §8.1 / §8.2（事故 D-33）。
 - `.cargo/config.toml` 是**本机私有**（`.gitignore` 已排除），装 linker / rustflags；`.example` 是给别人的模板。
 
+**Android APK 构建唯一正道 = `bash scripts/build-android.sh`**（D-58 实证，勿绕过）：
+- 直接 `npx tauri android build --apk` 在本机必产**空壳包**（symlink 缺陷 → 包内 .so 全 0 字节），
+  且默认 universal 4-ABI——就算手工补 .so 也会 22MB 超 12MB 红线（多 ABI 从来不是交付口径，arm64 单 ABI 才是）。
+- 脚本一条龙：上游构建→解包四断言校验→自动修复（拷 arm64 真 .so + Gradle `-x rustBuild*`）→apksigner V3 签名→zipalign→体积门禁。
+- 直跑 `./gradlew` 会因 rustBuild* 任务起 `npm.bat` 失败，必须 `-x` 全部 rustBuild*。
+
 ### 引导：别再走的路（都实测证伪过）
 
 - `.cargo/config.toml` 里 `[env] PATH = { prepend = true }` **在 Windows 下无效** ——
