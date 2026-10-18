@@ -11,6 +11,7 @@
 //!    首次删除误判为重放（①② 无法通过）；导出侧 peer 过滤同理。
 //! 2. 发送侧 `note_sent_tombstones`：导出墓碑发送成功后推进本端 base，实现③的
 //!    「第二次同步墓碑 ChangeRecord = 0」（协议无回执，接收侧 base 无法回传）。
+//!
 //! 另：merge live 分支加「复活抑制」（本端墓碑 rev ≥ 变更 rev 时不 put）——否则
 //! ②「采用远端」仲裁后的收敛会被对端陈旧 live 变更回滚。
 //!
@@ -589,7 +590,7 @@ fn case6_export_payload_whitelist_no_internal_records() {
         "载荷类型越界（TRASH/CONFLICT/DEVICE/SYNC_STATE 不得出网）：{types:?}"
     );
     assert!(
-        types.iter().any(|&t| t == RECORD_TYPE_ITEM),
+        types.contains(&RECORD_TYPE_ITEM),
         "活跃条目仍应导出"
     );
     let _ = std::fs::remove_dir_all(&dir);

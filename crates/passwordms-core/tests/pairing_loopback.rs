@@ -90,6 +90,7 @@ fn pairing_loopback_handshake_and_sync() {
 ///   - 有缺陷：host recv 立即 WouldBlock（错误里含 "would block"）；
 ///   - 已修复：host 阻塞等待 600ms，收到的是垃圾帧 → serde 错误（Internal/Validation），
 ///     且从 accept 到出错的耗时 ≥ 500ms（证明真的阻塞等待了）。
+///
 /// 回环投递零延迟，所以既有回环测试从不触发此竞态——本测试用人为延迟补上这个盲区。
 #[test]
 fn poll_accept_stream_is_blocking_after_accept() {

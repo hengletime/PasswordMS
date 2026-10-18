@@ -15,6 +15,7 @@
   import { sync } from '../lib/stores/sync.svelte';
   import { theme } from '../lib/stores/theme.svelte';
   import { ui } from '../lib/stores/ui.svelte';
+  import { runVaultExport } from '../lib/vault-export';
   import type { VaultFileInfoDto, VaultSettings } from '../types';
 
   // 语言分段钮的显示名：语言名用母语书写（中文/English），属于专有名词，不做翻译。
@@ -69,25 +70,22 @@
   }
 
   async function exportVault(): Promise<void> {
-    // D-51：为空时**不发 IPC**（空密码到后端必 UnlockFailed →「解锁失败，请重试。」误导用户），直接就地提示。
-    if (exportPassword.length === 0) {
-      ui.toast('error', 'settings.export_password_required');
-      return;
-    }
-    const ok = await ui.confirm('settings.export_confirm_title', 'settings.export_confirm_body');
-    if (!ok) {
-      return;
-    }
-    const dest = await save({ defaultPath: 'passwordms-export.vault' });
-    if (dest === null) {
-      return;
-    }
-    try {
-      await api.vault.exportVault(dest, exportPassword);
+    // D-51 / Q-1：守卫与流程抽到 src/lib/vault-export.ts（可被 vitest 行为级验证），
+    // 这里只注入真实依赖；`exportPassword` 为空时该模块不发 IPC、就地提示。
+    const result = await runVaultExport({
+      exportPassword,
+      confirm: (): Promise<boolean> =>
+        ui.confirm('settings.export_confirm_title', 'settings.export_confirm_body'),
+      pickDestination: (): Promise<string | null> =>
+        save({ defaultPath: 'passwordms-export.vault' }),
+      exportVault: (dest: string, password: string): Promise<void> =>
+        api.vault.exportVault(dest, password),
+      toast: (kind, messageKey): void => {
+        ui.toast(kind, messageKey);
+      },
+    });
+    if (result.cleared) {
       exportPassword = ''; // 导出成功后清空，避免明文主密码残留在组件状态里
-      ui.toast('success', 'common.ok');
-    } catch (err) {
-      ui.toast('error', toAppError(err).messageKey);
     }
   }
 
