@@ -103,3 +103,26 @@ sequenceDiagram
     PC-->>PH: done
     PH-->>U: 同步完成提示
   end
+
+%% ============ ⑤ 附件 blob 同步阶段（缺陷 D-53 增量，arch §3.12） ============
+sequenceDiagram
+  autonumber
+  participant A as 设备A(有附件)
+  participant B as 设备B(缺blob)
+  Note over A,B: 前置：既有 Push → Push → Done 已完成；双方 blob_support=true
+  B->>A: BlobPull{ want:[blob_ref…] }（seq 单调延续，信封加密）
+  A->>A: 从内存 slot 取 blob 帧 wrapped_key/nonce/plaintext_len/ct（零解密）
+  A->>B: BlobMeta{ blob_ref, wrapped_key, nonce, plaintext_len, chunk_total, chunk_size }
+  loop chunk_total 次（每片一个加密信封，≤768KiB）
+    A->>B: BlobData{ blob_ref, index, ct_slice }
+    B->>B: spool: idx.part（密文）+ manifest 记账
+  end
+  B->>B: 组帧 ct = part0‖…‖partn → Frame(ITEM,FLAG_BLOB) → open_frame 验 tag
+  alt 验签通过且容量允许
+    B->>B: append_frame 入库 → 条目立即可导出
+    A->>B: BlobPhaseEnd{ completed:[ref], missing:[] }
+  else tag 失败/超容量
+    B->>B: 丢弃 spool 不入索引（read_blob 永不见半成品）
+    A->>B: BlobPhaseEnd{ completed:[], missing:[ref] }
+  end
+  Note over A,B: 角色对调：A 发 BlobPull 拉取 B 侧缺失，对称重复

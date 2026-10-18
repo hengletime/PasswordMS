@@ -185,6 +185,8 @@ export const enUS: Messages = {
     vault_full: 'The vault has reached its {n} MB capacity limit.',
     filename: 'Original filename',
     mime: 'Type',
+    // D-53：blob 未同步时的占位态。
+    pending_sync: 'Attachment content pending sync; export will be available once the blob arrives.',
   },
   import: {
     title: 'Import',
@@ -335,6 +337,9 @@ export const enUS: Messages = {
     sync_aborted: 'Sync was aborted.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',
+    blob_missing: 'The attachment content has not been synced to this device yet; try again after syncing.',
+    blob_incomplete: 'The attachment content transfer was incomplete; please sync again.',
+    blob_capacity: 'The attachment exceeds the remaining vault capacity on this device.',
     io: 'File read/write error.',
     network_timeout: 'Network timeout: make sure both devices are on the same LAN and the peer is still on the pairing screen, then retry.',
     network_refused: 'Connection refused: the peer may have left the pairing screen, or a firewall blocked the port. Ask the peer to show the QR code again.',

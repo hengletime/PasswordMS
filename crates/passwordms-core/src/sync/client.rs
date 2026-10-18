@@ -15,6 +15,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
+use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, EphemeralKeypair, SessionKeys};
 use crate::sync::merge;
 use crate::sync::protocol::{
@@ -45,6 +46,8 @@ pub struct JoinerSession {
 pub struct JoinerSyncResult {
     pub applied: usize,
     pub conflicts: Vec<String>,
+    /// D-53：blob 阶段实际新入库的附件数（能力协商通过时才有意义）。
+    pub blobs: usize,
 }
 
 impl JoinerSession {
@@ -103,13 +106,14 @@ impl JoinerSession {
         let c1 = state.last_sent_seq + 1;
         let c2 = c1 + 1;
 
-        // seq=c1：推送本端变更。
+        // seq=c1：推送本端变更（D-53：随报文通告本端 blob 能力）。
         let push = SyncPayload {
             kind: SyncKind::Push,
             device_id: repo.device_id().to_string(),
             cursor: 0,
             changes: repo.export_changes(),
             conflicts: Vec::new(),
+            blob_support: true,
         };
         let push_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, c1, now, &push)?;
         transport::send_frame(&mut self.stream, &serde_json::to_vec(&push_env)?)?;
@@ -128,18 +132,49 @@ impl JoinerSession {
             cursor: state.last_recv_seq,
             changes: Vec::new(),
             conflicts: report.conflicts.clone(),
+            blob_support: true,
         };
         let done_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, c2, now, &done)?;
         transport::send_frame(&mut self.stream, &serde_json::to_vec(&done_env)?)?;
 
+        // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
+        // 先我拉对端缺的，再我供对端拉的（串行，与 Host 侧次序镜像）。
+        // 注意 send_blob 是「先用后增」：Done 已占用 c2，故 blob 报文须从 c2+1 起，
+        // 否则第一条 Pull 与 Done 同 seq 会被对端 ReplayGuard 拒绝。
+        let mut sent = c2;
+        let mut blobs = 0;
+        if blob_transfer::blob_phase_enabled(true, reply.blob_support) {
+            sent = c2 + 1;
+            let phase = blob_transfer::pull_missing(
+                &mut self.stream,
+                &self.keys.sync_key[..],
+                &self.session_id,
+                &mut replay,
+                repo,
+                &mut sent,
+                now,
+            )?;
+            blobs = phase.appended;
+            blob_transfer::serve_pull(
+                &mut self.stream,
+                &self.keys.sync_key[..],
+                &self.session_id,
+                &mut replay,
+                repo,
+                &mut sent,
+                now,
+            )?;
+        }
+
         state.last_recv_seq = replay.last_recv_seq();
-        state.last_sent_seq = c2;
+        state.last_sent_seq = sent;
         repo.save_sync_state(state)?;
         repo.touch_device_sync(&self.host_id, now)?;
 
         Ok(JoinerSyncResult {
             applied: report.applied,
             conflicts: report.conflicts,
+            blobs,
         })
     }
 }

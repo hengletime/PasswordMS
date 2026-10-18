@@ -15,7 +15,7 @@
 
 - [1. 实现方案与框架选型](#1-实现方案与框架选型)
 - [2. 加密方案](#2-加密方案)
-- [3. 局域网同步协议](#3-局域网同步协议)
+- [3. 局域网同步协议](#3-局域网同步协议)（含 §3.12 附件 blob 同步·缺陷 D-53 增量设计）
 - [4. 文件列表及相对路径](#4-文件列表及相对路径)
 - [5. 数据结构与接口](#5-数据结构与接口)
 - [6. 程序调用流程](#6-程序调用流程)
@@ -418,6 +418,159 @@ sequenceDiagram
 | 指纹/密钥确认失败 | `HMAC` 比对失败 | `ERR_FINGERPRINT_MISMATCH` |
 | 重放 | `seq ≤ last` 或 `ts` 越窗 | `ERR_REPLAY_DETECTED`（A-08） |
 | 会话被中断 | 锁定/网络断开 | `ERR_SYNC_ABORTED` |
+
+### 3.12 附件 blob 同步（增量设计 · 缺陷 D-53）
+
+> **缺陷**：同步只搬运条目/分组，附件的密文 blob 帧不随行——对端有附件条目元数据却无内容，导出报「条目不存在」。本节在 §3.6/§3.9 之上做**纯增量**设计：不改 `SYNC_MAX_FRAME_BYTES`（U4 推论，冻结）、不引入明文过网、不改动既有 `Push → Push → Done` 交换循环的语义。
+
+#### 3.12.1 代码现状裁定依据（工程师必读）
+
+| 事实 | 出处 | 设计影响 |
+|------|------|---------|
+| `ChangeRecord` 无 `flags` 字段，wire 无法区分 blob 帧与条目帧 | `sync/protocol.rs` | 分片报文**不复用** `ChangeRecord`，另立 `BlobMessage` |
+| blob 帧以 `record_type=ITEM + FLAG_BLOB` 存储，`record_id == blob_ref == item_id`；AAD = `record_type ‖ record_id` | `store/repository.rs` `write_record`/`import_attachment` | 分片传输可直接切片 blob 帧**密文**，对端按原字节还原整帧 |
+| blob 帧头无 rev/updated_at（rev 属于 item 明文层）；`update_item` 不重写 blob 帧 → **blob 内容写后不可变** | `store/repository.rs` | blob 不参与 LWW，规则退化为「按 `blob_ref` 幂等补齐」 |
+| 传输单帧上限 `SYNC_MAX_FRAME_BYTES = 1MB + 64KB`；1MB 明文经 AEAD(+16B)+Base64(×4/3) 膨胀 ≈ 1.37MB **必超限** | `constants.rs` / `sync/transport.rs` | 线上分片明文预算必须 < 1MB，见 §3.12.2 |
+| 三条同步路径（配对 `server.rs`/`client.rs`、重同步 `resync.rs`）共用 `export_changes` + `merge::apply_changes` | 复核确认 | blob 阶段做成**公共模块**供三处复用，一处实现三处生效 |
+| `export_changes` 只导出 live 记录且 `deleted` 恒为 `false`（墓碑不在 `live` 表） | `store/repository.rs` | **发现独立缺陷**：删除（条目与 blob 皆然）当前根本不会过线传播，见 §3.12.7 |
+
+#### 3.12.2 分片传输协议（裁定：方案 B 改良——独立 blob 阶段 + 密文切片）
+
+**结论**：采用 **B（条目交换完成后按需拉取的独立阶段）**，但分片**不是**「每块一条 `ChangeRecord`」，而是对 blob 帧密文的**透明切片**（新报文 `BlobMessage::Data`）。
+
+**为什么不选 A（每块一条 ChangeRecord）**：
+1. `ChangeRecord` 的契约是「一条密文对应一个完整 AEAD 帧」——密文切片不是合法 AEAD 输出，塞进去要为每片伪造 `plaintext_len` 语义，破坏 §3.6 的字段不变式；
+2. 每片独立 IK 意味着 20MB 附件产生 20 组 `wrapped_key`，且对端收齐后仍须「解密→重组→重新 AEAD 封装」成单个本地 blob 帧（本地存储是单帧，U4），Android 端多付一轮 20MB 级 CPU+内存；
+3. 三条同步路径的交换循环都要改造成多信封推送，动面大。
+
+**B+切片的收益**：
+- 发送端**零解密**：切片直接取自内存 `slots` 中 blob 帧的 `ct`（`Frame.ct` 常驻），不触碰明文；
+- 接收端重组密文后**一次 `open_frame`**——AEAD tag 免费充当「组帧完整性+真实性」校验，无需额外哈希；
+- 本地 blob 帧字节与对端**完全一致**（可原样 `append_frame`），对 A-02 式去重与压缩友好；
+- 每信封仅 ~835KB 密文，Android 内存受控。
+
+**分片尺寸推导（红线：`SYNC_MAX_FRAME_BYTES` 不放宽）**：
+
+```
+SYNC_BLOB_CHUNK_BYTES := 768 KiB = 786,432 B   （新增常量，线上分片尺寸）
+Base64(786,432)            = 1,048,576 B（恰为 1 MiB，×4/3 精确整除）
+信封 JSON 开销（会话ID/seq/ts/nonce/字段名）≈ 600 B
+合计 ≈ 1,049,200 B < SYNC_MAX_FRAME_BYTES = 1,114,112 B ✓（余量 ≈ 64KB）
+```
+
+> 注意：`ATTACHMENT_CHUNK_BYTES = 1MB`（U4）是**本地**分片常量，继续用于本地；线上分片用 `SYNC_BLOB_CHUNK_BYTES`，二者**分离命名、分离取值**，互不牵动。
+
+#### 3.12.3 协议时序（push 侧分片 → 传输 → 对端组帧 → apply → 条目可用）
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant A as 设备A(有附件)
+  participant B as 设备B(缺blob)
+  Note over A,B: 前置：既有 Push → Push → Done 交换已完成<br/>（attachment 条目 ChangeRecord 已到 B，B 解出 blob_ref）
+  Note over A,B: 能力协商：双方 SyncPayload.blob_support=true 才进入本阶段<br/>（serde default=false，老端不触发、不收新报文）
+  B->>A: BlobPull{ want:[blob_ref…] }  ← seq 单调延续，同信封加密
+  A->>A: 逐 ref：取 slot 中 blob 帧的 wrapped_key/nonce/plaintext_len/ct（零解密）
+  A->>B: BlobMeta{ blob_ref, item_id, wrapped_key, wrapped_key_nonce, nonce, plaintext_len, chunk_total, chunk_size }
+  loop chunk_total 次（每次一个独立加密信封）
+    A->>B: BlobData{ blob_ref, index, ct_slice(≤768KiB) }
+    B->>B: 落 spool：idx.part（密文切片）+ manifest 记账
+  end
+  B->>B: 组帧：ct = part₀‖…‖partₙ → Frame{ITEM, FLAG_BLOB, record_id, …} → open_frame 验 tag
+  alt 验签通过且容量允许
+    B->>B: append_frame 入库 → blobs 索引可见 → 条目立即可导出
+    A->>B: BlobPhaseEnd{ completed:[ref], missing:[] }
+  else tag 失败/超容量
+    B->>B: 丢弃 spool，不入索引（read_blob 永不见半成品）
+    A->>B: BlobPhaseEnd{ completed:[], missing:[ref] }（UI 呈现部分同步）
+  end
+  Note over A,B: 角色对调：A→B 发 BlobPull(A 侧缺失清单)，对称重复②~⑤<br/>（双向各拉各缺，互不阻塞）
+```
+
+**方向与编排**：`Done` 之后，先 A 拉 B 缺的，再 B 拉 A 缺的（串行，避免半双工交织）；两条路径共用 `sync/blob_transfer.rs` 的 `pull_missing()` / `serve_pull()`。
+
+#### 3.12.4 新增 / 变更的数据结构
+
+**`sync/protocol.rs`**：
+
+```rust
+// SyncPayload 增量（serde default → 老端反序列化兼容）
+#[serde(default)] pub blob_support: bool,
+
+// 新报文族（与 HandshakeMessage 平行的明文外壳 + 信封加密，serde tag="t"）
+pub enum BlobMessage {
+    Pull  { want: Vec<String> },                       // 拉取方 → 对端：缺失清单
+    Meta  { blob_ref: String, item_id: String,         // 帧元信息（一次）
+            #[serde(with = "b64")] wrapped_key: Vec<u8>,
+            #[serde(with = "b64")] wrapped_key_nonce: Vec<u8>,
+            #[serde(with = "b64")] nonce: Vec<u8>,
+            plaintext_len: u32, chunk_total: u32, chunk_size: u32 },
+    Data  { blob_ref: String, index: u32,              // 一片一信封
+            #[serde(with = "b64")] ct_slice: Vec<u8> },
+    End   { completed: Vec<String>, missing: Vec<String> },  // 阶段收尾
+}
+```
+
+**`constants.rs`**：`SYNC_BLOB_CHUNK_BYTES: usize = 768 * 1024`（推导见 §3.12.2）。
+
+**`store/repository.rs` 新增原语**（只加不改既有签名）：
+
+| 方法 | 职责 |
+|------|------|
+| `has_blob(blob_ref) -> bool` | `blobs` 表查询（补齐判定的依据） |
+| `attachment_blob_refs() -> Vec<String>` | 收集全部 attachment 条目的 `blob_ref` |
+| `blob_frame(blob_ref) -> Option<&Frame>` | 暴露完整 blob 帧（含 `wrapped_key`/`nonce`/`plaintext_len`/`ct`），供发送端零解密切片 |
+| `write_blob_frame(frame: Frame) -> BlobWriteOutcome` | 接收端入库：帧已存在且字节一致 → `Skipped`；存在但不同 → 保留本地 `KeptLocal`；不存在 → `Appended`（blob 帧内容写后不可变，不做 LWW 覆盖） |
+| `remove_item_direct`（变更） | 删除 attachment 条目时**连带 `tombstone_blob`**（先查 kind 再墓碑） |
+
+**新模块 `sync/blob_transfer.rs`**：`pull_missing()` / `serve_pull()` / `BlobPhaseReport{ completed, missing }`；内含 spool 管理（§3.12.6）。
+
+**`SyncResultDto` / `ResyncOutcome`（IPC）**：`#[serde(default)] blobs: usize`（本阶段实际入库 blob 数，UI 呈现）。
+
+#### 3.12.5 blob 的 rev/updated_at 语义与收敛（裁定）
+
+- blob 帧头**无** rev/updated_at（帧布局 §2.6 既有事实），rev 语义属于 item 明文层 → **blob 不参与 LWW**；
+- 当前实现中 blob 内容**写后不可变**（`update_item` 仅重写 item 帧；无替换 blob 的 API）→ 规则收敛为幂等补齐：
+  - 本地缺 `blob_ref` → 拉取；本地已有且字节一致 → 跳过（不重传不重写）；
+  - 本地已有但字节不同 → **保留本地**、计入 `missing` 上报（异常路径，记审计日志，不得覆盖本地）；
+- **次序无关收敛**：
+  - 先 item 后 blob → item 在列表可见，导出/查看返回 `ERR_BLOB_MISSING`，UI 显示「附件内容待同步」；blob 补齐后立即可用；
+  - 先 blob 后 item → blob 静默入库（无 item 引用，无 UI 入口，无泄露面）；item 到达后零成本可用。
+
+#### 3.12.6 不完整 blob 的中间态与断点续传（裁定）
+
+- **spool 目录**：`<保险库文件路径>.blobspool/<blob_ref>/`，内含 `idx.part`（**密文切片**）+ `manifest.json`（`{blob_ref, chunk_total, chunk_size, received:[…]}`）。**A-01 安全**：spool 只存密文，泄漏不产生明文暴露面；
+- **`read_blob` 永不见半成品**：`blobs` 索引仅在「组帧 → `open_frame` tag 验证通过 → `append_frame` 入库」成功后写入；spool 与正式索引物理隔离；
+- **断连重试续传**：manifest 持久化已收分片，重同步时该 `blob_ref` 仍在缺失清单 → 已收分片跳过（按 `idx` 与 `part` 文件长度双重校验），只补差额；
+- **孤儿清理**：锁定时 / 下次同步开始时，清理「无对应 attachment 条目」的 spool 目录（条目中途被删的场景）；
+- **上限校验前置**：接收端在 `Meta` 阶段做 `MAX_VAULT_BYTES` 容量预检，超限直接拒绝（回 `missing`），不落半个分片。
+
+#### 3.12.7 删除传播（裁定 + 独立缺陷上报）
+
+- **merge 侧连带规则（本次就位）**：`apply_changes` 的 ITEM `deleted=true` 分支，若被删条目为 attachment → 连带 `tombstone_blob`（与 `delete_item(permanent=true)` 本地语义对齐）；本地**软删（进回收站）不清 blob**（还原需要），仅远端删除与 purge 清；
+- **🔴 独立缺陷（建议另立 D-5x，不并入 D-53）**：`export_changes` 只遍历 `live` 表且 `deleted` 恒为 `false` → **墓碑记录从不导出，当前任何删除（条目/blob/分组）都不会传播到对端**。blob 删除传播的触发前提缺失。本设计已把 merge 侧连带逻辑与 blob 幂等规则就位，待墓碑导出补齐后自动生效；D-53 验收范围限定为「blob 可用性同步」。
+
+#### 3.12.8 安全复核（A-01 / A-06 / A-07 / A-08 / A-09）
+
+| 项 | 复核结论 |
+|----|---------|
+| 明文过网 | **无**。线上载荷 = 会话密钥 AEAD 信封内的 blob 帧**密文切片**（双重加密：会话层 + blob IK 层），发送端全程不解密 |
+| 同步层是否需解密 blob | **不需要**。对端持 VK（U1/U2 裁定共享）即可解开 `wrapped_key` 入库；唯一解密发生在接收端 finalize 的一次 `open_frame`（兼作组帧校验） |
+| 防重放 | **不受影响**。blob 阶段全部信封走同一 `ReplayGuard`，`seq` 从 `Done` 之后单调延续，AAD 仍绑 `session_id‖seq‖ts`（A-06/A-08） |
+| 未配对/越权 | 阶段仅在既有握手+密钥确认成功后进入，无新增认证面（A-07） |
+| 日志/落盘 | spool 仅密文；日志不记 `blob_ref` 以外任何内容，不记凭据（A-09） |
+
+#### 3.12.9 新增错误码
+
+| code | 含义 | 触发 |
+|------|------|------|
+| `ERR_BLOB_MISSING` | 附件条目存在但本地无密文 blob | 导出/查看附件时 blob 未同步 |
+| `ERR_BLOB_INCOMPLETE` | 组帧失败（分片缺失/错序/tag 不符） | finalize 校验失败（内部，转 `missing` 上报） |
+| `ERR_BLOB_CAPACITY` | 接收端容量预检超限 | `Meta` 阶段 `MAX_VAULT_BYTES` 预检 |
+
+#### 3.12.10 兼容性（裁定）
+
+MVP 两端同时发版；协议层以 `SyncPayload.blob_support`（`serde(default)=false`）做**能力协商**：老端不带该字段 → 新端**不发起** blob 阶段，行为与现状逐位一致（老端永远不会收到无法解析的新报文）；两端同版则全功能。混跑期间 D-53 缺陷在老端依旧存在——可接受，文档留痕。
 
 ---
 

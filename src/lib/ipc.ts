@@ -113,6 +113,9 @@ export const keydocs = {
     invoke<ItemDto>('import_attachment', { source_path: sourcePath, title }),
   exportAttachment: (itemId: string, destPath: string): Promise<void> =>
     invoke<void>('export_attachment', { item_id: itemId, dest_path: destPath }),
+  // D-53：附件 blob 是否已同步到本机（「附件内容待同步」态判定）。
+  attachmentBlobReady: (itemId: string): Promise<boolean> =>
+    invoke<boolean>('attachment_blob_ready', { item_id: itemId }),
 };
 
 /** 生成器 / TOTP。 */

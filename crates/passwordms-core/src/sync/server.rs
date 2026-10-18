@@ -17,6 +17,7 @@ use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
+use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, EphemeralKeypair, HostIdentity, SessionKeys};
 use crate::sync::merge;
 use crate::sync::protocol::{
@@ -37,6 +38,8 @@ pub struct HostSyncResult {
     pub fingerprint: String,
     pub applied: usize,
     pub conflicts: Vec<String>,
+    /// D-53：blob 阶段实际新入库的附件数（能力协商通过时才有意义）。
+    pub blobs: usize,
 }
 
 /// Host 监听会话。
@@ -267,7 +270,7 @@ impl SyncServer {
         // 6) 双向同步交换。
         let mut state = repo.sync_state(&hello.joiner_id);
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
-        let (applied, conflicts) =
+        let (applied, conflicts, blobs) =
             run_exchange(&mut stream, &keys, &self.session_id, &mut replay, &mut state, repo, now)?;
         state.last_recv_seq = replay.last_recv_seq();
         repo.save_sync_state(state)?;
@@ -279,6 +282,7 @@ impl SyncServer {
             fingerprint,
             applied,
             conflicts,
+            blobs,
         })
     }
 }
@@ -316,9 +320,10 @@ fn persist_device(
     repo.upsert_paired_device(device)
 }
 
-/// Host 侧一次同步交换：收 Push → 合并 → 回 Push → 收 Done。
+/// Host 侧一次同步交换：收 Push → 合并 → 回 Push → 收 Done →（blob 阶段）。
 ///
 /// 序号单调递增（从持久化的 `last_sent_seq` 起），以支持重复同步（D-11）。
+/// 返回 `(applied, conflicts, blobs_appended)`。
 fn run_exchange(
     stream: &mut std::net::TcpStream,
     keys: &SessionKeys,
@@ -327,7 +332,7 @@ fn run_exchange(
     state: &mut DeviceSyncState,
     repo: &mut Repository,
     now: i64,
-) -> CoreResult<(usize, Vec<String>)> {
+) -> CoreResult<(usize, Vec<String>, usize)> {
     // 收 Joiner 的 Push。
     let push_bytes = transport::recv_frame(stream).map_err(|e| stage_io(e, "push_recv"))?;
     let push_env: SyncEnvelope = serde_json::from_slice(&push_bytes)?;
@@ -335,7 +340,7 @@ fn run_exchange(
     let push_payload = open_envelope(&keys.sync_key[..], session_id, &push_env)?;
     let report = merge::apply_changes(repo, state, &push_payload.changes)?;
 
-    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放）。
+    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放；D-53：随报文通告本端 blob 能力）。
     let out_seq = state.last_sent_seq + 1;
     let reply = SyncPayload {
         kind: SyncKind::Push,
@@ -343,6 +348,7 @@ fn run_exchange(
         cursor: 0,
         changes: repo.export_changes(),
         conflicts: report.conflicts.clone(),
+        blob_support: true,
     };
     let reply_env = seal_envelope(&keys.sync_key[..], session_id, out_seq, now, &reply)?;
     transport::send_frame(stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
@@ -353,8 +359,37 @@ fn run_exchange(
     replay.accept(done_env.seq, done_env.ts, now)?;
     let _ = open_envelope(&keys.sync_key[..], session_id, &done_env)?;
 
-    state.last_sent_seq = out_seq;
-    Ok((report.applied, report.conflicts))
+    // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
+    // Host 次序：先供 Joiner 拉的（收 Pull、发 Meta/Data/End），再拉 Joiner 有的（发 Pull、收 Meta/Data/End）——
+    // 与 Joiner 侧「先拉后供」严格镜像，避免半双工交织。
+    // 注意 send_blob 是「先用后增」：reply Push 已占用 out_seq，故 blob 报文须从 out_seq+1 起。
+    let mut sent = out_seq;
+    let mut blobs = 0;
+    if blob_transfer::blob_phase_enabled(true, push_payload.blob_support) {
+        sent = out_seq + 1;
+        blob_transfer::serve_pull(
+            stream,
+            &keys.sync_key[..],
+            session_id,
+            replay,
+            repo,
+            &mut sent,
+            now,
+        )?;
+        let phase = blob_transfer::pull_missing(
+            stream,
+            &keys.sync_key[..],
+            session_id,
+            replay,
+            repo,
+            &mut sent,
+            now,
+        )?;
+        blobs = phase.appended;
+    }
+
+    state.last_sent_seq = sent;
+    Ok((report.applied, report.conflicts, blobs))
 }
 
 /// 设备密钥包裹 AAD。

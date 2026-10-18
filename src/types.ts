@@ -196,12 +196,16 @@ export interface PairResultDto {
   fingerprint: string;
   applied: number;
   conflicts: string[];
+  /** D-53：blob 阶段实际入库的附件数。 */
+  blobs?: number;
 }
 
 /** 同步结果。 */
 export interface SyncResultDto {
   applied: number;
   conflicts: string[];
+  /** D-53：blob 阶段实际入库的附件数。 */
+  blobs?: number;
 }
 
 /** 同步状态。 */

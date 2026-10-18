@@ -183,6 +183,8 @@ export const zhCN = {
     vault_full: '保险库已达 {n} MB 容量上限。',
     filename: '原始文件名',
     mime: '类型',
+    // D-53：blob 未同步时的占位态。
+    pending_sync: '附件内容待同步：内容尚未从其他设备同步到本机，同步后即可导出。',
   },
   import: {
     title: '导入',
@@ -333,6 +335,9 @@ export const zhCN = {
     sync_aborted: '同步已中止。',
     conflict: '存在未处理的冲突。',
     vk_adopt_requires_empty: '本机保险库非空，无法直接采用对端密钥。',
+    blob_missing: '附件内容尚未同步到本机，请在已同步后重试。',
+    blob_incomplete: '附件内容传输不完整，请重新同步。',
+    blob_capacity: '附件超出本机保险库剩余容量。',
     io: '文件读写出错。',
     network_timeout: '网络响应超时：请确认两台设备在同一局域网、对方仍停在配对等待页，然后重试。',
     network_refused: '连接被拒绝：对方可能已离开配对页，或防火墙拦下了端口，请对方重新展示二维码。',

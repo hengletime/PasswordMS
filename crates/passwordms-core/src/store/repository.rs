@@ -46,6 +46,17 @@ pub struct ItemDraft {
     pub favorite: bool,
 }
 
+/// blob 帧写入结果（D-53：幂等补齐，不做 LWW 覆盖——blob 内容写后不可变）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobWriteOutcome {
+    /// 本地已有字节完全一致的 blob 帧：跳过（不重传不重写）。
+    Skipped,
+    /// 本地已有但字节不同：**保留本地**（异常路径，调用方计入 missing 并留审计日志）。
+    KeptLocal,
+    /// 本地没有：追加入库。
+    Appended,
+}
+
 /// 磁盘上的一个帧槽位。
 #[derive(Debug, Clone)]
 struct Slot {
@@ -676,12 +687,18 @@ impl Repository {
     }
 
     /// 导出附件到目标路径。
+    ///
+    /// D-53：附件条目存在但 blob 未同步到本机时，报 `ERR_BLOB_MISSING`
+    /// （此前误报「条目不存在」——这正是 D-53 缺陷的用户可见面）。
     pub fn export_attachment(&self, item_id: &str, dest_path: &Path) -> CoreResult<()> {
         let item = self.get_item(item_id)?;
         let blob_ref = match &item.kind {
             ItemKind::Attachment(a) => a.blob_ref.clone(),
             _ => return Err(CoreError::Validation("not_an_attachment".to_string())),
         };
+        if !self.has_blob(&blob_ref) {
+            return Err(CoreError::BlobMissing);
+        }
         let data = self.read_blob(&blob_ref)?;
         std::fs::write(dest_path, &data)?;
         Ok(())
@@ -694,6 +711,71 @@ impl Repository {
             .chunks(ATTACHMENT_CHUNK_BYTES)
             .map(|c| c.to_vec())
             .collect())
+    }
+
+    // ===== blob 同步原语（D-53，架构文档 §3.12.4；只加不改既有签名）=====
+
+    /// `blobs` 索引查询：本地是否已有该 blob 的密文帧（补齐判定依据）。
+    pub fn has_blob(&self, blob_ref: &str) -> bool {
+        self.blobs.contains_key(blob_ref)
+    }
+
+    /// 收集全部 attachment 条目的 `blob_ref`（供拉取方比对缺失清单）。
+    pub fn attachment_blob_refs(&self) -> Vec<String> {
+        self.items
+            .values()
+            .filter_map(|item| match &item.kind {
+                ItemKind::Attachment(a) => Some(a.blob_ref.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 完整 blob 帧（含 `wrapped_key`/`nonce`/`plaintext_len`/`ct`）。
+    ///
+    /// 供发送端**零解密**切片：直接取帧内 `ct` 切块过线，全程不触碰明文（A-01）。
+    pub fn blob_frame(&self, blob_ref: &str) -> Option<Frame> {
+        self.blobs.get(blob_ref).map(|&idx| self.slots[idx].frame.clone())
+    }
+
+    /// 接收端入库一个远端 blob 帧（幂等，不覆盖本地）。
+    ///
+    /// - 帧已存在且字节一致 → [`BlobWriteOutcome::Skipped`]；
+    /// - 帧已存在但字节不同 → [`BlobWriteOutcome::KeptLocal`]（保留本地，不覆盖）；
+    /// - 不存在 → 追加入库 → [`BlobWriteOutcome::Appended`]（`blobs` 索引此刻才可见，
+    ///   `read_blob` 永不见半成品）。
+    ///
+    /// 调用方须先做 AEAD 验证（[`Repository::verify_blob_frame`]）；本方法不重复验证。
+    pub fn write_blob_frame(&mut self, frame: Frame) -> CoreResult<BlobWriteOutcome> {
+        if !frame.is_blob() || frame.record_type != RECORD_TYPE_ITEM {
+            return Err(CoreError::Validation("not_a_blob_frame".to_string()));
+        }
+        let id = frame.record_id_string();
+        if let Some(&idx) = self.blobs.get(&id) {
+            // 字节级一致判定（字段直比，避免整帧 encode 的 20MB 级拷贝）。
+            let local = &self.slots[idx].frame;
+            let same = local.record_type == frame.record_type
+                && local.flags == frame.flags
+                && local.record_id == frame.record_id
+                && local.wrapped_key == frame.wrapped_key
+                && local.nonce == frame.nonce
+                && local.plaintext_len == frame.plaintext_len
+                && local.ct == frame.ct;
+            return Ok(if same { BlobWriteOutcome::Skipped } else { BlobWriteOutcome::KeptLocal });
+        }
+        let offset = self.container.append_frame(&frame)?;
+        self.slots.push(Slot { offset, frame });
+        self.blobs.insert(id, self.slots.len() - 1);
+        Ok(BlobWriteOutcome::Appended)
+    }
+
+    /// 验证一帧可被本库 VK 解开（unwrap IK + AEAD tag 校验，明文即弃）。
+    ///
+    /// 接收端 finalize 用它充当「组帧完整性 + 真实性」校验（D-53：AEAD tag 免费
+    /// 充当组帧校验，无需额外哈希）。验证失败 = 分片缺失/错序/tag 不符。
+    pub fn verify_blob_frame(&self, frame: &Frame) -> CoreResult<()> {
+        let _pt = self.open_frame(frame)?;
+        Ok(())
     }
 
     // ===== 回收站 =====
@@ -830,7 +912,18 @@ impl Repository {
     }
 
     /// 远端删除条目（直接墓碑，不进回收站）。
+    ///
+    /// **D-53 连带规则**：被删条目为 attachment 时连带墓碑其 blob 帧（与
+    /// [`Repository::delete_item`] 的 `permanent=true` 本地语义对齐）——否则对端会留下
+    /// 「无条目引用的孤儿 blob」。本地软删（进回收站）**不清** blob（还原需要），
+    /// 仅远端删除与 purge 清。
     pub fn remove_item_direct(&mut self, item_id: &str) -> CoreResult<()> {
+        // 先查 kind 再墓碑：条目明文仍在本内存时判断，之后 tombstone 不可逆。
+        if let Some(item) = self.get_item_opt(item_id) {
+            if let ItemKind::Attachment(_) = item.kind {
+                self.tombstone_blob(item_id)?;
+            }
+        }
         self.tombstone(RECORD_TYPE_ITEM, item_id)?;
         self.items.remove(item_id);
         Ok(())

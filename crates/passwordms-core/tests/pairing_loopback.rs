@@ -224,7 +224,7 @@ fn repair_already_paired_vault_without_adopt() {
         joiner.persist_host_device(repo).unwrap();
         joiner.push_and_sync(repo, now_ms()).unwrap();
     }
-    let first = host_handle.join().unwrap().expect("首次配对失败");
+    let _first = host_handle.join().unwrap().expect("首次配对失败");
 
     // ---- 第二次配对：Joiner 本地库**非空**（有首次同步进来的数据），不走采纳 ----
     let identity2 = HostIdentity::generate().unwrap();

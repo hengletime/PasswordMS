@@ -138,6 +138,7 @@ fn sync_join_impl(
         fingerprint: joiner.host_fingerprint().to_string(),
         applied: result.applied,
         conflicts: result.conflicts,
+        blobs: result.blobs,
     })
 }
 
@@ -183,6 +184,7 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
         Ok(SyncResultDto {
             applied: outcome.applied,
             conflicts: outcome.conflicts,
+            blobs: outcome.blobs,
         })
     })
     .await

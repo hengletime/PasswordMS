@@ -219,6 +219,9 @@ pub struct PairResultDto {
     pub fingerprint: String,
     pub applied: usize,
     pub conflicts: Vec<String>,
+    /// D-53：blob 阶段实际入库的附件数（老前端缺省 0）。
+    #[serde(default)]
+    pub blobs: usize,
 }
 
 /// 同步结果 DTO。
@@ -226,6 +229,9 @@ pub struct PairResultDto {
 pub struct SyncResultDto {
     pub applied: usize,
     pub conflicts: Vec<String>,
+    /// D-53：blob 阶段实际入库的附件数（老前端缺省 0）。
+    #[serde(default)]
+    pub blobs: usize,
 }
 
 /// 同步状态 DTO。

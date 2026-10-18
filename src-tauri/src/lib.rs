@@ -48,6 +48,7 @@ pub fn run() {
             // keydoc
             commands::keydoc_cmd::import_attachment,
             commands::keydoc_cmd::export_attachment,
+            commands::keydoc_cmd::attachment_blob_ready,
             // generator
             commands::generator_cmd::generate_password,
             commands::generator_cmd::totp_now,

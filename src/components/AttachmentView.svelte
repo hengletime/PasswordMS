@@ -1,5 +1,6 @@
 <script lang="ts">
   // 加密附件视图（PRD F-12）：展示元信息 + 导出（明文风险由二次确认覆盖）。
+  // D-53：blob 未同步到本机时呈现「附件内容待同步」占位态，导出禁用（导出会报 ERR_BLOB_MISSING）。
   import { save } from '@tauri-apps/plugin-dialog';
   import Icon from './common/Icon.svelte';
   import { formatBytes, MAX_ATTACHMENT_BYTES, MB } from '../lib/constants';
@@ -18,6 +19,24 @@
       ? item.kind
       : { original_filename: '', mime_type: '', size_bytes: 0, blob_size_bytes: 0, title: '', blob_ref: '' },
   );
+
+  // D-53：blob 是否已就绪（仅 attachment 条目查询；后端不可达时保守按未同步处理）。
+  let blobReady = $state<boolean | null>(null);
+  $effect(() => {
+    if (item.kind.type !== 'attachment') {
+      blobReady = true;
+      return;
+    }
+    blobReady = null;
+    void api.keydocs
+      .attachmentBlobReady(item.item_id)
+      .then((ready): void => {
+        blobReady = ready;
+      })
+      .catch((): void => {
+        blobReady = false;
+      });
+  });
 
   async function exportFile(): Promise<void> {
     const confirmed = await ui.confirm('attach.export_confirm_title', 'attach.export_confirm_body');
@@ -60,7 +79,19 @@
     </p>
   {/if}
 
-  <button class="pms-btn is-ghost attach-export" type="button" onclick={() => void exportFile()}>
+  {#if blobReady === false}
+    <p class="pms-alert is-warning">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('attach.pending_sync')}</span>
+    </p>
+  {/if}
+
+  <button
+    class="pms-btn is-ghost attach-export"
+    type="button"
+    disabled={blobReady === false}
+    onclick={() => void exportFile()}
+  >
     <Icon name="download" size={15} />{ui.t('attach.export')}
   </button>
 </div>

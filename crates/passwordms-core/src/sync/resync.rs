@@ -27,6 +27,7 @@ use crate::crypto::{keys, rng};
 use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::sync_state::DeviceSyncState;
 use crate::store::repository::Repository;
+use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, ROLE_CLIENT, ROLE_SERVER};
 use crate::sync::merge;
 use crate::sync::protocol::{
@@ -89,6 +90,8 @@ pub struct ResyncOutcome {
     pub applied: usize,
     /// 新产生的冲突条目 ID。
     pub conflicts: Vec<String>,
+    /// D-53：blob 阶段实际新入库的附件数（能力协商通过时才有意义）。
+    pub blobs: usize,
 }
 
 /// 计算 transcript：`sha256(label ‖ client_id ‖ server_id ‖ nonce_c ‖ nonce_s)`。
@@ -186,13 +189,14 @@ pub fn resync_with_peer(
     let c1 = state.last_sent_seq + 1;
     let c2 = c1 + 1;
 
-    // 8) 发本端 Push。
+    // 8) 发本端 Push（D-53：随报文通告本端 blob 能力）。
     let push = SyncPayload {
         kind: SyncKind::Push,
         device_id: client_id.clone(),
         cursor: 0,
         changes: repo.export_changes(),
         conflicts: Vec::new(),
+        blob_support: true,
     };
     let push_env = seal_envelope(&sk[..], &session_id, c1, now, &push)?;
     transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?).map_err(|e| stage_io(e, "push_send"))?;
@@ -211,19 +215,37 @@ pub fn resync_with_peer(
         cursor: state.last_recv_seq,
         changes: Vec::new(),
         conflicts: report.conflicts.clone(),
+        blob_support: true,
     };
     let done_env = seal_envelope(&sk[..], &session_id, c2, now, &done)?;
     transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?).map_err(|e| stage_io(e, "done_send"))?;
 
+    // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
+    // 发起方次序：先拉后供（与响应方镜像）。
+    // 注意 send_blob 是「先用后增」：Done 已占用 c2，故 blob 报文须从 c2+1 起。
+    let mut sent = c2;
+    let mut blobs = 0;
+    if blob_transfer::blob_phase_enabled(true, reply.blob_support) {
+        sent = c2 + 1;
+        let phase = blob_transfer::pull_missing(
+            &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+        )?;
+        blobs = phase.appended;
+        blob_transfer::serve_pull(
+            &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+        )?;
+    }
+
     // 11) 持久化游标。
     state.last_recv_seq = replay.last_recv_seq();
-    state.last_sent_seq = c2;
+    state.last_sent_seq = sent;
     repo.save_sync_state(state)?;
     repo.touch_device_sync(peer_device_id, now)?;
 
     Ok(ResyncOutcome {
         applied: report.applied,
         conflicts: report.conflicts,
+        blobs,
     })
 }
 
@@ -352,7 +374,7 @@ impl ResyncServer {
         let push = open_envelope(&sk[..], &session_id, &push_env)?;
         let report = merge::apply_changes(repo, &mut state, &push.changes)?;
 
-        // 7) 回送本端 Push。
+        // 7) 回送本端 Push（D-53：随报文通告本端 blob 能力）。
         let s1 = state.last_sent_seq + 1;
         let reply = SyncPayload {
             kind: SyncKind::Push,
@@ -360,6 +382,7 @@ impl ResyncServer {
             cursor: 0,
             changes: repo.export_changes(),
             conflicts: report.conflicts.clone(),
+            blob_support: true,
         };
         let reply_env = seal_envelope(&sk[..], &session_id, s1, now, &reply)?;
         transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
@@ -368,17 +391,35 @@ impl ResyncServer {
         let done_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "done_recv"))?;
         let done_env: SyncEnvelope = serde_json::from_slice(&done_bytes)?;
         replay.accept(done_env.seq, done_env.ts, now)?;
-        let _ = open_envelope(&sk[..], &session_id, &done_env)?;
+        let done_payload = open_envelope(&sk[..], &session_id, &done_env)?;
+
+        // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
+        // 响应方次序：先供（收发起方 Pull、发 Meta/Data/End），再拉（发 Pull、收 Meta/Data/End）——
+        // 与发起方「先拉后供」严格镜像。
+        // 注意 send_blob 是「先用后增」：reply Push 已占用 s1，故 blob 报文须从 s1+1 起。
+        let mut sent = s1;
+        let mut blobs = 0;
+        if blob_transfer::blob_phase_enabled(true, done_payload.blob_support) {
+            sent = s1 + 1;
+            blob_transfer::serve_pull(
+                &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+            )?;
+            let phase = blob_transfer::pull_missing(
+                &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+            )?;
+            blobs = phase.appended;
+        }
 
         // 9) 持久化游标。
         state.last_recv_seq = replay.last_recv_seq();
-        state.last_sent_seq = s1;
+        state.last_sent_seq = sent;
         repo.save_sync_state(state)?;
         repo.touch_device_sync(&hello.client_id, now)?;
 
         Ok(ResyncOutcome {
             applied: report.applied,
             conflicts: report.conflicts,
+            blobs,
         })
     }
 }

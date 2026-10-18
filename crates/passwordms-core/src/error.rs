@@ -32,6 +32,12 @@ pub mod codes {
     pub const ERR_FINGERPRINT_MISMATCH: &str = "ERR_FINGERPRINT_MISMATCH";
     pub const ERR_SYNC_ABORTED: &str = "ERR_SYNC_ABORTED";
     pub const ERR_CONFLICT_EXISTS: &str = "ERR_CONFLICT_EXISTS";
+    /// 【D-53 新增】附件条目存在但本地无密文 blob（未同步）。
+    pub const ERR_BLOB_MISSING: &str = "ERR_BLOB_MISSING";
+    /// 【D-53 新增】blob 组帧失败（分片缺失/错序/tag 不符；内部，转 missing 上报）。
+    pub const ERR_BLOB_INCOMPLETE: &str = "ERR_BLOB_INCOMPLETE";
+    /// 【D-53 新增】接收端容量预检超限（Meta 阶段拒绝，不落半个分片）。
+    pub const ERR_BLOB_CAPACITY: &str = "ERR_BLOB_CAPACITY";
     /// 【主理人裁定 U1/U2 新增】Joiner 本地库非空时禁止静默采用 Host 的 VK。
     pub const ERR_VK_ADOPT_REQUIRES_EMPTY: &str = "ERR_VK_ADOPT_REQUIRES_EMPTY";
     pub const ERR_IO: &str = "ERR_IO";
@@ -89,6 +95,15 @@ pub enum CoreError {
     SyncAborted,
     #[error("unresolved conflict exists")]
     ConflictExists,
+    /// 【D-53】附件条目存在但本地无密文 blob（未同步），导出/查看时触发。
+    #[error("attachment blob not present locally")]
+    BlobMissing,
+    /// 【D-53】blob 组帧失败（分片缺失/错序/tag 不符）。
+    #[error("blob assembly incomplete")]
+    BlobIncomplete,
+    /// 【D-53】接收端容量预检超限。
+    #[error("blob exceeds receiver vault capacity")]
+    BlobCapacity,
     /// 【主理人裁定 U1/U2】Joiner 本地库非空，需前端确认后清空或拒绝。
     #[error("vault key adoption requires an empty local vault")]
     VkAdoptRequiresEmpty { record_count: usize },
@@ -126,6 +141,9 @@ impl CoreError {
             CoreError::FingerprintMismatch => codes::ERR_FINGERPRINT_MISMATCH,
             CoreError::SyncAborted => codes::ERR_SYNC_ABORTED,
             CoreError::ConflictExists => codes::ERR_CONFLICT_EXISTS,
+            CoreError::BlobMissing => codes::ERR_BLOB_MISSING,
+            CoreError::BlobIncomplete => codes::ERR_BLOB_INCOMPLETE,
+            CoreError::BlobCapacity => codes::ERR_BLOB_CAPACITY,
             CoreError::VkAdoptRequiresEmpty { .. } => codes::ERR_VK_ADOPT_REQUIRES_EMPTY,
             CoreError::Io(_) => codes::ERR_IO,
             CoreError::Crypto(_) => codes::ERR_CRYPTO,
@@ -158,6 +176,9 @@ impl CoreError {
             CoreError::FingerprintMismatch => "err.fingerprint",
             CoreError::SyncAborted => "err.sync_aborted",
             CoreError::ConflictExists => "err.conflict",
+            CoreError::BlobMissing => "err.blob_missing",
+            CoreError::BlobIncomplete => "err.blob_incomplete",
+            CoreError::BlobCapacity => "err.blob_capacity",
             CoreError::VkAdoptRequiresEmpty { .. } => "err.vk_adopt_requires_empty",
             // io::Error 有两类来源：本机文件读写、TCP 同步链路（transport 的 read/write 超时、
             // 对端拒绝/断开都走 From<std::io::Error>）。按 kind 细分文案——

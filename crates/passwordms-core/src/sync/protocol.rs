@@ -198,6 +198,56 @@ pub struct SyncPayload {
     /// 冲突条目 ID 清单（仅 ID，不含明文）。
     #[serde(default)]
     pub conflicts: Vec<String>,
+    /// 本端是否支持 blob 同步阶段（D-53）。
+    ///
+    /// `serde(default)` = false → 老端报文缺字段时视为不支持，新端**不发起** blob 阶段、
+    /// 不发任何 `BlobMessage`，行为与 D-53 之前逐位一致（§3.12.10 能力协商）。
+    #[serde(default)]
+    pub blob_support: bool,
+}
+
+/// blob 阶段报文族（D-53，架构文档 §3.12.4；与 [`HandshakeMessage`] 平行）。
+///
+/// **线上编码说明（重要）**：`Pull` / `Meta` / `End` 体量小，直接以 `serde_json`
+/// 进信封内层；`Data` 的 `ct_slice`（≤ 768 KiB）**不走 JSON-b64**——它以二进制
+/// 形式进信封内层 pt（`[tag][blob_ref 16B][index u32][slice]`，见
+/// `blob_transfer` 的 seal/open），线上只做**一次** Base64。若按本枚举的
+/// `#[serde(with = "b64")]` 走 JSON-in-JSON 双层编码，768 KiB 分片的完整信封
+/// 实为 ~1.40 MB，必超 `SYNC_MAX_FRAME_BYTES`。本枚举保留为**应用层类型**
+/// （构造 / 测试 / 语义权威），Data 的线上编码由 blob_transfer 统一收口。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum BlobMessage {
+    /// 拉取方 → 对端：缺失清单（空清单 = 无缺，对端立即回 End）。
+    Pull {
+        want: Vec<String>,
+    },
+    /// 帧元信息（每个 blob 一次）。
+    Meta {
+        blob_ref: String,
+        item_id: String,
+        #[serde(with = "b64")]
+        wrapped_key: Vec<u8>,
+        #[serde(with = "b64")]
+        wrapped_key_nonce: Vec<u8>,
+        #[serde(with = "b64")]
+        nonce: Vec<u8>,
+        plaintext_len: u32,
+        chunk_total: u32,
+        chunk_size: u32,
+    },
+    /// 一片一信封（线上为二进制 pt，见模块说明）。
+    Data {
+        blob_ref: String,
+        index: u32,
+        #[serde(with = "b64")]
+        ct_slice: Vec<u8>,
+    },
+    /// 阶段收尾（服务方视角：能提供的=completed，提供不了的=missing）。
+    End {
+        completed: Vec<String>,
+        missing: Vec<String>,
+    },
 }
 
 /// 变更集元素（端到端密文）。
@@ -282,8 +332,7 @@ pub fn qr_svg(text: &str) -> CoreResult<String> {
 mod qr_ips_tests {
     use super::*;
 
-    fn sample(ips: Vec<String>) -> QRPayload {
-        QRPayload {
+    fn sample(ips: Vec<String>) -> QRPayload {        QRPayload {
             v: QR_PROTOCOL_VERSION,
             ip: ips.first().cloned().unwrap_or_default(),
             port: 40001,
@@ -319,5 +368,49 @@ mod qr_ips_tests {
         let back = QRPayload::decode_string(&text).unwrap();
         assert!(back.ips.is_empty());
         assert_eq!(back.ip, "192.168.1.10");
+    }
+}
+
+/// D-53 协议层单测：能力协商兼容性与 BlobMessage serde 形态。
+#[cfg(test)]
+mod blob_protocol_tests {
+    use super::*;
+
+    /// 老端 SyncPayload（无 blob_support 字段）反序列化 → false（不发起 blob 阶段）。
+    #[test]
+    fn legacy_sync_payload_without_blob_support_defaults_false() {
+        let legacy = r#"{"kind":"push","device_id":"dev","changes":[],"conflicts":[]}"#;
+        let payload: SyncPayload = serde_json::from_str(legacy).unwrap();
+        assert!(!payload.blob_support);
+        // 新端显式 true 正常往返。
+        let modern = r#"{"kind":"push","device_id":"dev","changes":[],"conflicts":[],"blob_support":true}"#;
+        let payload: SyncPayload = serde_json::from_str(modern).unwrap();
+        assert!(payload.blob_support);
+    }
+
+    /// BlobMessage serde 形态：tag = "t"，二进制字段 b64（应用层往返）。
+    #[test]
+    fn blob_message_serde_roundtrip() {
+        let msgs = vec![
+            BlobMessage::Pull { want: vec!["ref-a".into(), "ref-b".into()] },
+            BlobMessage::Meta {
+                blob_ref: "ref-a".into(),
+                item_id: "item-a".into(),
+                wrapped_key: vec![1u8; 48],
+                wrapped_key_nonce: vec![2u8; 24],
+                nonce: vec![3u8; 24],
+                plaintext_len: 1234,
+                chunk_total: 2,
+                chunk_size: 768 * 1024,
+            },
+            BlobMessage::Data { blob_ref: "ref-a".into(), index: 1, ct_slice: vec![9u8; 32] },
+            BlobMessage::End { completed: vec!["ref-a".into()], missing: vec![] },
+        ];
+        for m in msgs {
+            let json = serde_json::to_string(&m).unwrap();
+            assert!(json.contains(r#""t":"#));
+            let back: BlobMessage = serde_json::from_str(&json).unwrap();
+            assert_eq!(m, back);
+        }
     }
 }

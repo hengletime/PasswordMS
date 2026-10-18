@@ -79,6 +79,17 @@ pub const MAX_VAULT_BYTES: u64 = 200 * 1024 * 1024;
 pub const MAX_NOTE_BYTES: usize = 256 * 1024;
 /// 附件同步分片大小 1 MB【已裁定 U4：≤ 1 MB 分片】。
 pub const ATTACHMENT_CHUNK_BYTES: usize = 1024 * 1024;
+/// 线上 blob 分片尺寸（D-53）：768 KiB 密文切片。
+///
+/// 推导（红线：`SYNC_MAX_FRAME_BYTES` 不放宽）：
+/// `Base64(786,432) = 1,048,576 B`（恰 1 MiB，×4/3 精确整除）+ 信封开销
+/// （session_id/seq/ts/nonce/字段名 + AEAD tag，实测 < 300 B）≈ 1,048,800 B
+/// `< SYNC_MAX_FRAME_BYTES = 1,114,112 B`（余量 ≈ 64 KiB）。
+/// 注意 blob 信封的线上形态**只有一次** Base64（切片以二进制进内层 pt，
+/// 见 `sync/blob_transfer.rs`）；若走 JSON-in-JSON 双层 b64，768 KiB 实为
+/// ~1.40 MB 必超限。与本地分片常量 [`ATTACHMENT_CHUNK_BYTES`]（1 MB）分离命名、
+/// 分离取值，互不牵动。
+pub const SYNC_BLOB_CHUNK_BYTES: usize = 768 * 1024;
 
 // ===== 会话 / 剪贴板 =====
 /// 剪贴板自动清空秒数。
