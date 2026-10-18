@@ -49,6 +49,11 @@ export const enUS: Messages = {
     error: 'Unlock failed, please try again.',
     show_password: 'Show password',
     hide_password: 'Hide password',
+    // D-55 "Restore from backup" on the lock screen: entry button, overwrite warning, empty-password hint.
+    restore_button: 'Restore from backup',
+    restore_confirm_title: 'Restore from backup',
+    restore_confirm_body: 'The selected backup will replace the local vault; the current vault file is backed up as a .bak file automatically. Continue?',
+    restore_password_required: 'Enter the master password first (the one the backup was created with); it will be used to unlock automatically after restoring.',
   },
   create: {
     title: 'Create vault',
@@ -246,7 +251,9 @@ export const enUS: Messages = {
     change_password_new: 'New master password',
     export_vault: 'Export vault',
     export_confirm_title: 'Export vault',
-    export_confirm_body: 'The exported file will be written to disk in plaintext. Confirm the location is safe.',
+    // D-54: the export is a byte-level encrypted copy (fs::copy after unlock_check), not plaintext;
+    // fs::copy preserves LastWriteTime → file mtime = when the vault data was last written.
+    export_confirm_body: 'The export is an encrypted copy of the whole vault (not plaintext), for backup or migration; restore it via "Restore from backup" on the lock screen. The file modification time reflects when the vault data was last written.',
     export_password_required: 'Enter the current master password before exporting.',
     vault_file: 'Vault file',
     size: 'Size',

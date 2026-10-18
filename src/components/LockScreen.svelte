@@ -1,25 +1,76 @@
 <script lang="ts">
   // 解锁界面（PRD F-01）。解锁失败统一提示，不区分原因（A-05）。
   // 设计规范 §5.1：品牌区 + .pms-field（纵向）⇒ .pms-input-group（横向，眼睛固定右端）。
+  import { open } from '@tauri-apps/plugin-dialog';
   import Icon from './common/Icon.svelte';
   import Logo from './common/Logo.svelte';
   import WindowControls from './common/WindowControls.svelte';
   import Spinner from './common/Spinner.svelte';
   import ThemeToggle from './common/ThemeToggle.svelte';
+  import { toAppError } from '../lib/errors';
+  import { api } from '../lib/ipc';
   import { session } from '../lib/stores/session.svelte';
   import { ui } from '../lib/stores/ui.svelte';
 
   let password = $state('');
   let showPassword = $state(false);
+  // D-55：备份恢复流程进行中（选文件 → 确认 → 替换库文件），期间禁止并发解锁/再次恢复。
+  let restoring = $state(false);
 
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
-    if (session.busy || password.length === 0) {
+    if (session.busy || restoring || password.length === 0) {
       return;
     }
     const ok = await session.unlock(password);
     password = '';
     if (ok) {
+      ui.setRoute('main');
+    }
+  }
+
+  /** D-55 从备份恢复：选 .vault 备份 → 警告确认 → 替换本机库 → 用密码框的值走既有解锁流程。 */
+  async function restoreFromBackup(): Promise<void> {
+    if (session.busy || restoring) {
+      return;
+    }
+    // 1. 选备份文件（只收 PasswordMS 导出的 .vault）。
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'PasswordMS', extensions: ['vault'] }],
+    });
+    if (selected === null) {
+      return;
+    }
+    const sourcePath = Array.isArray(selected) ? selected[0] : selected;
+    if (!sourcePath) {
+      return;
+    }
+    // 2. 主密码为空先提示：恢复后要用密码框的值解锁（unlock_check 校验的是备份
+    //    创建时的主密码），不发无谓的 IPC。
+    if (password.length === 0) {
+      ui.toast('error', 'lock.restore_password_required');
+      return;
+    }
+    // 3. 警告确认：备份将替换本机当前库（原库自动留 .bak 后路）。
+    const ok = await ui.confirm('lock.restore_confirm_title', 'lock.restore_confirm_body');
+    if (!ok) {
+      return;
+    }
+    restoring = true;
+    try {
+      await api.vault.restoreBackup(sourcePath);
+    } catch (err) {
+      restoring = false;
+      ui.toast('error', toAppError(err).messageKey);
+      return;
+    }
+    restoring = false;
+    // 4. 走既有解锁成功路径：失败时 session.unlock 置 unlockError（统一提示，A-05）。
+    const unlocked = await session.unlock(password);
+    password = '';
+    if (unlocked) {
       ui.setRoute('main');
     }
   }
@@ -49,7 +100,7 @@
             autocomplete="current-password"
             placeholder={ui.t('lock.password_placeholder')}
             bind:value={password}
-            disabled={session.busy}
+            disabled={session.busy || restoring}
           />
           <button
             class="pms-icon-btn"
@@ -69,7 +120,7 @@
       <button
         class="pms-btn is-primary is-block is-lg"
         type="submit"
-        disabled={session.busy || password.length === 0}
+        disabled={session.busy || restoring || password.length === 0}
       >
         {#if session.busy}
           <Spinner size={16} label={ui.t('lock.busy')} />
@@ -79,8 +130,12 @@
       </button>
     </form>
 
-    <button class="pms-btn is-ghost is-block lock-create" type="button" onclick={() => ui.setRoute('create')}>
+    <button class="pms-btn is-ghost is-block lock-create" type="button" disabled={session.busy || restoring} onclick={() => ui.setRoute('create')}>
       {ui.t('lock.create_new')}
+    </button>
+    <!-- D-55：恢复后用上面密码框里的值解锁（备份创建时的主密码），不新增第二个密码框。 -->
+    <button class="pms-btn is-ghost is-block lock-restore" type="button" disabled={session.busy || restoring} onclick={() => void restoreFromBackup()}>
+      <Icon name="upload" size={15} />{ui.t('lock.restore_button')}
     </button>
   </div>
 </main>
@@ -126,6 +181,10 @@
   }
   .lock-create {
     margin-top: 0.5rem;
+  }
+  /* D-55「从备份恢复」：与「创建新保险库」同构的 ghost 块按钮，紧随其后。 */
+  .lock-restore {
+    margin-top: 0.25rem;
   }
   /* 右上角常驻主题切换（未进主界面也能切）。 */
   /* 去掉原生标题栏后的自绘顶条：兼作窗口拖动区（含双击最大化）。

@@ -47,6 +47,11 @@ export const zhCN = {
     error: '解锁失败，请重试。',
     show_password: '显示密码',
     hide_password: '隐藏密码',
+    // D-55 锁屏页「从备份恢复」：入口按钮、覆盖警告、空密码提示。
+    restore_button: '从备份恢复',
+    restore_confirm_title: '从备份恢复',
+    restore_confirm_body: '将使用所选备份替换本机当前保险库，原库会自动备份为 .bak 文件。确认继续？',
+    restore_password_required: '请先输入主密码（备份创建时的主密码），恢复后将用它自动解锁。',
   },
   create: {
     title: '创建保险库',
@@ -244,7 +249,9 @@ export const zhCN = {
     change_password_new: '新主密码',
     export_vault: '导出保险库',
     export_confirm_title: '导出保险库',
-    export_confirm_body: '导出后文件将以明文形式保存到磁盘，请确认存放位置安全。',
+    // D-54：导出实际是字节级加密副本（unlock_check 后 fs::copy），并非明文；
+    // fs::copy 保留 LastWriteTime → 文件修改时间 = 库数据最后写入时刻（客户要求保留该语义）。
+    export_confirm_body: '导出的是整库的加密副本（非明文），用于备份或迁移；可在锁屏页用「从备份恢复」导入。文件的修改时间为库数据的最后写入时间。',
     export_password_required: '请先输入当前主密码再导出。',
     vault_file: '保险库文件',
     size: '大小',

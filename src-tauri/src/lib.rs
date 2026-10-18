@@ -31,6 +31,7 @@ pub fn run() {
             commands::vault_cmd::lock,
             commands::vault_cmd::change_master_password,
             commands::vault_cmd::export_vault,
+            commands::vault_cmd::restore_backup,
             // item
             commands::item_cmd::list_items,
             commands::item_cmd::get_item,

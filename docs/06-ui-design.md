@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）**
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）**
 
 ---
 
@@ -325,6 +325,14 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
       {错误时} p.pms-hint（--pms-danger）
       button.pms-btn.is-primary.is-block.is-lg  "解锁"
     button.pms-btn.is-ghost.is-block  "创建新保险库"
+    button.pms-btn.is-ghost.is-block  "从备份恢复"（D-55，紧随其后，ghost 块钮）
+      ↳ 流程：dialog.open（filter 仅 .vault）选备份 → 主密码为空先 toast
+        `lock.restore_password_required`（不新增第二个密码框，复用上方密码框的值）
+        → ui.confirm 警告「备份将替换本机当前库，原库自动备份为 .bak」
+        → `restore_backup`（后端校验 magic，不合法返回 ERR_VALIDATION 且不触碰本机库；
+          本机库已存在时先留 `passwordms.vault.bak-<unix_ms>`；fs::copy 保留 mtime）
+        → 成功后用密码框的值走既有 `unlock` 流程（unlock_check 校验的是备份创建时
+          的主密码；失败仍走 A-05 统一提示）。恢复过程中解锁/恢复/创建钮全部禁用。
 ```
 
 ### 5.2 创建保险库 `CreateVaultWizard.svelte`（P0）
@@ -376,7 +384,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `ItemList.svelte` | 行高 56px；标题 600、副行 `.pms-meta`；悬停 `--pms-bg-2`；选中左侧 2px 青绿竖条；空态 = 居中图标 + 文案 |
 | `ItemDetail.svelte` | 字段用"标签 + 值 + 行尾复制按钮"三段式；密码值用 `--pms-mono`；复制按钮是 `.pms-icon-btn` |
 | `ItemEditor.svelte` | 全部换成 `.pms-field` / `.pms-input-group`；自定义字段区用 .pms-card 内嵌浅底块；底部操作条 sticky |
-| `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`） |
+| `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`）。**导出的是整库的加密副本而非明文（D-54）**，且**文件的修改时间 = 库数据的最后写入时间**（`fs::copy` 保留 LastWriteTime）；备份可在锁屏页用「从备份恢复」（D-55）导入 |
 | `PasswordGenerator.svelte` / `PasswordGeneratorModal.svelte` | 结果用 `--pms-mono` 大字 + `.pms-input-group` 承载复制/刷新按钮；选项区两列网格。**一律以弹窗形态出现**（`PasswordGeneratorModal` 内 Modal 自带 `{#if open}` 包裹 → 关闭即卸载，不残留请求/toast）。位数用**数字输入框**（输入中不钳制，失焦/回车才 clamp 到 8–64）；四类字符复选；**一类都不选时生成按钮 `disabled` 并给出提示**；结果下方带 `StrengthMeter`。**生成器参数（位数 / 四类字符 / 排除易混 / 自选符号集）变更后防抖 300ms 静默持久化**（D-52：走 `SettingsStore.saveQuiet` 不弹 toast，用显式变更点触发而非 `$effect` → 初始化不会把未变更默认值写回）；初始值优先级 `initial`（调用方显式传入）> 设置里持久化的偏好 > 默认值，`symbol_set` 空时回退 `+-_.,:` |
 | `common/ThemeToggle.svelte` | 三态循环（系统 → 浅色 → 暗色），图标用 `sun` / `moon`，并带 `title`。切换时**同时**更新 `document.documentElement` 的 `data-theme` **和**原生窗口标题栏（见 §4 D-32）。挂载点：解锁页右上角、主界面顶栏右区。 |
 | `HealthCheck.svelte` | 健康分做大字环形/大数字 + 4 个统计卡（弱口令/重复/超期/总数），弱项用 `.pms-badge.is-danger` |
@@ -561,6 +569,8 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | **D-44** | **P0 功能不可用（配对）** | **手机配对必败且报错误导**（客户真机：扫码报「文件读写错误」、粘贴挂 ~21s 后报「同步已中止」；Host 日志仅 `CoreError("ERR_IO")`）。回环测试（`pairing_loopback.rs`，127.0.0.1 全链路）通过 → 协议无错，根因在网络层四处叠加：①多网卡机器（WSL2/Hyper-V）UDP 选路探测只广播**一个** IP，选中手机路由不到的虚拟网卡即必败；②Android `EHOSTUNREACH` 在 stable Rust 折叠为 `Uncategorized` → 文案落到「文件读写错误」；③`TcpStream::connect` 失败一律折叠成 `SyncAborted` 且无超时（SYN 被静默丢弃要挂 ~21s）；④会话死后二维码仍挂着，Host 侧 io 错误无阶段信息 | ①`QRPayload` 新增 `ips: Vec<String>`（`serde(default)` 兼容旧码），`local_ipv4s()` 枚举全部非回环 IPv4、主选排最前，Joiner 逐个尝试（各 4s 超时）；②`connect_with_timeout` 保留 io kind（超时/不可达 → 专用文案 `err.network_unreachable` 等）；③`CoreError::Io` Debug 放出 `stage\|io:Kind`（server.rs 各阶段标注 hello_recv/accept_send/…），日志可定位断开点；④worker 结束时 emit `pairing://ended`，前端收二维码 + 提示「请重新生成二维码」（`sync.pair_ended`）；⑤配对页显示本机地址 + 防火墙放行提示（v1.9） |
 | **D-50** | P1 生成器体验 | **符号集不可自选**（主人需求）：D-49 把符号池精编为 6 个安全符号是「一刀切」，主人要求「用户愿意选哪些，可以参与生成密码，把常用的列出来」 | `PasswordGenerator.svelte` 勾选「符号」后展示 **34 个常用符号芯片**（`- _ . , : + ~ ? ! * @ # $ % ^ & ( ) [ ] { } < > = \| ; / \ ' " \`），点击切换、选中态用 `--pms-accent` 底 + `aria-pressed`；核心层 `GeneratorOptions` 新增 `symbol_set: Option<String>`（`serde(default)` 兼容旧库/旧前端），`effective_symbol_set()` 去重并过滤为可打印 ASCII 非字母数字，空集回退默认精编集 `+-_.,:`。回归测试：自定义集 200×32 扫描 + 过滤/兜底断言（v2.0） |
 | **D-51** | **P0 功能不可用** | **「导出保险库」必报「解锁失败，请重试。」**（用户实测）：导出卡片根本没有密码输入框，而 `exportVault()` 误把「修改主密码」卡片的 `oldPassword`（几乎总是空串）传给 `api.vault.exportVault(dest, oldPassword)`；后端 `repo.export_vault` 要先对**当前主密码**做 `unlock_check` 再 copy 库文件 → 空密码必 `UnlockFailed` → 前端 toast `err.unlock_failed`，报错误导用户 | ① 导出卡片导出按钮**上方**新增当前主密码输入框（`.set-row` + `.set-label` + `.pms-input set-ctl` + `type="password"` + `autocomplete="current-password"`；文案复用 `settings.change_password_old`「当前主密码」语义一致，`id="set-pw-export"` 避免与改密码卡片重复）；② `exportVault()` 改用独立的 `exportPassword`，**为空时不发 IPC** 直接 toast `settings.export_password_required`，成功后清空（v2.1） |
+| **D-54** | P1 文案 | **导出确认文案误称「明文」**：`settings.export_confirm_body` 写「导出后文件将以明文形式保存到磁盘」，而实际导出是 `unlock_check` 通过后 `fs::copy` 的**字节级加密副本**（实测导出文件与本机库 sha256 相同、magic 同为 `PMSVAULT`）——事实错误且吓退用户，还漏了「mtime = 库数据最后写入时间」这一可感知行为 | 改为「导出的是整库的加密副本（非明文），用于备份或迁移；可在锁屏页用『从备份恢复』导入。文件的修改时间为库数据的最后写入时间。」（zh/en 同步，v2.2） |
+| **D-55** | **P0 功能闭环缺失** | **导出的备份全 app 无导入通道**：用户把库导出后换机/误删，没有任何界面能从备份恢复——备份只能靠手工替换 `%APPDATA%\com.passwordms.app\passwordms.vault` | 锁屏页新增「从备份恢复」入口（D-55）：core 层 `restore_backup_from(src, dest)`（magic 校验 + **恢复前整库帧流完整性校验**——尾部截断/遗留尾料一律拒绝 `corrupt_vault_backup`，杜绝「restore 成功但记录静默丢失」+ `fs::copy` 保留 mtime）+ 3 例回归测试（原密码解锁且条目数一致 / 非 vault 文件拒绝 / 错主密码 UnlockFailed）；src-tauri `restore_backup` 命令（须锁定态、覆盖前留 `.bak-<unix_ms>`、不自动解锁）；前端 dialog 选 .vault → 警告确认 → 用密码框的值走既有 unlock 流程（v2.2） |
 
 ---
 

@@ -1,8 +1,11 @@
-//! 保险库命令：创建 / 解锁 / 锁定 / 改主密码 / 导出（架构文档 §5.2）。
+//! 保险库命令：创建 / 解锁 / 锁定 / 改主密码 / 导出 / 从备份恢复（架构文档 §5.2）。
 
 use std::path::Path;
 
+use passwordms_core::error::CoreError;
+use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
+use passwordms_core::store::container::restore_backup_from;
 
 use crate::dto::StatusDto;
 use crate::error::{lock_err, IpcResult};
@@ -93,5 +96,36 @@ pub fn export_vault(
     let session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo()?;
     repo.export_vault(Path::new(&dest_path), &master_password)?;
+    Ok(())
+}
+
+/// D-55 从备份恢复保险库文件（锁屏页「从备份恢复」入口）。
+///
+/// - **当前会话必须处于锁定态**：Unlocked 时内存中的 KEK/VK 属于旧库，替换库文件后
+///   二者失配，后续操作必错。校验与替换全程持有 session 互斥锁（无锁序倒置风险：
+///   本函数不获取 resync 锁），避免「检查时锁定、复制时被解锁」的竞态。
+/// - **覆盖保护**：本机 `passwordms.vault` 已存在时，先复制为同目录
+///   `passwordms.vault.bak-<unix_ms>`，恢复失败或反悔时还有后路。
+/// - magic 校验与复制在核心层 [`restore_backup_from`]（`fs::copy` **保留 mtime**，
+///   与导出语义一致）；不合法的备份文件返回 `ERR_VALIDATION`，不触碰目标文件。
+/// - 恢复后**不自动解锁**：`unlock_check` 校验的是备份创建时的主密码，解锁与失败
+///   提示由前端用既有 `unlock` 流程完成。
+#[tauri::command(rename_all = "snake_case")]
+pub fn restore_backup(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    source_path: String,
+) -> IpcResult<()> {
+    let session = state.session.lock().map_err(lock_err)?;
+    if session.is_unlocked() {
+        return Err(CoreError::Validation("vault_is_unlocked".to_string()).into());
+    }
+    let dest = vault_path(&app)?;
+    // 覆盖保护：原库先留 .bak 后路（unix_ms 时间戳避免同名覆盖）。
+    if dest.exists() {
+        let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));
+        std::fs::copy(&dest, &bak)?;
+    }
+    restore_backup_from(Path::new(&source_path), &dest)?;
     Ok(())
 }

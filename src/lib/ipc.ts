@@ -60,6 +60,9 @@ export const vault = {
     }),
   exportVault: (destPath: string, masterPassword: string): Promise<void> =>
     invoke<void>('export_vault', { dest_path: destPath, master_password: masterPassword }),
+  // D-55 从备份恢复：source_path 必须是 PasswordMS 导出的 .vault 备份（后端校验 magic）。
+  restoreBackup: (sourcePath: string): Promise<void> =>
+    invoke<void>('restore_backup', { source_path: sourcePath }),
 };
 
 /** 条目类。 */

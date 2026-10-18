@@ -208,3 +208,70 @@ fn serialize_header_padded(header: &Vault, capacity: usize) -> CoreResult<Vec<u8
     }
     Ok(bytes)
 }
+
+/// D-55 后续加固：对备份字节流做**整库帧流完整性校验**（只读，不建任何状态）。
+///
+/// 从记录区起点（`CONTAINER_PREFIX_LEN + header_len`，`header_len` 取自文件
+/// `[10..12)` 的 u16 LE）起逐帧 [`Frame::decode`]，要求**恰好消费到文件尾**：
+/// - 头部声明的 `header_len` 使记录区起点越过文件尾（头区截断）→ 拒绝；
+/// - 任何帧头不足 [`FRAME_HEADER_LEN`]、帧体截断（decode 报 `truncated frame` 等）、
+///   或记录区遗留无法成帧的尾料 → 拒绝。
+///
+/// 上述任一情况返回 `CoreError::Validation("corrupt_vault_backup")`。容器格式**没有**
+/// 合法的尾部填充/预留区（空格填充在头部容量内完成，记录区直到 EOF 都是帧），故无放行分支。
+/// 背景（QA 实证）：仅查 magic 会放行尾部截断的备份 → `restore` Ok 后 unlock 竟然
+/// 成功但 `record_count = 0`（read_frames 对 <124B 尾料静默退出）——静默丢数据。
+pub fn verify_frame_stream(bytes: &[u8]) -> CoreResult<()> {
+    if bytes.len() < CONTAINER_PREFIX_LEN {
+        return Err(CoreError::Validation("corrupt_vault_backup".to_string()));
+    }
+    let header_len = u16::from_le_bytes([bytes[10], bytes[11]]) as usize;
+    let record_start = CONTAINER_PREFIX_LEN + header_len;
+    if record_start > bytes.len() {
+        return Err(CoreError::Validation("corrupt_vault_backup".to_string()));
+    }
+    let mut cursor = record_start;
+    while cursor < bytes.len() {
+        // decode 的失败变体是 Internal（truncated frame 等）——在恢复入口一律折叠为
+        // Validation("corrupt_vault_backup")，报错语义收敛到「备份文件不完整/损坏」。
+        let (frame, consumed) = Frame::decode(&bytes[cursor..])
+            .map_err(|_| CoreError::Validation("corrupt_vault_backup".to_string()))?;
+        if consumed == 0 {
+            return Err(CoreError::Validation("corrupt_vault_backup".to_string()));
+        }
+        cursor += frame.encoded_len();
+    }
+    Ok(())
+}
+
+/// D-55 从备份恢复：校验源文件确为 PasswordMS 保险库备份，然后**字节级**复制到目标路径。
+///
+/// - 校验：源文件存在、不短于容器前缀（[`CONTAINER_PREFIX_LEN`]）、头部 magic 为
+///   [`VAULT_MAGIC`]（"PMSVAULT"）；不符返回 `CoreError::Validation("not_a_vault_backup")`，
+///   此时**不得触碰目标文件**。
+/// - **整库帧流完整性校验**（[`verify_frame_stream`]）：从记录区起点逐帧解码至恰好
+///   EOF，挡住「尾部截断的备份」——否则 restore 成功但记录静默丢失（QA 实证 caseA/
+///   caseB）；不符返回 `CoreError::Validation("corrupt_vault_backup")`，不复制。
+/// - 复制用 [`fs::copy`]：Windows/Unix 上都会**保留源文件的修改时间**——「备份文件的
+///   mtime = 库数据最后写入时刻」是导出（`export_vault`）既有的语义，客户明确要求
+///   恢复路径保留一致。
+/// - 目标已存在时会被覆盖；调用方（src-tauri `restore_backup` 命令）负责先留
+///   `.bak-<unix_ms>` 覆盖保护。
+pub fn restore_backup_from(src: &Path, dest: &Path) -> CoreResult<()> {
+    let meta = fs::metadata(src)?;
+    if meta.len() < CONTAINER_PREFIX_LEN as u64 {
+        return Err(CoreError::Validation("not_a_vault_backup".to_string()));
+    }
+    let mut file = File::open(src)?;
+    let mut magic = [0u8; 8];
+    file.read_exact(&mut magic)?;
+    if &magic != VAULT_MAGIC {
+        return Err(CoreError::Validation("not_a_vault_backup".to_string()));
+    }
+    // QA 实证加固：仅查 magic 会放行尾部截断的备份（restore Ok → unlock 成功但
+    // record_count=0，静默丢数据）。复制前先做整库帧流校验。
+    let bytes = fs::read(src)?;
+    verify_frame_stream(&bytes)?;
+    fs::copy(src, dest)?;
+    Ok(())
+}
