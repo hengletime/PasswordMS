@@ -37,6 +37,9 @@
   let pane = $state<PaneMode>(PANE_DETAIL);
   const editing = $derived(pane.view !== 'detail');
   let syncTab = $state<SyncTab>('pair');
+  // D-58b：用户是否手动点过同步页 tab。点过即永久尊重用户选择，
+  // 之后进入同步页不再按配对状态调整初始标签（不做持久化）。
+  let syncTabTouched = $state(false);
   // 顶栏「生成密码」入口（客户反馈：生成器原先只藏在密码框的图标里，根本发现不了）。
   // 这里不带 onuse —— 只生成 + 复制，不写回任何条目。
   let genOpen = $state(false);
@@ -85,7 +88,18 @@
   /** 切换分区（桌面顶栏 / 移动端底部导航共用；行为完全一致）。 */
   function pickSection(key: MainSection): void {
     ui.setSection(key);
+    // D-58b：进入同步页且用户从未手动选过 tab 时，按当前配对状态决定初始标签
+    // （已有配对设备 → 优先「状态」；无配对设备 → 优先「配对」）。
+    if (key === 'sync' && !syncTabTouched) {
+      syncTab = sync.devices.length > 0 ? 'status' : 'pair';
+    }
     dispatch({ type: 'section' });
+  }
+
+  /** D-58b：手动切换同步页 tab（标记 touched，之后不再自动劫持初始标签）。 */
+  function pickSyncTab(tab: SyncTab): void {
+    syncTabTouched = true;
+    syncTab = tab;
   }
 
   async function lockNow(): Promise<void> {
@@ -284,7 +298,7 @@
             class="sync-tab"
             class:active={syncTab === 'pair'}
             type="button"
-            onclick={() => (syncTab = 'pair')}
+            onclick={() => pickSyncTab('pair')}
           >
             {ui.t('sync.tab_pair')}
           </button>
@@ -292,7 +306,7 @@
             class="sync-tab"
             class:active={syncTab === 'devices'}
             type="button"
-            onclick={() => (syncTab = 'devices')}
+            onclick={() => pickSyncTab('devices')}
           >
             {ui.t('sync.tab_devices')}
           </button>
@@ -300,7 +314,7 @@
             class="sync-tab"
             class:active={syncTab === 'status'}
             type="button"
-            onclick={() => (syncTab = 'status')}
+            onclick={() => pickSyncTab('status')}
           >
             {ui.t('sync.tab_status')}
           </button>
@@ -308,7 +322,7 @@
             class="sync-tab"
             class:active={syncTab === 'conflicts'}
             type="button"
-            onclick={() => (syncTab = 'conflicts')}
+            onclick={() => pickSyncTab('conflicts')}
           >
             {ui.t('sync.tab_conflicts')}
           </button>

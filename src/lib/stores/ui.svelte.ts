@@ -32,6 +32,37 @@ export type MainSection = 'items' | 'health' | 'trash' | 'settings' | 'sync';
 /** 语言持久化键名。 */
 const LOCALE_STORAGE_KEY = 'passwordms.locale';
 
+// ===== D-58a：Toast 时长策略（错误文案长，固定 4s 看不完就关）=====
+/** success：短确认，无需久留。 */
+const TOAST_SUCCESS_MS = 3000;
+/** info：一般提示。 */
+const TOAST_INFO_MS = 5000;
+/** error：起步时长。 */
+const TOAST_ERROR_MIN_MS = 6000;
+/** error：每字停留毫秒数。 */
+const TOAST_ERROR_PER_CHAR_MS = 150;
+/** error：封顶时长。 */
+const TOAST_ERROR_MAX_MS = 12000;
+
+/**
+ * 计算一条 Toast 的停留时长（ms；D-58a）。
+ *
+ * - success = 3000ms；info = 5000ms；
+ * - error 按渲染后文案长度自适应：`min(12000, max(6000, 字数 × 150))`
+ *   （6000ms 起步、每字 150ms、12s 封顶）。
+ * 字数按 Unicode 码点计（中文每字算 1，与视觉阅读单位一致）。
+ */
+export function toastDurationMs(kind: ToastKind, message: string): number {
+  if (kind === 'success') {
+    return TOAST_SUCCESS_MS;
+  }
+  if (kind === 'info') {
+    return TOAST_INFO_MS;
+  }
+  const length = [...message].length;
+  return Math.min(TOAST_ERROR_MAX_MS, Math.max(TOAST_ERROR_MIN_MS, length * TOAST_ERROR_PER_CHAR_MS));
+}
+
 /** 读取持久化语言；非法值 / 隐私模式 / 无 localStorage 时兜底为默认语言。 */
 function readStoredLocale(): Locale {
   try {
@@ -90,12 +121,16 @@ class UiStore {
     this.section = section;
   }
 
-  /** 弹出 Toast（4 秒后自动消失）。 */
+  /**
+   * 弹出 Toast（D-58a：时长按 kind + 渲染后文案长度自适应，见 `toastDurationMs`）。
+   * `t()` 为本类方法且 `translate` 为纯函数，Node 测试环境无 window 依赖。
+   */
   toast(kind: ToastKind, messageKey: string, params?: Record<string, string | number>): number {
     this.seq += 1;
     const id = this.seq;
     this.toasts = [...this.toasts, { id, kind, messageKey, params }];
-    setTimeout((): void => this.dismiss(id), 4000);
+    const duration = toastDurationMs(kind, this.t(messageKey, params));
+    setTimeout((): void => this.dismiss(id), duration);
     return id;
   }
 
