@@ -106,17 +106,20 @@ impl JoinerSession {
         let c1 = state.last_sent_seq + 1;
         let c2 = c1 + 1;
 
-        // seq=c1：推送本端变更（D-53：随报文通告本端 blob 能力）。
+        // seq=c1：推送本端变更（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，
+        // 按对端 base 过滤）。
         let push = SyncPayload {
             kind: SyncKind::Push,
             device_id: repo.device_id().to_string(),
             cursor: 0,
-            changes: repo.export_changes(),
+            changes: repo.export_changes(&state),
             conflicts: Vec::new(),
             blob_support: true,
         };
         let push_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, c1, now, &push)?;
         transport::send_frame(&mut self.stream, &serde_json::to_vec(&push_env)?)?;
+        // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发；失败路径不落盘自动重发）。
+        merge::note_sent_tombstones(&mut state, &push.changes);
 
         // 接收 Host 的 Push 并合并。
         let reply_bytes = transport::recv_frame(&mut self.stream)?;

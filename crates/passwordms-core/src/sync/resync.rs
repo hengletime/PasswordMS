@@ -189,17 +189,19 @@ pub fn resync_with_peer(
     let c1 = state.last_sent_seq + 1;
     let c2 = c1 + 1;
 
-    // 8) 发本端 Push（D-53：随报文通告本端 blob 能力）。
+    // 8) 发本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤）。
     let push = SyncPayload {
         kind: SyncKind::Push,
         device_id: client_id.clone(),
         cursor: 0,
-        changes: repo.export_changes(),
+        changes: repo.export_changes(&state),
         conflicts: Vec::new(),
         blob_support: true,
     };
     let push_env = seal_envelope(&sk[..], &session_id, c1, now, &push)?;
     transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?).map_err(|e| stage_io(e, "push_send"))?;
+    // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发；失败路径不落盘自动重发）。
+    merge::note_sent_tombstones(&mut state, &push.changes);
 
     // 9) 收对端 Push 并合并。
     let reply_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "reply_recv"))?;
@@ -374,18 +376,20 @@ impl ResyncServer {
         let push = open_envelope(&sk[..], &session_id, &push_env)?;
         let report = merge::apply_changes(repo, &mut state, &push.changes)?;
 
-        // 7) 回送本端 Push（D-53：随报文通告本端 blob 能力）。
+        // 7) 回送本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤）。
         let s1 = state.last_sent_seq + 1;
         let reply = SyncPayload {
             kind: SyncKind::Push,
             device_id: server_id.clone(),
             cursor: 0,
-            changes: repo.export_changes(),
+            changes: repo.export_changes(&state),
             conflicts: report.conflicts.clone(),
             blob_support: true,
         };
         let reply_env = seal_envelope(&sk[..], &session_id, s1, now, &reply)?;
         transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
+        // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发）。
+        merge::note_sent_tombstones(&mut state, &reply.changes);
 
         // 8) 收 Done。
         let done_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "done_recv"))?;

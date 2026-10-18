@@ -17,6 +17,10 @@ pub struct ConflictEntry {
     pub detected_at: i64,
     #[serde(default)]
     pub resolved: bool,
+    /// D-56：远端版本是一条**删除墓碑**（remote_snapshot 为死亡前快照）。
+    /// 「采用远端」仲裁时按接受删除处理（本端软删），而非复活死亡快照。
+    #[serde(default)]
+    pub remote_deleted: bool,
 }
 
 /// 冲突三选一仲裁选项。

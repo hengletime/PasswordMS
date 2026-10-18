@@ -340,18 +340,21 @@ fn run_exchange(
     let push_payload = open_envelope(&keys.sync_key[..], session_id, &push_env)?;
     let report = merge::apply_changes(repo, state, &push_payload.changes)?;
 
-    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放；D-53：随报文通告本端 blob 能力）。
+    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放；D-53：随报文通告本端 blob 能力；
+    // D-56：载荷含墓碑，按对端 base 过滤）。
     let out_seq = state.last_sent_seq + 1;
     let reply = SyncPayload {
         kind: SyncKind::Push,
         device_id: repo.device_id().to_string(),
         cursor: 0,
-        changes: repo.export_changes(),
+        changes: repo.export_changes(state),
         conflicts: report.conflicts.clone(),
         blob_support: true,
     };
     let reply_env = seal_envelope(&keys.sync_key[..], session_id, out_seq, now, &reply)?;
     transport::send_frame(stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
+    // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发）。
+    merge::note_sent_tombstones(state, &reply.changes);
 
     // 收 Done。
     let done_bytes = transport::recv_frame(stream).map_err(|e| stage_io(e, "done_recv"))?;

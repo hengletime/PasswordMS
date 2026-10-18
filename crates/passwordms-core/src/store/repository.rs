@@ -860,12 +860,21 @@ impl Repository {
                 // 保留本机：丢弃远端快照。
             }
             ConflictChoice::TakeRemote => {
-                let mut remote = entry.remote_snapshot.clone();
-                remote.rev = entry.local_snapshot.rev.max(remote.rev) + 1;
-                remote.updated_at = now_ms();
-                remote.modified_by = self.device_id.clone();
-                self.write_record(RECORD_TYPE_ITEM, &remote.item_id, 0, &serde_json::to_vec(&remote)?)?;
-                self.items.insert(remote.item_id.clone(), remote);
+                if entry.remote_deleted {
+                    // D-56：删除冲突「采用远端」= 接受对端的删除 → 本端**软删**
+                    // （blob 保留、回收站可还原），而非复活死亡快照（§3.13.2 收敛裁定）。
+                    let local = self
+                        .get_item_opt(&entry.item_id)
+                        .unwrap_or_else(|| entry.local_snapshot.clone());
+                    self.trash_item_direct(&local)?;
+                } else {
+                    let mut remote = entry.remote_snapshot.clone();
+                    remote.rev = entry.local_snapshot.rev.max(remote.rev) + 1;
+                    remote.updated_at = now_ms();
+                    remote.modified_by = self.device_id.clone();
+                    self.write_record(RECORD_TYPE_ITEM, &remote.item_id, 0, &serde_json::to_vec(&remote)?)?;
+                    self.items.insert(remote.item_id.clone(), remote);
+                }
             }
             ConflictChoice::KeepBoth => {
                 let mut dup = entry.remote_snapshot.clone();
@@ -913,10 +922,11 @@ impl Repository {
 
     /// 远端删除条目（直接墓碑，不进回收站）。
     ///
-    /// **D-53 连带规则**：被删条目为 attachment 时连带墓碑其 blob 帧（与
-    /// [`Repository::delete_item`] 的 `permanent=true` 本地语义对齐）——否则对端会留下
-    /// 「无条目引用的孤儿 blob」。本地软删（进回收站）**不清** blob（还原需要），
-    /// 仅远端删除与 purge 清。
+    /// **D-56 降级为内部保留方法**：merge 的远端删除分支改走
+    /// [`Repository::trash_item_direct`]（软删，O-05 要求对端同样享有回收站误删保护），
+    /// 本方法不再被同步路径调用。其 D-53 时代的「连带 `tombstone_blob`」规则随之只在
+    /// purge 路径（[`Repository::purge_item`]）生效——软删后 blob 必须保留供还原。
+    /// 保留本方法供未来 compaction / 内部工具使用。
     pub fn remove_item_direct(&mut self, item_id: &str) -> CoreResult<()> {
         // 先查 kind 再墓碑：条目明文仍在本内存时判断，之后 tombstone 不可逆。
         if let Some(item) = self.get_item_opt(item_id) {
@@ -927,6 +937,15 @@ impl Repository {
         self.tombstone(RECORD_TYPE_ITEM, item_id)?;
         self.items.remove(item_id);
         Ok(())
+    }
+
+    /// merge 专用：远端删除到达本端时执行**软删**（D-56 §3.13.2 裁定二）。
+    ///
+    /// 等价 [`Repository::move_item_to_trash`]：新 `trash_id` 由本端生成、`deleted_at`
+    /// 为本端当前时刻（`deleted_at` 不入 wire）、**不清 blob**（回收站还原需要；
+    /// blob 墓碑仅随本端 purge 发生）。
+    pub fn trash_item_direct(&mut self, item: &Item) -> CoreResult<()> {
+        self.move_item_to_trash(item)
     }
 
     /// 取条目（不存在返回 `None`，供合并探测使用）。
@@ -1045,10 +1064,20 @@ impl Repository {
 
     // ===== 同步辅助 =====
 
-    /// 导出自上次同步以来发生变化的记录（items + folders；MVP 范围）。
-    pub fn export_changes(&self) -> Vec<ChangeRecord> {
+    /// 导出待同步变更（D-56 签名变更：增加对端 base 做免重发过滤）。
+    ///
+    /// 载荷构成（§3.13.6）：
+    /// - **live 白名单**：仅 `ITEM` / `FOLDER`（TRASH/CONFLICT/DEVICE/SYNC_STATE 不过线，
+    ///   修复「内部记录全量出网」缺陷）；
+    /// - **墓碑**：本端 `ITEM`/`FOLDER` 墓碑帧（blob 墓碑不独立导出——item 墓碑已完整
+    ///   表达删除意图），经 peer base 过滤（`base.rev >= 墓碑 rev` 不导出）。
+    pub fn export_changes(&self, peer_base: &DeviceSyncState) -> Vec<ChangeRecord> {
         let mut out = Vec::new();
         for (key, idx) in &self.live {
+            // 类型白名单：只有业务记录过线（D-56 ⑥）。
+            if key.0 != RECORD_TYPE_ITEM && key.0 != RECORD_TYPE_FOLDER {
+                continue;
+            }
             let frame = &self.slots[*idx].frame;
             let (rev, updated_at, modified_by) = match key.0 {
                 RECORD_TYPE_FOLDER => self
@@ -1077,7 +1106,129 @@ impl Repository {
                 plaintext_len: frame.plaintext_len,
             });
         }
+        if let Ok(tombstones) = self.tombstone_changes(peer_base) {
+            out.extend(tombstones);
+        }
         out
+    }
+
+    /// 枚举本端墓碑并构造 `ChangeRecord { deleted: true }`（D-56 §3.13.1 裁定一）。
+    ///
+    /// - **零格式变更**：`tombstone()` 仅置位 flags、原 payload（删除前密文）原样保留
+    ///   （实现前提已核实：repository.rs `tombstone`/`place_frame` 均为 `frame.clone()`
+    ///   后 `flags |= FLAG_TOMBSTONE` 原地 pwrite）→ 解密原 payload 即取到 rev/updated_at；
+    /// - 同一 `(type, id)` 可能存在多个历史墓碑帧（`place_frame` 长度变化时的中转墓碑），
+    ///   取 **rev 最高**者（真正的删除墓碑）；
+    /// - 该 id 仍有活跃记录（删除后被还原）→ 历史墓碑不再表达删除意图，跳过；
+    /// - 解密失败（老库损坏墓碑）→ 跳过该帧**不中断**（统一错误语义，A-05；不外泄、
+    ///   不计数上报——损坏墓碑静默缺席，重同步时对端亦无该记录可补）；
+    /// - `wrapped_key/nonce/ciphertext` 取自墓碑帧原字段（对端凭共享 VK 可解出死亡快照）。
+    pub fn tombstone_changes(&self, peer_base: &DeviceSyncState) -> CoreResult<Vec<ChangeRecord>> {
+        // (type, id) -> (rev, updated_at, modified_by, slot 下标)。
+        let mut best: HashMap<(u8, String), (u64, i64, String, usize)> = HashMap::new();
+        for (idx, slot) in self.slots.iter().enumerate() {
+            let frame = &slot.frame;
+            if frame.is_blob() || !frame.is_tombstone() {
+                continue;
+            }
+            if frame.record_type != RECORD_TYPE_ITEM && frame.record_type != RECORD_TYPE_FOLDER {
+                continue;
+            }
+            let id = frame.record_id_string();
+            // 复活取代：该 id 仍活跃 → 其历史墓碑一律不导出。
+            let alive = match frame.record_type {
+                RECORD_TYPE_ITEM => self.items.contains_key(&id),
+                _ => self.folders.contains_key(&id),
+            };
+            if alive {
+                continue;
+            }
+            let (rev, updated_at, modified_by) = match self.open_frame(frame) {
+                Ok(pt) => {
+                    if frame.record_type == RECORD_TYPE_ITEM {
+                        match serde_json::from_slice::<Item>(&pt) {
+                            Ok(item) => (item.rev, item.updated_at, item.modified_by),
+                            Err(_) => continue,
+                        }
+                    } else {
+                        match serde_json::from_slice::<Folder>(&pt) {
+                            Ok(folder) => (folder.rev, folder.updated_at, String::new()),
+                            Err(_) => continue,
+                        }
+                    }
+                }
+                Err(_) => continue,
+            };
+            match best.get(&(frame.record_type, id.clone())) {
+                Some(&(best_rev, ..)) if best_rev >= rev => {}
+                _ => {
+                    best.insert((frame.record_type, id), (rev, updated_at, modified_by, idx));
+                }
+            }
+        }
+        let mut out = Vec::with_capacity(best.len());
+        for ((record_type, id), (rev, updated_at, modified_by, idx)) in best {
+            // peer base 免重发过滤（§3.13.3 + 实现补注）：仅当 base 已**推进越过**该
+            // 墓碑 rev，或 base 恰为该 rev 的**墓碑标记**（hash=[0;32]，对端已应用过）
+            // 时才不导出。base 为同 rev 活跃条目（hash 非零）= 该墓碑首次到达，必须导出
+            // ——否则常规流「同步 rev1 → 删 rev1」的删除永远不过线。
+            if let Some(base) = peer_base.base.get(&id) {
+                if base.rev > rev || (base.rev == rev && base.hash == [0u8; 32]) {
+                    continue;
+                }
+            }
+            let frame = &self.slots[idx].frame;
+            out.push(ChangeRecord {
+                record_type,
+                record_id: id,
+                rev,
+                updated_at,
+                modified_by,
+                deleted: true,
+                wrapped_key: frame.wrapped_key.ct.clone(),
+                wrapped_key_nonce: frame.wrapped_key.nonce.clone(),
+                ciphertext: frame.ct.clone(),
+                nonce: frame.nonce.to_vec(),
+                plaintext_len: frame.plaintext_len,
+            });
+        }
+        out.sort_by(|a, b| a.record_id.cmp(&b.record_id));
+        Ok(out)
+    }
+
+    /// 本端某记录当前墓碑的最大 payload rev（无墓碑 → `None`）。
+    ///
+    /// merge 的 live 分支用于「本端已删、对端变更不新于删除」的**复活抑制**（D-56）：
+    /// 本端本地无该条目但持有同 rev 墓碑时，对端发来的陈旧 live 变更不得把条目复活。
+    /// 解密失败的墓碑帧跳过（与 [`Repository::tombstone_changes`] 同一容错语义）。
+    pub fn tombstone_rev(&self, record_type: u8, id: &str) -> Option<u64> {
+        let mut best: Option<u64> = None;
+        for slot in &self.slots {
+            let frame = &slot.frame;
+            if frame.is_blob()
+                || !frame.is_tombstone()
+                || frame.record_type != record_type
+                || frame.record_id_string() != id
+            {
+                continue;
+            }
+            let parsed_rev = match self.open_frame(frame) {
+                Ok(pt) => {
+                    if record_type == RECORD_TYPE_ITEM {
+                        serde_json::from_slice::<Item>(&pt).ok().map(|i| i.rev)
+                    } else {
+                        serde_json::from_slice::<Folder>(&pt).ok().map(|f| f.rev)
+                    }
+                }
+                Err(_) => None,
+            };
+            if let Some(rev) = parsed_rev {
+                if best.map_or(true, |b| rev > b) {
+                    best = Some(rev);
+                }
+            }
+        }
+        best
     }
 
     /// 解密一条远端变更（对端与本端共享同一 VK）。

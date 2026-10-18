@@ -203,9 +203,16 @@ pub fn sync_status(state: tauri::State<'_, AppState>) -> IpcResult<SyncStatusDto
     let repo = session.repo()?;
     let devices = repo.list_paired_devices();
     let last_sync_at = devices.iter().filter_map(|d| d.last_sync_at).max();
+    // D-56：待发变更按「对端 base 过滤后」的口径统计，取最落后对端的数量
+    // （墓碑经免重发过滤；无已配对设备时无可同步对象，计 0）。
+    let pending_changes = devices
+        .iter()
+        .map(|d| repo.export_changes(&repo.sync_state(&d.device_id)).len())
+        .max()
+        .unwrap_or(0);
     Ok(SyncStatusDto {
         last_sync_at,
-        pending_changes: repo.export_changes().len(),
+        pending_changes,
         device_count: devices.len(),
     })
 }

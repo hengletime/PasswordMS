@@ -272,7 +272,7 @@ fn case2_resume_from_partial_spool_no_duplicate_frames() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ===== ③ 删除传播 merge 级：attachment deleted=true → item+blob 双墓碑；软删保留 blob =====
+// ===== ③ 删除传播 merge 级（D-56 修订）：远端删除=软删进回收站且 blob 保留；purge 才清 =====
 
 #[test]
 fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
@@ -283,7 +283,11 @@ fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
     let mut session_a = Session::create(&host_vault, HOST_PWD, true).unwrap();
     let (src, _data) = make_source(&dir, "src.bin", 64 * 1024, false);
     let item_id = host_import(&mut session_a, &src);
-    let changes = session_a.repo().unwrap().export_changes();
+    // D-56：export_changes 需要对端 base（此处单端构造，空 base = 全量导出）。
+    let changes = {
+        let repo = session_a.repo().unwrap();
+        repo.export_changes(&repo.sync_state("qa-peer"))
+    };
     let blob_frame = session_a.repo().unwrap().blob_frame(&item_id).unwrap();
 
     // B 建空库并采纳 A 的 VK（change_to_item 解密需要同 VK）。
@@ -307,7 +311,8 @@ fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
     assert_eq!(outcome, passwordms_core::store::repository::BlobWriteOutcome::Appended);
     assert!(session_b.repo().unwrap().has_blob(&item_id));
 
-    // 3) 远端删除传播（deleted=true）→ item + blob 双墓碑。
+    // 3) 远端删除传播（deleted=true）→ D-56 裁定二：**软删**进回收站，blob **保留**
+    //    （回收站还原需要；原「item+blob 双墓碑」规则随 D-56 修正作废）。
     let mut tombstone = changes.clone();
     for c in tombstone.iter_mut() {
         if c.record_id == item_id {
@@ -315,8 +320,12 @@ fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
         }
     }
     apply_changes(session_b.repo_mut().unwrap(), &mut state, &tombstone).unwrap();
-    assert!(session_b.repo().unwrap().get_item_opt(&item_id).is_none(), "条目应被墓碑");
-    assert!(!session_b.repo().unwrap().has_blob(&item_id), "blob 应连带墓碑");
+    assert!(
+        session_b.repo().unwrap().get_item_opt(&item_id).is_none(),
+        "条目应离开活跃表"
+    );
+    assert!(session_b.repo().unwrap().has_blob(&item_id), "远端软删必须保留 blob");
+    assert_eq!(session_b.repo().unwrap().list_trash().len(), 1, "应进回收站");
 
     // 4) 本地软删（进回收站）**不清** blob（还原要用）。
     session_a.repo_mut().unwrap().delete_item(&item_id, false).unwrap();

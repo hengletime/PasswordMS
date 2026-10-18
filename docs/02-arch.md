@@ -543,7 +543,8 @@ pub enum BlobMessage {
 - **`read_blob` 永不见半成品**：`blobs` 索引仅在「组帧 → `open_frame` tag 验证通过 → `append_frame` 入库」成功后写入；spool 与正式索引物理隔离；
 - **断连重试续传**：manifest 持久化已收分片，重同步时该 `blob_ref` 仍在缺失清单 → 已收分片跳过（按 `idx` 与 `part` 文件长度双重校验），只补差额；
 - **孤儿清理**：锁定时 / 下次同步开始时，清理「无对应 attachment 条目」的 spool 目录（条目中途被删的场景）；
-- **上限校验前置**：接收端在 `Meta` 阶段做 `MAX_VAULT_BYTES` 容量预检，超限直接拒绝（回 `missing`），不落半个分片。
+- **上限校验前置**：接收端在 `Meta` 阶段做 `MAX_VAULT_BYTES` 容量预检，超限直接拒绝（回 `missing`），不落半个分片；
+- **内存峰值备案（D-56 轮补注）**：finalize 的「拼接 → `open_frame` 验 tag」在内存中持有完整密文一次（≤ 20MB + 16B tag）；MVP 可接受，如需优化可改为流式拼接 + 分块校验（不改协议）。
 
 #### 3.12.7 删除传播（裁定 + 独立缺陷上报）
 
@@ -571,6 +572,86 @@ pub enum BlobMessage {
 #### 3.12.10 兼容性（裁定）
 
 MVP 两端同时发版；协议层以 `SyncPayload.blob_support`（`serde(default)=false`）做**能力协商**：老端不带该字段 → 新端**不发起** blob 阶段，行为与现状逐位一致（老端永远不会收到无法解析的新报文）；两端同版则全功能。混跑期间 D-53 缺陷在老端依旧存在——可接受，文档留痕。
+
+### 3.13 删除传播（增量设计 · 缺陷 D-56）
+
+> **缺陷**：`export_changes` 只遍历 `live` 表且 `deleted` 恒为 `false`，墓碑帧从不导出 → 任何删除（条目/分组/blob）不过线（§3.12.7 已上报）。本节补齐「墓碑导出 + 远端删除语义」，**零帧格式变更、零 wire 结构变更**，与 §3.12 blob 阶段正交。
+
+#### 3.13.1 裁定一：墓碑枚举——解密原 payload 取 rev，零格式变更
+
+**事实**（复核确认）：帧头无 rev/updated_at；`tombstone()` 仅 `flags |= FLAG_TOMBSTONE` 原地 pwrite，**payload（删除前的原记录密文）未被重写**。
+
+**裁定**：**不改 `tombstone()`、不改帧格式**。导出时遍历 `slots` 中满足「`is_tombstone && !is_blob && record_type ∈ {ITEM, FOLDER}`」的帧，用本端 VK 经既有 `open_frame` 解密原 payload → 反序列化 `Item`/`Folder` → 取 `rev`/`updated_at` → 构造 `ChangeRecord{ deleted: true, rev, updated_at, wrapped_key/nonce/ciphertext 原样 }`。
+
+- **老库兼容**：旧墓碑帧 payload 同样未重写，天然可提取；解密失败（损坏）→ **跳过该墓碑并计数，不致命**（统一错误语义，A-05）；
+- `deleted_at` 不入 wire：merge 的墓碑分支只消费 `rev`（base 推进），不参与 LWW 比较；回收站展示的删除时间由对端**本端**生成（软删时刻）；
+- blob 墓碑**不独立导出**：item 墓碑已完整表达删除意图（对端软删保留 blob，见裁定二），blob 帧墓碑仅本地语义。
+
+#### 3.13.2 裁定二：远端删除 = 软删（进回收站），修正 §3.12.7 连带规则
+
+**结论**：远端 item 墓碑到达时，对端**走软删**（新 `Repository::trash_item_direct`，等价 `move_item_to_trash`：新 `trash_id` 由对端本地生成、`deleted_at` = 对端当前时间），**不是** `remove_item_direct` 永久删。
+
+- **理由**：(a) 安全需求 O-05 要求删除默认走回收站而非物理删除——对端用户同样享有误删保护；(b) 两端语义对称，A 端软删 ⟺ B 端软删；(c) 若永久删，单端误删/缺陷即瞬时摧毁对端数据且不可恢复；
+- **🔴 修正 D-53 §3.12.7**：远端删除改软删后，`remove_item_direct` 的「连带 `tombstone_blob`」**不再由 merge 触发**——软删后 blob 必须保留（回收站还原需要）；blob 墓碑仅随**本端** purge（`purge_item`/`empty_trash`/30 天到期）发生。`remove_item_direct` 降级为内部保留方法（merge 不再调用）。
+
+**merge `deleted` 分支新逻辑（幂等 + 收敛）**：
+
+```text
+base = state.base.get(id)
+若 base.rev >= change.rev  → report.skipped += 1; continue     // 幂等判重：墓碑不重放（收敛）
+match repo.get_item_opt(id):
+  Some(local) if local.rev > change.rev:                        // 删除-修改拉锯：本端更新
+      remote_snapshot = repo.decrypt_change(change)?           // 墓碑 ct = 死亡前快照（零 wire 变更！）
+      add_conflict(ConflictEntry{ local, remote_snapshot })    // 入冲突箱，UI 三选一（Q3）
+  Some(_)  => repo.trash_item_direct(&local)?                   // 软删：tombstone ITEM + 写本端 trash
+  None     => {}                                                // 本端从未见过，仅推进 base
+state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分支，base 推进到墓碑 rev
+```
+
+- **删除-复活拉锯收敛确认**：A 删（rev=R）、B 未同步前改（rev=R+1）→ B 收墓碑 rev=R，`local.rev(R+1) > R` → **冲突箱而非复活/静默删**；仲裁「保留本机」→ B 条目存活、后续 item 变更正常过线 → A 端复活（A 本地无条目 + 非删除变更 → 正常 put）✓；仲裁「采用远端」→ B 软删 + base 推进，A 端 trash 快照本地私有保留 ✓。两向皆收敛，无拉锯震荡；
+- **FOLDER 墓碑 = 仅删分组壳，无级联**：A 端 `delete_folder(ToTrash)` 的条目级联**已经**通过逐条 item 墓碑过线（`delete_folder` 内部对每条 `move_item_to_trash`）；`ToUngrouped` 的条目转未分组也已通过 item 更新（`folder_id=None, rev+1`）过线。对端只需应用分组墓碑 + 各 item 变更，**不得**再自行级联（会与对端用户意图冲突）。对端条目 `folder_id` 悬空的瞬态（同步中断）由前端兜底「分组不存在 → 渲染为未分组」。
+
+#### 3.13.3 裁定三：墓碑保留与收敛
+
+| 项 | 裁定 |
+|----|------|
+| 墓碑帧物理累积 | **MVP 可接受，本轮不物理清除**（留 TODO：compaction 时剔除「全部已配对设备 base.rev 均已推进至该墓碑 rev」的帧） |
+| 体积量化 | 条目/分组墓碑 ≈ 124B 帧头 + 300–600B 密文/条；按 1000 次删除估算 ≤ **0.75 MB**（< 200MB 上限的 0.4%）。**blob 墓碑是唯一大头**：`tombstone_blob` 原地标记，≤20MB 密文仍占文件——`file_size()` 容量预检已计入（现状即含），不产生超卖；blob 墓碑回收依赖未来 compaction（TODO） |
+| 免重发 | `export_changes` 增加 **peer base 过滤**：base 已推进（`base.rev >= 墓碑 rev`）的墓碑**不导出** → 连续两次同步第二次墓碑零重发、对端零重复应用（带宽 + 幂等双收益） |
+
+#### 3.13.4 裁定四：trash 记录本身不过线（确认建议）
+
+**确认**：`RECORD_TYPE_TRASH` 的 live 记录与墓碑**均不导出**。理由：回收站是本地私有视图（30 天本地保留），`trash_id` 由各端独立生成，同步会造成 ID 漂移与重复记录；对端删除感知完全由 item 墓碑承载。顺带修正既有浪费：`export_changes` 现遍历整个 `live` 表，TRASH/CONFLICT/DEVICE/SYNC_STATE 的 live 记录也会被发出去在对端 `skipped`——本次**白名单化**：live 仅导出 ITEM/FOLDER，墓碑仅导出 ITEM/FOLDER，其余一律不发。
+
+#### 3.13.5 裁定五：与 blob 阶段的交互（确认）
+
+- 远端 item 墓碑 → 对端**软删**（blob 保留）→ 条目进对端回收站，`attachment_blob_refs()`（基于活跃条目）不再含该 `blob_ref` → §3.12.6 的孤儿清理**只清 spool 目录，不清正式 blob 索引**（现状设计即如此，确认无需改）→ 回收站内附件可正常还原导出；
+- 对端 30 天到期 `purge_expired_trash` / 手动彻底删 → 本端 `tombstone_blob` → blob 不可读、密文留待 compaction（TODO）；对端 purge 事件**不需要**额外过线报文（各端回收站生命周期自治，最终一致）；
+- `blob_transfer.rs` 拉取判定基于活跃条目 → 已删条目的 blob 既不会被拉取也不会被误清 ✓。
+
+#### 3.13.6 函数签名变更（前后端契约不变，仅 Rust 内部）
+
+| 签名 | 变更 |
+|------|------|
+| `Repository::export_changes(&self, peer_base: &DeviceSyncState) -> Vec<ChangeRecord>` | **签名变更**：增加 peer base 参数做免重发过滤；内部并入墓碑枚举与类型白名单。4 个调用点（`server.rs:349`、`client.rs:114`、`resync.rs:197/383`）各传在手 `state` |
+| `Repository::tombstone_changes(&self, peer_base) -> CoreResult<Vec<ChangeRecord>>`（**新**） | 遍历墓碑帧 → 解密取 rev → `ChangeRecord{deleted:true}`；解密失败跳过计数 |
+| `Repository::trash_item_direct(&mut self, item: &Item) -> CoreResult<()>`（**新**） | merge 专用软删：写本端 trash（新 trash_id、deleted_at=now）+ tombstone ITEM（**不**清 blob） |
+| `merge::apply_changes` ITEM/FOLDER deleted 分支 | 重写为 §3.13.2 逻辑（幂等判重 / 冲突箱 / 软删 / base 推进） |
+| `Repository::remove_item_direct` | 降级为内部保留（merge 不再调用）；文档标注 |
+
+**时序要点**（并入既有 `Push → Push → Done` + blob 阶段，无新阶段）：Push 载荷的 `changes` 由「live ITEM/FOLDER + 墓碑 ITEM/FOLDER（peer 过滤后）」构成 → 对端 merge 按上文分支应用 → 墓碑在两端 base 推进后自然停发。wire 结构、传输上限、加密层**零变更**。
+
+#### 3.13.7 兼容性
+
+老端（D-56 前）收到新端墓碑 ChangeRecord：merge 既有 deleted 分支会执行 `remove_item_direct`（永久删）+ base 推进——**行为正确但语义偏狠**（对端无回收站痕迹），且老端不导出墓碑故删除单向。MVP 两端同版发版（与 D-53 同一约束），混跑期间可接受，文档留痕。
+
+#### 3.13.8 实现补注（D-56 落地时的两处细化与一处补充，用例实证必要）
+
+1. **幂等判重 / 导出过滤按 base.hash 细化**：base 与墓碑同 rev 但 `hash != [0;32]` 表示本端持有**同 rev 活跃条目**，该墓碑是**首次到达**，不得判重跳过——常规流「同步 rev1 → 删 rev1」中 `base.rev == 墓碑 rev` 恒成立，伪码字面的 `>=` 会使删除永远不过线。修正为：`base.rev > rev`，或 `base.rev == rev && base.hash == [0;32]`（墓碑标记）才判重；导出侧 peer 过滤同理。
+2. **发送侧墓碑基准推进（`merge::note_sent_tombstones`）**：协议无「已应用」回执，接收侧 base 无法回传；各发送点在**发送成功后**把已导出墓碑记入本端对该对端的 base（`hash=[0;32]`），下一轮导出过滤即零重发（§3.13.3 的落点）。失败路径不落盘（`save_sync_state` 仅在整轮成功后执行），中断自动重发，宁多勿丢。
+3. **复活抑制**：merge 的 live 分支在本端无活跃条目但持有 `rev >= 变更 rev` 的墓碑时跳过该 live 变更——否则「采用远端」删除仲裁后的收敛会被对端陈旧 live 变更回滚（拉锯震荡）。
+
+> **架构复核追认（高见远，2026-10-18）**：上三点全部追认——1 是对 §3.13.2 伪码 `>=` 缺陷的正确修正（主干路径阻断级，反例独立复推成立）；2 是 §3.13.3 欠定处的必要补全；3 是收敛正确性必需。**残余风险备案**：若本端完整走完一轮（send 成功→base 推进→落盘）而接收端在读取 push 帧之后、apply 落盘之前崩溃，该墓碑两端均不再重发，收敛为「对端存活、本端已删」的静默分歧（数据无损、不复发不震荡，窗口毫秒~秒级）——MVP 接受为已知残余风险。远期修正方向（P2 backlog）：(a) Lamport/HLC 时钟统一删除-vs-live 新旧比较（推荐，零 wire 变更）；(b) Done 载荷 base 回执反熵。到达序不对称（墓碑先到→冲突箱；live 先到→静默复活）同属此本质冲突，一并入 P2。
 
 ---
 
