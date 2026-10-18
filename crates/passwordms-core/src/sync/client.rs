@@ -208,7 +208,11 @@ pub fn pair(
     let mut connected: Option<TcpStream> = None;
     let mut last_err: Option<CoreError> = None;
     for ip in &candidates {
-        match transport::connect_with_timeout(ip, qr.port, Duration::from_secs(4)) {
+            match transport::connect_with_timeout(
+                ip,
+                qr.port,
+                std::time::Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS),
+            ) {
             Ok(stream) => {
                 connected = Some(stream);
                 break;

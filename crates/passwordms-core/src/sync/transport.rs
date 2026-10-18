@@ -14,18 +14,15 @@ pub fn listen(port: u16) -> CoreResult<TcpListener> {
     TcpListener::bind(("0.0.0.0", port)).map_err(|_| CoreError::SyncAborted)
 }
 
-/// 连接对端。
-pub fn connect(ip: &str, port: u16) -> CoreResult<TcpStream> {
-    connect_with_timeout(ip, port, std::time::Duration::from_secs(30))
-}
-
-/// 带显式超时的连接（D-44）。
+/// 带显式超时的连接（D-44；D-57 起重同步亦用此入口）。
 ///
 /// 修复两点：
 /// 1. `TcpStream::connect` 对「SYN 被静默丢弃」的地址要挂约 21 秒才报错——
-///    多候选 IP 逐个尝试时必须用短超时，否则用户面对长时间无响应。
+///    多候选 IP 逐个尝试时必须用短超时，否则用户面对长时间无响应；
+///    重同步直连不可路由的对端地址同理（D-57：改用 [`crate::constants::SYNC_CONNECT_TIMEOUT_SECS`]）。
 /// 2. 旧实现把 connect 失败一律折叠成 `SyncAborted`（「同步已中止」），错误码失真；
-///    现在保留 io kind（TimedOut/NetworkUnreachable → 对应网络文案）。
+///    现在保留 io kind（TimedOut/NetworkUnreachable → 对应网络文案；connect 阶段
+///    统一映射 `err.network_unreachable`，见 error.rs message_key）。
 pub fn connect_with_timeout(ip: &str, port: u16, timeout: std::time::Duration) -> CoreResult<TcpStream> {
     let addr: std::net::IpAddr = ip
         .parse()

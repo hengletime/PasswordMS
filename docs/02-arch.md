@@ -653,6 +653,12 @@ state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分�
 
 > **架构复核追认（高见远，2026-10-18）**：上三点全部追认——1 是对 §3.13.2 伪码 `>=` 缺陷的正确修正（主干路径阻断级，反例独立复推成立）；2 是 §3.13.3 欠定处的必要补全；3 是收敛正确性必需。**残余风险备案**：若本端完整走完一轮（send 成功→base 推进→落盘）而接收端在读取 push 帧之后、apply 落盘之前崩溃，该墓碑两端均不再重发，收敛为「对端存活、本端已删」的静默分歧（数据无损、不复发不震荡，窗口毫秒~秒级）——MVP 接受为已知残余风险。远期修正方向（P2 backlog）：(a) Lamport/HLC 时钟统一删除-vs-live 新旧比较（推荐，零 wire 变更）；(b) Done 载荷 base 回执反熵。到达序不对称（墓碑先到→冲突箱；live 先到→静默复活）同属此本质冲突，一并入 P2。
 
+#### 3.13.9 实现补注（D-57 · 重同步连接超时与网络文案归一化）
+
+1. **连接统一短超时**：`SYNC_CONNECT_TIMEOUT_SECS = 4` 为配对与重同步共用常量；`transport::connect`（无超时版）已删除，全部连接走 `connect_with_timeout`。
+2. **connect 阶段文案统一**：`stage == "connect"` 的 Io 失败无论 kind 一律报 `err.network_unreachable`（「无法连接到电脑：请确认同一 Wi‑Fi 同一网段」）——连接失败对用户只有一种可行动含义。配对路径 client.rs 的 connect 失败**不带** connect 阶段标注，仍按 kind 归一化结果报 `network_refused`（「对方可能已离开配对页」），两场景可行动含义区分保留（QA 实证）。
+3. **跨平台 kind 形态根因（D-44 遗留缺陷修正）**：`format!("io:{}", err.kind())` 的 Debug 输出在 Windows 实测为小写带空格（`io:connection refused`/`io:timed out`，QA harness 本机实证），D-44 的 PascalCase 字面映射表（`io:ConnectionRefused`）**整体落空坠入 `err.io`**——用户网络错误全部显示「文件读写出错」。修复：message_key 对 kind 归一化（去 `io:` 前缀 → 小写 → 仅留字母数字）后匹配，双形态通吃；`operation would block` 等未映射 kind 仍走 `err.io` 兜底（WouldBlock 在 D-46 轮询中是正常控制流不上屏，无回归）。
+
 ---
 
 ## 4. 文件列表及相对路径

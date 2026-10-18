@@ -186,15 +186,36 @@ impl CoreError {
             // 注意 UnexpectedEof 文件截断/网络断开两可，保守归 err.io。
             CoreError::Io(kind) => {
                 // 载荷格式："io:Kind" 或带阶段前缀的 "stage|io:Kind"（server.rs 标注失败阶段，D-44）。
-                // 取最后一个 '|' 之后的部分（无前缀时即整体）。
-                let k = kind.rsplit('|').next().unwrap_or(kind.as_str());
-                match k {
-                    "io:TimedOut" => "err.network_timeout",
-                    "io:ConnectionRefused" => "err.network_refused",
-                    "io:ConnectionReset" | "io:ConnectionAborted" | "io:BrokenPipe" => "err.network_broken",
+                let (stage, k) = match kind.split_once('|') {
+                    Some((s, rest)) => (Some(s), rest),
+                    None => (None, kind.as_str()),
+                };
+                // D-57：connect 阶段失败**无论 kind 为何**（TimedOut/Other/NotConnected/
+                // Uncategorized/…）一律映射 `err.network_unreachable`——连接失败只有一种
+                // 用户可行动的含义（网络不通/不在同一网段）；「对方仍停在配对等待页」的
+                // TimedOut 提示只适用于配对/交换阶段，对重同步的连接阶段是误导（曾致
+                // 用户往「文件读写」方向排查）。
+                if stage == Some("connect") {
+                    return "err.network_unreachable";
+                }
+                // 归一化匹配（D-57 补充根因）：kind 载荷来自 `format!("io:{}", err.kind())`
+                // 的 Debug 输出，跨平台形态不一——Linux 类平台多为 PascalCase（"TimedOut"），
+                // Windows 实测为小写带空格（"timed out"/"connection refused"）。
+                // D-44 的 PascalCase 字面表在本平台全部落空（一律坠入 err.io），正是客户
+                // 看到「文件读写出错」的第二个根因。统一去前缀、小写、仅留字母数字后匹配。
+                let norm: String = k
+                    .trim_start_matches("io:")
+                    .to_ascii_lowercase()
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric())
+                    .collect();
+                match norm.as_str() {
+                    "timedout" => "err.network_timeout",
+                    "connectionrefused" => "err.network_refused",
+                    "connectionreset" | "connectionaborted" | "brokenpipe" => "err.network_broken",
                     // Android 上无路由/不可达（EHOSTUNREACH/ENETUNREACH）在 stable Rust
                     // 折叠为 Uncategorized——配对场景几乎必然是「两台设备不通」，单独给文案（D-44）。
-                    "io:Uncategorized" | "io:NetworkUnreachable" | "io:HostUnreachable" => {
+                    "uncategorized" | "networkunreachable" | "hostunreachable" => {
                         "err.network_unreachable"
                     }
                     _ => "err.io",
@@ -261,6 +282,50 @@ mod tests {
         assert_eq!(
             CoreError::Io("exchange_done_recv|io:Uncategorized".into()).message_key(),
             "err.network_unreachable"
+        );
+    }
+
+    #[test]
+    fn connect_stage_always_maps_to_network_unreachable() {
+        // D-57：connect 阶段失败无论 kind 为何 → err.network_unreachable。
+        for kind in [
+            "io:TimedOut",
+            "io:timed out",
+            "io:Other",
+            "io:NotConnected",
+            "io:Uncategorized",
+            "io:uncategorized",
+            "io:ConnectionRefused",
+            "io:connection refused",
+            "io:OutOfMemory",
+        ] {
+            let staged = format!("connect|{kind}");
+            assert_eq!(
+                CoreError::Io(staged).message_key(),
+                "err.network_unreachable",
+                "connect 阶段的 {kind} 应映射 network_unreachable"
+            );
+        }
+        // 回归：非 connect 阶段的既有映射不变（PascalCase 与 Windows 小写形态均覆盖）。
+        assert_eq!(
+            CoreError::Io("hello_recv|io:TimedOut".into()).message_key(),
+            "err.network_timeout"
+        );
+        assert_eq!(
+            CoreError::Io("hello_recv|io:timed out".into()).message_key(),
+            "err.network_timeout"
+        );
+        assert_eq!(
+            CoreError::Io("push_recv|io:ConnectionReset".into()).message_key(),
+            "err.network_broken"
+        );
+        assert_eq!(
+            CoreError::Io("io:connection refused".into()).message_key(),
+            "err.network_refused"
+        );
+        assert_eq!(
+            CoreError::Io("io:OutOfMemory".into()).message_key(),
+            "err.io"
         );
     }
 

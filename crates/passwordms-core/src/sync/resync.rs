@@ -143,7 +143,15 @@ pub fn resync_with_peer(
     )?;
 
     // 3) 连接对端持久监听端口。
-    let mut stream = transport::connect(&peer_ip, peer_port)?;
+    // D-57：改用与配对一致的短超时（裸 connect 对不可路由地址挂 ~21s+，用户干等），
+    // 并以 stage_io 标注 connect 阶段——message_key 对该阶段统一映射
+    // `err.network_unreachable`（网络不通/不在同一网段），不再误报「文件读写出错」。
+    let mut stream = transport::connect_with_timeout(
+        &peer_ip,
+        peer_port,
+        std::time::Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS),
+    )
+    .map_err(|e| stage_io(e, "connect"))?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|_| CoreError::SyncAborted)?;

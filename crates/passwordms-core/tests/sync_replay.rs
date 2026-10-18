@@ -9,8 +9,13 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use passwordms_core::constants::{PAIR_TOKEN_TTL_SECS, QR_PROTOCOL_VERSION, SYNC_TIME_WINDOW_SECS};
+use passwordms_core::constants::{
+    PAIR_TOKEN_TTL_SECS, QR_PROTOCOL_VERSION, SYNC_CONNECT_TIMEOUT_SECS, SYNC_TIME_WINDOW_SECS,
+};
 use passwordms_core::crypto::rng;
+use passwordms_core::error::{stage_io, CoreError};
+use passwordms_core::model::now_ms;
+use passwordms_core::model::sync_state::PairedDevice;
 use passwordms_core::session::Session;
 use passwordms_core::store::repository::Repository;
 use passwordms_core::sync::handshake;
@@ -19,7 +24,7 @@ use passwordms_core::sync::protocol::{
 };
 use passwordms_core::sync::replay::ReplayGuard;
 use passwordms_core::sync::resync::{ResyncHello, ResyncMessage, ResyncServer};
-use passwordms_core::sync::server::SyncServer;
+use passwordms_core::sync::server::{device_key_aad, SyncServer};
 use passwordms_core::sync::transport;
 use passwordms_core::sync::{Hello, HostIdentity};
 
@@ -44,7 +49,12 @@ fn cleanup(path: &Path) {
 
 /// 模拟 Joiner：连接 Host 端口，发送 HELLO，返回收到的 REJECT 错误码。
 fn client_send_hello(port: u16, token: Vec<u8>) -> String {
-    let mut stream = transport::connect("127.0.0.1", port).expect("client connect");
+    let mut stream = transport::connect_with_timeout(
+        "127.0.0.1",
+        port,
+        std::time::Duration::from_secs(SYNC_CONNECT_TIMEOUT_SECS),
+    )
+    .expect("client connect");
     let hello = HandshakeMessage::Hello(Hello {
         v: QR_PROTOCOL_VERSION,
         token,
@@ -122,7 +132,12 @@ fn run_server_reject(
 
 /// 模拟发起方：连接重同步监听端口，发送未配对 HELLO，返回收到的 REJECT 错误码。
 fn client_send_resync_hello(port: u16) -> String {
-    let mut stream = transport::connect("127.0.0.1", port).expect("client connect");
+    let mut stream = transport::connect_with_timeout(
+        "127.0.0.1",
+        port,
+        std::time::Duration::from_secs(SYNC_CONNECT_TIMEOUT_SECS),
+    )
+    .expect("client connect");
     let hello = ResyncMessage::Hello(ResyncHello {
         v: QR_PROTOCOL_VERSION,
         client_id: "qa_test_unpaired_device".to_string(),
@@ -302,4 +317,66 @@ fn key_confirmation_mismatch_is_detected() {
     // 角色不同 → MAC 不同（阻断中间人重放）。
     let wrong = handshake::confirm_mac(&confirm_key, handshake::ROLE_CLIENT, &transcript).expect("mac");
     assert!(!handshake::verify_mac(&expected, &wrong));
+}
+
+// ===== D-57：重同步连接阶段失败 → err.network_unreachable =====
+
+/// 重同步发起方连「确定无监听」的本机端口（立即 ConnectionRefused，不真等系统超时）。
+/// 前提：设备记录可解开（sync_key 材料有效），使流程推进到 connect 阶段才失败。
+#[test]
+fn resync_connect_failure_maps_to_network_unreachable() {
+    let (mut session, path) = temp_session();
+    // record_id 落帧头须为合法 UUID（record_id_to_bytes 校验）。
+    let device_id = uuid::Uuid::new_v4().to_string();
+    let sync_key = [7u8; 32];
+    {
+        let repo = session.repo_mut().expect("repo");
+        let wrapped = passwordms_core::crypto::keys::wrap_item_key(
+            repo.vault_key(),
+            &sync_key,
+            &device_key_aad(&device_id),
+        )
+        .expect("wrap sync_key");
+        let device = PairedDevice {
+            device_id: device_id.clone(),
+            device_name: "QA-Peer".to_string(),
+            fingerprint: String::new(),
+            sync_key_wrapped: wrapped,
+            paired_at: 0,
+            last_sync_at: None,
+            peer_ip: Some("127.0.0.1".to_string()),
+            peer_port: Some(1),
+        };
+        repo.upsert_paired_device(device).expect("upsert device");
+    }
+    let err = passwordms_core::sync::resync::resync_with_peer(
+        session.repo_mut().expect("repo"),
+        &device_id,
+        now_ms(),
+    )
+    .expect_err("端口 1 无监听，连接必败");
+    assert!(
+        matches!(err, CoreError::Io(ref k) if k.starts_with("connect|io:")),
+        "connect 阶段应被标注（实际：{err:?}）"
+    );
+    assert_eq!(
+        err.message_key(),
+        "err.network_unreachable",
+        "连接失败必须报「网络不通/不在同一网段」，而非「文件读写出错」"
+    );
+    cleanup(&path);
+}
+
+/// 直接核验 `connect_with_timeout` + `stage_io(e, "connect")` 的组合产物
+/// （与 resync_with_peer 内部同一构造路径，纯传输层可复现口径）。
+#[test]
+fn transport_connect_refusal_stages_as_connect() {
+    let err = transport::connect_with_timeout("127.0.0.1", 1, Duration::from_millis(500))
+        .expect_err("端口 1 不应有监听");
+    let staged = stage_io(err, "connect");
+    assert!(
+        matches!(staged, CoreError::Io(ref k) if k.starts_with("connect|io:")),
+        "实际：{staged:?}"
+    );
+    assert_eq!(staged.message_key(), "err.network_unreachable");
 }

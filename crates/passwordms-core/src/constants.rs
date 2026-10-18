@@ -111,6 +111,9 @@ pub const SYNC_TIME_WINDOW_SECS: i64 = 120;
 pub const SYNC_RETRY_ATTEMPTS: u32 = 3;
 /// 同步重试退避（毫秒）。
 pub const SYNC_RETRY_BACKOFF_MS: [u64; 3] = [1000, 2000, 4000];
+/// TCP 连接超时（秒）。配对（D-44）与重同步（D-57）共用：对 SYN 被静默丢弃的
+/// 不可路由地址，系统级 connect 可挂约 21s（Android 更久），必须用短超时。
+pub const SYNC_CONNECT_TIMEOUT_SECS: u64 = 4;
 /// 长度前缀帧的单帧上限（附件分片 + 余量）。
 pub const SYNC_MAX_FRAME_BYTES: u32 = (ATTACHMENT_CHUNK_BYTES as u32) + 64 * 1024;
 /// 同步默认监听端口范围下界。
