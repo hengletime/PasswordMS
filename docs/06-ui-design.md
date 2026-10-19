@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）**
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）**
 
 ---
 
@@ -381,7 +381,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 
 | 文件 | 要点 |
 |---|---|
-| `ItemList.svelte` | 行高 56px；标题 600、副行 `.pms-meta`；悬停 `--pms-bg-2`；选中左侧 2px 青绿竖条；空态 = 居中图标 + 文案 |
+| `ItemList.svelte` | 行高 56px；标题 600、副行 `.pms-meta`；悬停 `--pms-bg-2`；选中左侧 2px 青绿竖条；空态 = 居中图标 + 文案。**列表头三入口（D-59）**：「新建登录」（主按钮）+「新建笔记」+「添加附件」（均 ghost）；附件按钮 = `paperclip` 图标，点击 → 系统文件对话框（单选）→ `import_attachment` 导入成功即建条目并选中（**不进编辑器**，标题默认取文件名含扩展名）；对话框取消 → 无动作无 toast；IPC 失败 → 统一错误 toast。桌面与移动端共用本组件（<768px 下三按钮 `flex: 1` 等宽排布不变） |
 | `ItemDetail.svelte` | 字段用"标签 + 值 + 行尾复制按钮"三段式；密码值用 `--pms-mono`；复制按钮是 `.pms-icon-btn` |
 | `ItemEditor.svelte` | 全部换成 `.pms-field` / `.pms-input-group`；自定义字段区用 .pms-card 内嵌浅底块；底部操作条 sticky |
 | `AttachmentView.svelte` | 元信息三行（文件名/类型/大小）+ 导出 ghost 按钮。**D-53「附件内容待同步」态**：blob 未同步到本机（`attachment_blob_ready` = false）时，导出按钮上方展示 `.pms-alert is-warning`（key `attach.pending_sync`）并禁用导出（强导会报 `ERR_BLOB_MISSING`） |
@@ -572,6 +572,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | **D-51** | **P0 功能不可用** | **「导出保险库」必报「解锁失败，请重试。」**（用户实测）：导出卡片根本没有密码输入框，而 `exportVault()` 误把「修改主密码」卡片的 `oldPassword`（几乎总是空串）传给 `api.vault.exportVault(dest, oldPassword)`；后端 `repo.export_vault` 要先对**当前主密码**做 `unlock_check` 再 copy 库文件 → 空密码必 `UnlockFailed` → 前端 toast `err.unlock_failed`，报错误导用户 | ① 导出卡片导出按钮**上方**新增当前主密码输入框（`.set-row` + `.set-label` + `.pms-input set-ctl` + `type="password"` + `autocomplete="current-password"`；文案复用 `settings.change_password_old`「当前主密码」语义一致，`id="set-pw-export"` 避免与改密码卡片重复）；② `exportVault()` 改用独立的 `exportPassword`，**为空时不发 IPC** 直接 toast `settings.export_password_required`，成功后清空（v2.1） |
 | **D-54** | P1 文案 | **导出确认文案误称「明文」**：`settings.export_confirm_body` 写「导出后文件将以明文形式保存到磁盘」，而实际导出是 `unlock_check` 通过后 `fs::copy` 的**字节级加密副本**（实测导出文件与本机库 sha256 相同、magic 同为 `PMSVAULT`）——事实错误且吓退用户，还漏了「mtime = 库数据最后写入时间」这一可感知行为 | 改为「导出的是整库的加密副本（非明文），用于备份或迁移；可在锁屏页用『从备份恢复』导入。文件的修改时间为库数据的最后写入时间。」（zh/en 同步，v2.2） |
 | **D-55** | **P0 功能闭环缺失** | **导出的备份全 app 无导入通道**：用户把库导出后换机/误删，没有任何界面能从备份恢复——备份只能靠手工替换 `%APPDATA%\com.passwordms.app\passwordms.vault` | 锁屏页新增「从备份恢复」入口（D-55）：core 层 `restore_backup_from(src, dest)`（magic 校验 + **恢复前整库帧流完整性校验**——尾部截断/遗留尾料一律拒绝 `corrupt_vault_backup`，杜绝「restore 成功但记录静默丢失」+ `fs::copy` 保留 mtime）+ 3 例回归测试（原密码解锁且条目数一致 / 非 vault 文件拒绝 / 错主密码 UnlockFailed）；src-tauri `restore_backup` 命令（须锁定态、覆盖前留 `.bak-<unix_ms>`、不自动解锁）；前端 dialog 选 .vault → 警告确认 → 用密码框的值走既有 unlock 流程（v2.2） |
+| **D-59** | **P0 功能不可达** | **附件功能前端零入口**（#530 真机走查发现）：后端 `import_attachment` 命令、core 层校验（≤20 MB）、D-53 blob 同步、`AttachmentView` 详情渲染全就绪，但列表「新建」区只有登录/笔记两个按钮，`api.keydocs.importAttachment` **全项目零调用**——F-13 密钥文档（附件）从上线起不可达 | 列表头新增第三个「添加附件」按钮（`paperclip` 图标，zh `添加附件` / en `Add attachment`）：点击 → 系统文件对话框（单选）→ `import_attachment` 导入成功即建条目 + `vault.load()` 刷新 + 选中新条目（**不进编辑器**；标题默认取文件名含扩展名，与 core 层空 title 回退语义一致）；对话框取消 → 无动作无 toast；IPC 失败（含超限 `ERR_ATTACHMENT_TOO_LARGE`）→ 统一错误 toast。流程逻辑抽 `src/lib/attachment-import.ts` 纯逻辑层（守卫/取消/成功/失败 4 分支有单测守门）+ ipc-contract 补 `import_attachment` 双侧在册断言（v2.4） |
 
 ---
 
@@ -621,3 +622,4 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 - [ ] **D-37** 桌面顶栏收缩：切英文后，1100px / 1080px 窗宽下顶栏**不折行、整页无横向滚动条**；缩到 850px 时 tab 变纯图标；拉宽到 ≥1200px 右区恢复「图标+文字」；中文下 1100px 观感不变
 - [ ] **D-38** 顶栏信息架构：桌面顶栏右区只有 `密码生成`/`锁定` 两钮（无语言/导入）；语言与主题在设置页「外观」组、导入在「数据」组且弹窗可用；设置页分组顺序为 外观→安全→体检→同步→数据→设备→改密码→库文件；移动端「⋯」菜单只剩 生成/锁定 两项
 - [ ] **桌面端红线**（1100×720）：三栏布局（分组 240 / 列表 300 / 详情 flex）与移动端改造前**逐像素一致**；顶栏导航与右区按钮照旧、无底部导航、无汉堡按钮
+- [ ] **D-60**（待实现，设计见 02-arch.md §3.14）：附件改依附父条目——移除列表页「添加附件」入口（回退 D-59 入口部分）；登录/笔记详情页新增附件区（区头「添加附件」+ 行：文件名/大小/MIME + 导出/删除，导出保留明文风险二次确认与待同步态）；AttachmentView 改造为附件行组件；回收站父条目行显示附件数徽标；i18n 中英双份 `attachments.*` 键（`item.new_attachment` 撤销）

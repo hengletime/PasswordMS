@@ -103,7 +103,7 @@ export const enUS: Messages = {
   item: {
     new_login: 'New login',
     new_note: 'New note',
-    new_attachment: 'New attachment',
+    new_attachment: 'Add attachment',
     empty: 'No items yet',
     no_results: 'No matching items',
     favorite: 'Favorite',

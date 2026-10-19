@@ -101,7 +101,7 @@ export const zhCN = {
   item: {
     new_login: '新建登录',
     new_note: '新建笔记',
-    new_attachment: '新建附件',
+    new_attachment: '添加附件',
     empty: '还没有条目',
     no_results: '没有匹配的条目',
     favorite: '收藏',
