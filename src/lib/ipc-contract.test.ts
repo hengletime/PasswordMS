@@ -51,10 +51,11 @@ describe('ipc command contract', () => {
     expect(invoked).toEqual(registered);
   });
 
-  it('keeps import_attachment wired on both sides (D-59 前端入口回归锚点)', () => {
-    // D-59 背景：后端与 ipc.ts 封装早就绪，但前端零调用导致附件功能不可达。
-    // 本断言明确锚定 import_attachment 双侧在册——任何一侧被移除都会红。
-    expect(invoked).toContain('import_attachment');
-    expect(registered).toContain('import_attachment');
+  it('keeps add_attachment / remove_attachment wired on both sides (D-60 前端入口回归锚点)', () => {
+    // D-59 的教训（后端就绪但前端零调用 → 附件不可达）；D-60 更名后锚定新命令双侧在册。
+    expect(invoked).toContain('add_attachment');
+    expect(registered).toContain('add_attachment');
+    expect(invoked).toContain('remove_attachment');
+    expect(registered).toContain('remove_attachment');
   });
 });

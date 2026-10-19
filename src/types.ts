@@ -33,13 +33,25 @@ export interface SecureNoteData {
   body: string;
 }
 
-/** 加密附件数据。 */
+/** 加密附件数据（D-60：仅存量库迁移读取用，运行期不再新建独立附件条目）。 */
 export interface AttachmentData {
   title: string;
   original_filename: string;
   mime_type: string;
   size_bytes: number;
   blob_ref: string;
+  blob_size_bytes: number;
+}
+
+/** 附件元数据（D-60 §3.14.1：内嵌于父条目 `attachments` 数组；字段名与 Rust serde 一致）。 */
+export interface AttachmentMetaDto {
+  /** 附件自身 UUID，同时是 blob 帧 record_id（≠ 父 item_id）。 */
+  attachment_id: string;
+  /** 原始文件名（随父帧密文过线，wipe_plaintext 覆盖）。 */
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  /** 密文占用（容量统计）。 */
   blob_size_bytes: number;
 }
 
@@ -53,6 +65,8 @@ export type ItemKind =
 export interface ItemDto {
   item_id: string;
   kind: ItemKind;
+  /** 父条目内嵌附件（D-60 §3.14.1；serde default 向后兼容旧帧 → 旧帧反序列化为 []）。 */
+  attachments: AttachmentMetaDto[];
   folder_id?: string | null;
   favorite: boolean;
   created_at: number;

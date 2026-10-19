@@ -446,3 +446,64 @@ $ npm run build
 ---
 
 > **本文件结论边界（Batch B 重申）**：静态审查**不能替代编译验证**（§5 已证）。上述 §9.6 中标注「未执行」「失败（环境）」的项**一律不得视为通过**；只有真实命令的输出才能作为通过依据。
+
+---
+
+## 10. D-60：附件内嵌父条目——core 批（T-D60-01+02）实现注记
+
+> 背景：D-59 修复暴露的架构方向修正（主人拍板）——「添加附件」不应是独立条目入口，
+> 附件应作为登录/安全笔记的**附属内容**。设计权威 = `docs/02-arch.md` §3.14（架构师高见远落盘）。
+> 本批由 team-lead 小李亲自实现（工程师子代理连续两轮网络故障零落盘后的 A 案顶上）。
+
+### 10.1 数据与迁移语义（§3.14.1 / §3.14.3）
+
+- `Item.attachments: Vec<AttachmentMeta>`（`model/item.rs:156`，`#[serde(default)]` 兼容旧帧）；
+  `AttachmentMeta{attachment_id, filename, mime_type, size_bytes, blob_size_bytes}`（`model/item.rs:60`）。
+- **关键解耦**：`attachment_id`（UUID）= blob 帧 record_id，**≠ 父 item_id**——KeepBoth 共享 blob 的前提。
+- `ItemKind::Attachment` 标 `#[deprecated]` 仅保留反序列化供迁移读取（`model/item.rs:90`）。
+- 存量迁移：unlock 时幂等执行（`session.rs:156` 解锁链 = 迁移 → 清过期回收站 → GC）；
+  遗留附件条目 → `SecureNote{title: 原 title, body: ""}` + `attachments=[原附件]`；
+  **attachment_id := 原条目 item_id（= 原 blob_ref）→ blob 帧字节级零重写**（`repository.rs:816`）。
+  选 SecureNote 而非 Login：假 Login（无密码）会污染 F-16 弱口令统计。
+
+### 10.2 GC 与删除语义（§3.14.4）
+
+- blob 清理从 D-53/D-56 的 1:1 tombstone 规则**改孤儿可达性 GC**（`repository.rs:876`）：
+  引用集合 = 活跃条目 attachments ∪ 回收站快照 attachments ∪ 遗留 blob_ref（迁移前兼容窗口，
+  `repository.rs:777`）。触发于 purge_item / empty_trash / purge_expired_trash / unlock（幂等）。
+- KeepBoth 共享引用：任一父条目存在即保活；父软删（trash 快照）不脱离引用集合（还原需要）。
+
+### 10.3 校验链与 IPC（§3.14.5）
+
+- 上限：单条目 16 附件（`constants.rs:79`）、文件名 255B（`constants.rs:81`）；新错误码
+  `ERR_ATTACHMENT_LIMIT`（`error.rs:42/78/137/173`，message_key `err.attachment_limit`）。
+- 四命令重写（`src-tauri/src/commands/keydoc_cmd.rs`，注册于 `lib.rs:49-52`）：
+  `add_attachment(item_id, source_path, title) -> 父条目` / `remove_attachment(item_id, attachment_id)`
+  / `export_attachment(item_id, attachment_id, dest_path)` / `attachment_blob_ready(attachment_id)`。
+- 同步协议 wire 零变更：附件元数据随父 ChangeRecord 加密帧过线（自动获得 E2E/rev/墓碑）；
+  blob 阶段机制不变，spool / manifest / 拉取清单键改 attachment_id。
+
+### 10.4 改动文件清单（core 批 16 文件）
+
+| 文件 | 改动 |
+|------|------|
+| `crates/passwordms-core/src/model/item.rs` | AttachmentMeta 新增 / Item.attachments / Attachment 废弃豁免 |
+| `crates/passwordms-core/src/constants.rs` | 16 / 255 两条上限 |
+| `crates/passwordms-core/src/error.rs` | ERR_ATTACHMENT_LIMIT 全链 |
+| `crates/passwordms-core/src/store/repository.rs` | add/remove/export_attachment、attachment_blob_refs、gc_orphan_blobs、migrate_legacy_attachments、delete/purge 改 GC、wipe 全覆盖 |
+| `crates/passwordms-core/src/session.rs` | unlock 链插入迁移 + GC（:156-160） |
+| `crates/passwordms-core/src/import/bitwarden_csv.rs` / `bitwarden_json.rs` | Item 字面量补 attachments |
+| `src-tauri/src/commands/keydoc_cmd.rs` | 四命令重写 |
+| `src-tauri/src/lib.rs` | 注册表 import_attachment → add_attachment + remove_attachment |
+| `crates/passwordms-core/tests/sync_blob.rs` | 9 例改造 + case10（:631 多附件续传/16 上限/255B 文件名）+ case11（:746 迁移幂等/零重写）+ case12（:846 GC KeepBoth） |
+| `crates/passwordms-core/tests/sync_deletion.rs` | case5 重写为父条目语义 |
+| `crates/passwordms-core/tests/{health_and_generator,sync_conflict,zeroize_check,container_roundtrip}.rs` | Item 字面量补 attachments（5 处） |
+| `docs/02-arch.md` | §3.14 全文 + §3.12.10/§3.13.8 修订注记（架构师落盘） |
+
+### 10.5 验证结果（真实工具链输出）
+
+- `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm`：**83/83 全绿**
+  （基线 80 + 净增 3 = case10/11/12；0 failed）。
+- `cargo check`（含 tests）：0 error / 0 warning。
+- clippy：仅备案旧项（lib 4 条 + lib-test 2 条既有项），无本轮新增。
+- 前端批（T-D60-03）与 QA 独立回归见后续章节。

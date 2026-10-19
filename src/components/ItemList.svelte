@@ -7,8 +7,7 @@
   import type { ItemDto } from '../types';
 
   interface Props {
-    /** D-59：kind 扩展 'attachment'——MainLayout 收到后走「选文件 → 导入」流程，不进编辑器。 */
-    onnew: (kind: 'login' | 'secure_note' | 'attachment') => void;
+    onnew: (kind: 'login' | 'secure_note') => void;
     /** 用户在列表里点选了某条目（D-31：用于让右侧面板退出编辑态）。 */
     onselect?: () => void;
   }
@@ -53,10 +52,6 @@
       </button>
       <button class="pms-btn is-ghost is-sm" type="button" onclick={() => onnew('secure_note')}>
         <Icon name="plus" size={15} />{ui.t('item.new_note')}
-      </button>
-      <!-- D-59：附件导入入口（此前后端就绪但前端零入口，附件功能不可达）。桌面/移动共用本组件。 -->
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => onnew('attachment')}>
-        <Icon name="paperclip" size={15} />{ui.t('item.new_attachment')}
       </button>
     </div>
   </header>

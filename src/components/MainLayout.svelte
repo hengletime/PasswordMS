@@ -24,16 +24,12 @@
   import PairShow from './sync/PairShow.svelte';
   import SyncStatus from './sync/SyncStatus.svelte';
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
-  import { open } from '@tauri-apps/plugin-dialog';
-  import { runAttachmentImport } from '../lib/attachment-import';
-  import { api } from '../lib/ipc';
   import { session } from '../lib/stores/session.svelte';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
   import { ui, type MainSection } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import { PANE_DETAIL, paneReducer, type PaneEvent, type PaneMode } from '../lib/pane-mode';
-  import type { ItemDto } from '../types';
 
   type SyncTab = 'pair' | 'devices' | 'status' | 'conflicts';
 
@@ -77,37 +73,8 @@
     pane = paneReducer(pane, event);
   }
 
-  function startCreate(kind: 'login' | 'secure_note' | 'attachment'): void {
-    // D-59：附件不进编辑器——直接「选文件 → 导入 → 刷新选中」。
-    if (kind === 'attachment') {
-      void importAttachment();
-      return;
-    }
+  function startCreate(kind: 'login' | 'secure_note'): void {
     dispatch({ type: 'new', kind });
-  }
-
-  /**
-   * D-59：添加附件 = 系统文件对话框（单选）→ `import_attachment` IPC → 刷新列表并选中新条目。
-   * 取消对话框 → 无动作无 toast；IPC 失败（含 20MB 超限）→ 统一错误 toast。
-   * 流程逻辑抽在 src/lib/attachment-import.ts（可行为级测试），此处只注入真实依赖。
-   */
-  async function importAttachment(): Promise<void> {
-    const result = await runAttachmentImport({
-      pickFile: async (): Promise<string | null> => {
-        const picked = await open({ multiple: false, directory: false });
-        return typeof picked === 'string' ? picked : null;
-      },
-      importAttachment: (sourcePath: string, title: string): Promise<ItemDto> =>
-        api.keydocs.importAttachment(sourcePath, title),
-      toast: (kind, messageKey): void => {
-        ui.toast(kind, messageKey);
-      },
-    });
-    if (result.item !== null) {
-      await vault.load();
-      vault.selectItem(result.item.item_id);
-      dispatch({ type: 'select' }); // D-31：退出编辑/新建态（防御性；导入路径本就不进编辑器）
-    }
   }
 
   function startEdit(): void {

@@ -101,7 +101,6 @@ export const zhCN = {
   item: {
     new_login: '新建登录',
     new_note: '新建笔记',
-    new_attachment: '添加附件',
     empty: '还没有条目',
     no_results: '没有匹配的条目',
     favorite: '收藏',
@@ -185,6 +184,12 @@ export const zhCN = {
     mime: '类型',
     // D-53：blob 未同步时的占位态。
     pending_sync: '附件内容待同步：内容尚未从其他设备同步到本机，同步后即可导出。',
+    // D-60：详情页附件区（父条目内嵌 attachments）。
+    add: '添加附件',
+    remove: '移除',
+    remove_confirm_title: '移除附件',
+    remove_confirm_body: '附件「{name}」将从条目移除，其内容会在同步后从所有设备删除。此操作无法撤销。',
+    section_title: '附件',
   },
   import: {
     title: '导入',
@@ -322,6 +327,7 @@ export const zhCN = {
     folder_name: '分组名称无效。',
     validation: '输入无效。',
     attachment_too_large: '附件超过大小上限。',
+    attachment_limit: '附件数量已达上限（16）。',
     vault_capacity: '保险库容量已满。',
     unsafe_url: '该网址不安全，已阻止打开。',
     import_parse: '导入文件解析失败。',

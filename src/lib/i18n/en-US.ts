@@ -103,7 +103,6 @@ export const enUS: Messages = {
   item: {
     new_login: 'New login',
     new_note: 'New note',
-    new_attachment: 'Add attachment',
     empty: 'No items yet',
     no_results: 'No matching items',
     favorite: 'Favorite',
@@ -187,6 +186,12 @@ export const enUS: Messages = {
     mime: 'Type',
     // D-53：blob 未同步时的占位态。
     pending_sync: 'Attachment content pending sync; export will be available once the blob arrives.',
+    // D-60：详情页附件区（父条目内嵌 attachments）。
+    add: 'Add attachment',
+    remove: 'Remove',
+    remove_confirm_title: 'Remove attachment',
+    remove_confirm_body: '"{name}" will be removed from the item, and its content will be deleted from all devices after sync. This cannot be undone.',
+    section_title: 'Attachments',
   },
   import: {
     title: 'Import',
@@ -324,6 +329,7 @@ export const enUS: Messages = {
     folder_name: 'Invalid folder name.',
     validation: 'Invalid input.',
     attachment_too_large: 'Attachment exceeds the size limit.',
+    attachment_limit: 'Attachment limit reached (16).',
     vault_capacity: 'Vault capacity is full.',
     unsafe_url: 'This URL is unsafe and was blocked.',
     import_parse: 'Failed to parse the import file.',

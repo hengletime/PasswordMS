@@ -253,7 +253,13 @@
       {/if}
     {:else if item.kind.type === 'secure_note'}
       <SecureNoteView {item} />
-    {:else}
+    {:else if item.kind.type === 'attachment'}
+      <!-- D-60：遗留独立附件条目在解锁迁移后不可达（migrate_legacy_attachments）；
+           保留分支仅作类型兜底，不渲染附件视图。 -->
+    {/if}
+
+    <!-- D-60：附件区（父条目内嵌 attachments），登录/笔记条目通用。 -->
+    {#if item.kind.type === 'login' || item.kind.type === 'secure_note'}
       <AttachmentView {item} />
     {/if}
 

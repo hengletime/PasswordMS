@@ -107,15 +107,19 @@ export const folders = {
     invoke<void>('reorder_folders', { ordered_ids: orderedIds }),
 };
 
-/** 密钥文档（附件）类。 */
+/** 密钥文档（附件）类。D-60：附件为父条目内嵌 `attachments`，按 (item_id, attachment_id) 定位。 */
 export const keydocs = {
-  importAttachment: (sourcePath: string, title: string): Promise<ItemDto> =>
-    invoke<ItemDto>('import_attachment', { source_path: sourcePath, title }),
-  exportAttachment: (itemId: string, destPath: string): Promise<void> =>
-    invoke<void>('export_attachment', { item_id: itemId, dest_path: destPath }),
-  // D-53：附件 blob 是否已同步到本机（「附件内容待同步」态判定）。
-  attachmentBlobReady: (itemId: string): Promise<boolean> =>
-    invoke<boolean>('attachment_blob_ready', { item_id: itemId }),
+  // 向父条目添加附件，返回**父条目**（rev+1）。
+  addAttachment: (itemId: string, sourcePath: string, title: string): Promise<ItemDto> =>
+    invoke<ItemDto>('add_attachment', { item_id: itemId, source_path: sourcePath, title }),
+  // 从父条目移除附件（blob 交孤儿 GC），返回父条目（rev+1）。
+  removeAttachment: (itemId: string, attachmentId: string): Promise<ItemDto> =>
+    invoke<ItemDto>('remove_attachment', { item_id: itemId, attachment_id: attachmentId }),
+  exportAttachment: (itemId: string, attachmentId: string, destPath: string): Promise<void> =>
+    invoke<void>('export_attachment', { item_id: itemId, attachment_id: attachmentId, dest_path: destPath }),
+  // D-53/D-60：附件 blob 是否已同步到本机（「附件内容待同步」态判定，按 attachment_id）。
+  attachmentBlobReady: (attachmentId: string): Promise<boolean> =>
+    invoke<boolean>('attachment_blob_ready', { attachment_id: attachmentId }),
 };
 
 /** 生成器 / TOTP。 */
