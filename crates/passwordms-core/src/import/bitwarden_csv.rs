@@ -136,6 +136,7 @@ pub fn parse(content: &str) -> CoreResult<ImportPreview> {
             updated_at: now,
             rev: 1,
             modified_by: "import".to_string(),
+            attachments: Vec::new(),
         });
     }
 

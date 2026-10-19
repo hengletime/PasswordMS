@@ -288,6 +288,7 @@ fn import_preview_wipe_plaintext_clears_items_and_folders() {
         updated_at: 0,
         rev: 1,
         modified_by: "qa_test".to_string(),
+        attachments: Vec::new(),
     };
     let mut preview = ImportPreview {
         folders: vec![folder],

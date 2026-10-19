@@ -123,6 +123,7 @@ fn build_login(raw: &Value, folder_map: &HashMap<String, String>) -> Option<Item
         updated_at: now,
         rev: 1,
         modified_by: "import".to_string(),
+        attachments: Vec::new(),
     })
 }
 
@@ -144,6 +145,7 @@ fn build_secure_note(raw: &Value, folder_map: &HashMap<String, String>) -> Optio
         updated_at: now,
         rev: 1,
         modified_by: "import".to_string(),
+        attachments: Vec::new(),
     })
 }
 

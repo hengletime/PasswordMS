@@ -75,6 +75,10 @@ pub const FLAG_BLOB: u8 = 0b0000_0010;
 pub const MAX_ATTACHMENT_BYTES: u64 = 20 * 1024 * 1024;
 /// 库总容量上限 200 MB。
 pub const MAX_VAULT_BYTES: u64 = 200 * 1024 * 1024;
+/// 单条目附件数上限（D-60 §3.14.1）：16 × ~200B 元数据 ≈ 3.2KB，远低于 1MB 同步帧上限。
+pub const MAX_ATTACHMENTS_PER_ITEM: usize = 16;
+/// 附件文件名最大字节数（D-60 §3.14.5，导入时超长拒绝）。
+pub const MAX_ATTACHMENT_FILENAME_BYTES: usize = 255;
 /// 安全笔记正文上限 256 KiB。
 pub const MAX_NOTE_BYTES: usize = 256 * 1024;
 /// 附件同步分片大小 1 MB【已裁定 U4：≤ 1 MB 分片】。

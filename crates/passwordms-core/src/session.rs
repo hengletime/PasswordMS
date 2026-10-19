@@ -151,8 +151,13 @@ impl Session {
 
         let device_id = load_or_create_device_id(path)?;
         let mut repo = Repository::open(path, vault_key, device_id)?;
+        // D-60 §3.14.3：存量独立附件条目 → SecureNote 挂附件（幂等；必须在同步 export
+        // 之前、wipe_plaintext 之前执行，避免迁移产物与远端旧语义帧竞态）。
+        let _ = repo.migrate_legacy_attachments();
         // 启动清理：到期回收站条目（F-15）。
         let _ = repo.purge_expired_trash();
+        // D-60 §3.14.4：孤儿 blob 可达性 GC（幂等扫描）。
+        let _ = repo.gc_orphan_blobs();
 
         Ok(Self {
             state: SessionState::Unlocked(Unlocked { repo, kek }),

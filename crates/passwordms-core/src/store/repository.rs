@@ -10,16 +10,17 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::constants::{
-    ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENT_BYTES, MAX_NOTE_BYTES, MAX_VAULT_BYTES,
-    MS_PER_DAY, RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM,
-    RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS,
+    ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILENAME_BYTES,
+    MAX_ATTACHMENTS_PER_ITEM, MAX_NOTE_BYTES, MAX_VAULT_BYTES, MS_PER_DAY, RECORD_TYPE_CONFLICT,
+    RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM, RECORD_TYPE_SYNC_STATE,
+    RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS,
 };
 use crate::crypto::keys::{self, VaultKey};
 use crate::crypto::{aead, rng};
 use crate::error::{CoreError, CoreResult};
 use crate::model::conflict::{ConflictChoice, ConflictEntry};
 use crate::model::folder::Folder;
-use crate::model::item::{AttachmentData, Item, ItemKind};
+use crate::model::item::{AttachmentMeta, Item, ItemKind};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::model::trash::TrashEntry;
@@ -547,6 +548,7 @@ impl Repository {
             updated_at: now,
             rev: 1,
             modified_by: self.device_id.clone(),
+            attachments: Vec::new(),
         };
         self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &serde_json::to_vec(&item)?)?;
         self.items.insert(item.item_id.clone(), item.clone());
@@ -581,15 +583,16 @@ impl Repository {
         Ok(item)
     }
 
-    /// 删除条目（默认进回收站；`permanent=true` 时彻底删除并清理附件 blob）。
+    /// 删除条目（默认进回收站；`permanent=true` 时彻底删除）。
+    ///
+    /// D-60 §3.14.4：彻底删除后的 blob 清理**不再 1:1 连带**（KeepBoth 共享引用会误杀），
+    /// 统一交孤儿 GC——父帧（含附件元数据）消失后，blob 若无任何引用即 tombstone。
     pub fn delete_item(&mut self, item_id: &str, permanent: bool) -> CoreResult<()> {
         let item = self.get_item(item_id)?;
         if permanent {
             self.tombstone(RECORD_TYPE_ITEM, item_id)?;
-            if let ItemKind::Attachment(_) = item.kind {
-                self.tombstone_blob(item_id)?;
-            }
             self.items.remove(item_id);
+            self.gc_orphan_blobs()?;
         } else {
             self.move_item_to_trash(&item)?;
         }
@@ -625,10 +628,34 @@ impl Repository {
         Ok(())
     }
 
-    // ===== 附件 =====
+    // ===== 附件（D-60：附件依附父条目，§3.14）=====
 
-    /// 导入附件（≤ 20 MB；库总量 ≤ 200 MB），返回新建的 attachment 条目。
-    pub fn import_attachment(&mut self, source_path: &Path, title: String) -> CoreResult<Item> {
+    /// 向父条目添加附件（§3.14.5 `add_attachment`）。
+    ///
+    /// 校验链：父条目存在且非遗留 attachment 型 → 附件数 ≤ [`MAX_ATTACHMENTS_PER_ITEM`]
+    /// → 文件名 ≤ [`MAX_ATTACHMENT_FILENAME_BYTES`] → 单文件 ≤ [`MAX_ATTACHMENT_BYTES`]
+    /// → 库容量 ≤ [`MAX_VAULT_BYTES`]。全部通过后：写 blob 帧（record_id =
+    /// `attachment_id`，**≠ 父 item_id**，§3.14.1 解耦）→ 父条目元数据追加 → 父 rev+1。
+    ///
+    /// `title` 仅用于校验兼容（D-59 遗留参数）：附件展示名就是 `filename`，
+    /// 空串原样接受；未来如需自定义展示名再扩展 `AttachmentMeta`。
+    #[allow(deprecated)]
+    pub fn add_attachment(
+        &mut self,
+        item_id: &str,
+        source_path: &Path,
+        title: &str,
+    ) -> CoreResult<Item> {
+        let _ = title; // 展示名 = filename；参数保留以维持 IPC 形状（§3.14.5）
+        let item = self.get_item(item_id)?.clone();
+        if matches!(item.kind, ItemKind::Attachment(_)) {
+            // 遗留型条目在迁移后不应存在；防御性拒绝。
+            return Err(CoreError::Validation("legacy_attachment_item".to_string()));
+        }
+        if item.attachments.len() >= MAX_ATTACHMENTS_PER_ITEM {
+            return Err(CoreError::AttachmentLimit);
+        }
+
         let meta = std::fs::metadata(source_path)?;
         let size = meta.len();
         if size > MAX_ATTACHMENT_BYTES {
@@ -645,36 +672,51 @@ impl Repository {
             .file_name()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "attachment".to_string());
+        if filename.len() > MAX_ATTACHMENT_FILENAME_BYTES {
+            return Err(CoreError::Validation("filename_too_long".to_string()));
+        }
         let mime = guess_mime(&filename);
 
-        let now = now_ms();
-        let item_id = uuid::Uuid::new_v4().to_string();
+        let attachment_id = uuid::Uuid::new_v4().to_string();
         let blob_ct_len = data.len() + crate::constants::AEAD_TAG_LEN;
-        let item = Item {
-            item_id: item_id.clone(),
-            kind: ItemKind::Attachment(AttachmentData {
-                title: if title.trim().is_empty() {
-                    filename.clone()
-                } else {
-                    title
-                },
-                original_filename: filename,
-                mime_type: mime,
-                size_bytes: size,
-                blob_ref: item_id.clone(),
-                blob_size_bytes: blob_ct_len as u64,
-            }),
-            folder_id: None,
-            favorite: false,
-            created_at: now,
-            updated_at: now,
-            rev: 1,
-            modified_by: self.device_id.clone(),
+        let attachment = AttachmentMeta {
+            attachment_id: attachment_id.clone(),
+            filename,
+            mime_type: mime,
+            size_bytes: size,
+            blob_size_bytes: blob_ct_len as u64,
         };
 
-        self.write_record(RECORD_TYPE_ITEM, &item.item_id, FLAG_BLOB, &data)?;
-        self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &serde_json::to_vec(&item)?)?;
-        self.items.insert(item.item_id.clone(), item.clone());
+        // blob 帧：record_id = attachment_id（§3.14.1 解耦；spool / 拉取清单同键）。
+        self.write_record(RECORD_TYPE_ITEM, &attachment_id, FLAG_BLOB, &data)?;
+
+        let mut updated = item;
+        updated.attachments.push(attachment);
+        updated.rev += 1;
+        updated.updated_at = now_ms();
+        updated.modified_by = self.device_id.clone();
+        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&updated)?)?;
+        self.items.insert(item_id.to_string(), updated.clone());
+        self.persist_header()?;
+        Ok(updated)
+    }
+
+    /// 从父条目移除单个附件（§3.14.5 `remove_attachment`）。
+    ///
+    /// 父条目 rev+1 正常传播（元数据减法随父帧过线）；blob **不立即墓碑**——
+    /// 交孤儿 GC（§3.14.4）：该 attachment_id 脱离引用集合后，下一次 GC 才 tombstone。
+    pub fn remove_attachment(&mut self, item_id: &str, attachment_id: &str) -> CoreResult<Item> {
+        let mut item = self.get_item(item_id)?.clone();
+        let before = item.attachments.len();
+        item.attachments.retain(|a| a.attachment_id != attachment_id);
+        if item.attachments.len() == before {
+            return Err(CoreError::ItemNotFound);
+        }
+        item.rev += 1;
+        item.updated_at = now_ms();
+        item.modified_by = self.device_id.clone();
+        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.items.insert(item_id.to_string(), item.clone());
         self.persist_header()?;
         Ok(item)
     }
@@ -686,20 +728,25 @@ impl Repository {
         Ok(self.open_frame(frame)?.to_vec())
     }
 
-    /// 导出附件到目标路径。
+    /// 导出附件到目标路径（§3.14.5：按 `(item_id, attachment_id)` 定位）。
     ///
-    /// D-53：附件条目存在但 blob 未同步到本机时，报 `ERR_BLOB_MISSING`
-    /// （此前误报「条目不存在」——这正是 D-53 缺陷的用户可见面）。
-    pub fn export_attachment(&self, item_id: &str, dest_path: &Path) -> CoreResult<()> {
+    /// D-53 语义保留：附件元数据存在但 blob 未同步到本机时，报 `ERR_BLOB_MISSING`。
+    pub fn export_attachment(
+        &self,
+        item_id: &str,
+        attachment_id: &str,
+        dest_path: &Path,
+    ) -> CoreResult<()> {
         let item = self.get_item(item_id)?;
-        let blob_ref = match &item.kind {
-            ItemKind::Attachment(a) => a.blob_ref.clone(),
-            _ => return Err(CoreError::Validation("not_an_attachment".to_string())),
-        };
-        if !self.has_blob(&blob_ref) {
+        let meta = item
+            .attachments
+            .iter()
+            .find(|a| a.attachment_id == attachment_id)
+            .ok_or(CoreError::ItemNotFound)?;
+        if !self.has_blob(&meta.attachment_id) {
             return Err(CoreError::BlobMissing);
         }
-        let data = self.read_blob(&blob_ref)?;
+        let data = self.read_blob(&meta.attachment_id)?;
         std::fs::write(dest_path, &data)?;
         Ok(())
     }
@@ -720,15 +767,128 @@ impl Repository {
         self.blobs.contains_key(blob_ref)
     }
 
-    /// 收集全部 attachment 条目的 `blob_ref`（供拉取方比对缺失清单）。
+    /// 收集全部附件 blob 引用（供拉取方比对缺失清单 / spool 有效性 / GC 引用集合）。
+    ///
+    /// D-60 §3.14.2/§3.14.4 修订：清单来源 = **活跃条目的 `attachments[].attachment_id`**
+    /// ∪ **回收站快照的 `attachments[].attachment_id`**（还原必须可用）；
+    /// 另含遗留 `ItemKind::Attachment` 条目的 `blob_ref`（迁移前的存量库兼容窗口，
+    /// 保证迁移前同步/GC 行为与 D-53 时代一致）。
+    #[allow(deprecated)]
     pub fn attachment_blob_refs(&self) -> Vec<String> {
-        self.items
+        let mut refs = Vec::new();
+        for item in self.items.values() {
+            match &item.kind {
+                // 遗留窗口：迁移前的独立附件条目（§3.14.3）。
+                ItemKind::Attachment(a) => refs.push(a.blob_ref.clone()),
+                _ => {
+                    for a in &item.attachments {
+                        refs.push(a.attachment_id.clone());
+                    }
+                }
+            }
+        }
+        for entry in self.trash.values() {
+            match &entry.item_snapshot.kind {
+                ItemKind::Attachment(a) => refs.push(a.blob_ref.clone()),
+                _ => {
+                    for a in &entry.item_snapshot.attachments {
+                        refs.push(a.attachment_id.clone());
+                    }
+                }
+            }
+        }
+        refs
+    }
+
+    /// 存量独立附件条目 → SecureNote 挂附件（D-60 §3.14.3，解锁时一次性自动迁移）。
+    ///
+    /// 规则：
+    /// 1. 新条目 `kind = SecureNote{ title: 原附件 title, body: "" }`——选 SecureNote
+    ///    而非 Login：假 Login（无密码）会污染 F-16 体检「弱口令」统计；
+    /// 2. `attachments = [AttachmentMeta{ attachment_id: 原条目 item_id（= 原 blob_ref
+    ///    → **blob 帧字节级零重写**）, filename: 原 original_filename, … }]`；
+    /// 3. 新条目 rev = 原 rev + 1、folder_id/favorite/created_at 继承 → 随同步传播；
+    /// 4. 旧 ITEM 帧置墓碑（D-56 链路自动传播删除）；
+    /// 5. 幂等：无 `kind == Attachment` 即空转。须在 wipe_plaintext 之前、同步 export
+    ///    之前执行（§3.14.8：避免迁移产物与远端旧语义帧竞态）。
+    ///
+    /// 返回迁移条目数。
+    pub fn migrate_legacy_attachments(&mut self) -> CoreResult<usize> {
+        #[allow(deprecated)]
+        let legacy: Vec<Item> = self
+            .items
             .values()
-            .filter_map(|item| match &item.kind {
-                ItemKind::Attachment(a) => Some(a.blob_ref.clone()),
-                _ => None,
-            })
-            .collect()
+            .filter(|item| matches!(item.kind, ItemKind::Attachment(_)))
+            .cloned()
+            .collect();
+        let n = legacy.len();
+        if n == 0 {
+            return Ok(0);
+        }
+        for old in legacy {
+            #[allow(deprecated)]
+            let (attachment_data, old_id) = match &old.kind {
+                ItemKind::Attachment(a) => (a.clone(), old.item_id.clone()),
+                _ => unreachable!("filtered above"),
+            };
+            let new_item = Item {
+                item_id: uuid::Uuid::new_v4().to_string(),
+                kind: ItemKind::SecureNote(crate::model::item::SecureNoteData {
+                    title: attachment_data.title.clone(),
+                    body: String::new(),
+                }),
+                folder_id: old.folder_id.clone(),
+                favorite: old.favorite,
+                created_at: old.created_at,
+                updated_at: old.updated_at,
+                rev: old.rev + 1,
+                modified_by: self.device_id.clone(),
+                attachments: vec![AttachmentMeta {
+                    // 关键：attachment_id = 原条目 item_id = 原 blob_ref → blob 帧零重写。
+                    attachment_id: old_id.clone(),
+                    filename: attachment_data.original_filename.clone(),
+                    mime_type: attachment_data.mime_type.clone(),
+                    size_bytes: attachment_data.size_bytes,
+                    blob_size_bytes: attachment_data.blob_size_bytes,
+                }],
+            };
+            // 旧 ITEM 帧置墓碑（blob 帧是独立槽位，不受影响）。
+            self.tombstone(RECORD_TYPE_ITEM, &old_id)?;
+            self.items.remove(&old_id);
+            self.write_record(
+                RECORD_TYPE_ITEM,
+                &new_item.item_id,
+                0,
+                &serde_json::to_vec(&new_item)?,
+            )?;
+            self.items.insert(new_item.item_id.clone(), new_item);
+        }
+        self.persist_header()?;
+        Ok(n)
+    }
+
+    /// 孤儿可达性 GC（D-60 §3.14.4）：不在引用集合中的 blob 帧 → tombstone。
+    ///
+    /// 触发时机：`purge_item` / `empty_trash` / `purge_expired_trash` / 解锁时（幂等）。
+    /// 正确性关键：KeepBoth 共享引用（两父条目同 attachment_id）任一存在即保活；
+    /// 父软删（trash 快照）不脱离引用集合，blob 保留供还原。
+    /// 返回本次 tombstone 的 blob 数。
+    pub fn gc_orphan_blobs(&mut self) -> CoreResult<usize> {
+        let referenced: std::collections::HashSet<String> =
+            self.attachment_blob_refs().into_iter().collect();
+        let orphans: Vec<String> = self
+            .blobs
+            .keys()
+            .filter(|id| !referenced.contains(*id))
+            .cloned()
+            .collect();
+        for id in &orphans {
+            self.tombstone_blob(id)?;
+        }
+        if !orphans.is_empty() {
+            self.persist_header()?;
+        }
+        Ok(orphans.len())
     }
 
     /// 完整 blob 帧（含 `wrapped_key`/`nonce`/`plaintext_len`/`ct`）。
@@ -802,14 +962,14 @@ impl Repository {
         Ok(item)
     }
 
-    /// 彻底删除回收站条目（含附件 blob）。
+    /// 彻底删除回收站条目（D-60 §3.14.4：blob 清理交孤儿 GC，不再 1:1 连带）。
     pub fn purge_item(&mut self, trash_id: &str) -> CoreResult<()> {
-        let entry = self.trash.get(trash_id).cloned().ok_or(CoreError::ItemNotFound)?;
-        if let ItemKind::Attachment(_) = entry.item_snapshot.kind {
-            self.tombstone_blob(&entry.item_snapshot.item_id)?;
+        if !self.trash.contains_key(trash_id) {
+            return Err(CoreError::ItemNotFound);
         }
         self.tombstone(RECORD_TYPE_TRASH, trash_id)?;
         self.trash.remove(trash_id);
+        self.gc_orphan_blobs()?;
         Ok(())
     }
 
@@ -924,18 +1084,14 @@ impl Repository {
     ///
     /// **D-56 降级为内部保留方法**：merge 的远端删除分支改走
     /// [`Repository::trash_item_direct`]（软删，O-05 要求对端同样享有回收站误删保护），
-    /// 本方法不再被同步路径调用。其 D-53 时代的「连带 `tombstone_blob`」规则随之只在
-    /// purge 路径（[`Repository::purge_item`]）生效——软删后 blob 必须保留供还原。
+    /// 本方法不再被同步路径调用。
+    /// **D-60 §3.14.4**：D-53 时代的「连带 `tombstone_blob`」1:1 规则作废，
+    /// blob 清理统一交孤儿 GC（KeepBoth 共享引用不得误杀）。
     /// 保留本方法供未来 compaction / 内部工具使用。
     pub fn remove_item_direct(&mut self, item_id: &str) -> CoreResult<()> {
-        // 先查 kind 再墓碑：条目明文仍在本内存时判断，之后 tombstone 不可逆。
-        if let Some(item) = self.get_item_opt(item_id) {
-            if let ItemKind::Attachment(_) = item.kind {
-                self.tombstone_blob(item_id)?;
-            }
-        }
         self.tombstone(RECORD_TYPE_ITEM, item_id)?;
         self.items.remove(item_id);
+        self.gc_orphan_blobs()?;
         Ok(())
     }
 
@@ -1276,16 +1432,28 @@ impl Repository {
     pub fn wipe_plaintext(&mut self) {
         for item in self.items.values_mut() {
             item.kind.wipe_plaintext();
+            for a in item.attachments.iter_mut() {
+                a.wipe_plaintext();
+            }
         }
         for folder in self.folders.values_mut() {
             folder.wipe_plaintext();
         }
         for entry in self.trash.values_mut() {
             entry.item_snapshot.kind.wipe_plaintext();
+            for a in entry.item_snapshot.attachments.iter_mut() {
+                a.wipe_plaintext();
+            }
         }
         for entry in self.conflicts.values_mut() {
             entry.local_snapshot.kind.wipe_plaintext();
             entry.remote_snapshot.kind.wipe_plaintext();
+            for a in entry.local_snapshot.attachments.iter_mut() {
+                a.wipe_plaintext();
+            }
+            for a in entry.remote_snapshot.attachments.iter_mut() {
+                a.wipe_plaintext();
+            }
         }
     }
 }

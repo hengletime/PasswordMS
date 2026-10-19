@@ -46,7 +46,8 @@ pub fn run() {
             commands::folder_cmd::delete_folder,
             commands::folder_cmd::reorder_folders,
             // keydoc
-            commands::keydoc_cmd::import_attachment,
+            commands::keydoc_cmd::add_attachment,
+            commands::keydoc_cmd::remove_attachment,
             commands::keydoc_cmd::export_attachment,
             commands::keydoc_cmd::attachment_blob_ready,
             // generator

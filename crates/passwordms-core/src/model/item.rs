@@ -49,15 +49,50 @@ pub struct AttachmentData {
     pub blob_size_bytes: u64,
 }
 
+/// 附件元数据（D-60 §3.14.1：内嵌于父条目；`attachment_id` 同时是 blob 帧 record_id）。
+///
+/// 设计要点（§3.14.1）：
+/// - `attachment_id`（UUID）**≠ 父 `item_id`**——同一 blob 帧可被多条目引用（KeepBoth
+///   仲裁场景），附件删除不立即 tombstone blob，交孤儿 GC（§3.14.4）；
+/// - `filename` 属用户私密（与原 `AttachmentData.original_filename` 同级），纳入 wipe；
+/// - `mime_type` / 尺寸字段不含凭据，不擦（与原裁定一致）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    /// UUID；同时是 blob 帧的 record_id（16B）。
+    pub attachment_id: String,
+    /// 原始文件名（wipe_plaintext 覆盖）。
+    pub filename: String,
+    pub mime_type: String,
+    /// 明文大小（字节）。
+    pub size_bytes: u64,
+    /// 密文占用（含 AEAD tag；容量统计口径）。
+    pub blob_size_bytes: u64,
+}
+
+impl AttachmentMeta {
+    /// 擦除原始文件名（A-04：与原 AttachmentData 同级私密）。
+    pub fn wipe_plaintext(&mut self) {
+        use zeroize::Zeroize;
+        self.filename.zeroize();
+    }
+}
+
 /// 条目类型枚举。内部标签 `type`，取值 `login` / `secure_note` / `attachment`。
+///
+/// **D-60 §3.14.1**：`Attachment` 变体**废弃**——附件改为父条目内嵌
+/// `attachments` 数组（见 [`Item::attachments`]）。本变体仅保留**反序列化**能力
+/// 供存量库迁移读取（`migrate_legacy_attachments`，§3.14.3），不得再新建。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ItemKind {
     Login(LoginData),
     SecureNote(SecureNoteData),
+    #[deprecated(since = "0.1.0", note = "D-60: attachments moved to Item.attachments")]
     Attachment(AttachmentData),
 }
 
+// 下述四个方法需匹配 `Attachment` 遗留变体（迁移读取兼容，D-60）——整块豁免弃用告警。
+#[allow(deprecated)]
 impl ItemKind {
     /// 条目标题（各子类型均有）。
     pub fn title(&self) -> &str {
@@ -115,6 +150,10 @@ pub struct Item {
     pub rev: u64,
     #[serde(default)]
     pub modified_by: String,
+    /// 附属附件元数据（D-60 §3.14.1；随父条目密文帧过线，自动获得 E2E/rev/墓碑语义）。
+    /// `#[serde(default)]` 兼容旧帧（无此字段反序列化为空数组）。
+    #[serde(default)]
+    pub attachments: Vec<AttachmentMeta>,
 }
 
 impl Item {

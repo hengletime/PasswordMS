@@ -573,6 +573,8 @@ pub enum BlobMessage {
 
 MVP 两端同时发版；协议层以 `SyncPayload.blob_support`（`serde(default)=false`）做**能力协商**：老端不带该字段 → 新端**不发起** blob 阶段，行为与现状逐位一致（老端永远不会收到无法解析的新报文）；两端同版则全功能。混跑期间 D-53 缺陷在老端依旧存在——可接受，文档留痕。
 
+> **🔴 修订注记（D-60 附件依附父条目）**：本节「blob 帧的 `record_id == blob_ref == item_id`」假设**自 D-60 起作废**——blob 帧 `record_id` 改为附件自身的 `attachment_id`（UUID，≠ 父 item_id），附件元数据内嵌于父条目（§3.14）。`blob_transfer.rs` 按 `blob_ref 16B` 传输与 spool 按 `blob_ref` 隔离的机制**不变**；变化仅在 blob 清单来源（`attachment_blob_refs` 遍历父条目 `attachments` 数组，**含回收站快照**）与孤儿清理判定（可达性 GC，§3.14.4）。`blob_support` 协商机制不变。
+
 ### 3.13 删除传播（增量设计 · 缺陷 D-56）
 
 > **缺陷**：`export_changes` 只遍历 `live` 表且 `deleted` 恒为 `false`，墓碑帧从不导出 → 任何删除（条目/分组/blob）不过线（§3.12.7 已上报）。本节补齐「墓碑导出 + 远端删除语义」，**零帧格式变更、零 wire 结构变更**，与 §3.12 blob 阶段正交。
@@ -651,6 +653,8 @@ state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分�
 2. **发送侧墓碑基准推进（`merge::note_sent_tombstones`）**：协议无「已应用」回执，接收侧 base 无法回传；各发送点在**发送成功后**把已导出墓碑记入本端对该对端的 base（`hash=[0;32]`），下一轮导出过滤即零重发（§3.13.3 的落点）。失败路径不落盘（`save_sync_state` 仅在整轮成功后执行），中断自动重发，宁多勿丢。
 3. **复活抑制**：merge 的 live 分支在本端无活跃条目但持有 `rev >= 变更 rev` 的墓碑时跳过该 live 变更——否则「采用远端」删除仲裁后的收敛会被对端陈旧 live 变更回滚（拉锯震荡）。
 
+> **🔴 修订注记（D-60 附件依附父条目）**：本节的「条目删除连带 blob」规则按 §3.14.4 改写为**可达性 GC**——父条目墓碑（附件元数据随父帧密文一同死亡）到达对端走软删、blob 保留（回收站还原需要），blob 墓碑仅在**孤儿回收**时发生（扫描全部活跃条目 + 回收站快照的 `attachments[].attachment_id`，不在引用集合中的 blob 帧才 `tombstone_blob`）。原「`remove_item_direct` 连带 `tombstone_blob`」1:1 规则作废（KeepBoth 仲裁下两条目可共享同一 blob_ref，1:1 会误杀）。merge 的墓碑判重/冲突箱/复活抑制逻辑**不变**（全部作用于父条目层，附件无独立 rev）。
+
 > **架构复核追认（高见远，2026-10-18）**：上三点全部追认——1 是对 §3.13.2 伪码 `>=` 缺陷的正确修正（主干路径阻断级，反例独立复推成立）；2 是 §3.13.3 欠定处的必要补全；3 是收敛正确性必需。**残余风险备案**：若本端完整走完一轮（send 成功→base 推进→落盘）而接收端在读取 push 帧之后、apply 落盘之前崩溃，该墓碑两端均不再重发，收敛为「对端存活、本端已删」的静默分歧（数据无损、不复发不震荡，窗口毫秒~秒级）——MVP 接受为已知残余风险。远期修正方向（P2 backlog）：(a) Lamport/HLC 时钟统一删除-vs-live 新旧比较（推荐，零 wire 变更）；(b) Done 载荷 base 回执反熵。到达序不对称（墓碑先到→冲突箱；live 先到→静默复活）同属此本质冲突，一并入 P2。
 
 #### 3.13.9 实现补注（D-57 · 重同步连接超时与网络文案归一化）
@@ -658,6 +662,121 @@ state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分�
 1. **连接统一短超时**：`SYNC_CONNECT_TIMEOUT_SECS = 4` 为配对与重同步共用常量；`transport::connect`（无超时版）已删除，全部连接走 `connect_with_timeout`。
 2. **connect 阶段文案统一**：`stage == "connect"` 的 Io 失败无论 kind 一律报 `err.network_unreachable`（「无法连接到电脑：请确认同一 Wi‑Fi 同一网段」）——连接失败对用户只有一种可行动含义。配对路径 client.rs 的 connect 失败**不带** connect 阶段标注，仍按 kind 归一化结果报 `network_refused`（「对方可能已离开配对页」），两场景可行动含义区分保留（QA 实证）。
 3. **跨平台 kind 形态根因（D-44 遗留缺陷修正）**：`format!("io:{}", err.kind())` 的 Debug 输出在 Windows 实测为小写带空格（`io:connection refused`/`io:timed out`，QA harness 本机实证），D-44 的 PascalCase 字面映射表（`io:ConnectionRefused`）**整体落空坠入 `err.io`**——用户网络错误全部显示「文件读写出错」。修复：message_key 对 kind 归一化（去 `io:` 前缀 → 小写 → 仅留字母数字）后匹配，双形态通吃；`operation would block` 等未映射 kind 仍走 `err.io` 兜底（WouldBlock 在 D-46 轮询中是正常控制流不上屏，无回归）。
+
+### 3.14 附件产品语义修正（增量设计 · D-60：附件依附父条目）
+
+> **需求**（主人 #530 走查裁定）：附件不是第三种条目类型，而是**登录/安全笔记条目的附属内容**——详情页内添加/查看/导出/删除，文件随父条目走（父删除 → 附件级联；同步随父条目变更传播）。不再有独立 attachment 条目与列表页「添加附件」按钮（D-59 入口回退）。
+
+#### 3.14.1 数据模型裁定：案 a —— 父条目内嵌 `attachments` 数组
+
+**两案权衡**：
+
+| 维度 | 案 a：条目内嵌数组 | 案 b：独立记录 + `parent_item_id` 外键 |
+|------|------------------|--------------------------------------|
+| 实体/白名单 | 零新增（复用 ITEM 帧与全部既有链路） | 新 record_type(0x08)：export 白名单、墓碑导出、peer 过滤、merge 分支、冲突箱拼装全链路加类 |
+| 同步帧 | 元数据随父 `ChangeRecord` 加密帧走，自动获得 E2E/rev/快照 | 父子两帧独立同步，冲突检测粒度碎，仲裁需拼装 |
+| 删除语义 | 父 tombstone → 附件级联天然成立 | 级联需外键扫描 + 子墓碑传播 |
+| 冲突箱 | Item 快照完整含附件 | 快照须拼父子两帧 |
+| blob 引用 | 需孤儿 GC 替代 1:1 引用（见 §3.14.4） | 天然 1:1 |
+| IPC/UI | 父条目详情一跳可达 | 双实体查询拼装 |
+
+**裁定：案 a**。决定性理由：同步链路（白名单/墓碑/判重/冲突箱）**零新增类型**，删除级联天然成立；代价（孤儿 GC）与回收站生命周期天然对齐（§3.14.4）。附件数上限（常量 `MAX_ATTACHMENTS_PER_ITEM = 16`，禁硬编码）下单条目元数据最坏 ≈ 16 × ~200B ≈ 3.2KB，相对 1MB 传输帧上限无压力。
+
+**结构定义（serde，wire snake_case；`#[serde(default)]` 向后兼容）**：
+
+```rust
+pub struct AttachmentMeta {
+    pub attachment_id: String,      // UUID；同时是 blob 帧 record_id（16B）
+    pub filename: String,           // 原始文件名（wipe_plaintext 覆盖）
+    pub mime_type: String,
+    pub size_bytes: u64,
+    pub blob_size_bytes: u64,       // 密文占用（容量统计）
+}
+pub struct Item {
+    // … 既有字段不变 …
+    #[serde(default)]
+    pub attachments: Vec<AttachmentMeta>,
+}
+```
+
+- **`ItemKind::Attachment` 变体废弃**（保留反序列化仅供迁移读取，§3.14.3）；
+- **`attachment_id == blob 帧 record_id`**：旧模型「`blob_ref == item_id`」的强耦合解耦——同一 blob 帧可被多条目引用（KeepBoth 仲裁场景），附件删除**不**立即 tombstone blob，交孤儿 GC；
+- `wipe_plaintext`：`filename` 纳入擦除（与原 `AttachmentData.original_filename` 同级私密）；
+- 搜索（`item_matches`）与健康检查**不含**附件文件名（最小改动：不扩大搜索面，文件名随父条目密文天然受 A-01 保护）。
+
+#### 3.14.2 同步协议影响：元数据随父帧走，blob 阶段机制不变
+
+| 项 | 影响与裁定 |
+|----|-----------|
+| 元数据传输 | `attachments` 在父条目明文 payload 内 → 随父 `ChangeRecord` 加密过线：**自动获得**端到端加密（A-01）、rev 版本化、LWW、冲突快照、D-56 判重/墓碑——**wire 结构零变更** |
+| blob 拉取清单 | 对端 merge 应用父条目后，`attachment_blob_refs()` 改为收集**全部活跃条目 + 回收站快照**的 `attachments[].attachment_id`；缺失者即拉取清单（父帧数组即清单，无需新报文） |
+| blob 阶段机制 | `BlobPull/Meta/Data/End`、`SYNC_BLOB_CHUNK_BYTES`、spool 按 `attachment_id`（原 blob_ref）目录隔离、manifest 续传、`blob_support` 协商——**全部不变**；仅 spool 键由「父 item_id」变为「attachment_id」（多附件互不干扰） |
+| D-56 级联 | 父墓碑到达 → 对端软删父（trash 快照含附件元数据）→ blob 保留；对端 purge 父 → 孤儿 GC tombstone blob。**无新增墓碑类型**，判重/复活抑制/冲突箱逻辑全部保持在父条目层 |
+| 冲突仲裁 | 「两者都留」：新条目复制 `attachments` 元数据、`attachment_id` 原样 → 两父条目**共享**同一 blob 帧（内容写后不可变，双份导出均正确）；删除其一不清 blob（GC 兜底） |
+| 老端兼容 | 父帧多出 `attachments` 字段：老端 serde 忽略未知字段可读，但**语义不识别**（老端把附件当独立条目）；本项目双端同发惯例不变——**混跑不支持附件新语义**，`blob_support` 协商照旧，文档留痕 |
+
+#### 3.14.3 迁移：启动时一次性自动迁移（独立附件条目 → SecureNote 挂附件）
+
+**裁定：自动迁移（migrate on unlock）**，废弃重导不采纳。依据：blob 帧可零重写复用（迁移仅改父帧元数据，blob 帧原样保留）；迁移逻辑幂等可测；「主人库只有走查样例」不构成废弃重导的充分理由——自动迁移对任意老库都正确。
+
+规则（解锁重建索引后、对 `kind == Attachment` 的存量条目一次性执行）：
+
+1. 生成新条目 `kind = SecureNote{ title: 原附件 title, body: "" }`——**选 SecureNote 而非 Login**：假 Login（无密码）会污染 F-16 体检「弱口令」统计，笔记无此副作用；
+2. `attachments = [AttachmentMeta{ attachment_id: 原条目 item_id（= 原 blob_ref → **blob 帧零重写**）, filename: 原 original_filename, … }]`；
+3. 新条目 `rev = 原 rev + 1`、`folder_id/favorite/created_at` 继承 → 正常随同步传播；
+4. 旧 ITEM 帧置墓碑（D-56 墓碑链路自动传播删除）；
+5. `persist_header` + 计数修正；迁移在 `wipe_plaintext` 之前、幂等（无 `kind == Attachment` 即空转）。
+
+#### 3.14.4 blob 生命周期：孤儿可达性 GC
+
+取代 D-53/D-56 的 1:1「条目删 → blob 墓碑」规则：
+
+- **引用集合**：遍历全部活跃条目 `attachments[].attachment_id` ∪ 全部回收站快照的 `attachments[].attachment_id`（还原必须可用）；
+- **GC 触发时机**：`purge_item` / `empty_trash` / `purge_expired_trash` / 解锁时（幂等扫描）；不在引用集合中的 blob 帧 → `tombstone_blob`；
+- **正确定性**：删除单个附件（父条目仍存活）→ 该 blob 立即脱离引用集合 → 下一次 GC 时 tombstone（密文滞留待未来 compaction，§3.13.3 量化结论不变）；KeepBoth 共享引用 → 双方任一存在即保活 ✓；
+- 容量预检（`MAX_VAULT_BYTES`）语义不变（`file_size()` 已含全部滞留密文）。
+
+#### 3.14.5 IPC 契约变更（前后端）
+
+| 命令 | 变更 |
+|------|------|
+| `add_attachment`（替代 `import_attachment`） | `{item_id, source_path, title?}` → 返回**父条目** `ItemDto`（`rev+1`）；校验：父存在且非 attachment 遗留、附件数 ≤ 16（`ERR_ATTACHMENT_LIMIT`，新增错误码）、单文件 ≤ 20MB、库容量 ≤ 200MB |
+| `remove_attachment`（新） | `{item_id, attachment_id}` → 父 `ItemDto`（`rev+1`）；blob 交 GC |
+| `export_attachment` | `{item_id, attachment_id, dest_path}`（原按条目定位改按附件定位） |
+| `ItemDto` | 增加 `attachments: AttachmentMetaDto[]` |
+
+`attachment-import.ts` 守卫逻辑**原样复用**：依赖注入签名仅 `importAttachment` → `addAttachment(item_id, …)` 一处替换，取消/成功/失败/守卫四分支契约不变。
+
+#### 3.14.6 UI 改动清单
+
+| 改动 | 说明 |
+|------|------|
+| ItemList：**回退 D-59 第三按钮** | 「添加附件」列表入口移除（`attachment-import.ts` 逻辑保留供详情页复用） |
+| ItemDetail：新增附件区 | 登录/笔记条目通用：区头「添加附件」+ 行列表（文件名 / 大小 / MIME + 导出 + 删除）；空态隐藏 |
+| AttachmentView → **AttachmentRow** | 由整页详情组件改造为附件行组件（导出前保留明文风险二次确认 + `ERR_BLOB_MISSING` 待同步态） |
+| ItemEditor | 不含附件编辑（附件只在详情页操作，避免编辑-删除竞态） |
+| Trash | 父条目行显示附件数徽标；还原/彻底删除均整父操作 |
+| i18n | `item.new_attachment` 撤销；新增 `attachments.add/export/remove/empty/limit` 等键（中英双份） |
+
+`docs/06-ui-design.md` 增加一行「待实现」注记（D-60 附件区布局）。
+
+#### 3.14.7 任务分解（T-D60-xx）
+
+| 编号 | 任务 | 涉及文件 | 前置 | 验收要点 |
+|------|------|---------|------|---------|
+| T-D60-01 | core 数据模型 + 迁移 + GC | `model/item.rs`（AttachmentMeta/attachments/wipe）、`store/repository.rs`（add/remove_attachment、export_attachment 重定位、孤儿 GC、migrate_legacy_attachments）、`constants.rs`（MAX_ATTACHMENTS_PER_ITEM=16）、`error.rs`（ERR_ATTACHMENT_LIMIT） | — | serde 往返含 attachments（default 兼容旧帧）；迁移后 blob 帧字节不变且导出一致；GC 不误杀 trash 快照引用与 KeepBoth 共享引用；附件数上限拒绝 |
+| T-D60-02 | core 同步 + 删除适配 | `repository.rs`（attachment_blob_refs 扩展含 trash 快照）、`sync/blob_transfer.rs`（spool 键确认）、`sync/merge.rs`（复核父层逻辑不变） | T-D60-01 | blob 拉取清单来自父数组；父软删 blob 保留；KeepBoth 共享 blob 同步后双端可导出；多附件（≥3）逐个续传 |
+| T-D60-03 | 前端 UI | `ItemList.svelte`（回退第三按钮）、`ItemDetail.svelte`（附件区）、`AttachmentView→AttachmentRow`、`attachment-import.ts`（注入改造+测试适配）、i18n 双份、`docs/06-ui-design.md` 注记 | T-D60-01 | 列表无独立附件入口；详情页增/导出/删全链路；守卫四分支测试照过；明文风险二次确认保留 |
+| T-D60-04 | 回归测试 | `tests/sync_blob.rs`（9 例改：blob_ref≠item_id、多附件）、`tests/sync_deletion.rs`（8 例改：父删级联 GC）、`sync_conflict`（快照含附件）、`ipc-contract.test.ts`（锚点更新）、新增 attachment-in-item 用例 | T-D60-02, T-D60-03 | 全部旧用例修订后通过 + 新增：添加附件→父 rev+1→同步→对端详情可见→导出字节一致→删附件→GC；迁移用例（老库 attachment 条目→SecureNote 挂附件） |
+| T-D60-05 | 文档收尾 | `docs/03-impl.md`（实现注记） | T-D60-04 | 与 §3.14 一致；标注混跑限制 |
+
+#### 3.14.8 风险与边界
+
+- **元数据膨胀**：附件数上限 16（常量），最坏 ~3.2KB/父帧，远低于 1MB 传输上限；文件名长度校验 ≤ 255B（导入时拒绝超长，`ERR_VALIDATION`）；
+- **多附件顺序与续传**：blob 阶段逐 `attachment_id` 串行传输，spool 按其目录隔离，manifest 续传机制复用，互不干扰；
+- **KeepBoth 共享 blob**：元数据复制、blob 共享，GC 引用集合保证不误删（T-D60-01/T-D60-04 显式用例）；
+- **回收站**：整父呈现（附件数徽标），不提供单附件粒度还原——附件操作只在活跃父条目上；
+- **迁移触发时机**：解锁后同步前执行，避免迁移产物与远端旧语义帧竞态；两端各自幂等迁移，收敛一致。
 
 ---
 

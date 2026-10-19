@@ -25,6 +25,7 @@ fn login(id: &str, password: &str, updated_at: i64, rev: u64) -> Item {
         updated_at,
         rev,
         modified_by: "qa_test".to_string(),
+        attachments: Vec::new(),
     }
 }
 
@@ -137,6 +138,7 @@ fn health_ignores_non_login_items() {
         updated_at: 0,
         rev: 1,
         modified_by: "qa_test".to_string(),
+        attachments: Vec::new(),
     };
     let report = health::check(&[note], &cfg, 1_000_000);
     assert_eq!(report.login_count, 0);

@@ -38,6 +38,8 @@ pub mod codes {
     pub const ERR_BLOB_INCOMPLETE: &str = "ERR_BLOB_INCOMPLETE";
     /// 【D-53 新增】接收端容量预检超限（Meta 阶段拒绝，不落半个分片）。
     pub const ERR_BLOB_CAPACITY: &str = "ERR_BLOB_CAPACITY";
+    /// 【D-60 新增】单条目附件数超上限（MAX_ATTACHMENTS_PER_ITEM）。
+    pub const ERR_ATTACHMENT_LIMIT: &str = "ERR_ATTACHMENT_LIMIT";
     /// 【主理人裁定 U1/U2 新增】Joiner 本地库非空时禁止静默采用 Host 的 VK。
     pub const ERR_VK_ADOPT_REQUIRES_EMPTY: &str = "ERR_VK_ADOPT_REQUIRES_EMPTY";
     pub const ERR_IO: &str = "ERR_IO";
@@ -71,6 +73,9 @@ pub enum CoreError {
     Validation(String),
     #[error("attachment exceeds the per-file size limit")]
     AttachmentTooLarge,
+    /// 【D-60】单条目附件数超上限（§3.14.5）。
+    #[error("attachment count exceeds the per-item limit")]
+    AttachmentLimit,
     #[error("vault total capacity exceeded")]
     VaultCapacityExceeded,
     #[error("unsafe url scheme")]
@@ -129,6 +134,7 @@ impl CoreError {
             CoreError::FolderNameInvalid => codes::ERR_FOLDER_NAME_INVALID,
             CoreError::Validation(_) => codes::ERR_VALIDATION,
             CoreError::AttachmentTooLarge => codes::ERR_ATTACHMENT_TOO_LARGE,
+            CoreError::AttachmentLimit => codes::ERR_ATTACHMENT_LIMIT,
             CoreError::VaultCapacityExceeded => codes::ERR_VAULT_CAPACITY_EXCEEDED,
             CoreError::UnsafeUrl => codes::ERR_UNSAFE_URL,
             CoreError::ImportParse(_) => codes::ERR_IMPORT_PARSE,
@@ -164,6 +170,7 @@ impl CoreError {
             CoreError::FolderNameInvalid => "err.folder_name",
             CoreError::Validation(_) => "err.validation",
             CoreError::AttachmentTooLarge => "err.attachment_too_large",
+            CoreError::AttachmentLimit => "err.attachment_limit",
             CoreError::VaultCapacityExceeded => "err.vault_capacity",
             CoreError::UnsafeUrl => "err.unsafe_url",
             CoreError::ImportParse(_) => "err.import_parse",

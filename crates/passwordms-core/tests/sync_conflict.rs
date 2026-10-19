@@ -25,6 +25,7 @@ fn login(id: &str, title: &str, rev: u64) -> Item {
         updated_at: rev as i64,
         rev,
         modified_by: "qa_test".to_string(),
+        attachments: Vec::new(),
     }
 }
 

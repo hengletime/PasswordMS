@@ -463,8 +463,8 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
     let host_vault = dir.join("host.vault");
     let joiner_vault = dir.join("joiner.vault");
 
-    // Host 导入 64KB 附件；配对同步（D-53 blob 阶段把 blob 带到 Joiner）。
-    let (item_id, original) = {
+    // Host 建父条目挂 64KB 附件（D-60：附件元数据随父帧过线，blob 经 D-53 阶段到 Joiner）。
+    let (parent_id, att_id, original) = {
         let mut hs = Session::create(&host_vault, HOST_PWD, true).unwrap();
         let src = dir.join("src.bin");
         let mut data = vec![0u8; 64 * 1024];
@@ -472,39 +472,45 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
             *b = (i % 251) as u8;
         }
         std::fs::write(&src, &data).unwrap();
-        let item = hs.repo_mut().unwrap().import_attachment(&src, "att".to_string()).unwrap();
-        (item.item_id, data)
+        let parent = make_login(&mut hs, "att-parent", None);
+        let parent = hs
+            .repo_mut()
+            .unwrap()
+            .add_attachment(&parent.item_id, &src, "")
+            .unwrap();
+        let att_id = parent.attachments[0].attachment_id.clone();
+        (parent.item_id, att_id, data)
     };
     let resync_server = ResyncServer::start(0, "DelHost".to_string()).unwrap();
     let resync_port = resync_server.port();
     let (_h1, _j1, host_id) = pair_first(&host_vault, resync_port, &joiner_vault);
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    assert!(joiner_session.repo().unwrap().has_blob(&item_id), "配对后 blob 应已同步");
+    assert!(joiner_session.repo().unwrap().has_blob(&att_id), "配对后 blob 应已同步");
 
-    // Joiner 软删附件 → Host 软删且 blob 保留。
-    joiner_session.repo_mut().unwrap().delete_item(&item_id, false).unwrap();
+    // Joiner 软删父条目 → Host 软删且 blob 保留（trash 快照仍引用，§3.14.4）。
+    joiner_session.repo_mut().unwrap().delete_item(&parent_id, false).unwrap();
     let (_h1o, _j1o) = run_resync(&host_vault, resync_server, &mut joiner_session, &host_id);
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let repo = hs.repo().unwrap();
-        assert!(repo.get_item_opt(&item_id).is_none());
-        assert!(repo.has_blob(&item_id), "远端软删必须保留 blob（还原需要）");
+        assert!(repo.get_item_opt(&parent_id).is_none());
+        assert!(repo.has_blob(&att_id), "远端软删必须保留 blob（还原需要）");
         assert_eq!(repo.list_trash().len(), 1);
     }
 
-    // Joiner purge（彻底删其回收站快照）→ blob 墓碑仅本地生效。
+    // Joiner purge（彻底删其回收站快照）→ GC 清 blob，仅本地生效。
     {
         let trash_id = joiner_session.repo().unwrap().list_trash()[0].trash_id.clone();
         joiner_session.repo_mut().unwrap().purge_item(&trash_id).unwrap();
-        assert!(!joiner_session.repo().unwrap().has_blob(&item_id), "purge 应清 blob");
+        assert!(!joiner_session.repo().unwrap().has_blob(&att_id), "purge 应清 blob");
     }
     // purge 事件不过线：TRASH 墓碑（白名单外）与 blob 墓碑（不独立导出）均不出网，
     // Host 的 blob 与回收站不受影响。
     let (_h2o, _j2o) = run_resync(&host_vault, rebind(resync_port), &mut joiner_session, &host_id);
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        assert!(hs.repo().unwrap().has_blob(&item_id), "对端 blob 不受本端 purge 影响");
+        assert!(hs.repo().unwrap().has_blob(&att_id), "对端 blob 不受本端 purge 影响");
         assert_eq!(hs.repo().unwrap().list_trash().len(), 1, "purge 事件不过线");
     }
 
@@ -514,19 +520,22 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
         let trash_id = hs.repo().unwrap().list_trash()[0].trash_id.clone();
         hs.repo_mut().unwrap().restore_item(&trash_id).unwrap();
         let dest = dir.join("host-export.bin");
-        hs.repo().unwrap().export_attachment(&item_id, &dest).unwrap();
+        hs.repo()
+            .unwrap()
+            .export_attachment(&parent_id, &att_id, &dest)
+            .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), original, "还原后导出字节一致");
     }
     let (_h3o, j3) = run_resync(&host_vault, rebind(resync_port), &mut joiner_session, &host_id);
     assert!(j3.applied >= 1, "还原变更应过线");
-    assert!(joiner_session.repo().unwrap().get_item_opt(&item_id).is_some());
-    assert!(joiner_session.repo().unwrap().has_blob(&item_id), "存活附件缺失 blob 应经 D-53 阶段补齐");
+    assert!(joiner_session.repo().unwrap().get_item_opt(&parent_id).is_some());
+    assert!(joiner_session.repo().unwrap().has_blob(&att_id), "存活父条目缺失 blob 应经 D-53 阶段补齐");
     {
         let dest = dir.join("joiner-export.bin");
         joiner_session
             .repo()
             .unwrap()
-            .export_attachment(&item_id, &dest)
+            .export_attachment(&parent_id, &att_id, &dest)
             .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), original);
     }
