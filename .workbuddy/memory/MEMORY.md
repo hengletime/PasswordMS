@@ -65,3 +65,5 @@ exe 三条硬验证：
   ⚠️ **每一次"更改完成交付"都必须随附完整可一键执行的 git 命令**（`git add` 带全部路径 + heredoc 的 commit message），
   主人明确要求过（2026-10-14 因连续两轮交付没附命令被点名）。交付清单里没有 git 命令 = 交付不完整。
   命令须按当轮 `git status --porcelain` 现点现开；跨多轮未提交时，一条命令覆盖全部待提交内容并注明。
+
+**build-android.sh 真身新鲜度门（D-60 补丁，2026-10-19）**：修复分支拷 REAL_SO 前必须验证其 mtime 晚于上游构建起点——否则上游 cargo 失败（如 .cargo-build-lock 撞锁 os error 5）时旧真身会被打进新包且「哈希自比」四断言全绿（fail-open）。⚠️ 起点时间戳必须在上游构建**之前**取，放在校验节会把编译完成时刻误判过期（首版踩过）。僵尸锁特征：mtime 数天前 + cargo 报 os error 5，清理前先确认无 cargo/rustc 进程存活。

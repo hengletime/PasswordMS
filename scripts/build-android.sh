@@ -125,6 +125,12 @@ else
 fi
 
 # ---------- 3. 上游构建 ----------
+# 记录上游构建起点时间戳（用于修复分支的真身新鲜度门，D-60 补丁）。
+# 背景（2026-10-19 实测事故）：上游 cargo 因 .cargo-build-lock os error 5 失败时，
+# 旧一轮留下的 REAL_SO 仍满足「四断言」（哈希就是跟它自己比的）→ 旧 core 被打进包
+# 且全部门禁绿灯——fail-open。故修复分支必须证明 REAL_SO 比上游起点新。
+# ⚠️ 必须在上游构建**之前**取值（首版误放在校验节，把「编译完成时刻」误判成过期）。
+UPSTREAM_START_TS="$(date +%s)"
 log "上游构建：npx tauri android build --apk --target aarch64"
 log "注意：本步骤在本机必然产出「空壳包」（包内 .so 为 0 字节），不得据其退出码判定成功。"
 UPSTREAM_RC=0
@@ -337,6 +343,12 @@ else
   warn "APK 完整性校验失败：上游产出空壳包 → 进入自动修复分支（D-17）。"
   if [ ! -f "$REAL_SO" ]; then
     die "上游未产出真实库：$REAL_SO 不存在。请先确认 'npx tauri android build' 是否真的完成了 Rust 编译。（本脚本不会自行调用 cargo：Android 链接器由 Tauri 注入，直接调 cargo 会失败。）"
+  fi
+  # 真身新鲜度门（D-60 补丁）：REAL_SO 的 mtime 必须晚于上游构建起点，
+  # 否则说明上游 cargo 没有真正编译（如构建锁冲突），拷进去的是上一轮的旧库。
+  REAL_SO_TS="$(stat -c %Y "$REAL_SO" 2>/dev/null || echo 0)"
+  if [ "$REAL_SO_TS" -lt "$UPSTREAM_START_TS" ]; then
+    die "真身过期（stale artifact）：$REAL_SO 的 mtime（${REAL_SO_TS}）早于上游构建起点（${UPSTREAM_START_TS}）——上游 cargo 未完成本次编译。最常见根因：.cargo-build-lock 冲突（os error 5）。请清理残留锁/确认无并发构建后重跑。本门禁不允许用旧库打新包。"
   fi
   REAL_SO_BYTES="$(wc -c < "$REAL_SO" | tr -d '[:space:]')"
   log "真实库：$REAL_SO（${REAL_SO_BYTES} 字节）→ 硬拷贝进 $JNILIBS_DIR/$BUNDLE_ABI/"
