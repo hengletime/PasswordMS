@@ -382,19 +382,30 @@ else
   fi
 fi
 
-# ---------- 7. 签名（D-45）----------
+# ---------- 7. 签名（D-45；2026-10-20 起默认正式证书）----------
 # 根因：Android 12+ 拒装未签名包，报「解析软件包时出现问题 / packageinfo is null」。
-# 上一版脚本到此收尾，交付的 app-universal-release-unsigned.apk 未签名 → 主人真机必装不上。
-# keystore/口令可用环境变量覆盖：PMS_KEYSTORE / PMS_KEY_ALIAS / PMS_KEY_PASS。
+# 正式证书：passwordms-release.jks（RSA4096 / 30 年，2026-10-20 建）。
+#   口令绝不进仓库——从本地私有文件 release.pass（仓库外，单行明文）读取。
+#   ⚠️ keystore 文件 + release.pass 必须双备份：丢失 = 该签名永久无法再升级。
+#   ⚠️ 公开发布的包一律用正式证书。测试构建时用旧测试证书显式覆盖：
+#     PMS_KEYSTORE=D:/AndroidDev/keystores/passwordms-test.jks \
+#     PMS_KEY_ALIAS=passwordms PMS_KEY_PASS=PmsTest2026Key bash scripts/build-android.sh
 log "APK 签名（未签名包 Android 12+ 必报解析错误，D-45）"
 BT_DIR="$(ls -d "${ANDROID_HOME:-D:/AndroidDev/sdk}"/build-tools/* 2>/dev/null | sort -V | tail -n 1)"
 if [ -z "$BT_DIR" ]; then
   die "未找到 build-tools（签名需要 apksigner）。请确认 ANDROID_HOME 下已安装 build-tools。"
 fi
 APKSIGNER="$BT_DIR/apksigner.bat"
-KS="${PMS_KEYSTORE:-D:/AndroidDev/keystores/passwordms-test.jks}"
+KS="${PMS_KEYSTORE:-D:/AndroidDev/keystores/passwordms-release.jks}"
 KS_ALIAS="${PMS_KEY_ALIAS:-passwordms}"
-KS_PASS="${PMS_KEY_PASS:-PmsTest2026Key}"
+PASS_FILE="${PMS_KEY_PASS_FILE:-D:/AndroidDev/keystores/release.pass}"
+if [ -n "${PMS_KEY_PASS:-}" ]; then
+  KS_PASS="$PMS_KEY_PASS"
+elif [ -f "$PASS_FILE" ]; then
+  KS_PASS="$(tr -d '\r\n' < "$PASS_FILE")"
+else
+  die "未找到签名口令：请创建 $PASS_FILE（单行 keystore 口令），或用 PMS_KEY_PASS / PMS_KEY_PASS_FILE 传入"
+fi
 if [ ! -f "$KS" ]; then
   die "签名 keystore 不存在：$KS（可用环境变量 PMS_KEYSTORE 指定其他 keystore）"
 fi
