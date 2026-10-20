@@ -129,3 +129,20 @@ pub fn restore_backup(
     restore_backup_from(Path::new(&source_path), &dest)?;
     Ok(())
 }
+
+/// D-61 读取自动锁定档位（分钟；`Vault.auto_lock_minutes` 明文头部字段）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn get_auto_lock(state: tauri::State<'_, AppState>) -> IpcResult<u16> {
+    let session = state.session.lock().map_err(lock_err)?;
+    let repo = session.repo()?;
+    Ok(repo.auto_lock_minutes())
+}
+
+/// D-61 设置自动锁定档位（仅接受 1/5/15，非法值 `ERR_VALIDATION`；幂等）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_auto_lock(state: tauri::State<'_, AppState>, minutes: u16) -> IpcResult<()> {
+    let mut session = state.session.lock().map_err(lock_err)?;
+    let repo = session.repo_mut()?;
+    repo.set_auto_lock_minutes(minutes)?;
+    Ok(())
+}

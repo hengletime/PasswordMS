@@ -30,10 +30,8 @@
   let newPassword = $state('');
   let newPassword2 = $state('');
   let importOpen = $state(false);
-  // 【已知缺口】`auto_lock_minutes` 位于 `Vault` 明文头部（PRD §4.1），当前 IPC 契约
-  // （`get_settings` / `update_settings` 仅覆盖 `VaultSettings`）未提供其读写通道，
-  // 故此处退化为「会话级本地偏好」，仅承载 UI 档位，待后端补充设置命令后接入持久化。
-  // 详见 docs/03-impl.md 遗留 TODO（T14 自动锁持久化）。
+  // D-61：自动锁定档位真持久化（`Vault.auto_lock_minutes` 明文头部）——
+  // 初始化读 IPC（get_auto_lock），换档即写（set_auto_lock）；失败回滚 select 显示值。
   let autoLockMinutes = $state<number>(AUTO_LOCK_OPTIONS[1] ?? 5);
 
   $effect((): void => {
@@ -47,7 +45,31 @@
       .catch((): void => {
         fileInfo = null;
       });
+    // 自动锁定档位：本页仅在解锁后的主界面可达，读取失败保持默认档（不阻塞页面）。
+    void api.vault
+      .getAutoLock()
+      .then((minutes: number): void => {
+        autoLockMinutes = minutes;
+      })
+      .catch((): void => {});
   });
+
+  /** D-61：换档 → set_auto_lock → success toast；失败 error toast 并回滚显示值。 */
+  async function onAutoLockChange(event: Event): Promise<void> {
+    const value = Number((event.target as HTMLSelectElement).value);
+    const previous = autoLockMinutes;
+    if (value === previous) {
+      return;
+    }
+    autoLockMinutes = value;
+    try {
+      await api.vault.setAutoLock(value);
+      ui.toast('success', 'settings.auto_lock_updated', { n: value });
+    } catch (err) {
+      autoLockMinutes = previous; // 回滚 select 显示值（档位未生效）
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
 
   async function saveSettings(): Promise<void> {
     await settings.save($state.snapshot(draft));
@@ -153,7 +175,7 @@
     <h3>{ui.t('settings.group_security')}</h3>
     <div class="set-row">
       <label class="set-label" for="set-autolock">{ui.t('settings.auto_lock')}</label>
-      <select id="set-autolock" class="pms-input set-ctl" bind:value={autoLockMinutes}>
+      <select id="set-autolock" class="pms-input set-ctl" value={autoLockMinutes} onchange={(e) => void onAutoLockChange(e)}>
         {#each AUTO_LOCK_OPTIONS as minutes (minutes)}
           <option value={minutes}>{ui.t('common.minutes', { n: minutes })}</option>
         {/each}

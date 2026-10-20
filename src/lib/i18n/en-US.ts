@@ -251,6 +251,7 @@ export const enUS: Messages = {
     group_sync: 'Sync',
     clipboard_ttl: 'Clipboard clear (seconds)',
     auto_lock: 'Auto-lock (minutes)',
+    auto_lock_updated: 'Auto-lock updated ({n} min)',
     auto_sync: 'Auto sync',
     sync_on_start: 'Sync on start',
     change_password: 'Change master password',

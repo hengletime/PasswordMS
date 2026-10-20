@@ -24,6 +24,8 @@
   import PairShow from './sync/PairShow.svelte';
   import SyncStatus from './sync/SyncStatus.svelte';
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
+  import { createAutoLock } from '../lib/auto-lock';
+  import { api } from '../lib/ipc';
   import { session } from '../lib/stores/session.svelte';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
@@ -48,6 +50,8 @@
   let menuOpen = $state(false);
   // 「⋯」菜单容器：用于判定点击是否落在菜单外（点外部关闭）。
   let menuEl = $state<HTMLDivElement | null>(null);
+  // D-61：窗口变 hidden 的时刻（visibilitychange；回前台补判用，null = 未在后台）。
+  let hiddenAt = $state<number | null>(null);
 
   // 分区清单。`label` = 桌面顶栏与移动端标题用（完整文案）；`tab` = 移动端底部导航用（短标签）。
   const NAV: { key: MainSection; icon: string; label: string; tab: string }[] = [
@@ -67,6 +71,55 @@
       void sync.loadDevices();
       void sync.loadConflicts();
     }
+  });
+
+  // ===== D-61 自动锁定（A 案：闲置达档位即锁，无「从不」档）=====
+  // 本组件只在 main 路由挂载（App.svelte 条件渲染）——锁定/切页即卸载，
+  // 卸载 cleanup 即 `stop()`；再次解锁重新挂载 → `start()` 重读档位。
+  const autoLock = createAutoLock({
+    getMinutes: async (): Promise<number> => api.vault.getAutoLock(),
+    lock: async (): Promise<void> => {
+      // 统一走既有 lockNow（reset 三个 store + 切锁屏路由）；IPC 失败不得让
+      // 未处理 rejection 冒泡（自动锁定失败静默，用户仍在主界面可手动锁）。
+      try {
+        await lockNow();
+      } catch {
+        // 静默：锁定失败不弹错（错弹本身也会打断用户）。
+      }
+    },
+    now: (): number => Date.now(),
+    schedule: (fn, ms): (() => void) => {
+      const id = window.setTimeout(fn, ms);
+      return (): void => {
+        window.clearTimeout(id);
+      };
+    },
+  });
+
+  $effect((): (() => void) => {
+    void autoLock.start();
+    const onActivity = (): void => {
+      autoLock.touch();
+    };
+    const onVisibility = (): void => {
+      if (document.hidden) {
+        hiddenAt = Date.now();
+      } else if (hiddenAt !== null) {
+        const at = hiddenAt;
+        hiddenAt = null;
+        // 回前台补判（Android 后台冻结计时器）；失败不冒泡。
+        void autoLock.onReturnFromBackground(at).catch((): void => {});
+      }
+    };
+    window.addEventListener('pointerdown', onActivity, { passive: true });
+    window.addEventListener('keydown', onActivity, { passive: true });
+    document.addEventListener('visibilitychange', onVisibility);
+    return (): void => {
+      autoLock.stop();
+      window.removeEventListener('pointerdown', onActivity);
+      window.removeEventListener('keydown', onActivity);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   });
 
   function dispatch(event: PaneEvent): void {

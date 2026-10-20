@@ -53,6 +53,9 @@ export const vault = {
   unlock: (masterPassword: string): Promise<StatusDto> =>
     invoke<StatusDto>('unlock', { master_password: masterPassword }),
   lock: (): Promise<void> => invoke<void>('lock'),
+  // D-61：自动锁定档位读写（`Vault.auto_lock_minutes` 明文头部；仅 1/5/15 合法）。
+  getAutoLock: (): Promise<number> => invoke<number>('get_auto_lock'),
+  setAutoLock: (minutes: number): Promise<void> => invoke<void>('set_auto_lock', { minutes }),
   changeMasterPassword: (oldPassword: string, newPassword: string): Promise<void> =>
     invoke<void>('change_master_password', {
       old_password: oldPassword,

@@ -1078,6 +1078,8 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `import_attachment` | `{source_path,title}` | `ItemDto` | F-12（超限报错） |
 | `export_attachment` | `{item_id,dest_path}` | `()` | F-12（明文风险由前端提示） |
 | `export_vault` | `{dest_path,master_password}` | `()` | O-03 备份 |
+| `get_auto_lock` | — | `u16` | D-61 读自动锁定档位（`Vault.auto_lock_minutes` 明文头部） |
+| `set_auto_lock` | `{minutes}` | `()` | D-61 设档位（仅 1/5/15，非法 `ERR_VALIDATION`；幂等） |
 | `generate_password` | `GeneratorOptions` | `{password}` | F-07 |
 | `copy_secret` | `{text,ttl_secs}` | `()` | F-06（含 30s 清空调度） |
 | `open_url` | `{url}` | `()` | F-05（协议白名单） |

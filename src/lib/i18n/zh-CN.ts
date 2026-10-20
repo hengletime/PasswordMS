@@ -249,6 +249,7 @@ export const zhCN = {
     group_sync: '同步',
     clipboard_ttl: '剪贴板清空（秒）',
     auto_lock: '自动锁定（分钟）',
+    auto_lock_updated: '自动锁定档位已更新（{n} 分钟）',
     auto_sync: '自动同步',
     sync_on_start: '启动时同步',
     change_password: '修改主密码',

@@ -437,7 +437,7 @@ $ npm run build
 | 事项 | 说明 |
 |------|------|
 | `src-tauri` 编译复验 | 见 §9.6 未执行项；需可用 `dlltool`/mingw 或改用 `x86_64-pc-windows-msvc` 工具链 |
-| 自动锁定持久化 | `Vault.auto_lock_minutes`（明文头部）暂无 IPC 读写通道；`Settings.svelte` 现为**会话级本地档位**，待后端补命令后接入（组件内已注明） |
+| 自动锁定持久化 | ✅ **已闭环（T-D61，见 §11）**：`get_auto_lock`/`set_auto_lock` IPC 通道 + 前端闲置计时 + Android 回前台补判 |
 | `sync_accept_pair` | 仍为契约占位 |
 | 墓碑压缩（compact） | 未暴露维护操作 |
 | 自动同步调度 / 重试（§3.10） | 未接入 UI |
@@ -507,3 +507,39 @@ $ npm run build
 - `cargo check`（含 tests）：0 error / 0 warning。
 - clippy：仅备案旧项（lib 4 条 + lib-test 2 条既有项），无本轮新增。
 - 前端批（T-D60-03）与 QA 独立回归见后续章节。
+
+## 11. T-D61 自动锁定（A 案）——全栈补芯实现注记
+
+> 缺陷定性（D-61，主人实测定性 P0 安全级）：`auto_lock_minutes` 此前只有数据字段
+> （`Vault.auto_lock_minutes` 明文头部）与 Settings 页摆设下拉框，执行层完全缺失——
+> 窗口开一夜不锁。A 案（主人拍板）：闲置达档位即锁，无「从不」档。
+
+### 11.1 改动清单
+
+| 文件 | 改动 |
+|------|------|
+| `crates/passwordms-core/src/store/repository.rs:135-163` | `auto_lock_minutes()` 读档 + `set_auto_lock_minutes()` 写档（仅 1/5/15，非法 `ERR_VALIDATION`；幂等；直接 `update_header` 不走 `persist_header`，rewrote 则 `rebuild_index`） |
+| `crates/passwordms-core/tests/auto_lock.rs`（新建） | 3 例：合法档位重开读回一致（真实持久化）/ 非法档位拒绝且不污染头部 / 幂等 + 换档往返 |
+| `src-tauri/src/commands/vault_cmd.rs:132-147` | `get_auto_lock` / `set_auto_lock` 两命令（`rename_all = "snake_case"`） |
+| `src-tauri/src/lib.rs:34-35` | 注册表追加两命令 |
+| `src/lib/ipc.ts:52-54` | `vault.getAutoLock()` / `vault.setAutoLock(minutes)` |
+| `src/lib/auto-lock.ts`（新建） | 纯逻辑层 `createAutoLock(deps)`：start/touch/onReturnFromBackground/stop 四方法，依赖注入（getMinutes/lock/now/schedule），档位读取失败保守回退 5 分钟 |
+| `src/lib/auto-lock.test.ts`（新建） | 7 例假时钟：到期锁 / touch 重置 / 回前台超档立即锁（harness 冻结建模）/ 未超档后台计入闲置 / 读失败回退 / 非正数回退 / stop 后不锁且 touch 不复活 |
+| `src/components/MainLayout.svelte` | `createAutoLock` 实例 + `$effect`：挂 `pointerdown`/`keydown`（passive）→ `touch()`；`visibilitychange` 记 hidden 时刻、回前台 → `onReturnFromBackground`；锁定动作复用既有 `lockNow()`（IPC 失败静默不冒泡）；组件仅 main 路由挂载，卸载 cleanup 即 `stop()`，再解锁重新 `start()` 重读档位 |
+| `src/components/Settings.svelte` | 摆设改真持久化：初始化 `getAutoLock()`；换档 `setAutoLock()` → success toast `settings.auto_lock_updated`；失败 error toast + 回滚 select 显示值 |
+| `src/lib/i18n/{zh-CN,en-US}.ts` | `settings.auto_lock_updated`（中英）；失败提示复用既有 err.* 键 |
+| `src/lib/ipc-contract.test.ts` | `get_auto_lock`/`set_auto_lock` 双侧在册锚点断言 |
+
+### 11.2 语义
+
+- **闲置定义**：`pointerdown` / `keydown` 均视为输入；最后一次输入起算，达档位即锁定。
+  滚轮 / 触摸滚动不重置（保守取向：读屏也算闲置）。
+- **锁定动作**：复用 `MainLayout.lockNow()`（session.lock + vault/settings/sync reset +
+  切锁屏路由），不另写第二套。
+- **Android 回前台补判**：后台 JS 计时器被冻结——`visibilitychange` 记 hidden 时刻，
+  回前台时 `now - hiddenAt >= 档位` 立即锁；未超档则后台停留时间**计入闲置**重排剩余
+  （后台 4 分钟 + 前台 1 分钟 = 5 分钟到期，不重新计满）。
+- **档位存储**：`Vault.auto_lock_minutes`（明文头部，PRD §4.1 既有字段）；合法档位
+  1/5/15 由 core 层校验；幂等写；**无「从不」档**（安全裁定）。
+- **保守回退**：档位读取失败（IPC 异常）或读到非正数 → 前端回退 5 分钟（`AUTO_LOCK_MINUTES`
+  默认档）——安全功能宁可锁早，不可锁不了。

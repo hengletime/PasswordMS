@@ -58,4 +58,12 @@ describe('ipc command contract', () => {
     expect(invoked).toContain('remove_attachment');
     expect(registered).toContain('remove_attachment');
   });
+
+  it('keeps get_auto_lock / set_auto_lock wired on both sides (D-61 自动锁定回归锚点)', () => {
+    // D-61：档位读写通道补齐；任何一侧被移除（前端忘调用 / 后端忘注册）都会红。
+    expect(invoked).toContain('get_auto_lock');
+    expect(registered).toContain('get_auto_lock');
+    expect(invoked).toContain('set_auto_lock');
+    expect(registered).toContain('set_auto_lock');
+  });
 });

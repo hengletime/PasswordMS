@@ -134,6 +134,35 @@ impl Repository {
         self.container.header()
     }
 
+    /// 读取自动锁定档位（分钟，D-61：`Vault.auto_lock_minutes` 明文头部字段）。
+    pub fn auto_lock_minutes(&self) -> u16 {
+        self.container.header().auto_lock_minutes
+    }
+
+    /// 设置自动锁定档位（D-61 A 案：闲置达档位即锁定）。
+    ///
+    /// - 仅接受 [`crate::constants::AUTO_LOCK_OPTIONS`] 内的档位，否则 `ERR_VALIDATION`；
+    /// - 幂等：与当前值相同直接返回 `Ok`（不重写头部）；
+    /// - 仅改写头部 `auto_lock_minutes` 并 `update_header`，**不走 [`Repository::persist_header`]**
+    ///   （后者会一并刷新 `item_count` 等计数，语义不符）；记录区若被连带重写
+    ///   （`update_header` 返回 rewrote）则重建索引（业务数据仍在内存，无需重解密）。
+    pub fn set_auto_lock_minutes(&mut self, minutes: u16) -> CoreResult<()> {
+        if !crate::constants::AUTO_LOCK_OPTIONS.contains(&minutes) {
+            return Err(CoreError::Validation(format!("invalid_auto_lock_minutes: {minutes}")));
+        }
+        if self.container.header().auto_lock_minutes == minutes {
+            return Ok(());
+        }
+        let mut header = self.container.header().clone();
+        header.auto_lock_minutes = minutes;
+        header.updated_at = now_ms();
+        let rewrote = self.container.update_header(header)?;
+        if rewrote {
+            self.rebuild_index()?;
+        }
+        Ok(())
+    }
+
     /// 容器路径。
     pub fn path(&self) -> std::path::PathBuf {
         self.container.path().to_path_buf()
