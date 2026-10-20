@@ -64,7 +64,7 @@ export const zhCN = {
     mismatch: '两次输入的主密码不一致。',
     too_short: '主密码至少需要 {n} 位。',
     weak_hint: '主密码较短，建议使用更长的口令；继续请勾选确认。',
-    acknowledge: '我已知晓并继续',
+    acknowledge: '我已知晓并同意免责声明与用户协议',
     submit: '创建并解锁',
     warning_body: '主密码无法找回。请妥善保管，遗失将无法恢复保险库数据。',
   },

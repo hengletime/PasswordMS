@@ -357,7 +357,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
       {mismatch} p.pms-hint（--pms-danger）
 
     .pms-wizard__ack      /* 浅底圆角块，包住 checkbox 行，视觉上独立成区 */
-      label.pms-check  "我已知晓并继续"
+      label.pms-check  "我已知晓并同意免责声明与用户协议"
 
     button.pms-btn.is-primary.is-block.is-lg  "创建并解锁"
     button.pms-btn.is-ghost.is-block  "返回"

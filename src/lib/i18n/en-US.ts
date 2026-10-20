@@ -66,7 +66,7 @@ export const enUS: Messages = {
     mismatch: 'The passwords do not match.',
     too_short: 'Master password must be at least {n} characters.',
     weak_hint: 'The password is short. A longer passphrase is recommended; check to continue.',
-    acknowledge: 'I understand and wish to continue',
+    acknowledge: 'I acknowledge the disclaimer & terms of use',
     submit: 'Create and unlock',
     warning_body: 'The master password cannot be recovered. If lost, your vault data cannot be restored.',
   },
