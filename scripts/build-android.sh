@@ -337,6 +337,13 @@ verify_apk() {
 }
 
 # ---------- 6. 校验 →（必要时）自动修复 → 二次校验 ----------
+if [ "$UPSTREAM_RC" -ne 0 ]; then
+  # 毒包二号路径堵截（D-62 补丁，2026-10-20 实测）：上游 cargo 失败（如构建锁冲突）时
+  # symlink 不会执行，jniLibs 里残留上一轮修复分支拷入的**真 .so**——gradle 照常打包、
+  # verify_apk 四断言对旧 .so 自比全绿，包看起来完全合法，实际是旧 core。
+  # 因此上游 RC≠0 时，无论 APK 校验是否通过都不可信，必须 die 重跑。
+  die "上游构建退出码=${UPSTREAM_RC} 非 0——本轮 APK 内容来源不可信（jniLibs 可能残留上一轮真身）。最常见根因：.cargo-build-lock 冲突（os error 5）。请确认无并发构建/清理残留锁后重跑。本门禁不允许用来源不明的包出厂。"
+fi
 if verify_apk "$APK"; then
   log "APK 完整性校验通过（上游路径，无需修复）。"
 else

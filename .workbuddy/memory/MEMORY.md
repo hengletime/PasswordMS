@@ -51,6 +51,13 @@ exe 三条硬验证：
 2. **新前端真进包**：新哈希名在 exe 内、旧哈希名已消失。
 3. **体积门禁**：`bash scripts/check-size.sh desktop` EXIT=0（Windows ≤10MB / APK ≤12MB）。
 
+出包清单（D-62 轮教训，2026-10-20）：**NSIS + MSI + APK + 绿色版 zip 四件**，绿色版交付物
+只能是 `bash scripts/make-portable.sh` 产物 `PasswordMS-*-portable-x64.zip`
+（exe + **WebView2Loader.dll** 运行库 + passwordms.portable 便携标记 + 使用说明.txt），
+**绝不允许拿裸 exe 冒充绿色版**——缺 WebView2Loader.dll（动态加载）根本起不来。
+且必须在 tauri build 后重跑 make-portable.sh：zip 吃的是当时 exe，旧 zip 会落后于最终构建
+（实测 zip 内 exe sha 12f3f16e ≠ 最终 563fec99）。交付前核对 zip 内 exe 哈希 = 四门验证过的 exe。
+
 ## 约定
 
 - **P2 backlog 排期**（主人拍板 2026-10-18）：HLC 时钟 / Done base 回执 / 到达序不对称文档化 → 统一排在 **#530 质量门与端到端回归之后**，勿提前插队。
