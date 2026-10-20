@@ -27,7 +27,7 @@ Grab the latest build from [Releases](https://github.com/hengletime/PasswordMS/r
 | `PasswordMS_x.y.z_x64-setup.exe` | Windows 10/11 x64 | Installer (recommended) |
 | `PasswordMS_x.y.z_x64_en-US.msi` | Windows 10/11 x64 | MSI installer (enterprise deployment) |
 | `PasswordMS_x.y.z-portable-x64.zip` | Windows 10/11 x64 | **Portable**: unzip & run, data stays in the folder (USB-stick friendly) |
-| `PasswordMS-x.y.z-arm64.apk` | Android 8.0+ (arm64) | Sideload (allow installing from unknown sources) |
+| `PasswordMS-x.y.z-arm64.apk` | Android 7.0+ (arm64) | Sideload (allow installing from unknown sources) |
 
 > Portable notes: unzip into any **writable directory** (do not run from inside the archiver's preview window), then double-click `passwordms.exe`. Data files are created next to the exe. To upgrade, overwrite the old `passwordms.exe` and `WebView2Loader.dll` with the new ones.
 

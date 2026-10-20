@@ -27,7 +27,7 @@
 | `PasswordMS_x.y.z_x64-setup.exe` | Windows 10/11 x64 | 安装版（推荐） |
 | `PasswordMS_x.y.z_x64_en-US.msi` | Windows 10/11 x64 | MSI 安装版（企业部署） |
 | `PasswordMS_x.y.z-portable-x64.zip` | Windows 10/11 x64 | **免安装绿色版**：解压即用，数据随文件夹走（U 盘可用） |
-| `PasswordMS-x.y.z-arm64.apk` | Android 8.0+ (arm64) | 侧载安装（允许安装未知来源应用） |
+| `PasswordMS-x.y.z-arm64.apk` | Android 7.0+ (arm64) | 侧载安装（允许安装未知来源应用） |
 
 > 绿色版使用说明：解压到任意**可写目录**（不要在压缩软件预览窗里直接运行），双击 `passwordms.exe`，数据文件自动生成在同目录。升级时用新版 `passwordms.exe` 与 `WebView2Loader.dll` 覆盖旧文件即可。
 
