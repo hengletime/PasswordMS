@@ -118,11 +118,19 @@ fn sync_join_impl(
     //    D-47：**同组重配对豁免**——本机已与该 Host 配对 = 本地 VK 已在首次配对时采纳
     //    （与对端一致）。此时重复扫码（重装、重复操作、想手动触发反向同步）不应再被
     //    「非空即拒」拦下，直接复用既有密钥完成本次交换；真正的异组保险库仍被拒绝。
-    let already_paired = session
-        .repo()?
-        .list_paired_devices()
-        .iter()
-        .any(|d| d.device_id == joiner.host_id().to_string());
+    //    D-62：豁免条件增强——本机「删除配对设备」（remove_paired_device）只清
+    //    PairedDevice/sync_state、**保留库密钥**（本地数据仍以其加密），上面那条判定
+    //    随之失配 → 重新扫码被 U1/U2 误拦（主人实测：解绑后无法重配对）。但此时本机
+    //    库的加密密钥**就是**握手下发的 Host VK，采纳是零风险幂等（同值重包裹）。
+    //    故补「本机当前 VK == 对端 VK」豁免：相等 = 同一逻辑库（安全跳过）；
+    //    不等 = 真正的异组保险库（仍拒绝，U1/U2 红线不破）。
+    let already_paired = {
+        let repo = session.repo()?;
+        repo.list_paired_devices()
+            .iter()
+            .any(|d| d.device_id == joiner.host_id().to_string())
+            || repo.vault_key()[..] == joiner.host_vault_key()[..]
+    };
     if !already_paired {
         session.adopt_vault_key(joiner.host_vault_key())?;
     }

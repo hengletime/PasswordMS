@@ -543,3 +543,29 @@ $ npm run build
   1/5/15 由 core 层校验；幂等写；**无「从不」档**（安全裁定）。
 - **保守回退**：档位读取失败（IPC 异常）或读到非正数 → 前端回退 5 分钟（`AUTO_LOCK_MINUTES`
   默认档）——安全功能宁可锁早，不可锁不了。
+
+---
+
+## 12. D-62：解绑后重配对被 U1/U2 误拦（主人实测修复）
+
+### 12.1 根因链（三层，全部实证）
+
+1. 首次配对时 Joiner 采纳 Host VK（本地数据以 Host VK 加密）；
+2. 本机「删除配对设备」（`repository.rs:1178 remove_paired_device`）只清
+   PairedDevice/sync_state，**库密钥保留**；
+3. 重新扫码 → D-47 豁免（`sync_cmd.rs` 判「配对记录含该 Host」）失配 → U1/U2
+   「非空即拒」（`session.rs adopt_vault_key`）→ `ERR_VK_ADOPT_REQUIRES_EMPTY`。
+   而此时本机 VK **就是**对端 VK，采纳本是零风险幂等操作。
+
+### 12.2 修复（两处，前端零改动）
+
+| 文件 | 修复 |
+|------|------|
+| `src-tauri/src/commands/sync_cmd.rs` | D-47 豁免条件增强：配对记录含该 Host **或 本机当前 VK == 握手下发的 Host VK**（相等 ⇒ 同一逻辑库 ⇒ 幂等安全；不等 ⇒ 真异组库 ⇒ 仍拒绝，U1/U2 红线不破） |
+| `crates/passwordms-core/src/sync/server.rs`（accept_and_sync pair 路径） | 重置接收基线 `state.last_recv_seq = 0`：pair 通道 = 全新配对会话（QR 一次性令牌 + 完整握手），解绑侧重配对时对端 seq 必然归零，沿用旧基线会误判重放（实测 `ERR_REPLAY_DETECTED`）。重放防护实质由「pair token 一次性 + merge 幂等判重（base.hash）」承担；**增量 resync 通道重放红线不受影响**（sync_replay 10 例不破佐证） |
+
+### 12.3 回归
+
+- 新用例 `pairing_loopback.rs::repair_repair_after_unbind_with_matching_vk`：
+  首次配对 → 解绑（VK 保留）→ 重配对 → 断言 VK 相等豁免命中 → 全流程成功且数据完好。
+- 全量 **87/87**（86 + pairing_loopback 新增 1），0 failed。

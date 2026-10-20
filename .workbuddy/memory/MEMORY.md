@@ -67,3 +67,5 @@ exe 三条硬验证：
   命令须按当轮 `git status --porcelain` 现点现开；跨多轮未提交时，一条命令覆盖全部待提交内容并注明。
 
 **build-android.sh 真身新鲜度门（D-60 补丁，2026-10-19）**：修复分支拷 REAL_SO 前必须验证其 mtime 晚于上游构建起点——否则上游 cargo 失败（如 .cargo-build-lock 撞锁 os error 5）时旧真身会被打进新包且「哈希自比」四断言全绿（fail-open）。⚠️ 起点时间戳必须在上游构建**之前**取，放在校验节会把编译完成时刻误判过期（首版踩过）。僵尸锁特征：mtime 数天前 + cargo 报 os error 5，清理前先确认无 cargo/rustc 进程存活。
+
+**build-android.sh 双门（D-62 补丁，2026-10-20）**：①真身新鲜度门（修复分支：REAL_SO mtime ≥ 上游起点）②上游 RC 门（全局：UPSTREAM_RC≠0 一票否决，哪怕四断言全绿）。背景：上游 cargo 撞锁失败时 symlink 不执行、jniLibs 残留上一轮真 .so，gradle 照打 + 四断言自比全绿 = 旧 core 毒包（实测两次）。两门缺一即 fail-open。锁竞争高发场景：desktop 构建刚结束立刻跑 Android 链（收尾进程仍持 target/release/.cargo-build-lock）——串行 sleep 或确认锁释放后再跑。

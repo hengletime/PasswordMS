@@ -269,6 +269,14 @@ impl SyncServer {
 
         // 6) 双向同步交换。
         let mut state = repo.sync_state(&hello.joiner_id);
+        // D-62：pair 通道 = **全新配对会话**（QR 一次性令牌 + 完整握手才走到这里），
+        // 对端 seq 允许从 1 重新开始——解绑重配对场景（remove_paired_device 清了对端
+        // 侧 sync_state）对端游标必然归零，若沿用旧 last_recv_seq 作基线，合法重配对
+        // 会被误判重放（实测 ERR_REPLAY_DETECTED）。故在此重置接收基线；
+        // 重放防护的实质由「pair token 一次性 + merge 幂等判重（base.hash）」承担：
+        // 即使旧信封被重放通过验收，merge 也只做幂等合并，数据不会回滚。
+        // 增量重同步通道（ResyncServer）的重放红线**不受影响**，维持严格单调。
+        state.last_recv_seq = 0;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
         let (applied, conflicts, blobs) =
             run_exchange(&mut stream, &keys, &self.session_id, &mut replay, &mut state, repo, now)?;

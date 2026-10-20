@@ -5,8 +5,10 @@
 //! 但 GUI 程序无法看 stderr，真机日志难取。本测试在**无防火墙、无网段差异**的回环环境
 //! 完整复现配对：若这里失败，直接拿到 Host 端断开点（决定性）；若成功，根因指向网络环境层。
 
+use passwordms_core::model::item::{ItemKind, LoginData};
 use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
+use passwordms_core::store::repository::ItemDraft;
 use passwordms_core::sync::client;
 use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::server::SyncServer;
@@ -281,6 +283,152 @@ fn repair_already_paired_vault_without_adopt() {
         joiner_result.is_ok(),
         "重配对（已配对保险库、跳过采纳）Joiner 侧失败: {:?}",
         joiner_result.err()
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// D-62 回归：**解绑后重配对**——Joiner 首次配对采纳 VK 并同步进数据后，在本机
+/// 「删除配对设备」（`remove_paired_device`：只清 PairedDevice/sync_state，**库密钥
+/// 保留**，本地数据仍以其加密）。D-47 豁免的判定依据（配对记录含该 Host）随之消失，
+/// 重新扫码被 U1/U2「非空即拒」误拦（主人实测：手机解绑后无法与电脑重配对）。
+/// sync_cmd 的 D-62 增强豁免 = 配对记录含该 Host **或 本机当前 VK == 握手下发的
+/// Host VK**（相等 ⇒ 本机库本就用该密钥加密 ⇒ 采纳幂等零风险）。本用例在 core 层
+/// 模拟命令层豁免语义：解绑 → 重配对 → 断言 VK 相等成立 → 不调用 adopt → 全流程
+/// 成功且本地数据完好。
+#[test]
+fn repair_repair_after_unbind_with_matching_vk() {
+    let dir = std::env::temp_dir().join(format!("pms-unbind-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let host_vault = dir.join("host.vault");
+    let joiner_vault = dir.join("joiner.vault");
+
+    // ---- 第一次配对：Host 建 1 条数据，Joiner 空库采纳 + 同步进来 ----
+    let mut host_session = Session::create(&host_vault, "Unbind#Master1", true).unwrap();
+    let host_id = host_session.repo().unwrap().device_id().to_string();
+    host_session
+        .repo_mut()
+        .unwrap()
+        .create_item(ItemDraft {
+            kind: ItemKind::Login(LoginData {
+                title: "unbind-item".to_string(),
+                url: None,
+                username: None,
+                password: Some("pw".to_string()),
+                notes: None,
+                totp_secret: None,
+                custom_fields: Vec::new(),
+            }),
+            folder_id: None,
+            favorite: false,
+        })
+        .unwrap();
+    let identity = HostIdentity::generate().unwrap();
+    let mut server = SyncServer::start(
+        0,
+        host_id.clone(),
+        "UnbindHost".to_string(),
+        identity,
+        0,
+        now_ms(),
+    )
+    .unwrap();
+    let qr = server.qr_payload(vec!["127.0.0.1".to_string()]).unwrap();
+    let host_handle = {
+        let mut host_session = host_session;
+        std::thread::spawn(move || {
+            let repo = host_session.repo_mut().unwrap();
+            server.accept_and_sync(repo, now_ms())
+        })
+    };
+    let mut joiner_session = Session::create(&joiner_vault, "Unbind#Joiner1", true).unwrap();
+    let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
+    {
+        let mut joiner = client::pair(&qr, &joiner_id, "UnbindJoiner", 0, now_ms()).unwrap();
+        joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+        let repo = joiner_session.repo_mut().unwrap();
+        joiner.persist_host_device(repo).unwrap();
+        joiner.push_and_sync(repo, now_ms()).unwrap();
+    }
+    let first = host_handle.join().unwrap();
+    assert!(first.is_ok(), "首次配对 Host 侧失败: {:?}", first.err());
+    assert_eq!(
+        joiner_session.repo().unwrap().list_items(None, false, None).len(),
+        1,
+        "首次配对后 Joiner 应有 1 条同步进来的数据"
+    );
+
+    // ---- 主人操作：Joiner 侧删除配对设备（D-47 豁免判定依据消失，VK 保留）----
+    joiner_session
+        .repo_mut()
+        .unwrap()
+        .remove_paired_device(&host_id)
+        .unwrap();
+    assert!(
+        joiner_session.repo().unwrap().list_paired_devices().is_empty(),
+        "解绑后配对记录应为空"
+    );
+
+    // ---- 重新配对：非空库 + 无配对记录 → 命中 D-62 的 VK 相等豁免（不 adopt）----
+    let identity2 = HostIdentity::generate().unwrap();
+    let mut server2 = SyncServer::start(
+        0,
+        host_id.clone(),
+        "UnbindHost".to_string(),
+        identity2,
+        0,
+        now_ms(),
+    )
+    .unwrap();
+    let qr2 = server2.qr_payload(vec!["127.0.0.1".to_string()]).unwrap();
+    let host_handle2 = std::thread::spawn(move || {
+        let mut host_session = Session::unlock(&host_vault, "Unbind#Master1").unwrap();
+        let repo = host_session.repo_mut().unwrap();
+        server2.accept_and_sync(repo, now_ms())
+    });
+
+    let joiner_result = (|| -> Result<(), passwordms_core::CoreError> {
+        let mut joiner2 = client::pair(&qr2, &joiner_id, "UnbindJoiner", 0, now_ms())?;
+        // 模拟 sync_cmd 的 D-62 增强豁免判定：VK 相等 ⇒ 跳过 adopt。
+        // 变异锚点：若豁免缺失，命令层会对非空库调用 adopt_vault_key → VkAdoptRequiresEmpty。
+        assert_eq!(
+            joiner_session.repo().unwrap().vault_key()[..],
+            joiner2.host_vault_key()[..],
+            "解绑不清密钥：本机 VK 必须仍等于握手下发的 Host VK（豁免前提）"
+        );
+        let repo = joiner_session.repo_mut().unwrap();
+        joiner2.persist_host_device(repo)?;
+        joiner2.push_and_sync(repo, now_ms())?;
+        Ok(())
+    })();
+
+    let second = match host_handle2.join() {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "unknown panic".to_string());
+            panic!("Host 线程 panic：{msg}");
+        }
+    };
+    assert!(
+        second.is_ok(),
+        "解绑后重配对（VK 相等豁免）Host 侧失败: {:?}",
+        second.err()
+    );
+    assert!(
+        joiner_result.is_ok(),
+        "解绑后重配对（VK 相等豁免）Joiner 侧失败: {:?}",
+        joiner_result.err()
+    );
+    // 数据完好：条目仍在（密钥未被动过，可正常枚举）。
+    assert_eq!(
+        joiner_session.repo().unwrap().list_items(None, false, None).len(),
+        1,
+        "重配对不得触碰本地数据"
     );
 
     let _ = std::fs::remove_dir_all(&dir);

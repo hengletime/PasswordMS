@@ -76,3 +76,4 @@ desktop.ini
 # 模板见 `.cargo/config.toml.example` —— 新机器上复制一份改名即可。
 # ===========================================================================
 .cargo/config.toml
+release/
