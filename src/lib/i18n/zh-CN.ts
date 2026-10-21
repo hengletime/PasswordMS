@@ -66,7 +66,7 @@ export const zhCN = {
     weak_hint: '主密码较短，建议使用更长的口令；继续请勾选确认。',
     // D-63：勾选行拆成「前缀 + 免责声明链接 + 与 + 用户协议链接」——
     // 两个链接是 checkbox 所在 label 的**兄弟节点**，点击只开法律弹窗、不切换勾选。
-    acknowledge_prefix: '我已知晓并同意',
+    acknowledge_prefix: '我已阅读并同意',
     disclaimer_link: '免责声明',
     acknowledge_middle: '与',
     terms_link: '用户协议',

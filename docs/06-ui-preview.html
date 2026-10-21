@@ -188,7 +188,16 @@
     .wz-head h1 { font-size: 1.35rem; font-weight: 600; margin: .6rem 0 .2rem; }
     .wz-head p { margin: 0; }
     .wz-form { display: flex; flex-direction: column; }
-    .wz-ack { background: var(--pms-bg-2); border: 1px solid var(--pms-border); border-radius: var(--pms-r); padding: .7rem .85rem; margin-bottom: .9rem; }
+    .wz-ack { background: var(--pms-bg-2); border: 1px solid var(--pms-border); border-radius: var(--pms-r); padding: .7rem .85rem; margin-bottom: .9rem; display: flex; flex-wrap: wrap; align-items: center; gap: .25rem; }
+    /* D-64：窄屏单行（预览同步） */
+    @media (max-width: 767px) {
+      .wz-ack { font-size: .8rem; gap: .2rem; padding: .6rem .7rem; }
+      .wz-ack .pms-check, .wz-ack-mid { font-size: inherit; }
+      .wz-ack .pms-check { gap: .4rem; }
+      .wz-ack .pms-check input[type='checkbox'] { width: 16px; height: 16px; flex: 0 0 16px; }
+    }
+    .wz-ack-mid { color: var(--pms-fg); }
+    .pms-link { display: inline; border: none; background: none; padding: 0; margin: 0; color: var(--pms-accent); font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
     .wz-back { margin-top: .4rem; }
 
     /* ---- 强度条（与 StrengthMeter.svelte 同构）---- */
@@ -376,7 +385,10 @@
             </div>
 
             <div class="wz-ack">
-              <label class="pms-check"><input type="checkbox" checked /> <span>我已知晓并同意免责声明与用户协议</span></label>
+              <label class="pms-check"><input type="checkbox" checked /> <span>我已阅读并同意</span></label>
+              <button type="button" class="pms-link">免责声明</button>
+              <span class="wz-ack-mid">与</span>
+              <button type="button" class="pms-link">用户协议</button>
             </div>
 
             <button class="pms-btn is-primary is-block is-lg" type="submit">创建并解锁</button>

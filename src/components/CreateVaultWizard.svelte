@@ -216,6 +216,29 @@
     font-size: 0.86rem;
     color: var(--pms-fg);
   }
+  /* D-64：窄屏（≤767px，项目统一定义）勾选行必须单行放下。
+     375px 手机上原排版会折成两行（"与"落行尾、"用户协议"被挤到第二行），很难看。
+     做法＝文案精炼（"我已阅读并同意"）+ 整行字号收敛到 0.8rem + 间距收紧，实测单行。 */
+  @media (max-width: 767px) {
+    .wz-ack {
+      font-size: 0.8rem;
+      gap: 0.2rem;
+      padding: 0.6rem 0.7rem;
+    }
+    .wz-ack-mid {
+      font-size: inherit;
+    }
+    /* 全局 .pms-check 是 0.86rem、.pms-link 用 font:inherit——统一收进本行字号 */
+    .wz-ack :global(.pms-check) {
+      font-size: inherit;
+      gap: 0.4rem;
+    }
+    .wz-ack :global(.pms-check input[type='checkbox']) {
+      width: 16px;
+      height: 16px;
+      flex: 0 0 16px;
+    }
+  }
   .wz-back {
     margin-top: 0.4rem;
   }

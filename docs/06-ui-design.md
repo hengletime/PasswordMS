@@ -254,13 +254,14 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 
 /* ---------- 内联链接按钮（D-63：勾选行的「免责声明 / 用户协议」入口） ---------- */
 /* 语义 = 按钮但长得像链接；不继承 .pms-btn 的盒子（padding/bg/border 全清）。
-   字号跟随 0.86rem 与 .pms-check 对齐；下划线 offset 2px 防止贴住中文笔画。
+   字号一律 `font: inherit`（D-64 起不再写死 0.86rem）——窄屏勾选行靠容器收敛字号，
+   写死会让链接比同行文字大、把行撑折。下划线 offset 2px 防止贴住中文笔画。
    与 checkbox 的 label 必须互为**兄弟节点**（见 §5.5「点链接不切换勾选」）。 */
 .pms-link {
   display: inline;
   border: none; background: none; padding: 0; margin: 0;
   color: var(--pms-accent);
-  font: inherit; font-size: .86rem;
+  font: inherit;
   cursor: pointer;
   text-decoration: underline; text-underline-offset: 2px;
 }
@@ -372,8 +373,10 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
       {mismatch} p.pms-hint（--pms-danger）
 
     .pms-wizard__ack      /* 浅底圆角块，包住 checkbox 行，视觉上独立成区 */
-      /* v2.7（D-63）：一行四项，flex-wrap 允许窄屏换行 */
-      label.pms-check  "我已知晓并同意"      /* 只包 checkbox + create.acknowledge_prefix */
+      /* v2.8（D-64）：**必须单行放下**（375px 手机实测原排版折两行）。
+         文案精炼为「我已阅读并同意」（15 字）+ 整行字号收敛：≤767px 时 0.8rem / gap 0.2rem /
+         padding 0.6rem 0.7rem / checkbox 16px。flex-wrap 保留作兜底（极端窄屏仍可折行不溢出）。 */
+      label.pms-check  "我已阅读并同意"      /* 只包 checkbox + create.acknowledge_prefix */
       button.pms-link  "免责声明"            /* ← label 的**兄弟节点**，点它只开弹窗 */
       span.wz-ack-mid  "与"                  /* create.acknowledge_middle */
       button.pms-link  "用户协议"            /* ← 同上 */
@@ -427,7 +430,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 .wz-ack                     /* display:flex; flex-wrap:wrap; align-items:center; gap:.25rem */
   label.pms-check           /* ← 只包 input[type=checkbox] + create.acknowledge_prefix */
     input[type=checkbox]
-    span                    /* 「我已知晓并同意」 */
+    span                    /* 「我已阅读并同意」 */
   button.pms-link           /* 「免责声明」 create.disclaimer_link  ← 兄弟节点 */
   span.wz-ack-mid           /* 「与」      create.acknowledge_middle */
   button.pms-link           /* 「用户协议」 create.terms_link      ← 兄弟节点 */

@@ -292,8 +292,8 @@ input[type='password']::-ms-clear { display: none; }
   padding: 0;
   margin: 0;
   color: var(--pms-accent);
+  /* D-64：字号一律继承宿主（勾选行），便于窄屏随容器收敛，避免折行。 */
   font: inherit;
-  font-size: .86rem;
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;

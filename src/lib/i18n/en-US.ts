@@ -68,7 +68,7 @@ export const enUS: Messages = {
     weak_hint: 'The password is short. A longer passphrase is recommended; check to continue.',
     // D-63: the acknowledgement row is split into prefix + disclaimer link + "&" + terms link —
     // both links are siblings of the checkbox label, so clicking them never toggles the checkbox.
-    acknowledge_prefix: 'I acknowledge the',
+    acknowledge_prefix: 'I have read and agree to the',
     disclaimer_link: 'Disclaimers',
     acknowledge_middle: '&',
     terms_link: 'Terms of Use',
