@@ -13,6 +13,7 @@
   import { toAppError } from '../lib/errors';
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
+  import { loadSettingsPageSide } from '../lib/settings-page';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
   import { theme } from '../lib/stores/theme.svelte';
@@ -29,6 +30,10 @@
 
   let draft = $state<VaultSettings>({ ...settings.value });
   let fileInfo = $state<VaultFileInfoDto | null>(null);
+  // D-73：读取失败必须**显式建模**，否则界面上「读失败」与「本来就没有」长得一样（都是空白卡片）。
+  let fileInfoFailed = $state(false);
+  // D-73：档位读失败时显示的是兜底档，必须让用户知道（否则「5 分钟」看起来像真实设置）。
+  let autoLockFailed = $state(false);
   let oldPassword = $state('');
   // D-51：导出保险库需要单独输入当前主密码（后端 repo.export_vault 会用它做 unlock_check 后再 copy 库文件）。
   // 旧实现误用「修改主密码」卡片的 oldPassword，而导出卡片根本没有输入框 → 空密码必报「解锁失败，请重试。」
@@ -64,31 +69,31 @@
   let autoLockMinutes = $state<number>(AUTO_LOCK_OPTIONS[1] ?? 5);
 
   $effect((): void => {
-    // settings.value 加载完成后同步到草稿。
-    draft = structuredClone(settings.value);
-    void api.system
-      .vaultFileInfo()
-      .then((info: VaultFileInfoDto): void => {
-        fileInfo = info;
-      })
-      .catch((): void => {
-        fileInfo = null;
-      });
-    // 自动锁定档位：本页仅在解锁后的主界面可达，读取失败保持默认档（不阻塞页面）。
-    void api.vault
-      .getAutoLock()
-      .then((minutes: number): void => {
-        autoLockMinutes = minutes;
-      })
-      .catch((): void => {});
-    // D-63：版本号运行时读取（@tauri-apps/api/app getVersion；失败保持 null → 显示「—」）。
-    void getVersion()
-      .then((version: string): void => {
-        appVersion = version;
-      })
-      .catch((): void => {
-        appVersion = null;
-      });
+    // D-73：`settings.value` 是 `$state` 的**深层响应式 Proxy**，而结构化克隆算法
+    // 遇到 Proxy 必抛 `DataCloneError`。这行曾是 effect 的第一行，一抛 →
+    // 后面三块（库文件信息 / 自动锁定档位 / 版本号）**从不执行**，
+    // 而且不报错到界面：主人只看到「卡片空白 + 版本显示「—」+ 自动锁定永远是 5 分钟」。
+    // 深拷纯对象用 `$state.snapshot()`。
+    // ⚠️ 不要改成浅拷贝 `{ ...settings.value }`：`generator` / `health` 两层仍是代理，
+    // 下面 `bind:value` 改草稿会**直接写穿到 store**，变成「取消不掉」的隐藏 bug。
+    draft = $state.snapshot(settings.value);
+    // D-73：三块旁路数据走 `loadSettingsPageSide`，**各自隔离失败**；
+    // 任一失败只影响它自己那块的显示，不再带塌其余两项。
+    void loadSettingsPageSide(
+      {
+        loadVaultFileInfo: (): Promise<VaultFileInfoDto> => api.system.vaultFileInfo(),
+        loadAutoLock: (): Promise<number> => api.vault.getAutoLock(),
+        loadVersion: (): Promise<string> => getVersion(),
+      },
+      AUTO_LOCK_OPTIONS[1] ?? 5,
+    ).then((side): void => {
+      fileInfo = side.fileInfo;
+      fileInfoFailed = side.fileInfoFailed;
+      autoLockFailed = side.autoLockFailed;
+      // 档位读失败时模块已回落成 fallback；这里再兜一次 null，保证 select 永远有选中项。
+      autoLockMinutes = side.autoLockMinutes ?? (AUTO_LOCK_OPTIONS[1] ?? 5);
+      appVersion = side.version;
+    });
   });
 
   /** D-61：换档 → set_auto_lock → success toast；失败 error toast 并回滚显示值。 */
@@ -218,6 +223,9 @@
         {/each}
       </select>
     </div>
+    {#if autoLockFailed}
+      <p class="pms-hint">{ui.t('settings.auto_lock_failed')}</p>
+    {/if}
     <div class="set-row">
       <label class="set-label" for="set-ttl">{ui.t('settings.clipboard_ttl')}</label>
       <input id="set-ttl" class="pms-input set-ctl" type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs} />
@@ -323,30 +331,43 @@
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.vault_file')}</h3>
+    <!-- D-73：主人原话「保险库文件是什么作用？没有看到文件啊？」——
+         标题没解释 + 下面空白是**双重失败**。先给一句它是什么/有什么用，再给路径与大小；
+         读不到时显示「读取失败」而不是留空（空状态 = 静默兜底，把失败伪装成「本来就没有」）。 -->
+    <p class="pms-meta">{ui.t('settings.vault_file_hint')}</p>
     {#if fileInfo}
       <p class="pms-meta set-mono">{fileInfo.path}</p>
       <p class="pms-meta">
         {ui.t('settings.size')}: {formatBytes(fileInfo.size_bytes)}
       </p>
+    {:else if fileInfoFailed}
+      <p class="pms-hint">{ui.t('settings.vault_file_failed')}</p>
+    {:else}
+      <p class="pms-meta">{ui.t('common.loading')}</p>
     {/if}
   </div>
 
   <!-- D-63：「关于」分组（需求：软件里必须有版本与作者等信息）。 -->
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_about')}</h3>
-    <div class="set-row">
+    <!-- D-73：纯信息行加 `is-info`、按钮行加 `is-actions`。
+         窄屏的 `.set-row { flex-direction: column }` 是**为控件行写的**（160px 固定宽在 390px 会溢出），
+         它只判了 `.set-row`，于是把信息行（「作者 / hengletime」被拆成两行，读起来像两条独立信息）
+         和按钮行（`align-items: stretch` 把三个按钮拉成满宽竖排，吃掉小半屏）一起误伤。
+         按行类型显式区分，不用 `:has()`（WebView 版本差异，别赌）。 -->
+    <div class="set-row is-info">
       <span class="set-name">PasswordMS</span>
       <span class="pms-meta">{ui.t('settings.about_version')}: {appVersion ?? '—'}</span>
     </div>
-    <div class="set-row">
+    <div class="set-row is-info">
       <span class="set-label">{ui.t('settings.about_author')}</span>
       <span class="pms-meta">hengletime</span>
     </div>
-    <div class="set-row">
+    <div class="set-row is-info">
       <span class="set-label">{ui.t('settings.about_license')}</span>
       <span class="pms-meta">MIT License</span>
     </div>
-    <div class="set-row">
+    <div class="set-row is-actions">
       <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openHomepage()}>
         <Icon name="external" size={14} />{ui.t('settings.about_homepage')}
       </button>
@@ -437,7 +458,9 @@
   .set-card .pms-alert {
     margin: 0 0 0.75rem;
   }
-  /* 移动端：每行由「label 左 / 控件右」改为上下堆叠，控件占满整宽，避免 160px 固定宽控件 + 长文案溢出。 */
+  /* 移动端：每行由「label 左 / 控件右」改为上下堆叠，控件占满整宽，避免 160px 固定宽控件 + 长文案溢出。
+     ⚠️ 下面 `.set-row` 的堆叠**只适用于含控件的行**（`.set-ctl` / 输入 / 分段控件）。
+     纯信息行必须加 `.is-info`、按钮行必须加 `.is-actions` 在下方覆盖回来（同层叠靠源码顺序取胜）。 */
   @media (max-width: 767px) {
     .set {
       padding: 0.9rem;
@@ -452,6 +475,26 @@
     }
     .set-seg {
       align-self: flex-start;
+    }
+    /* 纯信息行（左标签 / 右文本）：窄屏仍保持左右两端对齐。
+       不能跟着上面的 .set-row 堆叠 ——「作者 / hengletime」拆成两行会被读成两条信息。 */
+    .set-row.is-info {
+      flex-direction: row;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.75rem;
+    }
+    .set-row.is-info .pms-meta {
+      text-align: right;
+      min-width: 0; /* 长文本可收缩，防溢出 */
+    }
+    /* 按钮行：窄屏横向排布、允许换行。被 stretch 拉成满宽竖排会吃掉半屏。 */
+    .set-row.is-actions {
+      flex-direction: row;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 0.5rem;
     }
   }
 </style>

@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`） · **v2.11 文件落盘与「取消不是错误」（D-71 / D-72）**：Android 上保存对话框返回的是 `content://` SAF URI（不是内核路径），`std::fs::write` 必失败 → 附件导出报「文件读写出错」（D-71，改走 provider fd 的 `"wt"` 写入）；同时**收口「取消 → 弹红」的三处散乱实现**（`vault-export` 未捕获 rejection / `AttachmentView` 取消弹红 / `ImportWizard` 空 catch 吞真错）为唯一口径 `runSaveToDestination`（D-72）；导入面板补格式说明 + **可下载 CSV 模板**（`save_import_template`），模板与解析器表头一致性由 `tests/import_template.rs` 锁死
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`） · **v2.11 文件落盘与「取消不是错误」（D-71 / D-72）**：Android 上保存对话框返回的是 `content://` SAF URI（不是内核路径），`std::fs::write` 必失败 → 附件导出报「文件读写出错」（D-71，改走 provider fd 的 `"wt"` 写入）；同时**收口「取消 → 弹红」的三处散乱实现**（`vault-export` 未捕获 rejection / `AttachmentView` 取消弹红 / `ImportWizard` 空 catch 吞真错）为唯一口径 `runSaveToDestination`（D-72）；导入面板补格式说明 + **可下载 CSV 模板**（`save_import_template`），模板与解析器表头一致性由 `tests/import_template.rs` 锁死 · **v2.12 设置页旁路数据失败隔离 + 保险库文件说明（D-73）**：`Settings.svelte` 的 `$effect` 首行曾用 `structuredClone` 深拷 `$state` 代理（结构化克隆算法遇 Proxy 必抛 `DataCloneError`），于是其后的「库文件信息 / 自动锁定档位 / 版本号」三块**从不执行**——四处症状（库文件卡片空白 / 版本显示「—」/ 自动锁定档位恒为默认档 / 连带整卡不刷新），其中「自动锁定档位读不到」客户尚未发现 → 深拷改 `$state.snapshot()`，三块改由 `src/lib/settings-page.ts::loadSettingsPageSide` **逐块独立失败隔离**并显式建模失败态；「保险库文件」补说明行、读不到显示 `settings.vault_file_failed` 而非空白卡片；档位读失败显示 `settings.auto_lock_failed`（否则「5 分钟」会被误读成真实设置）；导入按钮文案消歧（`import.choose_file`）+ 「预览」不再无解释置灰（改可点 + `import.choose_first` 提示）；**手机「关于」组按行类型显式区分**（`.is-info` / `.is-actions`，见 §6.10）——根因不是「规则写错了」而是「**规则的适用范围没写**」：窄屏 `.set-row { flex-direction: column }` 只对**控件行**成立（`.set-ctl` 的 160px 固定宽在 390px 会溢出），一刀切下去把纯信息行与按钮行一起扫了 → 信息行 `.is-info`（左右两端对齐）/ 按钮行 `.is-actions`（横排换行）在**同一个 `@media` 块内 `.set-row` 之后**覆盖回来，**不许用 `:has()`**（WebView 版本差异，别赌）；桌面 ≥768px 不需要任何新规则、逐像素不变
 
 ---
 
@@ -409,7 +409,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `ItemEditor.svelte` | 全部换成 `.pms-field` / `.pms-input-group`；自定义字段区用 .pms-card 内嵌浅底块；底部操作条 sticky |
 | `AttachmentView.svelte` | **D-60 改造为父条目附件区**（不再是独立附件条目的整页详情）：区头 = `paperclip` 图标 + 区标题（`attach.section_title`）+「添加附件」ghost 按钮（`attach.add`，常驻可点——空附件数组时行列表隐藏但入口保留）；附件行 = `--pms-bg-2` 浅底圆角卡（图标 + 文件名 600 + `MIME · 大小` meta 行 + 行尾两个 `.pms-icon-btn` 导出/移除）。**待同步态（D-53 语义保留）**：`attachment_blob_ready(attachment_id) = false` 时行内展示 `attach.pending_sync`（`--pms-warning` 色）并禁用导出按钮（强导会报 `ERR_BLOB_MISSING`）。导出保留明文风险二次确认（`attach.export_confirm_*`）；**导出的选目标与写盘走 `runSaveToDestination`（D-71/D-72）——取消安静返回、失败才弹红**，Android 的 `content://` 由后端经 provider fd 写入（详见 §5.8）；移除走二次确认（`attach.remove_confirm_*`，确认体带文件名插值）→ `remove_attachment` → blob 交孤儿 GC。添加/移除成功后 `vault.load()` 刷新（父条目 rev+1） |
 | `ImportWizard.svelte` | 三步走：①「选择文件」+ 路径回显 ②格式单选（`json` / `csv`）③「解析预览」。**格式选择器下方必须有格式说明，不能让用户点完解析才知道文件不合法（D-72）**：`.pms-meta` 一行写支持范围（`import.supported_hint`）、`.pms-hint` 一行写细则（`import.template_hint`：CSV 列清单与 `type` 取值），两行都**常显**、不随格式切换隐藏。下一行是 `.pms-btn.is-ghost` 的「下载 CSV 模板」按钮（`download` 图标 + `import.download_template`）→ 系统保存对话框 → `save_import_template` 写盘 → success toast `import.template_saved`。**取消/失败的判定见 §5.8.2**（取消必须安静，失败必须红）。CSV 解析后展示映射表：已知列用 `.pms-badge.is-accent` 芯片、扩展列用 `.pms-badge-muted` |
-| `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`）。**导出的是整库的加密副本而非明文（D-54）**，且**文件的修改时间 = 库数据的最后写入时间**（`fs::copy` 保留 LastWriteTime）；备份可在锁屏页用「从备份恢复」（D-55）导入。**自动锁定档位真持久化（D-61 A 案）**：`auto_lock_minutes` 经 `get_auto_lock`/`set_auto_lock` 读写库明文头部（初始化读 IPC，换档即写 + success toast `settings.auto_lock_updated`，失败 error toast 并回滚 select 显示值）；执行层为全局闲置计时——`pointerdown`/`keydown`（passive）重置闲置起点，闲置达档位即走既有 `lockNow()`（reset 三个 store + 切锁屏路由）；Android 后台冻结计时器由 `visibilitychange` 补判（回前台超档立即锁，未超档后台时间计入闲置重排剩余）；无「从不」档；纯逻辑层 `src/lib/auto-lock.ts` 依赖注入可测（假时钟 8 例）。**「关于」分组（D-63 v2.7）**：末尾追加独立卡片（`settings.group_about`），四行 = 产品名 + 版本 / 作者 / 许可证 / 三按钮（项目主页 + 免责声明 + 用户协议，均为 `is-ghost is-sm`）；版本经 `getVersion()` **运行时读取，禁硬编码**，读取失败显示 `—`。详见 §5.5 |
+| `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`）。**导出的是整库的加密副本而非明文（D-54）**，且**文件的修改时间 = 库数据的最后写入时间**（`fs::copy` 保留 LastWriteTime）；备份可在锁屏页用「从备份恢复」（D-55）导入。**自动锁定档位真持久化（D-61 A 案）**：`auto_lock_minutes` 经 `get_auto_lock`/`set_auto_lock` 读写库明文头部（初始化读 IPC，换档即写 + success toast `settings.auto_lock_updated`，失败 error toast 并回滚 select 显示值）；执行层为全局闲置计时——`pointerdown`/`keydown`（passive）重置闲置起点，闲置达档位即走既有 `lockNow()`（reset 三个 store + 切锁屏路由）；Android 后台冻结计时器由 `visibilitychange` 补判（回前台超档立即锁，未超档后台时间计入闲置重排剩余）；无「从不」档；纯逻辑层 `src/lib/auto-lock.ts` 依赖注入可测（假时钟 8 例）。**「关于」分组（D-63 v2.7）**：末尾追加独立卡片（`settings.group_about`），四行 = 产品名 + 版本 / 作者 / 许可证 / 三按钮（项目主页 + 免责声明 + 用户协议，均为 `is-ghost is-sm`）；版本经 `getVersion()` **运行时读取，禁硬编码**，读取失败显示 `—`。**旁路数据失败隔离（D-73 v2.12）**：三块旁路数据（库文件信息 / 自动锁定档位 / 版本号）一律经 `src/lib/settings-page.ts::loadSettingsPageSide` **逐块独立失败隔离**（任一失败不影响其余两项；失败态显式建模，不再被 `.catch(() => null)` 吞成空白）；`draft` 深拷**必须**用 `$state.snapshot()`，**禁止 `structuredClone`**（对 `$state` 代理必抛 `DataCloneError`，且抛在 `$effect` 首行会让其后逻辑全部不执行；全仓由 `src/lib/state-clone-guard.test.ts` 守门），也**不得**用浅拷贝 `{ ...value }`（`generator` / `health` 两层仍是代理，`bind:value` 会写穿 store）；「保险库文件」卡片**有说明行** `settings.vault_file_hint`，读不到时显示 `settings.vault_file_failed` 而**不是**空白卡片。详见 §5.5 |
 | `PasswordGenerator.svelte` / `PasswordGeneratorModal.svelte` | 结果用 `--pms-mono` 大字 + `.pms-input-group` 承载复制/刷新按钮；选项区两列网格。**一律以弹窗形态出现**（`PasswordGeneratorModal` 内 Modal 自带 `{#if open}` 包裹 → 关闭即卸载，不残留请求/toast）。位数用**数字输入框**（输入中不钳制，失焦/回车才 clamp 到 8–64）；四类字符复选；**一类都不选时生成按钮 `disabled` 并给出提示**；结果下方带 `StrengthMeter`。**生成器参数（位数 / 四类字符 / 排除易混 / 自选符号集）变更后防抖 300ms 静默持久化**（D-52：走 `SettingsStore.saveQuiet` 不弹 toast，用显式变更点触发而非 `$effect` → 初始化不会把未变更默认值写回）；初始值优先级 `initial`（调用方显式传入）> 设置里持久化的偏好 > 默认值，`symbol_set` 空时回退 `+-_.,:` |
 | `common/ThemeToggle.svelte` | 三态循环（系统 → 浅色 → 暗色），图标用 `sun` / `moon`，并带 `title`。切换时**同时**更新 `document.documentElement` 的 `data-theme` **和**原生窗口标题栏（见 §4 D-32）。挂载点：解锁页右上角、主界面顶栏右区。 |
 | `HealthCheck.svelte` | 健康分做大字环形/大数字 + 4 个统计卡（弱口令/重复/超期/总数），弱项用 `.pms-badge.is-danger` |
@@ -463,15 +463,17 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 ```
 div.pms-card.set-card
   h3                              settings.group_about
-  .set-row  span.set-name  "PasswordMS"   +   span.pms-meta  "版本: {appVersion ?? '—'}"
-  .set-row  span.set-label 作者    +   span.pms-meta  "hengletime"
-  .set-row  span.set-label 许可证  +   span.pms-meta  "MIT License"
-  .set-row  button.pms-btn.is-ghost.is-sm ×3
+  .set-row.is-info  span.set-name  "PasswordMS"   +   span.pms-meta  "版本: {appVersion ?? '—'}"
+  .set-row.is-info  span.set-label 作者    +   span.pms-meta  "hengletime"
+  .set-row.is-info  span.set-label 许可证  +   span.pms-meta  "MIT License"
+  .set-row.is-actions  button.pms-btn.is-ghost.is-sm ×3
               ① Icon(name="external",14) + settings.about_homepage
               ② settings.about_disclaimer
               ③ settings.about_terms
 ```
 
+- **行类型必须显式标注**（D-73，v2.12）：前三行是纯信息行 → `.is-info`；末行是按钮行 → `.is-actions`。
+  漏标就会被窄屏的 `.set-row { flex-direction: column }` 一并堆叠（信息行左右拆散、按钮拉成满宽竖排）。详见 **§6.10**。
 - **版本禁止硬编码**：`getVersion()`（`@tauri-apps/api/app`）在 `$effect` 里读一次，失败置 `null` → 模板渲染 `appVersion ?? '—'`。写死 `1.2.2` 会在下个版本立刻变成假信息。
 - **项目主页**：常量 `HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS'`，点击前先过 `isSafeUrl()`（复用 `src/lib/url-safety.ts`，与条目 URL 同一套白名单），再走既有 `api.system.openUrl`。**不要**引 `@tauri-apps/plugin-opener` 新依赖——已有 IPC 够了。
 - **图标**：主页按钮用 `external`（Icon 里没有 `link`，写错名会静默不渲染）。按钮尺寸 `is-ghost is-sm`，与卡片内其它行同高，不用主色，避免「关于」抢走安全设置的注意力。
@@ -826,7 +828,7 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
 | `ItemList.svelte` | `width: 300px` → `width: auto; flex: 1; border-right: none;` |
 | `ItemDetail.svelte` | 已具备 `flex: 1; min-width: 0`，无需改动 |
 | `ItemEditor.svelte` | 加 `flex: 1; min-width: 0`（独占整屏）；底部 sticky 操作条因 `.body` 预留了底栏高度而不会被遮挡 |
-| `Settings.svelte` | `.set-row` 由「label 左 / 控件右」改为上下堆叠，`.set-ctl` 占满整宽（避免 160px 固定宽控件 + 长文案溢出） |
+| `Settings.svelte` | `.set-row` 由「label 左 / 控件右」改为上下堆叠，`.set-ctl` 占满整宽（避免 160px 固定宽控件 + 长文案溢出）。⚠️ **仅限控件行**；纯信息行加 `.is-info`、按钮行加 `.is-actions` 覆盖回左右 / 横排，详见 **§6.10**（D-73 同轮） |
 | `Trash.svelte` | `.trash-row` 允许换行，动作按钮落到下一行 |
 | `MainLayout.svelte` `.sync-grid` | `minmax(300px, 1fr)` 在 390px 下会溢出 → 改单列 `grid-template-columns: 1fr` |
 
@@ -882,6 +884,48 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
   右区只有两个高频钮，藏起来等于自废入口；图标化既保入口又在最窄档省 ~180px。
 - 窗口三钮 `WindowControls` **不受档位影响**，永远在最右（它是 `.topbar` 直接子级，见 §8）。
 - 需求宽实测账：紧凑二档 ≈ 660px（768 起）、紧凑一档 ≈ 870px（900 起，英文 tab 最坏值）、完整档 ≈ 1060px（1200 起），各档均有余量。
+
+### 6.10 设置页：控件行与信息行必须分开处理（D-73，v2.12）
+
+> 起因：主人装 1.2.6 后发来 390px 截图 —— 「关于」卡片里**每个「标签 / 值」都被拆成上下两行、左对齐**，
+> 三个按钮被拉成**三条满宽竖排**。这是 §6.6 表里 `Settings.svelte` 那条改动**误伤**出来的。
+
+**根因不是「规则写错了」，而是「规则的适用范围没写」**：
+
+```css
+/* ↓ 这条规则是为「控件行」写的：.set-ctl 那 160px 固定宽在 390px 会溢出 */
+@media (max-width: 767px) {
+  .set-row { flex-direction: column; align-items: stretch; gap: 0.35rem; }
+  .set-ctl { width: 100%; }
+  .set-seg { align-self: flex-start; }
+}
+```
+
+它只判了 `.set-row` 一律堆叠，于是把**纯信息行**和**按钮行**一起改了：
+
+- 信息行：`作者` 与 `hengletime` 变成两行左对齐 → 读起来像两条独立信息，且与上一行的对应关系丢失；
+- 按钮行：`align-items: stretch` 把三个 `.pms-btn.is-ghost.is-sm` 拉成满宽竖排 → 三条按钮吃掉小半屏。
+
+**硬约束**（写死，不许再犯）：
+
+> `@media (max-width: 767px)` 的 `.set-row { flex-direction: column }` **只适用于含控件的行**
+> （`.set-ctl` / 输入 / 分段控件）。
+> 纯信息行（左标签 + 右文本）必须加 `.is-info` 保持左右两端对齐；按钮行必须加 `.is-actions` 保持横排换行。
+> 判据：390px 下「关于」组仍是「作者 ……… hengletime」同一行两端对齐，三个按钮横向排布（必要时换行）；
+> 1100px 下逐像素不变。
+
+**实现要点**：
+
+1. 三类行用**显式类名**区分，**不许用 `:has()`**（WebView 版本差异，别赌）。
+2. 覆盖规则必须写在同一个 `@media` 块内、且**位于 `.set-row` 之后** —— 同位阶靠源码顺序取胜；**不许新开第二个 `@media`**，会把层叠关系搅乱。
+3. 桌面（≥768px）**一个像素都不许变**：`.set-row` 本来就是 `space-between`，`is-info` / `is-actions` 在桌面不需要任何新规则。
+4. 主题 / 语言 / 自动锁定 / 剪贴板 / 体检阈值 / 改密码 那些行**都是控件行，窄屏堆叠是对的**，继续走原规则，不许加 `is-*`。
+5. 设备组用的是 `.set-list-row`（§6.8 契约），走另一条链路，**不受本规则影响，不要去动它**。
+6. **机器守卫**：`src/lib/settings-row-type-guard.test.ts`（8 例）扫 `Settings.svelte` 原文，锁死
+   ① 恰好 3 条 `is-info` + 1 条 `is-actions`，且**全文件只有这 4 条**带 `is-*`（控件行不许被误标）；
+   ② 覆盖规则在**同一个** `@media (max-width: 767px)` 块内、位于一刀切 `.set-row` 之后；
+   ③ 媒体块**外**没有任何 `.set-row.is-info` / `.set-row.is-actions` ⇒ 桌面逐像素不变；
+   ④ 全文件无 `:has(`（负向断言先剥注释再扫，否则注释里写「不许用 `:has()`」会把自己判红）。
 
 ## 7. 本次必须修的缺陷
 
@@ -1004,3 +1048,16 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
   - **导入面板说清格式**：格式单选下方常显 `import.supported_hint`（`.pms-meta`）+ `import.template_hint`（`.pms-hint`），再下面是 `.pms-btn.is-ghost` 的「下载 CSV 模板」按钮；**说明出现在解析按钮之前**，且不随格式切换隐藏。
   - **模板可导入**：下载得到的 CSV **直接喂回本应用必须 0 跳过**（`total == 2` / `items.len() == 2` / `skipped == 0`），表头 10 列与 `KNOWN_COLUMNS` 逐字同序，示例行**不得溢出到 `custom_fields`**——全部由 `crates/passwordms-core/tests/import_template.rs` 锁死。
   - **模板内容不在前端拼**：固定取 `passwordms_core::import::template::CSV_TEMPLATE`。
+- [ ] **D-73**（v2.12 已实现）：**设置页五个症状全部消失**（**两处独立根因**：④ 及之前是 `$effect` 首行深拷抛错导致其后全哑；⑤ 是窄屏规则未限定适用范围。两者同轮发现、**不同根因**，修好深拷不会让⑤自动消失）
+  - **根因判据（结构性）**：`Settings.svelte` 的 `$effect` 里 `draft` 的深拷**只允许** `$state.snapshot(settings.value)`。全仓（`src/**/*.{svelte,ts}`）**不得出现** `structuredClone` 的调用形态——对 `$state` 代理必抛 `DataCloneError`，而抛在 `$effect` 首行会让同一 `$effect` 内**后面所有逻辑静默不执行**（`src/lib/state-clone-guard.test.ts` 两例守门：扫描面有效性 + 零命中）。
+  - **症状① 版本可见**：「关于」分组显示**真实版本号**（如 `1.2.7`），不是 `—`。
+  - **症状② 库文件卡片有内容**：「保险库文件」卡片显示**路径 + 大小**两项非空（路径等宽 `.set-mono` 可折行），且**标题下方有说明行** `settings.vault_file_hint`（回答「这个文件是干什么的」），不再只有标题。
+  - **症状③ 自动锁定档位真实**（客户尚未发现的隐藏症状）：把档位改成 **15 分钟** → 重启应用 → 设置页仍显示 **15 分钟**（缺陷期为恒显示 5 分钟）；改回 **1 分钟** 同样成立。判据是「显示值 == 库里 `auto_lock_minutes`」。
+  - **症状④ 失败不再伪装成空**：构造库文件信息读取失败（后端返回错误）→ 卡片显示 `settings.vault_file_failed`（**有一行字**），**不得**是空白卡片；且此时版本号与自动锁定档位**仍正常显示**（逐块失败隔离的回归锚点）。
+  - **失败隔离判据（可单测）**：`loadSettingsPageSide` 中任一 load reject 时，其余两项**必须仍有值**；`fileInfoFailed` / `autoLockFailed` 成功路径必须为 `false`。`src/lib/settings-page.test.ts` 5 例（三者全成功 / 库文件失败 / 版本失败 / 档位失败 / 档位返回非有限数）。
+  - **导入按钮文案消歧**：按钮文案为「选择要导入的文件」/ "Choose a file to import"（不再是「选择导出文件」——本应用导出的是 `.vault` 加密备份，不从该入口导入）。
+  - **「预览」可解释**：未选文件时按钮**可点**，点击出现 `import.choose_first` 提示（toast），**不得**再「置灰且无任何说明」。
+  - **症状⑤ 手机「关于」组排版不散乱**（客户 1.2.6 真机截图追加）：390px 下「作者」与 `hengletime` 必须**同一行两端对齐**（标签左、值右），**不得**被拆成上下两行左对齐；「许可证 / MIT License」同理；三个按钮（项目主页 / 免责声明 / 用户协议）必须**横向排布**（必要时换行），**不得**被拉成三条满宽竖排。1100px 桌面下**逐像素不变**。结构判据由 `src/lib/settings-row-type-guard.test.ts`（8 例）锁死：恰好 3 条 `.is-info` + 1 条 `.is-actions`、全文件仅此 4 条 `is-*`、覆盖规则在同一 `@media` 块内且位于 `.set-row` 之后、媒体块外无 `is-*` 规则（⇒ 桌面不变）、无 `:has(`。
+  - **症状① 在手机上也成立**：390px 下「关于」第一行显示**真实版本号**（如 `1.2.7`）而不是 `—` —— 与症状① 同源同判据，窄屏不额外退化。
+  - **档位失败有出口**：`autoLockFailed = true` 时下拉旁必须出现 `settings.auto_lock_failed` 一行字（否则「5 分钟」会被误读成真实设置）。
+

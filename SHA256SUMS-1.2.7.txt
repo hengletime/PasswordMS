@@ -1,0 +1,7 @@
+# PasswordMS v1.2.7 交付产物 SHA256（2026-10-21 20:50:28 生成）
+# 全部由本机实测 sha256sum 得出，非估算
+44dc57812f1e6ee0679ddad0f75ac5765ed7f62d119817df149d1719b99489c6 *target/x86_64-pc-windows-gnullvm/release/bundle/nsis/PasswordMS_1.2.7_x64-setup.exe
+6224f85176a7c251923aa2c4a6eb2615d89a0b1482a955aa45f53cb7d7028835 *target/x86_64-pc-windows-gnullvm/release/bundle/msi/PasswordMS_1.2.7_x64_en-US.msi
+535359e98ff8103ae67b3f52c5539642baa67096100d9b261ad471bc66df81e2 *target/PasswordMS-1.2.7-arm64.apk
+b1e0c42f5dad103c876afc2f056029645c66019729ae155b3f4a33218fa38d77 *target/x86_64-pc-windows-gnullvm/release/PasswordMS-1.2.7-portable-x64.zip
+ec34d67b1551db1815e2c2b9a5400fea967d4850df17be3a8c613fb9a76591ff *target/x86_64-pc-windows-gnullvm/release/passwordms.exe

@@ -846,7 +846,7 @@ pub struct Item {
 - **测试**：`crates/passwordms-core/tests/pairing_session_code.rs` 三例（替换原 `pairing_fingerprint_consistency.rs`）——
   ① 两屏同值且为 16 位小写 hex；② 会话码跨配对必变、设备指纹跨配对不变、两者不相等；③ 电脑端对端指纹留空。
 
-#### 3.14.11 v1.2.5 增量（D-71 / D-72：Android `content://` 写盘 + 「取消不是错误」口径 + 导入模板）
+#### 3.14.11 v1.2.6 增量（D-71 / D-72：Android `content://` 写盘 + 「取消不是错误」口径 + 导入模板）
 
 > 客户真机反馈（2026-10-21）：「手机端想把附件下载保存时，提示：文件读写错误。」
 > 「在设置有个导入功能，对导入内容的格式有什么要求？是否需要给用户一个模板？」
@@ -906,6 +906,74 @@ Android 的保存对话框（`ACTION_CREATE_DOCUMENT`）回传的是 `content://
   ——`crates/passwordms-core/tests/import_template.rs` 逐条断言。**改模板必须同步改测试**，
   否则「模板改了、解析器没跟上」会静默把示例值映射到别的列。
 - **前端不拼模板**：内容只从 core 常量取，避免两份文本各自演化。
+
+#### 3.14.12 v1.2.7 增量（D-73：设置页旁路数据的失败隔离 + 行类型分离）
+
+> 客户装 1.2.6 真机反馈（2026-10-21，三条截图）：「关于」组窄屏排版散乱 / 设置里「保险库文件」没看到文件、
+> 版本号也没出来 / 导入面板里按钮写着「选择导出文件」且「预览」不可用。
+> 本轮查出**两处独立根因、五个症状**——修好第一处不会让第五个自动消失，这是本条要留给后人的关键区别。
+
+**A. 根因一：`structuredClone` 遇 `$state` 代理必抛，而它站在 `$effect` 第一行**
+
+`Settings.svelte` 的 `$effect` 首行原为 `draft = structuredClone(settings.value)`。
+`settings.value` 是 Svelte 5 的**深层响应式 Proxy**，而 HTML 结构化克隆算法遇 Proxy 必抛 `DataCloneError`
+（实测报文 `#<Object> could not be cloned.`）。异常抛在首行 ⇒ **该 `$effect` 后续全部逻辑静默不执行**，
+且**不冒到界面**（effect 内的异常不会渲染成错误页）。于是同一个 bug 长出四个症状：
+
+| 症状 | 表现 | 为什么看起来像四个 bug |
+|---|---|---|
+| ① | 「关于 → 版本」显示 `—` | 版本读取根本没跑 |
+| ② | 「保险库文件」卡片只有标题、下面全空 | 库文件信息根本没跑 |
+| ③ | 自动锁定下拉**恒为默认档**（设 1 或 15 分钟都显示 5 分钟） | 档位读取根本没跑；**客户尚未发现这一条** |
+| ④ | 「读失败」与「本来就没有」长得一模一样（都是空白） | 每块的 `.catch(() => null)` 把失败吞成空状态 |
+
+- **修法一**：深拷改 `$state.snapshot(settings.value)`。
+- **修法二（更重要）**：三块旁路数据抽到 `src/lib/settings-page.ts::loadSettingsPageSide`，
+  **各自 try/catch、失败显式建模**（`fileInfoFailed` / `autoLockFailed`），并明确**串行**而非 `Promise.all`
+  ——`Promise.all` 的语义就是「一个 reject 全丢」，正是本缺陷要消灭的形状。
+- **为什么不能用浅拷贝 `{ ...settings.value }`**：内层 `generator` / `health` 仍是代理，
+  下面 `bind:value` 改草稿会**直接写穿到 store**，变成「取消不掉」的隐藏 bug。
+- **`NaN` / `Infinity` 判失败**：后端若回非有限数，`<select>` 里没有任何 option 与之相等，
+  会渲染成一个**没选中项的下拉**——又一种「看起来正常、其实不对」。
+
+**B. 根因二：裸 `structuredClone` 会被人再写一次 → 静态守卫**
+
+`src/lib/state-clone-guard.test.ts` 两例：① 扫描面有效性（`> 60` 个文件、锚定到被守对象）；② 全仓
+`src/**/*.{svelte,ts}` 零命中（正则刻意避开注释与正则字面量自身）。
+**配套约束**：注释里也不要写出调用形态，否则会命中守卫自己的正则（本项目实测踩过）。
+
+**C. 症状⑤：窄屏 `.set-row` 是「一刀切」，但它只为控件行而写**
+
+`Settings.svelte` 的 `@media (max-width: 767px)` 里 `.set-row { flex-direction: column }` 的**真实理由**
+是控件行里的 `.set-ctl`（160px 固定宽）在 390px 会溢出，必须堆叠。但选择器没限定范围，
+把**纯信息行**（标签 / 值）与**按钮行**一起扫了 ⇒ 信息行被拆成上下两行左对齐、按钮被拉成三条满宽竖排。
+
+- **修法**：行类型**显式标注** —— 信息行 `.is-info`（`row` + `baseline` + `space-between`，值右对齐可收缩）、
+  按钮行 `.is-actions`（`row` + `wrap` + `flex-start`），覆盖规则写在**同一个 `@media` 块内、`.set-row` 之后**。
+- **不许用 `:has()`**：WebView 版本差异，别赌。
+- **桌面 ≥768px 逐像素不变**，且有**结构性证明**：媒体块**外**零 `.is-*` 规则
+  （`src/lib/settings-row-type-guard.test.ts` 8 例，含「覆盖规则在同一媒体块内且在 `.set-row` 之后」的花括号配平判据）。
+- **特异度而非顺序才是主保险**：`.set-row.is-info` (0,2,0) > `.set-row` (0,1,0)，
+  即使将来有人调换源码顺序也依然生效；测试里硬绑顺序只是第二道保险。
+- **负向断言必须先剥注释**：`expect(SRC).not.toContain(':has(')` 会命中解释「不许用 `:has()`」的注释本身，
+  所以守卫先 `stripComments()` 再扫代码（**不是**删注释让它变绿——注释是留给下一个人的，删掉等于把陷阱复原）。
+
+**D. 旁带：两处误导性 UI**
+
+- `import.choose_file` 文案原为「选择导出文件」——本应用导出的是 `.vault` 加密备份，**该入口不导入 `.vault`**，
+  文案与实际功能相反。改为「选择要导入的文件」。
+- 「预览」原先 `disabled={sourcePath.length === 0}`：**置灰且无任何解释**，用户不知道要先选文件。
+  改为可点 + 未选文件时 `import.choose_first` 提示。
+- **`loading` 态刻意保留**：去掉它，`fileInfo === null && !fileInfoFailed` 只能渲染空白，
+  恰好复现症状② 的观感。**已知无害的闪烁 < 会与 bug 混淆的空白**。
+
+**E. 门禁读数报废事故（方法论，值得记形状）**
+
+本轮第一遍门禁 20:24:11 启动、报 **PASS 7 门 / EXIT=0**，但**读数作废**：
+前端阶段只跑 12s（20:24:2x 结束），而 `settings-row-type-guard.test.ts` 到 **20:25:30** 才创建，
+那轮**少跑 8 例却依然全绿**。**门禁不会告诉你它没看到的东西**——判据不是总判定（两轮都 PASS），
+而是**文件时点 vs 门禁各阶段时点**。重跑后 24 文件 164 例才对上账（21+3 / 149+15）。
+配套做法：并行工程师交付**静止树 sha256 基线**，跑门禁前后各校一次。
 
 
 

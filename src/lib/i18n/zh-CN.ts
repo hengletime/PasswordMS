@@ -198,7 +198,11 @@ export const zhCN = {
   },
   import: {
     title: '导入',
-    choose_file: '选择导出文件',
+    // D-73：原「选择导出文件」被主人读成「选本应用导出的文件」（本应用导出的是 .vault
+    // 加密备份，根本不从这个入口导）→ 改成动作方向明确的措辞。
+    choose_file: '选择要导入的文件',
+    // D-73：「预览」不再因为未选文件而置灰（置灰+无说明 = 用户卡死），改为可点+提示。
+    choose_first: '请先点上面的「选择要导入的文件」。',
     format: '格式',
     format_json: 'JSON',
     format_csv: 'CSV',
@@ -263,6 +267,7 @@ export const zhCN = {
     clipboard_ttl: '剪贴板清空（秒）',
     auto_lock: '自动锁定（分钟）',
     auto_lock_updated: '自动锁定档位已更新（{n} 分钟）',
+    auto_lock_failed: '读取失败：当前显示的是兜底档位，库里实际档位未能取得。',
     auto_sync: '自动同步',
     sync_on_start: '启动时同步',
     change_password: '修改主密码',
@@ -276,6 +281,11 @@ export const zhCN = {
     export_password_required: '请先输入当前主密码再导出。',
     vault_file: '保险库文件',
     size: '大小',
+    // D-73：标题必须自带解释。主人原话「保险库文件是什么作用？没有看到文件啊？」——
+    // 一句「为什么你会关心这个文件」比一个路径有用得多（备份/换机就是复制它）。
+    vault_file_hint: '本机全部条目都加密保存在这一个文件里；备份或换机就是复制它，路径见下。',
+    // D-73：读不到时**不能留空**（空 = 静默兜底，把失败伪装成「本来就没有」）。
+    vault_file_failed: '读取失败：未能取得库文件路径与大小（条目本身不受影响）。',
     weak_max_len: '弱口令长度阈值',
     stale_days: '超期天数',
     // D-63：「关于」分组（版本 / 作者 / 许可证 / 项目主页 / 法律条款入口）。

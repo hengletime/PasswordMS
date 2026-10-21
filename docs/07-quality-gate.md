@@ -1,7 +1,7 @@
 # 07 · 质量门与出包门禁（权威）
 
 > **本文档的性质**：PasswordMS 交付前的**唯一门禁权威**。§1 日常门 = 一条命令跑完的自动化总门；§2 出包门 = 产出安装包/APK 的**唯一正道**与出包后的人工验收；§3 安全验收点 A-01~A-10 与测试证据的映射；§4 已知边界（**未验证 ≠ 通过**）。
-> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-21 15:11 实跑刷新**（总耗时 **6m39s**，总判定 **PASS**，7 门全过 / 0 失败 / 0 跳过；Rust **120 例**、前端 **20 文件 138 例**）；2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
+> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-21 20:33（v1.2.7）实跑刷新**（总耗时 **5m55s**，总判定 **PASS**，7 门全过 / 0 失败 / 0 跳过；Rust **124 例**、前端 **24 文件 164 例**）；2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
 > **记录人**：工程师（寇豆码）　**最近一次执行**：2026-10-21
 
 ---
@@ -30,22 +30,30 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 ### 1.2 门清单与本次实跑数字
 
-| # | 门 | 命令 | 本次实测（2026-10-21 v1.2.6） | 判定 |
+| # | 门 | 命令 | 本次实测（2026-10-21 v1.2.7） | 判定 |
 |---|----|------|---------|------|
-| 1 | 前端单测 | `npm run test`（vitest） | **21 文件 149/149 通过**（2026-10-21 16:17:18 实测；含 D-72 新增 `save-dialog` 5、`ipc-contract` 12→15、`import` 5→7、`vault-export` 5→6） | ✅ 12s |
+| 1 | 前端单测 | `npm run test`（vitest） | **24 文件 164/164 通过**（2026-10-21 20:33 实测，门禁 20:33:00 启动；较 v1.2.6 的 21/149 新增 3 文件 15 例，见下） | ✅ 12s |
 | 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 14s |
 | 3 | CSS 层叠契约 | `npm run check:css` | **0 FAIL / 6 WARN**（6 WARN 为既有浅色主/危险按钮对比度 3.74~4.38:1，过控件底线 3.0 未达 AA 4.5，已知项） | ✅ 4s |
-| 4 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **124/124 通过**（21 个编译目标 + 1 个 doc-test，明细见 §1.3） | ✅ 343s |
-| 5 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，明细见 §1.4），rc=0 | ✅ 13s |
-| 6 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.40 MB**（2,519,040 B）+ NSIS **1.59 MB**（1,664,935 B），均 ≤ 10 MB；绿色版 zip **1.93 MB**（2,026,617 B） | ✅ 15s |
-| 7 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.61 MB ≤ 12 MB**（`PasswordMS-1.2.6-arm64.apk`，6,934,163 B） | ✅ 8s |
+| 4 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **124/124 通过**（22 个编译目标 + 1 个 doc-test，明细见 §1.3）—— 与 v1.2.6 同数，因 D-73 是**纯前端**缺陷、本轮 Rust 源码零改动（`find src-tauri/src crates -name "*.rs" -newermt` 空输出） | ✅ 287s |
+| 5 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，明细见 §1.4），rc=0 | ✅ 17s |
+| 6 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.40 MB**（2,519,040 B）+ NSIS **1.59 MB**（1,664,395 B），均 ≤ 10 MB；绿色版 zip **1.93 MB**（2,027,598 B，4 件含 `WebView2Loader.dll`） | ✅ 15s |
+| 7 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.62 MB ≤ 12 MB**（`PasswordMS-1.2.7-arm64.apk`，6,938,259 B） | ✅ 8s |
 
-> **§1.2 的读数口径（重要）**：第 1~5 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-21 16:17:18→16:23:44，6m26s，**7 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
-> 第 6~7 行的字节数来自该次实跑之后的 v1.2.6 正式出包产物（`--allow-missing` 口径不变）。
+> **§1.2 的读数口径（重要）**：第 1~5 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-21 20:33:00→20:38:55，**5m55s**，**7 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
+> 第 6~7 行的字节数来自该次实跑之后的 v1.2.7 正式出包产物（`--allow-missing` 口径不变）。
 > ⚠️ **门禁输出必须落日志再 grep**：`bash scripts/gate-all.sh | tail -N` 会把前端例数等关键读数截掉，且日志含 ANSI 色码 —— 用 `grep -a` 才读得到。
-> 前端 149 例的构成（逐文件实测，非估算）：`138 + 5(save-dialog 新增) + 1(vault-export) + 3(ipc-contract) + 2(import) = 149`，与 `vitest` 汇总行吻合。
+> 前端 164 例的构成（逐文件实测，非估算）：`149（v1.2.6 基线） + 5(settings-page 新增) + 2(state-clone-guard 新增) + 8(settings-row-type-guard 新增) = 164`，与 `vitest` 汇总行吻合。
+> **Rust 287s 比上轮 343s 快不是提速**：上轮是干净全量重编（改过 `crates/` 源码），本轮 Rust 源码零改动、全是增量复用，**两个数字不可直接比较**。
 > **前端例数在交付窗口内是移动靶**：它是各分工的累加量。本节记的是**"最近一次实跑的定值 + 时间戳"**，不是冻结基线；
 > 引用请连同时间一起引，别跨轮引用一个裸数字（本轮已两次出现"旧数字被当现值"的事故）。
+
+> **门禁读数因并行写入而报废一次（2026-10-21，v1.2.7 本轮）**：本轮第一遍门禁于 **20:24:11** 启动、报 `Test Files 23 passed` / PASS 7 门 / EXIT=0，
+> **但读数作废**——前端测试阶段只跑 12s，20:24:2x 就结束了，而 `src/lib/settings-row-type-guard.test.ts` 到 **20:25:30** 才被创建，
+> 于是那轮**少了 8 例守卫**却依然全绿：**门禁不会告诉你"它没看到的东西"**。
+> 判据不是看总判定（两轮都是 PASS），而是看**文件时点 vs 门禁阶段时点**。重跑后 24 文件 164 例才对上账（21+3 / 149+15）。
+> **教训**：跑门禁前必须确认文件树静止；派工给并行工程师后，要么等他明确停手，要么对比 sha256 基线，不能靠"我觉得他改完了"。
+> 配套做法：让工程师交付**静止树 sha256 基线**（`Settings.svelte 05514fb2…` / `settings-row-type-guard.test.ts 4d034b83…` / `06-ui-design.md d61974ad…` / `settings-page.ts 95c6452a…`），跑前跑后各校一次。
 
 > **测量口径事故（2026-10-21 修，值得记住形状）**：`timing_sidechannel` 在本轮门禁里红了两次（比值 1.671 / 1.502，越界 `[0.7,1.4]`），
 > 而同一棵代码树 20 分钟前刚通过。查下去不是安全缺陷，是**采样相位缺陷**：原实现「一条路径连续跑满 N 次再换下一条」，
@@ -55,7 +63,7 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 > 验证：连跑 3 次比值 **0.974 / 0.990 / 1.005**；第 3 次整机抖动（三路径中位数全冲到 2500、p10 全在 1700）比值仍 1.005 —— 因为负载对三条路径等量施加。
 > **判据**：一条时序测试若把「整机负载」记成「路径差异」，它就是在随机报红；改采样口径不算放宽阈值，改阈值才算。
 
-### 1.3 Rust 全量 124 例逐 target 累加（2026-10-21 16:17 实跑）
+### 1.3 Rust 全量 124 例逐 target 累加（2026-10-21 20:33 实跑）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。
 
@@ -79,7 +87,7 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 | `sync_conflict` | 5 | |
 | `sync_deletion` | 8 | D-56 删除传播 |
 | `sync_replay` | 10 | A-06/A-07/A-08 + D-57 新增 2 例（`ResyncHello` 字面量需带 `sync_port: 0` 表示老客户端） |
-| `timing_sidechannel` | 1 | **本次实跑 108.37s（历史 103~169s，波动属正常）**，KDF 烧时序设计使然，勿当卡死。采样口径已改为**三路径轮转**（原为逐路径连续采样，会把整机负载记成路径差异 → 间歇假红，详见 §1.2「测量口径事故」） |
+| `timing_sidechannel` | 1 | **本次实跑 104.38s（历史 103~169s，波动属正常）**，KDF 烧时序设计使然，勿当卡死。采样口径已改为**三路径轮转**（原为逐路径连续采样，会把整机负载记成路径差异 → 间歇假红，详见 §1.2「测量口径事故」） |
 | `unlock_error_probe` | 1 | D-10 护栏（`assert_ne!(code, "ERR_UNLOCK_FAILED")`——D-10 已修，此护栏的存在性见 04-qa.md §Phase 4c） |
 | `zeroize_check` | 7 | A-04 证据（含 D-1b folders 擦除） |
 | doc-tests | 1 | `attachment_name.rs` 的 ``` 示例（**必须靠 `.cargo/config.toml` 的 `rustdocflags` 才能链接**，见 §1.1） |

@@ -200,7 +200,12 @@ export const enUS: Messages = {
   },
   import: {
     title: 'Import',
-    choose_file: 'Choose export file',
+    // D-73: "Choose export file" read as "pick a file exported by this app"
+    // (this app exports an encrypted .vault backup, which never enters through here).
+    choose_file: 'Choose a file to import',
+    // D-73: Preview is no longer disabled without a file (disabled + unexplained = stuck);
+    // it is clickable and explains what to do instead.
+    choose_first: 'Pick a file first.',
     format: 'Format',
     format_json: 'JSON',
     format_csv: 'CSV',
@@ -267,6 +272,7 @@ export const enUS: Messages = {
     clipboard_ttl: 'Clipboard clear (seconds)',
     auto_lock: 'Auto-lock (minutes)',
     auto_lock_updated: 'Auto-lock updated ({n} min)',
+    auto_lock_failed: 'Could not read your setting; the value shown is a fallback.',
     auto_sync: 'Auto sync',
     sync_on_start: 'Sync on start',
     change_password: 'Change master password',
@@ -280,6 +286,11 @@ export const enUS: Messages = {
     export_password_required: 'Enter the current master password before exporting.',
     vault_file: 'Vault file',
     size: 'Size',
+    // D-73: the heading must explain itself — "what is this file for" beats a bare path.
+    vault_file_hint: 'Everything is encrypted into this single file; copy it to back up or move to another machine.',
+    // D-73: when the read fails, never render nothing (blank = a silent fallback that
+    // disguises a failure as "there was nothing to show").
+    vault_file_failed: 'Could not read the vault file path and size. Your items are unaffected.',
     weak_max_len: 'Weak length threshold',
     stale_days: 'Stale days',
     // D-63: "About" group (version / author / license / homepage / legal entries).

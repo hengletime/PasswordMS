@@ -62,6 +62,10 @@
 
   async function doPreview(): Promise<void> {
     if (sourcePath.length === 0) {
+      // D-73：不能静默 return。旧实现把「预览」按钮 `disabled` 掉，界面上又不解释为什么 →
+      // 主人卡在这里（真机反馈：「预览这里点不动，也没提示」）。现在按钮可点，
+      // 未选文件时给出明确指令，用户至少知道下一步做什么。
+      ui.toast('info', 'import.choose_first');
       return;
     }
     busy = true;
@@ -135,7 +139,7 @@
       <option value="json">{ui.t('import.format_json')}</option>
       <option value="csv">{ui.t('import.format_csv')}</option>
     </select>
-    <button class="pms-btn is-ghost" type="button" onclick={() => void doPreview()} disabled={sourcePath.length === 0 || busy}>
+    <button class="pms-btn is-ghost" type="button" onclick={() => void doPreview()} disabled={busy}>
       {ui.t('import.preview')}
     </button>
   </div>
