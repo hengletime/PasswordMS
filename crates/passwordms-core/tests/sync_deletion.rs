@@ -155,7 +155,7 @@ fn run_resync(
     });
     let joiner_outcome = {
         let repo = joiner_session.repo_mut().unwrap();
-        resync::resync_with_peer(repo, host_device_id, now_ms()).unwrap()
+        resync::resync_with_peer(repo, host_device_id, now_ms(), 0).unwrap()
     };
     let host_outcome = handle
         .join()

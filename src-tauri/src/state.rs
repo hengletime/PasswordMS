@@ -191,34 +191,61 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
         let state = app.state::<AppState>();
 
         // 锁顺序恒为 resync → session，避免与命令层形成环。
-        let mut guard = match state.resync.lock() {
-            Ok(g) => g,
-            Err(_) => break,
+        //
+        // v1.2.4（根因 A）：轮询调用**与结果处理分处两个作用域** —— 出作用域后再 emit。
+        // 前端收到 `sync://applied` 会立刻回打 `items_list`，那条 IPC 要拿 session 锁；
+        // 若在持锁状态下 emit，它会白等一个轮询周期（最坏 200ms + 本次传输耗时）。
+        let polled = {
+            let mut guard = match state.resync.lock() {
+                Ok(g) => g,
+                Err(_) => break,
+            };
+            let handle = match guard.as_mut() {
+                Some(h) => h,
+                None => break,
+            };
+            let mut session = match state.session.lock() {
+                Ok(s) => s,
+                Err(_) => break,
+            };
+            // 会话若已锁定则本轮跳过（等待解锁或停止信号）。
+            match session.repo_mut() {
+                Ok(repo) => handle.server.poll_once(repo, now_ms()),
+                Err(_) => continue,
+            }
         };
-        let handle = match guard.as_mut() {
-            Some(h) => h,
-            None => break,
-        };
-        let mut session = match state.session.lock() {
-            Ok(s) => s,
-            Err(_) => break,
-        };
-        // 会话若已锁定则本轮跳过（等待解锁或停止信号）。
-        match session.repo_mut() {
-            Ok(repo) => {
+
+        match polled {
+            Ok(Some(outcome)) => {
                 // D-48：错误必须留痕——此前 `let _ =` 把断连原因全部吞掉，
                 // 对端只看到笼统的「文件读写错误」，PC 侧却无线索可查。
-                match handle.server.poll_once(repo, now_ms()) {
-                    Ok(Some(outcome)) => {
-                        append_log(&app, &format!("[resync] completed: applied={}", outcome.applied));
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        append_log(&app, &format!("[resync] aborted: {e:?}"));
-                    }
-                }
+                append_log(
+                    &app,
+                    &format!(
+                        "[resync] completed: applied={} blobs={} conflicts={}",
+                        outcome.applied,
+                        outcome.blobs,
+                        outcome.conflicts.len()
+                    ),
+                );
+                // v1.2.4 根因 A：**被动同步命中后必须通知前端**。
+                // 对端（手机）发起的重同步会把变更写进本机库，但本机前端 store 仍持有
+                // 同步前的条目列表 → 主人实测「手机删了附件、电脑上附件还在」。
+                // 事件载荷只带计数（不含任何明文/ID），前端据此决定是否 reload。
+                let _ = tauri::Emitter::emit(
+                    &app,
+                    "sync://applied",
+                    serde_json::json!({
+                        "applied": outcome.applied,
+                        "blobs": outcome.blobs,
+                        "conflicts": outcome.conflicts.len(),
+                    }),
+                );
             }
-            Err(_) => continue,
+            Ok(None) => {}
+            Err(e) => {
+                append_log(&app, &format!("[resync] aborted: {e:?}"));
+            }
         }
     });
 }

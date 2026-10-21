@@ -372,7 +372,9 @@ export const enUS: Messages = {
     network_timeout: 'Network timeout: make sure both devices are on the same LAN and the peer is still on the pairing screen, then retry.',
     network_refused: 'Connection refused: the peer may have left the pairing screen, or a firewall blocked the port. Ask the peer to show the QR code again.',
     network_broken: 'Connection dropped mid-handshake: start pairing again on both devices.',
-    network_unreachable: 'Cannot reach the computer: make sure the phone and the PC are on the same Wi‑Fi network (same subnet) and Windows Firewall allows PasswordMS (private networks), then retry.',
+    // v1.2.4 root cause C: the old wording hard-coded a direction ("the computer"), which is
+    // backwards when the PC is the one showing it. Now direction-neutral.
+    network_unreachable: 'Cannot reach the peer device: make sure both devices are on the same Wi‑Fi network (same subnet), and that Windows Firewall allows PasswordMS (private networks). If a sync just succeeded on the other device, try again; if it still fails, re-pair.',
     crypto: 'A cryptographic operation failed.',
     internal: 'An internal error occurred.',
     unknown: 'An unknown error occurred.',

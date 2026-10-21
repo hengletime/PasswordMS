@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { DEFAULT_CONFLICT_CHOICE } from '../conflict';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
+import { PEER_SYNC_APPLIED_EVENT, shouldReloadAfterPeerSync } from '../sync-applied';
 import { vault } from './vault.svelte';
 import { ui } from './ui.svelte';
 
@@ -192,5 +193,19 @@ if (typeof window !== 'undefined') {
     if (ev.payload === 'aborted') {
       sync.pairEnded = true;
     }
+  });
+
+  // v1.2.4 根因 A：**对端（手机）发起的重同步**把数据写进了本机库，但本机前端 store
+  // 还停在同步前 → 主人实测「手机删了附件、电脑上附件还在」。后端（state.rs 的
+  // spawn_resync_worker）在被动同步完成后 emit `sync://applied`，这里据此 reload。
+  // 判定收敛在纯函数里（`src/lib/sync-applied.ts`，有单测）。
+  void listen(PEER_SYNC_APPLIED_EVENT, (ev) => {
+    if (!shouldReloadAfterPeerSync(ev.payload)) {
+      return;
+    }
+    // 条目/分组 + 设备上次同步时间 + 冲突箱：三者都可能被对端这次同步改变。
+    void vault.load();
+    void sync.loadDevices();
+    void sync.loadConflicts();
   });
 }

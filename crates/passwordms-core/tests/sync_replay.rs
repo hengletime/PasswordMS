@@ -143,6 +143,9 @@ fn client_send_resync_hello(port: u16) -> String {
         client_id: "qa_test_unpaired_device".to_string(),
         client_name: "QA-Joiner".to_string(),
         nonce_c: vec![7u8; 32],
+        // 这里刻意填 0：等价于「v1.2.4 之前的老客户端」——不发 sync_port。
+        // 被测语义是「未配对设备必须被拒」，与端口通告无关；顺带守住老客户端不炸。
+        sync_port: 0,
     });
     transport::send_frame(&mut stream, &serde_json::to_vec(&hello).expect("ser"))
         .expect("send hello");
@@ -353,6 +356,7 @@ fn resync_connect_failure_maps_to_network_unreachable() {
         session.repo_mut().expect("repo"),
         &device_id,
         now_ms(),
+        0,
     )
     .expect_err("端口 1 无监听，连接必败");
     assert!(

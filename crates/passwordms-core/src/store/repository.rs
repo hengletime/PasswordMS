@@ -1214,6 +1214,47 @@ impl Repository {
         Ok(())
     }
 
+    /// 刷新已配对设备的对端地址（v1.2.4 根因 B：地址自愈）。
+    ///
+    /// 背景：`peer_ip` / `peer_port` 此前只在**配对那一刻**写一次（`server.rs` 的
+    /// `handle_stream`）。此后对端换 IP（DHCP 续租）或监听端口 rebind
+    /// （`resync.port` 被占用后 fallback 到随机端口）时，本机记录永久失效 →
+    /// `sync_now` 一直连不上，只能重新配对。
+    ///
+    /// 语义：
+    /// - `peer_ip`：本次连接的**真实来源**，无条件采用；
+    /// - `sync_port`：对端自报的监听端口。**为 0 时保留原值**（老客户端不发该字段，
+    ///   不得把可用的端口清空）；
+    /// - 只改这两个字段，`sync_key_wrapped` / `fingerprint` / `paired_at` / `last_sync_at`
+    ///   一律不动（本方法不承担「记录同步时间」的职责，那是 [`Self::touch_device_sync`]）；
+    /// - 值未变化时不重写记录（避免每次同步都白写一条 device 帧）；
+    /// - 设备不存在 → [`CoreError::NotPaired`]（调用方本已校验过配对关系，此处防御）。
+    pub fn update_paired_addr(
+        &mut self,
+        device_id: &str,
+        peer_ip: &str,
+        sync_port: u16,
+    ) -> CoreResult<()> {
+        let mut device = self
+            .devices
+            .get(device_id)
+            .cloned()
+            .ok_or(CoreError::NotPaired)?;
+        let next_ip = Some(peer_ip.to_string());
+        let next_port = if sync_port == 0 {
+            device.peer_port
+        } else {
+            Some(sync_port)
+        };
+        if device.peer_ip == next_ip && device.peer_port == next_port {
+            return Ok(());
+        }
+        device.peer_ip = next_ip;
+        device.peer_port = next_port;
+        self.upsert_paired_device(device)?;
+        Ok(())
+    }
+
     // ===== 设置 =====
 
     /// 读取设置。

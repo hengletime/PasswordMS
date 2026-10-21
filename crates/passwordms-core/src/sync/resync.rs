@@ -59,6 +59,12 @@ pub struct ResyncHello {
     /// 发起方随机数（32B）。
     #[serde(with = "crate::sync::protocol::b64")]
     pub nonce_c: Vec<u8>,
+    /// v1.2.4（根因 B）：发起方**自己的持久重同步监听端口**，供响应方刷新配对地址。
+    ///
+    /// 协议向后兼容：老客户端不发该字段 → `#[serde(default)]` 取 0 → 响应方保留原值
+    /// （**不得**把 0 写进配对记录，否则老客户端会把可用的 peer_port 清空）。
+    #[serde(default)]
+    pub sync_port: u16,
 }
 
 /// 重同步 CHALLENGE（响应方 → 发起方），含响应方密钥确认 MAC。
@@ -123,10 +129,15 @@ pub fn device_display_name(device_id: &str) -> String {
 ///
 /// 读取已配对设备 → 连接其持久监听端口 → 会话密钥派生 + 双向确认 → `Push/Push/Done`
 /// 交换 → 合并（含冲突箱）→ 更新游标 → 返回摘要。
+///
+/// `local_port`（v1.2.4 根因 B）：**本机**持久重同步监听端口，随 HELLO 通告给对端。
+/// 对端据此刷新它记录的「我这台设备怎么连」的地址（IP 由 accept 出的 socket 得到）。
+/// 传 0 表示本机暂无监听器 —— 对端会保留其原有记录，不清空。
 pub fn resync_with_peer(
     repo: &mut Repository,
     peer_device_id: &str,
     now: i64,
+    local_port: u16,
 ) -> CoreResult<ResyncOutcome> {
     // 1) 读取已配对设备与地址。
     let peer = repo
@@ -164,6 +175,7 @@ pub fn resync_with_peer(
         client_id: client_id.clone(),
         client_name: device_display_name(&client_id),
         nonce_c: nonce_c.clone(),
+        sync_port: local_port,
     });
     transport::send_frame(&mut stream, &serde_json::to_vec(&hello)?).map_err(|e| stage_io(e, "hello_send"))?;
 
@@ -297,13 +309,16 @@ impl ResyncServer {
         let accepted = self.listener.accept();
         let _ = self.listener.set_nonblocking(false);
         match accepted {
-            Ok((stream, _peer)) => {
+            Ok((stream, peer)) => {
                 // D-46：Windows 上 accept 出的 socket 继承 listener 的非阻塞模式
                 //（Unix 不会），必须显式改回阻塞，否则 recv 立即 WouldBlock。
                 stream
                     .set_nonblocking(false)
                     .map_err(|_| CoreError::SyncAborted)?;
-                Ok(Some(self.handle(stream, repo, now)?))
+                // v1.2.4（根因 B）：对端 IP 取自 accept 出的 socket——这是**本次连接的真实来源**，
+                // 比配对时记录的陈旧地址可靠。以前这里丢弃了 `_peer`，导致地址永不自愈。
+                let peer_ip = peer.ip().to_string();
+                Ok(Some(self.handle(stream, &peer_ip, repo, now)?))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(_) => Err(CoreError::SyncAborted),
@@ -314,6 +329,7 @@ impl ResyncServer {
     fn handle(
         &mut self,
         mut stream: TcpStream,
+        peer_ip: &str,
         repo: &mut Repository,
         now: i64,
     ) -> CoreResult<ResyncOutcome> {
@@ -426,6 +442,12 @@ impl ResyncServer {
         state.last_recv_seq = replay.last_recv_seq();
         state.last_sent_seq = sent;
         repo.save_sync_state(state)?;
+        // v1.2.4（根因 B）：**同步成功后刷新对端地址**。
+        // 以前只在配对那一刻记录一次 peer_ip/port，手机换 IP（DHCP）或监听端口 rebind
+        // （resync.port 被占用后 fallback）之后，本机重同步永远连不上、只能重新配对。
+        // 现在每次成功入站都把「这次真实来源 IP + 对端自报的监听端口」写回配对记录。
+        // 只在**校验通过且同步成功**之后调用：失败/被拒的连接不得篡改地址（防投毒）。
+        repo.update_paired_addr(&hello.client_id, peer_ip, hello.sync_port)?;
         repo.touch_device_sync(&hello.client_id, now)?;
 
         Ok(ResyncOutcome {

@@ -317,6 +317,16 @@ sequenceDiagram
 3. 双方用 `sk` 完成密钥确认（同上）；未配对设备因无 `sync_key` 无法推导 `sk` → **拒绝（A-07）**。
 4. 每次同步 `session_id` 随机、`sk` 唯一，构成会话隔离。
 
+**v1.2.4 增量（对端地址自愈 + 被动同步通知，缺陷见 §3.15）**
+
+5. `ResyncHello` 增加 `#[serde(default)] sync_port: u16`：发起方通告**自己的**持久重同步监听端口。
+   老客户端不发该字段 → 反序列化为 `0` → 响应方**保留**其原有 `peer_port`（不得被 0 清空）。
+6. 响应方在**校验通过且同步成功之后**用「accept 出的真实来源 IP + `hello.sync_port`」刷新配对记录
+   （`Repository::update_paired_addr`，只改 `peer_ip`/`peer_port`，不动 `sync_key_wrapped` 等）。
+   失败/被拒的连接不得写入地址（防投毒）。
+7. 被动同步（对端发起）成功后，壳层 `spawn_resync_worker` 向前端 emit `sync://applied`
+   （载荷只有计数 `applied`/`blobs`/`conflicts`），前端据此 reload——否则本机 UI 会停留在同步前的快照。
+
 ### 3.6 同步报文格式（字段级 schema）
 
 传输：TCP + 长度前缀帧（`u32` 小端长度 + 帧体）。握手阶段帧体为**明文 JSON**；数据阶段帧体为**加密信封**。
@@ -660,7 +670,7 @@ state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分�
 #### 3.13.9 实现补注（D-57 · 重同步连接超时与网络文案归一化）
 
 1. **连接统一短超时**：`SYNC_CONNECT_TIMEOUT_SECS = 4` 为配对与重同步共用常量；`transport::connect`（无超时版）已删除，全部连接走 `connect_with_timeout`。
-2. **connect 阶段文案统一**：`stage == "connect"` 的 Io 失败无论 kind 一律报 `err.network_unreachable`（「无法连接到电脑：请确认同一 Wi‑Fi 同一网段」）——连接失败对用户只有一种可行动含义。配对路径 client.rs 的 connect 失败**不带** connect 阶段标注，仍按 kind 归一化结果报 `network_refused`（「对方可能已离开配对页」），两场景可行动含义区分保留（QA 实证）。
+2. **connect 阶段文案统一**：`stage == "connect"` 的 Io 失败无论 kind 一律报 `err.network_unreachable`（「无法连接到对端设备：请确认两台设备在同一 Wi‑Fi 同一网段…」）——连接失败对用户只有一种可行动含义。**v1.2.4 起该文案方向中性**（原文写死「无法连接到电脑…手机与电脑」，电脑端触发时方向反了）。配对路径 client.rs 的 connect 失败**不带** connect 阶段标注，仍按 kind 归一化结果报 `network_refused`（「对方可能已离开配对页」），两场景可行动含义区分保留（QA 实证）。
 3. **跨平台 kind 形态根因（D-44 遗留缺陷修正）**：`format!("io:{}", err.kind())` 的 Debug 输出在 Windows 实测为小写带空格（`io:connection refused`/`io:timed out`，QA harness 本机实证），D-44 的 PascalCase 字面映射表（`io:ConnectionRefused`）**整体落空坠入 `err.io`**——用户网络错误全部显示「文件读写出错」。修复：message_key 对 kind 归一化（去 `io:` 前缀 → 小写 → 仅留字母数字）后匹配，双形态通吃；`operation would block` 等未映射 kind 仍走 `err.io` 兜底（WouldBlock 在 D-46 轮询中是正常控制流不上屏，无回归）。
 
 ### 3.14 附件产品语义修正（增量设计 · D-60：附件依附父条目）
@@ -777,6 +787,46 @@ pub struct Item {
 - **KeepBoth 共享 blob**：元数据复制、blob 共享，GC 引用集合保证不误删（T-D60-01/T-D60-04 显式用例）；
 - **回收站**：整父呈现（附件数徽标），不提供单附件粒度还原——附件操作只在活跃父条目上；
 - **迁移触发时机**：解锁后同步前执行，避免迁移产物与远端旧语义帧竞态；两端各自幂等迁移，收敛一致。
+
+### 3.15 同步可用性缺陷（增量设计 · v1.2.4 批）
+
+> 客户实测（2026-10-21）：手机删某条目一个附件并在手机上点「立即同步」（该方向成功）→
+> 电脑上该附件仍在；随后在电脑点「立即同步」→ 报「无法连接到电脑…」且确实连不上。
+> 本文按客户的「根因 A/B/C」口径记录（正式缺陷编号待主理人编号）。
+
+#### 3.15.1 根因 A 附件删除传播：**已被证伪**
+
+`Repository::remove_attachment` / `export_changes` / `merge::apply_changes` 三者组合是**正确的**，
+双端 loopback 已证明删除能过线（`crates/passwordms-core/tests/attachment_sync.rs`，3 例）：
+B 删附件 → B 发起重同步 → A 侧 `attachments.len()==1`、剩的是第二个、`attachment_blob_refs()`
+不含被删 id；反向（A 删 → B 消失）同样成立；连续两轮同步不复活。
+
+因此客户看到的现象**不是数据没过去，而是数据过去了但本机 UI 没刷新**——见 §3.15.3。
+
+#### 3.15.2 根因 B 对端地址自愈
+
+`peer_ip` / `peer_port` 此前只在配对那一刻写一次。对端换 IP（DHCP 续租）或监听端口 rebind
+（`resync.port` 被占用后 fallback）后，本机记录永久失效 → `sync_now` 永远连不上，只能重配对。
+
+修法见 §3.5 增量 5/6：`ResyncHello.sync_port` + 成功后 `update_paired_addr`。
+测试：`tests/resync_addr_heal.rs`（① 记录被改坏 → 一次成功同步自愈；② `sync_port==0` 老客户端
+保留原端口；③ `update_paired_addr` 三契约）。
+
+#### 3.15.3 根因 A 的真实落点：被动同步后的 UI 陈旧
+
+`src-tauri/src/state.rs::spawn_resync_worker` 在 `poll_once` 成功后只写日志，**不通知前端**；
+而本机自发起的那条路径（`sync.svelte.ts::syncNow`，D-47）是会 `vault.load()` 的。
+于是「对端推过来的变更」永远停留在库里、不上屏，表现为「附件还在」。
+
+修法：worker 在成功轮询后 emit `sync://applied`（载荷仅计数），前端
+`src/lib/sync-applied.ts::shouldReloadAfterPeerSync` 判定后 reload 条目/设备/冲突。
+三项全零（对端只是取走本机数据）不刷新，避免白刷列表打断编辑。
+
+#### 3.15.4 根因 C 网络错误文案方向中性
+
+`err.network_unreachable` 原文写死「无法连接到**电脑**…请确认**手机与电脑**…」，电脑端触发时
+方向完全反了。改为「无法连接到对端设备…若刚刚在另一台设备上同步成功过，请再试一次」。
+`network_timeout` / `network_refused` / `network_broken` 复核为方向中性，未改。
 
 ---
 

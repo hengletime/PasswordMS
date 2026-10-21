@@ -186,9 +186,14 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
     let app_log = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
+        // v1.2.4（根因 B）：本机持久重同步监听端口要随 HELLO 通告给对端，
+        // 对端据此刷新它记录的本机地址（地址自愈）。
+        // **必须在取 session 锁之前**：`ensure_resync_listener` 要拿 resync 锁，
+        // 而全局锁顺序恒为 resync → session；反过来写就是死锁。
+        let sync_port = ensure_resync_listener(&app)?;
         let mut session = state.session.lock().map_err(lock_err)?;
         let repo = session.repo_mut()?;
-        let outcome = resync::resync_with_peer(repo, &device_id, now_ms())?;
+        let outcome = resync::resync_with_peer(repo, &device_id, now_ms(), sync_port)?;
         Ok(SyncResultDto {
             applied: outcome.applied,
             conflicts: outcome.conflicts,
