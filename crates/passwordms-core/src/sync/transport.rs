@@ -23,14 +23,15 @@ pub fn listen(port: u16) -> CoreResult<TcpListener> {
 /// 2. 旧实现把 connect 失败一律折叠成 `SyncAborted`（「同步已中止」），错误码失真；
 ///    现在保留 io kind（TimedOut/NetworkUnreachable → 对应网络文案；connect 阶段
 ///    统一映射 `err.network_unreachable`，见 error.rs message_key）。
-pub fn connect_with_timeout(ip: &str, port: u16, timeout: std::time::Duration) -> CoreResult<TcpStream> {
+pub fn connect_with_timeout(
+    ip: &str,
+    port: u16,
+    timeout: std::time::Duration,
+) -> CoreResult<TcpStream> {
     let addr: std::net::IpAddr = ip
         .parse()
         .map_err(|_| CoreError::Validation("ip".to_string()))?;
-    let stream = TcpStream::connect_timeout(
-        &std::net::SocketAddr::new(addr, port),
-        timeout,
-    )?;
+    let stream = TcpStream::connect_timeout(&std::net::SocketAddr::new(addr, port), timeout)?;
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|_| CoreError::SyncAborted)?;

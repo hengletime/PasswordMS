@@ -12,7 +12,10 @@ use crate::state::{vault_path, AppState};
 
 /// 启动判定：是否存在保险库、当前是否锁定。
 #[tauri::command(rename_all = "snake_case")]
-pub fn get_status(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> IpcResult<StatusDto> {
+pub fn get_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<StatusDto> {
     let path = vault_path(&app)?;
     let session = state.session.lock().map_err(lock_err)?;
     Ok(StatusDto {

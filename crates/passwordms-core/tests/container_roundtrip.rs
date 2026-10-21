@@ -5,8 +5,8 @@
 use std::path::PathBuf;
 
 use passwordms_core::constants::{CONTAINER_PREFIX_LEN, FLAG_TOMBSTONE, FRAME_HEADER_LEN};
-use passwordms_core::crypto::{kdf, keys, rng, verify};
 use passwordms_core::crypto::keys::MasterKey;
+use passwordms_core::crypto::{kdf, keys, rng, verify};
 use passwordms_core::model::item::{CustomField, Item, ItemKind, LoginData};
 use passwordms_core::model::now_ms;
 use passwordms_core::model::vault::Vault;
@@ -16,7 +16,10 @@ use zeroize::Zeroizing;
 
 fn tmp_vault_path(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("passwordms_test_{name}_{}.vault", uuid::Uuid::new_v4()));
+    p.push(format!(
+        "passwordms_test_{name}_{}.vault",
+        uuid::Uuid::new_v4()
+    ));
     p
 }
 
@@ -105,9 +108,13 @@ fn container_roundtrip_and_minimal_rewrite() {
     let vk = rng::random_key().expect("vk");
     let header = build_header(&kek, &vk);
 
-    let mut repo =
-        Repository::create(&path, header, Zeroizing::new(vk), "qa_test_device".to_string())
-            .expect("create");
+    let mut repo = Repository::create(
+        &path,
+        header,
+        Zeroizing::new(vk),
+        "qa_test_device".to_string(),
+    )
+    .expect("create");
 
     let item_a = repo.create_item(login_draft("qa_test_alpha")).expect("a");
     let item_b = repo.create_item(login_draft("qa_test_beta")).expect("b");
@@ -170,9 +177,13 @@ fn single_item_update_hits_in_place_branch_and_leaves_others_intact() {
     let vk = rng::random_key().expect("vk");
     let header = build_header(&kek, &vk);
 
-    let mut repo =
-        Repository::create(&path, header, Zeroizing::new(vk), "qa_test_device".to_string())
-            .expect("create");
+    let mut repo = Repository::create(
+        &path,
+        header,
+        Zeroizing::new(vk),
+        "qa_test_device".to_string(),
+    )
+    .expect("create");
     let item_a = repo.create_item(login_draft("qa_test_alpha")).expect("a");
     let item_b = repo.create_item(login_draft("qa_test_beta")).expect("b");
 
@@ -203,7 +214,11 @@ fn single_item_update_hits_in_place_branch_and_leaves_others_intact() {
         "等长更新不应改变文件总大小"
     );
     // 帧数不变（无墓碑、无追加）。
-    assert_eq!(frames_after.len(), frames_before.len(), "等长更新不应新增帧");
+    assert_eq!(
+        frames_after.len(),
+        frames_before.len(),
+        "等长更新不应新增帧"
+    );
     // 目标帧：同一偏移被覆写，字节已变化。
     assert_eq!(a_after.0, a_before.0, "目标帧应在原偏移被原地覆写");
     assert_ne!(a_after.1, a_before.1, "目标帧字节应已更新");

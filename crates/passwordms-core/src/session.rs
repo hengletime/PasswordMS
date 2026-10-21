@@ -11,8 +11,8 @@ use zeroize::Zeroizing;
 
 use crate::constants::MIN_MASTER_PASSWORD_LEN;
 use crate::crypto::keys::{self, Kek, VaultKey};
-use crate::crypto::{kdf, verify};
 use crate::crypto::rng;
+use crate::crypto::{kdf, verify};
 use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::vault::{KdfParams, Vault};
@@ -63,7 +63,11 @@ impl Session {
     }
 
     /// 创建保险库并返回已解锁会话（F-01）。
-    pub fn create(path: &Path, master_password: &str, strength_confirmed: bool) -> CoreResult<Self> {
+    pub fn create(
+        path: &Path,
+        master_password: &str,
+        strength_confirmed: bool,
+    ) -> CoreResult<Self> {
         // U6 已裁定：< 8 位硬拦截；≥ 8 位仅强度提示（前端确认），核心不强制混合字符类型。
         let _ = strength_confirmed;
         if master_password.chars().count() < MIN_MASTER_PASSWORD_LEN {
@@ -192,7 +196,11 @@ impl Session {
     }
 
     /// 修改主密码（O-08）：仅重包裹 VK，不重写任何条目密文。
-    pub fn change_master_password(&mut self, old_password: &str, new_password: &str) -> CoreResult<()> {
+    pub fn change_master_password(
+        &mut self,
+        old_password: &str,
+        new_password: &str,
+    ) -> CoreResult<()> {
         if new_password.chars().count() < MIN_MASTER_PASSWORD_LEN {
             return Err(CoreError::WeakMasterPassword);
         }
@@ -208,7 +216,12 @@ impl Session {
         let kek_old = kdf::derive_kek(&mk_old[..])?;
         let verify_old = kdf::derive_verify_key(&mk_old[..])?;
         drop(mk_old);
-        let vk_check = verify::unlock_check(&kek_old, &verify_old, &header.verify_mac, &header.wrapped_vault_key)?;
+        let vk_check = verify::unlock_check(
+            &kek_old,
+            &verify_old,
+            &header.verify_mac,
+            &header.wrapped_vault_key,
+        )?;
 
         // 与当前会话 VK 常量时间比对，确保旧密码确为当前主密码。
         if !verify::constant_time_eq(&vk_check[..], &unlocked.repo.vault_key()[..]) {
@@ -240,7 +253,9 @@ impl Session {
         };
         let count = unlocked.repo.record_count();
         if count != 0 {
-            return Err(CoreError::VkAdoptRequiresEmpty { record_count: count });
+            return Err(CoreError::VkAdoptRequiresEmpty {
+                record_count: count,
+            });
         }
         let header = unlocked.repo.header().clone();
         let wrapped = keys::wrap_vault_key(&unlocked.kek, host_vk)?;

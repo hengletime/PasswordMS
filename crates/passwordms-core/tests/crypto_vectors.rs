@@ -3,7 +3,7 @@
 //! 状态：已在本机实跑通过（`cargo test -p passwordms-core`，见 docs/03b-verification.md）。
 
 use passwordms_core::constants::{
-    AEAD_NONCE_LEN, AAD_VAULT_KEY, ENCRYPTION_SCHEME, KDF_ITERATIONS, KDF_MEMORY_KIB,
+    AAD_VAULT_KEY, AEAD_NONCE_LEN, ENCRYPTION_SCHEME, KDF_ITERATIONS, KDF_MEMORY_KIB,
     KDF_PARALLELISM, KDF_SALT_LEN,
 };
 use passwordms_core::crypto::{aead, kdf, keys, rng, verify};
@@ -86,9 +86,21 @@ fn unlock_failure_is_unified_error() {
 
     // A-05 原文（01-security-req.md:155）要求的是「**文案一致**」——因此不仅错误码要相同，
     // 面向用户的 i18n key 也必须完全相同。Phase 4c 补强：逐条断言 message_key 一致。
-    assert_eq!(err.message_key(), "err.unlock_failed", "错误密码的文案 key 应统一");
-    assert_eq!(err2.message_key(), "err.unlock_failed", "数据损坏的文案 key 应统一");
-    assert_eq!(err3.message_key(), "err.unlock_failed", "密文被替换的文案 key 应统一");
+    assert_eq!(
+        err.message_key(),
+        "err.unlock_failed",
+        "错误密码的文案 key 应统一"
+    );
+    assert_eq!(
+        err2.message_key(),
+        "err.unlock_failed",
+        "数据损坏的文案 key 应统一"
+    );
+    assert_eq!(
+        err3.message_key(),
+        "err.unlock_failed",
+        "密文被替换的文案 key 应统一"
+    );
     assert_eq!(
         CoreError::UnlockFailed.message_key(),
         "err.unlock_failed",

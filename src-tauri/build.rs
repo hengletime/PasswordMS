@@ -77,7 +77,12 @@ fn ensure_windres_on_path() {
         candidates.push(PathBuf::from(dir));
     }
     if let Some(home) = env::var_os("USERPROFILE").or_else(|| env::var_os("HOME")) {
-        candidates.push(PathBuf::from(home).join(".workbuddy").join("tools").join("mingw-bin"));
+        candidates.push(
+            PathBuf::from(home)
+                .join(".workbuddy")
+                .join("tools")
+                .join("mingw-bin"),
+        );
     }
     candidates.push(PathBuf::from(r"C:\msys64\mingw64\bin"));
     candidates.push(PathBuf::from(r"C:\mingw64\bin"));

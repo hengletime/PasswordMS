@@ -78,8 +78,11 @@ fn pair_first(host_vault: &Path, resync_port: u16, joiner_vault: &Path) -> (Stri
 
     let mut joiner_session = Session::create(joiner_vault, JOINER_PWD, true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
-    let mut joiner = client::pair(&qr, &joiner_id, "AddrJoiner", 0, now_ms()).expect("回环配对握手失败");
-    joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+    let mut joiner =
+        client::pair(&qr, &joiner_id, "AddrJoiner", 0, now_ms()).expect("回环配对握手失败");
+    joiner_session
+        .adopt_vault_key(joiner.host_vault_key())
+        .unwrap();
     let result = {
         let repo = joiner_session.repo_mut().unwrap();
         joiner.persist_host_device(repo).unwrap();
@@ -150,7 +153,11 @@ fn resync_heals_stale_peer_address_without_repairing() {
     let joiner_vault = dir.join("joiner.vault");
 
     let mut host_session = Session::create(&host_vault, HOST_PWD, true).unwrap();
-    host_session.repo_mut().unwrap().create_item(login_draft("addr-item")).unwrap();
+    host_session
+        .repo_mut()
+        .unwrap()
+        .create_item(login_draft("addr-item"))
+        .unwrap();
     drop(host_session);
 
     let host_resync = ResyncServer::start(0, "AddrHost".to_string()).unwrap();
@@ -172,14 +179,25 @@ fn resync_heals_stale_peer_address_without_repairing() {
     // 配对后 Host 再建一条，让本轮同步确实有「新东西」可应用（applied ≥ 1 才有意义）。
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        hs.repo_mut().unwrap().create_item(login_draft("after-pair")).unwrap();
+        hs.repo_mut()
+            .unwrap()
+            .create_item(login_draft("after-pair"))
+            .unwrap();
     }
 
     // 一次正常重同步（Joiner 通告自己的监听端口）。
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    let (_host_out, joiner_out) =
-        resync_once(&host_vault, host_resync, &mut joiner_session, &host_id, joiner_port);
-    assert!(joiner_out.applied >= 1, "Joiner 应至少应用 1 条（配对后新增的条目）");
+    let (_host_out, joiner_out) = resync_once(
+        &host_vault,
+        host_resync,
+        &mut joiner_session,
+        &host_id,
+        joiner_port,
+    );
+    assert!(
+        joiner_out.applied >= 1,
+        "Joiner 应至少应用 1 条（配对后新增的条目）"
+    );
 
     // 断言：Host 侧记录已自动修回真实值，无需重新配对。
     assert_eq!(
@@ -200,7 +218,11 @@ fn legacy_client_without_sync_port_keeps_recorded_port() {
     let joiner_vault = dir.join("joiner.vault");
 
     let mut host_session = Session::create(&host_vault, HOST_PWD, true).unwrap();
-    host_session.repo_mut().unwrap().create_item(login_draft("legacy-item")).unwrap();
+    host_session
+        .repo_mut()
+        .unwrap()
+        .create_item(login_draft("legacy-item"))
+        .unwrap();
     drop(host_session);
 
     let host_resync = ResyncServer::start(0, "AddrHost".to_string()).unwrap();
@@ -262,21 +284,36 @@ fn update_paired_addr_contract() {
     assert_eq!(after.peer_port, Some(7000), "sync_port=0 不得清空已有端口");
 
     // (b) sync_port != 0 → 两个字段都刷新，且其它字段一字不动。
-    repo.update_paired_addr(&peer_id, "192.168.1.6", 7001).unwrap();
+    repo.update_paired_addr(&peer_id, "192.168.1.6", 7001)
+        .unwrap();
     let after = repo.get_paired_device(&peer_id).unwrap();
     assert_eq!(after.peer_ip.as_deref(), Some("192.168.1.6"));
     assert_eq!(after.peer_port, Some(7001));
     assert_eq!(after.paired_at, device.paired_at, "不得改动 paired_at");
-    assert_eq!(after.fingerprint, device.fingerprint, "不得改动 fingerprint");
+    assert_eq!(
+        after.fingerprint, device.fingerprint,
+        "不得改动 fingerprint"
+    );
     assert_eq!(after.last_sync_at, None, "本方法不承担记录同步时间的职责");
-    assert_eq!(after.sync_key_wrapped, device.sync_key_wrapped, "不得改动共享密钥");
+    assert_eq!(
+        after.sync_key_wrapped, device.sync_key_wrapped,
+        "不得改动共享密钥"
+    );
 
     // (c) 值未变化 → 幂等（重启后仍一致）。
-    repo.update_paired_addr(&peer_id, "192.168.1.6", 7001).unwrap();
+    repo.update_paired_addr(&peer_id, "192.168.1.6", 7001)
+        .unwrap();
     drop(session);
     let reopened = Session::unlock(&vault, HOST_PWD).unwrap();
-    let dev = reopened.repo().unwrap().get_paired_device(&peer_id).unwrap();
-    assert_eq!((dev.peer_ip.as_deref(), dev.peer_port), (Some("192.168.1.6"), Some(7001)));
+    let dev = reopened
+        .repo()
+        .unwrap()
+        .get_paired_device(&peer_id)
+        .unwrap();
+    assert_eq!(
+        (dev.peer_ip.as_deref(), dev.peer_port),
+        (Some("192.168.1.6"), Some(7001))
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

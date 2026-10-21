@@ -16,7 +16,10 @@ const MASTER: &str = "qa-restore-master-pw";
 
 fn tmp_path(tag: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("passwordms_restore_{tag}_{}.vault", uuid::Uuid::new_v4()));
+    p.push(format!(
+        "passwordms_restore_{tag}_{}.vault",
+        uuid::Uuid::new_v4()
+    ));
     p
 }
 
@@ -159,7 +162,10 @@ fn restore_then_wrong_password_unlock_fails() {
         Err(e) => e,
         Ok(_) => panic!("错主密码应解锁失败"),
     };
-    assert!(matches!(err, CoreError::UnlockFailed), "期望 UnlockFailed，实际 {err:?}");
+    assert!(
+        matches!(err, CoreError::UnlockFailed),
+        "期望 UnlockFailed，实际 {err:?}"
+    );
 
     let _ = std::fs::remove_file(&vault_path);
     let _ = std::fs::remove_file(&backup_path);
@@ -198,7 +204,10 @@ fn restore_rejects_backup_with_truncated_frame_body() {
     // 把备份截断到「第一帧帧头之后、帧体之内」。
     let mut bytes = std::fs::read(&backup_path).expect("read backup");
     let start = record_start_of(&bytes);
-    assert!(start + FRAME_HEADER_LEN + 8 < bytes.len(), "测试前提：第一帧帧体足够长");
+    assert!(
+        start + FRAME_HEADER_LEN + 8 < bytes.len(),
+        "测试前提：第一帧帧体足够长"
+    );
     bytes.truncate(start + FRAME_HEADER_LEN + 8);
     std::fs::write(&backup_path, &bytes).expect("write truncated");
 
@@ -239,7 +248,10 @@ fn restore_rejects_backup_with_tiny_tail_fragment() {
     // 此前 restore Ok → unlock 成功 → record_count=0，静默丢数据，最糟形态）。
     let mut bytes = std::fs::read(&backup_path).expect("read backup");
     let start = record_start_of(&bytes);
-    assert!(start + 50 < bytes.len(), "测试前提：记录区应有足够内容可截断");
+    assert!(
+        start + 50 < bytes.len(),
+        "测试前提：记录区应有足够内容可截断"
+    );
     bytes.truncate(start + 50);
     std::fs::write(&backup_path, &bytes).expect("write truncated");
 

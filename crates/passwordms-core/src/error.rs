@@ -267,7 +267,10 @@ mod tests {
 
     #[test]
     fn io_message_keys_by_kind() {
-        assert_eq!(CoreError::Io("io:TimedOut".into()).message_key(), "err.network_timeout");
+        assert_eq!(
+            CoreError::Io("io:TimedOut".into()).message_key(),
+            "err.network_timeout"
+        );
         assert_eq!(
             CoreError::Io("io:ConnectionRefused".into()).message_key(),
             "err.network_refused"
@@ -276,8 +279,14 @@ mod tests {
             CoreError::Io("io:ConnectionReset".into()).message_key(),
             "err.network_broken"
         );
-        assert_eq!(CoreError::Io("io:Uncategorized".into()).message_key(), "err.network_unreachable");
-        assert_eq!(CoreError::Io("io:OutOfMemory".into()).message_key(), "err.io");
+        assert_eq!(
+            CoreError::Io("io:Uncategorized".into()).message_key(),
+            "err.network_unreachable"
+        );
+        assert_eq!(
+            CoreError::Io("io:OutOfMemory".into()).message_key(),
+            "err.io"
+        );
     }
 
     #[test]
@@ -351,10 +360,14 @@ mod tests {
     fn debug_prints_io_kind_but_not_other_payloads() {
         // Io：kind 可见（无隐私）。
         assert!(
-            format!("{:?}", CoreError::Io("hello_recv|io:TimedOut".into())).contains("hello_recv|io:TimedOut")
+            format!("{:?}", CoreError::Io("hello_recv|io:TimedOut".into()))
+                .contains("hello_recv|io:TimedOut")
         );
         // 其它带载荷变体：仅错误码，载荷不出现在 Debug 里。
-        assert_eq!(format!("{:?}", CoreError::Validation("secret-ish".into())), r#"CoreError("ERR_VALIDATION")"#);
+        assert_eq!(
+            format!("{:?}", CoreError::Validation("secret-ish".into())),
+            r#"CoreError("ERR_VALIDATION")"#
+        );
     }
 }
 

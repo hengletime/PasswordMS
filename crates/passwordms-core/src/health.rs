@@ -82,10 +82,16 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
 
     let mut suggestions: Vec<String> = Vec::new();
     if !weak.is_empty() {
-        suggestions.push(format!("有 {} 条条目使用弱口令，建议改为 12 位以上的混合字符密码。", weak.len()));
+        suggestions.push(format!(
+            "有 {} 条条目使用弱口令，建议改为 12 位以上的混合字符密码。",
+            weak.len()
+        ));
     }
     if !reused.is_empty() {
-        suggestions.push(format!("有 {} 条条目重复使用同一密码，建议为每站设置独立密码。", reused.len()));
+        suggestions.push(format!(
+            "有 {} 条条目重复使用同一密码，建议为每站设置独立密码。",
+            reused.len()
+        ));
     }
     if !stale.is_empty() {
         suggestions.push(format!(
@@ -116,7 +122,10 @@ fn is_weak(password: &str, weak_max_len: u8) -> bool {
     if password.chars().count() < weak_max_len as usize {
         return true;
     }
-    has_lower(password) as u8 + has_upper(password) as u8 + has_digit(password) as u8 + has_symbol(password) as u8
+    has_lower(password) as u8
+        + has_upper(password) as u8
+        + has_digit(password) as u8
+        + has_symbol(password) as u8
         <= 1
 }
 

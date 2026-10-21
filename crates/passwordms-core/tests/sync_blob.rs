@@ -19,15 +19,15 @@ use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
 use passwordms_core::store::container::Container;
 use passwordms_core::store::repository::{BlobWriteOutcome, ItemDraft};
-use passwordms_core::sync::blob_transfer::{self, seal_blob_envelope, open_blob_envelope};
+use passwordms_core::sync::blob_transfer::{self, open_blob_envelope, seal_blob_envelope};
 use passwordms_core::sync::client;
+use passwordms_core::sync::client::JoinerSyncResult;
 use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::merge::apply_changes;
 use passwordms_core::sync::protocol::{BlobMessage, SyncEnvelope};
 use passwordms_core::sync::replay::ReplayGuard;
 use passwordms_core::sync::resync::{self, ResyncOutcome, ResyncServer};
-use passwordms_core::sync::server::{SyncServer, HostSyncResult};
-use passwordms_core::sync::client::JoinerSyncResult;
+use passwordms_core::sync::server::{HostSyncResult, SyncServer};
 
 const HOST_PWD: &str = "Blob#Host-Pw1";
 const JOINER_PWD: &str = "Blob#Joiner-Pw1";
@@ -154,9 +154,11 @@ fn pair_first(
 
     let mut joiner_session = Session::create(joiner_vault, JOINER_PWD, true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
-    let mut joiner = client::pair(&qr, &joiner_id, "BlobJoiner", 0, now_ms())
-        .expect("回环配对握手失败");
-    joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+    let mut joiner =
+        client::pair(&qr, &joiner_id, "BlobJoiner", 0, now_ms()).expect("回环配对握手失败");
+    joiner_session
+        .adopt_vault_key(joiner.host_vault_key())
+        .unwrap();
     let result = {
         let repo = joiner_session.repo_mut().unwrap();
         joiner.persist_host_device(repo).unwrap();
@@ -239,13 +241,24 @@ fn case1_end_to_end_attachment_blob_sync() {
     let joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
     let blob_ref = assert_export_matches(&joiner_session, &joiner_vault, &original);
     // D-60 §3.14.1：attachment_id 与父 item_id 解耦（blob 帧 record_id = attachment_id）。
-    assert_eq!(blob_ref, attachment_id, "blob 帧 record_id == attachment_id");
+    assert_eq!(
+        blob_ref, attachment_id,
+        "blob 帧 record_id == attachment_id"
+    );
     assert_ne!(blob_ref, item_id, "attachment_id 不得再与父 item_id 强耦合");
 
     // 双端 blob 帧字节完全一致（可原样 append_frame）。
     let host_session = Session::unlock(&host_vault, HOST_PWD).unwrap();
-    let host_frame = host_session.repo().unwrap().blob_frame(&blob_ref).expect("host 应有 blob 帧");
-    let joiner_frame = joiner_session.repo().unwrap().blob_frame(&blob_ref).expect("joiner 应有 blob 帧");
+    let host_frame = host_session
+        .repo()
+        .unwrap()
+        .blob_frame(&blob_ref)
+        .expect("host 应有 blob 帧");
+    let joiner_frame = joiner_session
+        .repo()
+        .unwrap()
+        .blob_frame(&blob_ref)
+        .expect("joiner 应有 blob 帧");
     assert_eq!(host_frame, joiner_frame, "双端 blob 帧字节应完全一致");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -285,7 +298,11 @@ fn case2_resume_from_partial_spool_no_duplicate_frames() {
     assert_eq!(joiner_result.blobs, 1, "续传后应完成 1 个 blob");
 
     // 无重复帧：该 ref 的非墓碑 blob 帧恰好 1 条。
-    assert_eq!(count_blob_frames(&joiner_vault, &blob_ref), 1, "不得产生重复 blob 帧");
+    assert_eq!(
+        count_blob_frames(&joiner_vault, &blob_ref),
+        1,
+        "不得产生重复 blob 帧"
+    );
 
     // 结果正确 + spool 清理。
     let joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
@@ -312,7 +329,11 @@ fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
         let repo = session_a.repo().unwrap();
         repo.export_changes(&repo.sync_state("qa-peer"))
     };
-    let blob_frame = session_a.repo().unwrap().blob_frame(&attachment_id).unwrap();
+    let blob_frame = session_a
+        .repo()
+        .unwrap()
+        .blob_frame(&attachment_id)
+        .unwrap();
 
     // B 建空库并采纳 A 的 VK（change_to_item 解密需要同 VK）。
     let mut session_b = Session::create(&b_vault, JOINER_PWD, true).unwrap();
@@ -323,10 +344,17 @@ fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
     let mut state = session_b.repo().unwrap().sync_state("qa-peer");
     let report = apply_changes(session_b.repo_mut().unwrap(), &mut state, &changes).unwrap();
     assert!(report.applied >= 1);
-    let b_item = session_b.repo().unwrap().get_item_opt(&item_id).expect("父条目应存在");
+    let b_item = session_b
+        .repo()
+        .unwrap()
+        .get_item_opt(&item_id)
+        .expect("父条目应存在");
     assert_eq!(b_item.attachments.len(), 1, "附件元数据应随父帧过线");
     assert_eq!(b_item.attachments[0].attachment_id, attachment_id);
-    assert!(!session_b.repo().unwrap().has_blob(&attachment_id), "blob 未同步前应缺失");
+    assert!(
+        !session_b.repo().unwrap().has_blob(&attachment_id),
+        "blob 未同步前应缺失"
+    );
 
     // 2) 补上 blob（写帧原语）→ has_blob。
     let outcome = session_b
@@ -350,16 +378,33 @@ fn case3_merge_delete_cascades_to_blob_and_soft_delete_keeps_it() {
         session_b.repo().unwrap().get_item_opt(&item_id).is_none(),
         "条目应离开活跃表"
     );
-    assert!(session_b.repo().unwrap().has_blob(&attachment_id), "远端软删必须保留 blob");
-    assert_eq!(session_b.repo().unwrap().list_trash().len(), 1, "应进回收站");
+    assert!(
+        session_b.repo().unwrap().has_blob(&attachment_id),
+        "远端软删必须保留 blob"
+    );
+    assert_eq!(
+        session_b.repo().unwrap().list_trash().len(),
+        1,
+        "应进回收站"
+    );
 
     // 4) 本地软删（进回收站）**不清** blob（还原要用）。
-    session_a.repo_mut().unwrap().delete_item(&item_id, false).unwrap();
-    assert!(session_a.repo().unwrap().has_blob(&attachment_id), "软删不得清 blob");
+    session_a
+        .repo_mut()
+        .unwrap()
+        .delete_item(&item_id, false)
+        .unwrap();
+    assert!(
+        session_a.repo().unwrap().has_blob(&attachment_id),
+        "软删不得清 blob"
+    );
     // purge（彻底删）→ 孤儿 GC 清 blob——D-60 §3.14.4 修订：GC 而非 1:1 连带。
     let trash_id = session_a.repo().unwrap().list_trash()[0].trash_id.clone();
     session_a.repo_mut().unwrap().purge_item(&trash_id).unwrap();
-    assert!(!session_a.repo().unwrap().has_blob(&attachment_id), "purge 后 GC 应清 blob");
+    assert!(
+        !session_a.repo().unwrap().has_blob(&attachment_id),
+        "purge 后 GC 应清 blob"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -382,23 +427,37 @@ fn case4_metadata_only_update_transfers_no_blob() {
     let (_h1, _j1, host_id) = pair_first(&host_vault, resync_server.port(), &joiner_vault);
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    let before = joiner_session.repo().unwrap().blob_frame(&blob_ref).unwrap();
+    let before = joiner_session
+        .repo()
+        .unwrap()
+        .blob_frame(&blob_ref)
+        .unwrap();
     let att = assert_export_matches(&joiner_session, &joiner_vault, &original);
     assert_eq!(att, blob_ref);
 
     // 仅元数据更新（favorite 翻转 → rev+1），blob 内容不变。
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        hs.repo_mut().unwrap().toggle_favorite(&item_id, true).unwrap();
+        hs.repo_mut()
+            .unwrap()
+            .toggle_favorite(&item_id, true)
+            .unwrap();
     }
 
     let (host_outcome, joiner_outcome) =
         run_resync(&host_vault, resync_server, &mut joiner_session, &host_id);
     assert_eq!(host_outcome.blobs, 0, "Host 拉取清单应为空");
-    assert_eq!(joiner_outcome.blobs, 0, "Joiner 拉取清单应为空：blob 零传输");
+    assert_eq!(
+        joiner_outcome.blobs, 0,
+        "Joiner 拉取清单应为空：blob 零传输"
+    );
 
     // Joiner 的 blob 帧字节不变；无 spool 残留。
-    let after = joiner_session.repo().unwrap().blob_frame(&blob_ref).unwrap();
+    let after = joiner_session
+        .repo()
+        .unwrap()
+        .blob_frame(&blob_ref)
+        .unwrap();
     assert_eq!(before, after, "元数据更新不得触碰 blob 帧");
     assert!(!spool_root(&joiner_vault).exists(), "不得留下 spool 目录");
 
@@ -466,7 +525,11 @@ fn case5_bidirectional_symmetric_sync() {
         .unwrap()
         .export_attachment(&host_parent2.item_id, &att2, &dest)
         .unwrap();
-    assert_eq!(std::fs::read(&dest).unwrap(), data2, "Host 侧 att2 字节应与 Joiner 原始一致");
+    assert_eq!(
+        std::fs::read(&dest).unwrap(),
+        data2,
+        "Host 侧 att2 字节应与 Joiner 原始一致"
+    );
     let _ = std::fs::remove_file(&dest);
     let joiner_parent1 = js
         .repo()
@@ -480,7 +543,11 @@ fn case5_bidirectional_symmetric_sync() {
         .unwrap()
         .export_attachment(&joiner_parent1.item_id, &att1, &dest)
         .unwrap();
-    assert_eq!(std::fs::read(&dest).unwrap(), data1, "Joiner 侧 att1 字节应与 Host 原始一致");
+    assert_eq!(
+        std::fs::read(&dest).unwrap(),
+        data1,
+        "Joiner 侧 att1 字节应与 Host 原始一致"
+    );
     let _ = std::fs::remove_file(&dest);
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -510,7 +577,8 @@ fn case6_20mb_attachment_chunk_math_and_envelope_limit() {
             index: index as u32,
             ct_slice: vec![0xABu8; slice_len],
         };
-        let env = seal_blob_envelope(&key, &session_id, 100 + index as u64, now_ms(), &msg).unwrap();
+        let env =
+            seal_blob_envelope(&key, &session_id, 100 + index as u64, now_ms(), &msg).unwrap();
         let wire = serde_json::to_vec(&env).unwrap();
         assert!(
             wire.len() < SYNC_MAX_FRAME_BYTES as usize,
@@ -532,7 +600,10 @@ fn case6_20mb_attachment_chunk_math_and_envelope_limit() {
     let (_h, _j, _id) = pair_first(&host_vault, 0, &joiner_vault);
     let js = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
     let blob_ref = assert_export_matches(&js, &joiner_vault, &original);
-    assert_eq!(blob_ref, attachment_id, "blob 帧 record_id == attachment_id");
+    assert_eq!(
+        blob_ref, attachment_id,
+        "blob 帧 record_id == attachment_id"
+    );
     assert_ne!(blob_ref, item_id, "attachment_id 与父 item_id 解耦");
     assert_eq!(count_blob_frames(&joiner_vault, &attachment_id), 1);
 
@@ -551,9 +622,13 @@ fn case7_capability_gate_matches_legacy_peers() {
 
     // 老端报文（无 blob_support 字段）反序列化 → false（serde default，协议层单测同款断言）。
     let legacy = r#"{"kind":"push","device_id":"dev","changes":[],"conflicts":[]}"#;
-    let payload: passwordms_core::sync::protocol::SyncPayload = serde_json::from_str(legacy).unwrap();
+    let payload: passwordms_core::sync::protocol::SyncPayload =
+        serde_json::from_str(legacy).unwrap();
     assert!(!payload.blob_support);
-    assert!(!blob_transfer::blob_phase_enabled(true, payload.blob_support));
+    assert!(!blob_transfer::blob_phase_enabled(
+        true,
+        payload.blob_support
+    ));
 }
 
 // ===== ⑧ 容量预检：超限 Meta 阶段即拒，不落半个分片 =====
@@ -561,7 +636,10 @@ fn case7_capability_gate_matches_legacy_peers() {
 #[test]
 fn case8_capacity_precheck_rejects_before_first_chunk() {
     // 20MB 附件在接近满库时拒绝。
-    assert!(!blob_transfer::capacity_ok(MAX_VAULT_BYTES - 4096, 20 * 1024 * 1024));
+    assert!(!blob_transfer::capacity_ok(
+        MAX_VAULT_BYTES - 4096,
+        20 * 1024 * 1024
+    ));
     assert!(!blob_transfer::capacity_ok(MAX_VAULT_BYTES, 0));
     // 正常场景放行。
     assert!(blob_transfer::capacity_ok(0, 20 * 1024 * 1024));
@@ -584,7 +662,9 @@ fn case9_spool_ciphertext_only_and_envelope_replay_rejected() {
     };
     let env: SyncEnvelope = seal_blob_envelope(&key, &session_id, 5, now_ms(), &msg).unwrap();
     let mut replay = ReplayGuard::new(SYNC_TIME_WINDOW_SECS);
-    replay.accept(env.seq, env.ts, now_ms()).expect("首次接收应通过");
+    replay
+        .accept(env.seq, env.ts, now_ms())
+        .expect("首次接收应通过");
     assert!(
         matches!(
             replay.accept(env.seq, env.ts, now_ms()),
@@ -615,9 +695,7 @@ fn case9_spool_ciphertext_only_and_envelope_replay_rejected() {
     for entry in std::fs::read_dir(&spool_dir).unwrap() {
         let bytes = std::fs::read(entry.unwrap().path()).unwrap();
         assert!(
-            !bytes
-                .windows(canary.len())
-                .any(|w| w == canary),
+            !bytes.windows(canary.len()).any(|w| w == canary),
             "spool 文件中出现明文金丝雀（A-01 违规）"
         );
     }
@@ -685,7 +763,11 @@ fn case10_multi_attachment_resume_and_limit_and_filename_bounds() {
     let (_host_result, joiner_result, _id) = pair_first(&host_vault, 0, &joiner_vault);
     assert_eq!(joiner_result.blobs, 3, "续传后应完成 3 个 blob");
     for id in &att_ids {
-        assert_eq!(count_blob_frames(&joiner_vault, id), 1, "附件 {id} 不得产生重复帧");
+        assert_eq!(
+            count_blob_frames(&joiner_vault, id),
+            1,
+            "附件 {id} 不得产生重复帧"
+        );
     }
 
     // Joiner 侧逐个导出 == 原始字节（顺序对应挂载顺序 a/b/c）。
@@ -697,7 +779,11 @@ fn case10_multi_attachment_resume_and_limit_and_filename_bounds() {
             .unwrap()
             .export_attachment(&parent_id, id, &dest)
             .expect("导出应成功");
-        assert_eq!(std::fs::read(&dest).unwrap(), originals[i], "附件 {i} 字节不一致");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            originals[i],
+            "附件 {i} 字节不一致"
+        );
         let _ = std::fs::remove_file(&dest);
     }
 
@@ -705,7 +791,10 @@ fn case10_multi_attachment_resume_and_limit_and_filename_bounds() {
     let tiny = dir.join("tiny.bin");
     std::fs::write(&tiny, [0u8; 1024]).unwrap();
     for _ in 0..13 {
-        js.repo_mut().unwrap().add_attachment(&parent_id, &tiny, "").unwrap();
+        js.repo_mut()
+            .unwrap()
+            .add_attachment(&parent_id, &tiny, "")
+            .unwrap();
     }
     let err = js
         .repo_mut()
@@ -731,7 +820,9 @@ fn case10_multi_attachment_resume_and_limit_and_filename_bounds() {
     let bad_path = dir.join(&bad_name);
     std::fs::write(&bad_path, [1u8; 16]).unwrap();
     assert_eq!(bad_name.len(), 258);
-    let err = repo.add_attachment(&parent2.item_id, &bad_path, "").unwrap_err();
+    let err = repo
+        .add_attachment(&parent2.item_id, &bad_path, "")
+        .unwrap_err();
     assert!(
         matches!(err, CoreError::Validation(ref m) if m == "filename_too_long"),
         "256B+ 文件名必须被拒，实际 {err:?}"
@@ -798,17 +889,26 @@ fn case11_legacy_attachment_migration_idempotent() {
         let items = repo.list_items(None, false, None);
         // 遗留型条目清零。
         #[allow(deprecated)]
-        let legacy_left = items.iter().filter(|i| matches!(i.kind, ItemKind::Attachment(_))).count();
+        let legacy_left = items
+            .iter()
+            .filter(|i| matches!(i.kind, ItemKind::Attachment(_)))
+            .count();
         assert_eq!(legacy_left, 0, "迁移后不得残留遗留型条目");
         // 迁移产物：SecureNote{ title: 原 title }，attachment_id == 旧 item_id（== blob_ref）。
         let migrated = items
             .iter()
             .find(|i| i.title() == "old-attachment")
             .expect("迁移产物 SecureNote 应存在");
-        assert!(matches!(migrated.kind, ItemKind::SecureNote(_)), "迁移产物应为 SecureNote");
+        assert!(
+            matches!(migrated.kind, ItemKind::SecureNote(_)),
+            "迁移产物应为 SecureNote"
+        );
         assert_eq!(migrated.attachments.len(), 1);
         let meta = &migrated.attachments[0];
-        assert_eq!(meta.attachment_id, x, "attachment_id 必须沿用旧 item_id（blob 零重写前提）");
+        assert_eq!(
+            meta.attachment_id, x,
+            "attachment_id 必须沿用旧 item_id（blob 零重写前提）"
+        );
         assert_eq!(meta.filename, "legacy.bin");
         assert_eq!(meta.size_bytes, original.len() as u64);
         // blob 帧字节级零重写。
@@ -820,8 +920,13 @@ fn case11_legacy_attachment_migration_idempotent() {
         assert_eq!(count_blob_frames(&vault, &x), 1, "不得产生重复 blob 帧");
         // 迁移产物可导出原字节。
         let dest = dir.join("migrated.bin");
-        repo.export_attachment(&migrated.item_id, &x, &dest).unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), original, "迁移后导出应与原始一致");
+        repo.export_attachment(&migrated.item_id, &x, &dest)
+            .unwrap();
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            original,
+            "迁移后导出应与原始一致"
+        );
         let _ = std::fs::remove_file(&dest);
     }
     drop(s);
@@ -831,7 +936,10 @@ fn case11_legacy_attachment_migration_idempotent() {
     let repo = s2.repo().unwrap();
     let again = repo.list_items(None, false, None);
     assert_eq!(
-        again.iter().filter(|i| i.title() == "old-attachment").count(),
+        again
+            .iter()
+            .filter(|i| i.title() == "old-attachment")
+            .count(),
         1,
         "二次解锁不得重复迁移"
     );
@@ -858,13 +966,22 @@ fn case12_gc_keeps_shared_blob_while_any_parent_references_it() {
     };
     // 模拟 KeepBoth 仲裁产物：父B 与父A 携带同一 attachment_id（§3.14.1 解耦前提）。
     let parent_b = {
-        let mut b = session.repo().unwrap().get_item_opt(&parent_a).unwrap().clone();
+        let mut b = session
+            .repo()
+            .unwrap()
+            .get_item_opt(&parent_a)
+            .unwrap()
+            .clone();
         b.item_id = uuid::Uuid::new_v4().to_string();
         b.kind = ItemKind::SecureNote(SecureNoteData {
             title: "keep-both-b".to_string(),
             body: String::new(),
         });
-        session.repo_mut().unwrap().put_item_direct(b.clone()).unwrap();
+        session
+            .repo_mut()
+            .unwrap()
+            .put_item_direct(b.clone())
+            .unwrap();
         b.item_id
     };
 
@@ -873,12 +990,19 @@ fn case12_gc_keeps_shared_blob_while_any_parent_references_it() {
     // 1) 父A 软删进回收站：trash 快照仍引用 X → blob 保活，GC 空转。
     repo.delete_item(&parent_a, false).unwrap();
     assert!(repo.has_blob(&x), "父A 软删不得清共享 blob");
-    assert_eq!(repo.gc_orphan_blobs().unwrap(), 0, "快照引用在，GC 不得动手");
+    assert_eq!(
+        repo.gc_orphan_blobs().unwrap(),
+        0,
+        "快照引用在，GC 不得动手"
+    );
 
     // 2) 父A 彻底删：父B 仍活跃引用 X → blob 仍保活（KeepBoth 核心断言）。
     let trash_id = repo.list_trash()[0].trash_id.clone();
     repo.purge_item(&trash_id).unwrap();
-    assert!(repo.has_blob(&x), "KeepBoth：父B 仍引用，purge 父A 不得清 blob");
+    assert!(
+        repo.has_blob(&x),
+        "KeepBoth：父B 仍引用，purge 父A 不得清 blob"
+    );
     assert_eq!(repo.gc_orphan_blobs().unwrap(), 0);
 
     // 3) 父B 仍可导出原字节。

@@ -9,7 +9,7 @@ use crate::model::conflict::ConflictEntry;
 use crate::model::item::Item;
 use crate::model::now_ms;
 use crate::model::sync_state::{BaseRev, DeviceSyncState};
-use crate::store::repository::{folder_hash, item_hash, hash32, Repository};
+use crate::store::repository::{folder_hash, hash32, item_hash, Repository};
 use crate::sync::protocol::ChangeRecord;
 
 /// 合并结果。
@@ -99,9 +99,13 @@ pub fn apply_changes(
                             report.applied += 1;
                         }
                     }
-                    state
-                        .base
-                        .insert(change.record_id.clone(), BaseRev { rev: change.rev, hash: [0u8; 32] });
+                    state.base.insert(
+                        change.record_id.clone(),
+                        BaseRev {
+                            rev: change.rev,
+                            hash: [0u8; 32],
+                        },
+                    );
                     continue;
                 }
                 let remote = repo.change_to_item(change)?;
@@ -123,9 +127,13 @@ pub fn apply_changes(
                             repo.add_conflict(entry)?;
                             report.conflicts.push(change.record_id.clone());
                             // 保留本机为正式条目，基准推进到远端 rev（后续仲裁按 UI 决定）。
-                            state
-                                .base
-                                .insert(change.record_id.clone(), BaseRev { rev: remote.rev, hash: item_hash(&remote)? });
+                            state.base.insert(
+                                change.record_id.clone(),
+                                BaseRev {
+                                    rev: remote.rev,
+                                    hash: item_hash(&remote)?,
+                                },
+                            );
                             continue;
                         }
                         // 无冲突：LWW 应用。
@@ -139,7 +147,10 @@ pub fn apply_changes(
                         }
                         state.base.insert(
                             change.record_id.clone(),
-                            BaseRev { rev: remote.rev.max(local.rev), hash: item_hash(&remote)? },
+                            BaseRev {
+                                rev: remote.rev.max(local.rev),
+                                hash: item_hash(&remote)?,
+                            },
                         );
                     }
                     None => {
@@ -155,9 +166,13 @@ pub fn apply_changes(
                             repo.put_item_direct(remote.clone())?;
                             report.applied += 1;
                         }
-                        state
-                            .base
-                            .insert(change.record_id.clone(), BaseRev { rev: remote.rev, hash: item_hash(&remote)? });
+                        state.base.insert(
+                            change.record_id.clone(),
+                            BaseRev {
+                                rev: remote.rev,
+                                hash: item_hash(&remote)?,
+                            },
+                        );
                     }
                 }
             }
@@ -174,9 +189,13 @@ pub fn apply_changes(
                         }
                     }
                     repo.remove_folder_direct(&change.record_id)?;
-                    state
-                        .base
-                        .insert(change.record_id.clone(), BaseRev { rev: change.rev, hash: [0u8; 32] });
+                    state.base.insert(
+                        change.record_id.clone(),
+                        BaseRev {
+                            rev: change.rev,
+                            hash: [0u8; 32],
+                        },
+                    );
                     report.applied += 1;
                     continue;
                 }
@@ -194,7 +213,10 @@ pub fn apply_changes(
                 }
                 state.base.insert(
                     change.record_id.clone(),
-                    BaseRev { rev: remote.rev, hash: folder_hash(&remote)? },
+                    BaseRev {
+                        rev: remote.rev,
+                        hash: folder_hash(&remote)?,
+                    },
                 );
             }
             _ => {
@@ -218,14 +240,19 @@ pub fn note_sent_tombstones(state: &mut DeviceSyncState, changes: &[ChangeRecord
     for change in changes.iter().filter(|c| c.deleted) {
         state.base.insert(
             change.record_id.clone(),
-            BaseRev { rev: change.rev, hash: [0u8; 32] },
+            BaseRev {
+                rev: change.rev,
+                hash: [0u8; 32],
+            },
         );
     }
 }
 
 /// 推进某条记录的同步基准。
 pub fn advance_state(state: &mut DeviceSyncState, record_id: &str, rev: u64, hash: [u8; 32]) {
-    state.base.insert(record_id.to_string(), BaseRev { rev, hash });
+    state
+        .base
+        .insert(record_id.to_string(), BaseRev { rev, hash });
 }
 
 /// 由原始密文计算基准摘要（用于墓碑等无明文场景）。

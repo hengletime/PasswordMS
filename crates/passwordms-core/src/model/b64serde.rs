@@ -18,7 +18,9 @@ pub mod vec {
     /// 从 Base64 字符串反序列化。
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
-        STANDARD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
+        STANDARD
+            .decode(s.as_bytes())
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -59,7 +61,9 @@ pub mod arr32 {
     /// 反序列化 32 字节数组（长度不符即报错）。
     pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
         let s = String::deserialize(d)?;
-        let raw = STANDARD.decode(s.as_bytes()).map_err(serde::de::Error::custom)?;
+        let raw = STANDARD
+            .decode(s.as_bytes())
+            .map_err(serde::de::Error::custom)?;
         let mut out = [0u8; 32];
         if raw.len() != 32 {
             return Err(serde::de::Error::custom("expected 32 bytes"));

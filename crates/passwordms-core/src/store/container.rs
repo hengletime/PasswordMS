@@ -17,13 +17,11 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use crate::constants::{
-    CONTAINER_PREFIX_LEN, FORMAT_VERSION, HEADER_RESERVED_BYTES, VAULT_MAGIC,
-};
+use crate::constants::FRAME_HEADER_LEN;
+use crate::constants::{CONTAINER_PREFIX_LEN, FORMAT_VERSION, HEADER_RESERVED_BYTES, VAULT_MAGIC};
 use crate::error::{CoreError, CoreResult};
 use crate::model::vault::Vault;
 use crate::store::frame::Frame;
-use crate::constants::FRAME_HEADER_LEN;
 
 /// 容器句柄：封装路径、头部与预留容量。
 pub struct Container {

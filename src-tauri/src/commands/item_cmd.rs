@@ -33,10 +33,7 @@ pub fn get_item(state: tauri::State<'_, AppState>, item_id: String) -> IpcResult
 
 /// 新建条目。
 #[tauri::command(rename_all = "snake_case")]
-pub fn create_item(
-    state: tauri::State<'_, AppState>,
-    draft: ItemDraftDto,
-) -> IpcResult<ItemDto> {
+pub fn create_item(state: tauri::State<'_, AppState>, draft: ItemDraftDto) -> IpcResult<ItemDto> {
     let mut session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     Ok(repo.create_item(to_draft(draft))?)

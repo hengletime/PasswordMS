@@ -109,8 +109,15 @@ fn poll_accept_stream_is_blocking_after_accept() {
     let host_id = host_session.repo().unwrap().device_id().to_string();
     let identity = HostIdentity::generate().unwrap();
 
-    let mut server = SyncServer::start(0, host_id, "NonBlockHost".to_string(), identity, 0, now_ms())
-        .unwrap();
+    let mut server = SyncServer::start(
+        0,
+        host_id,
+        "NonBlockHost".to_string(),
+        identity,
+        0,
+        now_ms(),
+    )
+    .unwrap();
     let port = server.local_port().unwrap();
 
     // Host：poll 路径（真实 App 用的就是这个）放独立线程。
@@ -150,7 +157,9 @@ fn poll_accept_stream_is_blocking_after_accept() {
         std::thread::sleep(Duration::from_millis(600));
         // 长度前缀帧（u32 LE）+ 垃圾载荷：不是合法 JSON。
         let payload = b"not-a-valid-frame";
-        stream.write_all(&(payload.len() as u32).to_le_bytes()).unwrap();
+        stream
+            .write_all(&(payload.len() as u32).to_le_bytes())
+            .unwrap();
         stream.write_all(payload).unwrap();
         stream.flush().unwrap();
         // 保持连接片刻再关，避免 host 读 Done 时收到对端关闭混淆断言。
@@ -208,8 +217,15 @@ fn repair_already_paired_vault_without_adopt() {
     let host_session = Session::create(&host_vault, "Repair#Master1", true).unwrap();
     let host_id = host_session.repo().unwrap().device_id().to_string();
     let identity = HostIdentity::generate().unwrap();
-    let mut server = SyncServer::start(0, host_id.clone(), "RepairHost".to_string(), identity, 0, now_ms())
-        .unwrap();
+    let mut server = SyncServer::start(
+        0,
+        host_id.clone(),
+        "RepairHost".to_string(),
+        identity,
+        0,
+        now_ms(),
+    )
+    .unwrap();
     let qr = server.qr_payload(vec!["127.0.0.1".to_string()]).unwrap();
     let host_handle = {
         let mut host_session = host_session;
@@ -222,7 +238,9 @@ fn repair_already_paired_vault_without_adopt() {
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
     {
         let mut joiner = client::pair(&qr, &joiner_id, "RepairJoiner", 0, now_ms()).unwrap();
-        joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+        joiner_session
+            .adopt_vault_key(joiner.host_vault_key())
+            .unwrap();
         let repo = joiner_session.repo_mut().unwrap();
         joiner.persist_host_device(repo).unwrap();
         joiner.push_and_sync(repo, now_ms()).unwrap();
@@ -346,7 +364,9 @@ fn repair_repair_after_unbind_with_matching_vk() {
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
     {
         let mut joiner = client::pair(&qr, &joiner_id, "UnbindJoiner", 0, now_ms()).unwrap();
-        joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+        joiner_session
+            .adopt_vault_key(joiner.host_vault_key())
+            .unwrap();
         let repo = joiner_session.repo_mut().unwrap();
         joiner.persist_host_device(repo).unwrap();
         joiner.push_and_sync(repo, now_ms()).unwrap();
@@ -354,7 +374,11 @@ fn repair_repair_after_unbind_with_matching_vk() {
     let first = host_handle.join().unwrap();
     assert!(first.is_ok(), "首次配对 Host 侧失败: {:?}", first.err());
     assert_eq!(
-        joiner_session.repo().unwrap().list_items(None, false, None).len(),
+        joiner_session
+            .repo()
+            .unwrap()
+            .list_items(None, false, None)
+            .len(),
         1,
         "首次配对后 Joiner 应有 1 条同步进来的数据"
     );
@@ -366,7 +390,11 @@ fn repair_repair_after_unbind_with_matching_vk() {
         .remove_paired_device(&host_id)
         .unwrap();
     assert!(
-        joiner_session.repo().unwrap().list_paired_devices().is_empty(),
+        joiner_session
+            .repo()
+            .unwrap()
+            .list_paired_devices()
+            .is_empty(),
         "解绑后配对记录应为空"
     );
 
@@ -426,7 +454,11 @@ fn repair_repair_after_unbind_with_matching_vk() {
     );
     // 数据完好：条目仍在（密钥未被动过，可正常枚举）。
     assert_eq!(
-        joiner_session.repo().unwrap().list_items(None, false, None).len(),
+        joiner_session
+            .repo()
+            .unwrap()
+            .list_items(None, false, None)
+            .len(),
         1,
         "重配对不得触碰本地数据"
     );

@@ -20,25 +20,35 @@ pub mod b64 {
     /// 反序列化标准 Base64。
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
-        STANDARD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
+        STANDARD
+            .decode(s.as_bytes())
+            .map_err(serde::de::Error::custom)
     }
 
     /// 可选变体。
     pub mod opt {
         use super::*;
         /// 序列化可选 Base64。
-        pub fn serialize<S: serde::Serializer>(bytes: &Option<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        pub fn serialize<S: serde::Serializer>(
+            bytes: &Option<Vec<u8>>,
+            s: S,
+        ) -> Result<S::Ok, S::Error> {
             match bytes {
                 Some(b) => s.serialize_str(&STANDARD.encode(b)),
                 None => s.serialize_none(),
             }
         }
         /// 反序列化可选 Base64。
-        pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<u8>>, D::Error> {
+        pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+            d: D,
+        ) -> Result<Option<Vec<u8>>, D::Error> {
             let opt = Option::<String>::deserialize(d)?;
             match opt {
                 None => Ok(None),
-                Some(s) => STANDARD.decode(s.as_bytes()).map(Some).map_err(serde::de::Error::custom),
+                Some(s) => STANDARD
+                    .decode(s.as_bytes())
+                    .map(Some)
+                    .map_err(serde::de::Error::custom),
             }
         }
     }
@@ -55,7 +65,9 @@ pub mod b64url {
     /// 反序列化 base64url（无填充）。
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
         let s = String::deserialize(d)?;
-        URL_SAFE_NO_PAD.decode(s.as_bytes()).map_err(serde::de::Error::custom)
+        URL_SAFE_NO_PAD
+            .decode(s.as_bytes())
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -219,9 +231,7 @@ pub struct SyncPayload {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum BlobMessage {
     /// 拉取方 → 对端：缺失清单（空清单 = 无缺，对端立即回 End）。
-    Pull {
-        want: Vec<String>,
-    },
+    Pull { want: Vec<String> },
     /// 帧元信息（每个 blob 一次）。
     Meta {
         blob_ref: String,
@@ -332,7 +342,8 @@ pub fn qr_svg(text: &str) -> CoreResult<String> {
 mod qr_ips_tests {
     use super::*;
 
-    fn sample(ips: Vec<String>) -> QRPayload {        QRPayload {
+    fn sample(ips: Vec<String>) -> QRPayload {
+        QRPayload {
             v: QR_PROTOCOL_VERSION,
             ip: ips.first().cloned().unwrap_or_default(),
             port: 40001,
@@ -383,7 +394,8 @@ mod blob_protocol_tests {
         let payload: SyncPayload = serde_json::from_str(legacy).unwrap();
         assert!(!payload.blob_support);
         // 新端显式 true 正常往返。
-        let modern = r#"{"kind":"push","device_id":"dev","changes":[],"conflicts":[],"blob_support":true}"#;
+        let modern =
+            r#"{"kind":"push","device_id":"dev","changes":[],"conflicts":[],"blob_support":true}"#;
         let payload: SyncPayload = serde_json::from_str(modern).unwrap();
         assert!(payload.blob_support);
     }
@@ -392,7 +404,9 @@ mod blob_protocol_tests {
     #[test]
     fn blob_message_serde_roundtrip() {
         let msgs = vec![
-            BlobMessage::Pull { want: vec!["ref-a".into(), "ref-b".into()] },
+            BlobMessage::Pull {
+                want: vec!["ref-a".into(), "ref-b".into()],
+            },
             BlobMessage::Meta {
                 blob_ref: "ref-a".into(),
                 item_id: "item-a".into(),
@@ -403,8 +417,15 @@ mod blob_protocol_tests {
                 chunk_total: 2,
                 chunk_size: 768 * 1024,
             },
-            BlobMessage::Data { blob_ref: "ref-a".into(), index: 1, ct_slice: vec![9u8; 32] },
-            BlobMessage::End { completed: vec!["ref-a".into()], missing: vec![] },
+            BlobMessage::Data {
+                blob_ref: "ref-a".into(),
+                index: 1,
+                ct_slice: vec![9u8; 32],
+            },
+            BlobMessage::End {
+                completed: vec!["ref-a".into()],
+                missing: vec![],
+            },
         ];
         for m in msgs {
             let json = serde_json::to_string(&m).unwrap();

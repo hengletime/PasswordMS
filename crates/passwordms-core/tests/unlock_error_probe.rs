@@ -122,7 +122,10 @@ fn probe_unlock_error_codes_across_failure_modes() {
     println!("④ 不存在的路径             -> {c_missing}");
 
     // —— 统一为 ERR_UNLOCK_FAILED 的全部路径（含结构性损坏，D-10 已折叠）——
-    assert_eq!(c_wrong, "ERR_UNLOCK_FAILED", "错误密码应统一为 ERR_UNLOCK_FAILED");
+    assert_eq!(
+        c_wrong, "ERR_UNLOCK_FAILED",
+        "错误密码应统一为 ERR_UNLOCK_FAILED"
+    );
     assert_eq!(
         c_content, "ERR_UNLOCK_FAILED",
         "头部内容篡改（走到 unlock_check）应统一为 ERR_UNLOCK_FAILED"

@@ -58,10 +58,12 @@ fn secret32_zeroizes() {
 #[test]
 fn session_lock_transitions_and_cascades() {
     let mut path = std::env::temp_dir();
-    path.push(format!("passwordms_test_zeroize_{}.vault", uuid::Uuid::new_v4()));
+    path.push(format!(
+        "passwordms_test_zeroize_{}.vault",
+        uuid::Uuid::new_v4()
+    ));
 
-    let mut session =
-        Session::create(&path, "qa_test_master_password", true).expect("create");
+    let mut session = Session::create(&path, "qa_test_master_password", true).expect("create");
     assert!(session.is_unlocked());
 
     // 锁定 → 状态切换、仓储不可访问（旧 Unlocked Drop → Zeroizing 级联清零）。
@@ -101,15 +103,24 @@ fn item_wipe_plaintext_clears_sensitive_fields() {
     assert!(is_wiped(&login.password), "password 应被擦除");
     assert!(is_wiped(&login.notes), "notes 应被擦除");
     assert!(is_wiped(&login.totp_secret), "totp_secret 应被擦除");
-    assert!(login.custom_fields[0].key.is_empty(), "自定义字段 key 应被擦除");
-    assert!(login.custom_fields[0].value.is_empty(), "自定义字段 value 应被擦除");
+    assert!(
+        login.custom_fields[0].key.is_empty(),
+        "自定义字段 key 应被擦除"
+    );
+    assert!(
+        login.custom_fields[0].value.is_empty(),
+        "自定义字段 value 应被擦除"
+    );
 
     let mut note = SecureNoteData {
         title: "qa_test_note_title".to_string(),
         body: "qa_test_body".to_string(),
     };
     note.wipe_plaintext();
-    assert!(note.title.is_empty() && note.body.is_empty(), "笔记标题与正文应被擦除");
+    assert!(
+        note.title.is_empty() && note.body.is_empty(),
+        "笔记标题与正文应被擦除"
+    );
 
     let mut att = AttachmentData {
         title: "qa_test_att".to_string(),
@@ -122,7 +133,10 @@ fn item_wipe_plaintext_clears_sensitive_fields() {
     att.wipe_plaintext();
     assert!(att.title.is_empty(), "附件标题应被擦除");
     assert!(att.original_filename.is_empty(), "原始文件名应被擦除");
-    assert_eq!(att.mime_type, "application/octet-stream", "非隐私元数据应保留");
+    assert_eq!(
+        att.mime_type, "application/octet-stream",
+        "非隐私元数据应保留"
+    );
 }
 
 #[test]
@@ -139,15 +153,17 @@ fn repository_wipe_plaintext_clears_item_read_from_repo() {
         uuid::Uuid::new_v4()
     ));
 
-    let mut session =
-        Session::create(&path, "qa_test_master_password", true).expect("create");
+    let mut session = Session::create(&path, "qa_test_master_password", true).expect("create");
     assert!(session.is_unlocked());
 
     // 1) 建库后写入一条 Login 条目，password 设为已知值。
     let item = session
         .repo_mut()
         .expect("unlocked")
-        .create_item(login_draft_with_password("qa_test_alpha", "qa_test_password"))
+        .create_item(login_draft_with_password(
+            "qa_test_alpha",
+            "qa_test_password",
+        ))
         .expect("create_item");
 
     // 2) 断言能从 repo 读回该 password（明文确实驻留于内存 items 映射中）。
@@ -215,8 +231,7 @@ fn repository_wipe_plaintext_clears_folder_fields() {
         uuid::Uuid::new_v4()
     ));
 
-    let mut session =
-        Session::create(&path, "qa_test_master_password", true).expect("create");
+    let mut session = Session::create(&path, "qa_test_master_password", true).expect("create");
     session
         .repo_mut()
         .expect("unlocked")
@@ -245,7 +260,10 @@ fn repository_wipe_plaintext_clears_folder_fields() {
     assert!(is_wiped(&after[0].icon), "分组 icon 应被清空");
     assert!(is_wiped(&after[0].color), "分组 color 应被清空");
     // 数值元数据保留（不可反推主题）。
-    assert_eq!(after[0].sort_order, before[0].sort_order, "sort_order 应保留");
+    assert_eq!(
+        after[0].sort_order, before[0].sort_order,
+        "sort_order 应保留"
+    );
     assert_eq!(after[0].rev, before[0].rev, "rev 应保留");
 
     let _ = std::fs::remove_file(&path);
@@ -303,14 +321,20 @@ fn import_preview_wipe_plaintext_clears_items_and_folders() {
     assert_eq!(preview.folders.len(), 1, "擦除不应删除预览分组");
     assert!(preview.folders[0].name.is_empty(), "预览分组 name 应被清空");
     assert!(is_wiped(&preview.folders[0].icon), "预览分组 icon 应被清空");
-    assert!(is_wiped(&preview.folders[0].color), "预览分组 color 应被清空");
+    assert!(
+        is_wiped(&preview.folders[0].color),
+        "预览分组 color 应被清空"
+    );
     assert_eq!(preview.items.len(), 1, "擦除不应删除预览条目");
     match &preview.items[0].kind {
         ItemKind::Login(login) => {
             assert!(login.title.is_empty(), "预览条目 title 应被清空");
             assert!(is_wiped(&login.password), "预览条目 password 应被清空");
             assert!(is_wiped(&login.username), "预览条目 username 应被清空");
-            assert!(login.custom_fields[0].value.is_empty(), "预览自定义字段应被清空");
+            assert!(
+                login.custom_fields[0].value.is_empty(),
+                "预览自定义字段应被清空"
+            );
         }
         other => panic!("应为 Login 条目，实际为 {other:?}"),
     }

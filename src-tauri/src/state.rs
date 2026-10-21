@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use passwordms_core::import::ImportPreview;
+use passwordms_core::model::now_ms;
 use passwordms_core::paths::portable_data_dir;
 use passwordms_core::session::Session;
-use passwordms_core::model::now_ms;
 use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::resync::ResyncServer;
 use passwordms_core::sync::server::SyncServer;
@@ -100,11 +100,16 @@ pub fn append_log(app: &tauri::AppHandle, msg: &str) {
     let ts = now_ms();
     let line = format!("[{ts}] {msg}\n");
     // 超 1MB：截断重建（保留最后可见问题，不追求日志轮转完备性）。
-    let need_truncate = std::fs::metadata(&path).map(|m| m.len() > 1_000_000).unwrap_or(false);
+    let need_truncate = std::fs::metadata(&path)
+        .map(|m| m.len() > 1_000_000)
+        .unwrap_or(false);
     let open = if need_truncate {
         std::fs::File::create(&path)
     } else {
-        std::fs::OpenOptions::new().create(true).append(true).open(&path)
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
     };
     if let Ok(mut f) = open {
         let _ = f.write_all(line.as_bytes());
@@ -152,7 +157,10 @@ pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
     let port = server.port();
     if fell_back {
         let _ = std::fs::write(&port_file, port.to_string());
-        append_log(app, &format!("[resync] saved port unavailable, rebound to {port} (peers must re-pair)"));
+        append_log(
+            app,
+            &format!("[resync] saved port unavailable, rebound to {port} (peers must re-pair)"),
+        );
     }
 
     let stop = Arc::new(AtomicBool::new(false));

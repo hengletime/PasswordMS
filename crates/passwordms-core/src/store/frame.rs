@@ -23,7 +23,9 @@
 //!
 //! 固定头部长度 = 124B（[`crate::constants::FRAME_HEADER_LEN`]）。
 
-use crate::constants::{AEAD_NONCE_LEN, FLAG_BLOB, FLAG_TOMBSTONE, FRAME_HEADER_LEN, WRAPPED_KEY_CT_LEN};
+use crate::constants::{
+    AEAD_NONCE_LEN, FLAG_BLOB, FLAG_TOMBSTONE, FRAME_HEADER_LEN, WRAPPED_KEY_CT_LEN,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::model::vault::WrappedKey;
 
@@ -121,7 +123,9 @@ impl Frame {
             return Err(CoreError::Internal("truncated frame".to_string()));
         }
         if ct_len != plaintext_len as usize + crate::constants::AEAD_TAG_LEN {
-            return Err(CoreError::Internal("ct_len/plaintext_len mismatch".to_string()));
+            return Err(CoreError::Internal(
+                "ct_len/plaintext_len mismatch".to_string(),
+            ));
         }
 
         let mut nonce = [0u8; AEAD_NONCE_LEN];
@@ -148,7 +152,8 @@ impl Frame {
 
 /// UUID 字符串 → 原始 16 字节。
 pub fn record_id_to_bytes(id: &str) -> CoreResult<[u8; 16]> {
-    let parsed = uuid::Uuid::parse_str(id).map_err(|_| CoreError::Validation("uuid".to_string()))?;
+    let parsed =
+        uuid::Uuid::parse_str(id).map_err(|_| CoreError::Validation("uuid".to_string()))?;
     Ok(*parsed.as_bytes())
 }
 

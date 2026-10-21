@@ -12,5 +12,7 @@ pub mod server;
 pub mod transport;
 
 pub use handshake::HostIdentity;
-pub use protocol::{Accept, ChangeRecord, Confirm, Hello, QRPayload, Reject, SyncEnvelope, SyncPayload};
+pub use protocol::{
+    Accept, ChangeRecord, Confirm, Hello, QRPayload, Reject, SyncEnvelope, SyncPayload,
+};
 pub use resync::{ResyncOutcome, ResyncServer};

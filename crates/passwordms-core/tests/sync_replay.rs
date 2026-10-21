@@ -178,8 +178,14 @@ fn replay_rejected_outside_time_window() {
     let now = 1_000_000_000i64;
     let too_old = now - (SYNC_TIME_WINDOW_SECS + 1) * 1000;
     let too_new = now + (SYNC_TIME_WINDOW_SECS + 1) * 1000;
-    assert_eq!(guard.check_ts(too_old, now).unwrap_err().code(), "ERR_REPLAY_DETECTED");
-    assert_eq!(guard.check_ts(too_new, now).unwrap_err().code(), "ERR_REPLAY_DETECTED");
+    assert_eq!(
+        guard.check_ts(too_old, now).unwrap_err().code(),
+        "ERR_REPLAY_DETECTED"
+    );
+    assert_eq!(
+        guard.check_ts(too_new, now).unwrap_err().code(),
+        "ERR_REPLAY_DETECTED"
+    );
     assert!(guard.check_ts(now, now).is_ok());
 }
 
@@ -313,12 +319,15 @@ fn key_confirmation_mismatch_is_detected() {
     let confirm_key = rng::random_key().expect("ck");
     let parts: [&[u8]; 2] = [b"hello", b"accept"];
     let transcript = handshake::transcript_hash(&parts);
-    let mac = handshake::confirm_mac(&confirm_key, handshake::ROLE_SERVER, &transcript).expect("mac");
-    let expected = handshake::confirm_mac(&confirm_key, handshake::ROLE_SERVER, &transcript).expect("mac");
+    let mac =
+        handshake::confirm_mac(&confirm_key, handshake::ROLE_SERVER, &transcript).expect("mac");
+    let expected =
+        handshake::confirm_mac(&confirm_key, handshake::ROLE_SERVER, &transcript).expect("mac");
     assert!(handshake::verify_mac(&expected, &mac));
 
     // 角色不同 → MAC 不同（阻断中间人重放）。
-    let wrong = handshake::confirm_mac(&confirm_key, handshake::ROLE_CLIENT, &transcript).expect("mac");
+    let wrong =
+        handshake::confirm_mac(&confirm_key, handshake::ROLE_CLIENT, &transcript).expect("mac");
     assert!(!handshake::verify_mac(&expected, &wrong));
 }
 

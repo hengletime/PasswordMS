@@ -66,7 +66,11 @@ fn login_draft(title: &str) -> ItemDraft {
 }
 
 /// 建父条目并挂两个附件，返回 `(item_id, att1, att2)`（att1 是第一个挂上的）。
-fn host_add_two_attachments(session: &mut Session, src1: &Path, src2: &Path) -> (String, String, String) {
+fn host_add_two_attachments(
+    session: &mut Session,
+    src1: &Path,
+    src2: &Path,
+) -> (String, String, String) {
     let repo = session.repo_mut().unwrap();
     let parent = repo.create_item(login_draft("att-sync-parent")).unwrap();
     let parent = repo.add_attachment(&parent.item_id, src1, "").unwrap();
@@ -80,7 +84,11 @@ fn host_add_two_attachments(session: &mut Session, src1: &Path, src2: &Path) -> 
 }
 
 /// 首次配对（Host 已有数据 → Joiner 采纳 VK + 双向同步，含 blob 阶段）。
-fn pair_first(host_vault: &Path, resync_port: u16, joiner_vault: &Path) -> (HostSyncResult, String) {
+fn pair_first(
+    host_vault: &Path,
+    resync_port: u16,
+    joiner_vault: &Path,
+) -> (HostSyncResult, String) {
     let host_device_id = {
         let s = Session::unlock(host_vault, HOST_PWD).unwrap();
         s.repo().unwrap().device_id().to_string()
@@ -106,8 +114,11 @@ fn pair_first(host_vault: &Path, resync_port: u16, joiner_vault: &Path) -> (Host
 
     let mut joiner_session = Session::create(joiner_vault, JOINER_PWD, true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
-    let mut joiner = client::pair(&qr, &joiner_id, "AttJoiner", 0, now_ms()).expect("回环配对握手失败");
-    joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+    let mut joiner =
+        client::pair(&qr, &joiner_id, "AttJoiner", 0, now_ms()).expect("回环配对握手失败");
+    joiner_session
+        .adopt_vault_key(joiner.host_vault_key())
+        .unwrap();
     let result = {
         let repo = joiner_session.repo_mut().unwrap();
         joiner.persist_host_device(repo).unwrap();
@@ -168,7 +179,10 @@ fn count_live_blob_frames(vault: &Path, blob_ref: &str) -> usize {
 fn attachment_ids(session: &Session, item_id: &str) -> Vec<String> {
     let repo = session.repo().unwrap();
     let item: Item = repo.get_item(item_id).unwrap().clone();
-    item.attachments.iter().map(|a| a.attachment_id.clone()).collect()
+    item.attachments
+        .iter()
+        .map(|a| a.attachment_id.clone())
+        .collect()
 }
 
 // ===== ① B（手机侧角色）删附件 → 过线到 A（电脑侧角色）=====
@@ -193,7 +207,10 @@ fn joiner_attachment_removal_propagates_to_host() {
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
     {
         let repo = joiner_session.repo().unwrap();
-        assert_eq!(attachment_ids(&joiner_session, &item_id), vec![att1.clone(), att2.clone()]);
+        assert_eq!(
+            attachment_ids(&joiner_session, &item_id),
+            vec![att1.clone(), att2.clone()]
+        );
         assert!(repo.has_blob(&att1), "B 侧应有 att1 的 blob");
         assert!(repo.has_blob(&att2), "B 侧应有 att2 的 blob");
     }
@@ -234,11 +251,21 @@ fn joiner_attachment_removal_propagates_to_host() {
     let blob_survived_unlock = {
         let repo = hs.repo().unwrap();
         let item = repo.get_item(&item_id).unwrap();
-        assert_eq!(item.attachments.len(), 1, "删除必须过线：A 侧应只剩 1 个附件");
-        assert_eq!(item.attachments[0].attachment_id, att2, "剩下的必须是第二个附件");
+        assert_eq!(
+            item.attachments.len(),
+            1,
+            "删除必须过线：A 侧应只剩 1 个附件"
+        );
+        assert_eq!(
+            item.attachments[0].attachment_id, att2,
+            "剩下的必须是第二个附件"
+        );
         assert!(item.rev >= removed_rev, "A 侧 rev 不应低于删除后的 rev");
         let refs = repo.attachment_blob_refs();
-        assert!(!refs.contains(&att1), "A 侧引用集合不得包含被删 attachment_id");
+        assert!(
+            !refs.contains(&att1),
+            "A 侧引用集合不得包含被删 attachment_id"
+        );
         assert!(refs.contains(&att2), "A 侧引用集合必须包含存活附件");
         repo.has_blob(&att1)
     };
@@ -281,7 +308,10 @@ fn host_attachment_removal_propagates_to_joiner() {
     // A 侧删第一个附件。
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        hs.repo_mut().unwrap().remove_attachment(&item_id, &att1).unwrap();
+        hs.repo_mut()
+            .unwrap()
+            .remove_attachment(&item_id, &att1)
+            .unwrap();
     }
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
@@ -297,7 +327,10 @@ fn host_attachment_removal_propagates_to_joiner() {
     {
         let repo = joiner_session.repo().unwrap();
         let refs = repo.attachment_blob_refs();
-        assert!(!refs.contains(&att1), "B 侧引用集合不得包含被删 attachment_id");
+        assert!(
+            !refs.contains(&att1),
+            "B 侧引用集合不得包含被删 attachment_id"
+        );
     }
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -332,9 +365,16 @@ fn attachment_removal_is_idempotent_across_repeated_resyncs() {
     assert_eq!(host_out.len(), 2, "Host 应收到两次连接");
 
     // 两轮之后两端都稳定在「1 个附件 = att2」。
-    assert_eq!(attachment_ids(&joiner_session, &item_id), vec![att2.clone()]);
+    assert_eq!(
+        attachment_ids(&joiner_session, &item_id),
+        vec![att2.clone()]
+    );
     let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-    assert_eq!(attachment_ids(&hs, &item_id), vec![att2], "重复同步不得让附件复活");
+    assert_eq!(
+        attachment_ids(&hs, &item_id),
+        vec![att2],
+        "重复同步不得让附件复活"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }

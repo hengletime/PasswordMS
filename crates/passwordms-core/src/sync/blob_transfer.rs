@@ -90,7 +90,11 @@ pub fn seal_blob_envelope(
             });
             pt.extend_from_slice(&serde_json::to_vec(msg)?);
         }
-        BlobMessage::Data { blob_ref, index, ct_slice } => {
+        BlobMessage::Data {
+            blob_ref,
+            index,
+            ct_slice,
+        } => {
             pt.push(PT_TAG_DATA);
             pt.extend_from_slice(&record_id_to_bytes(blob_ref)?);
             pt.extend_from_slice(&index.to_le_bytes());
@@ -437,15 +441,22 @@ fn meta_of(blob_ref: &str, frame: &Frame) -> BlobMessage {
 /// finalize 一个收齐的 blob：组帧 → tag 验证 → 入库（幂等，不覆盖本地）。
 ///
 /// 成败都清 spool：成功已入库；失败（缺片/tag 不符）重同步时全量重传。
-fn finalize_blob(repo: &mut Repository, meta: BlobMeta, spool: Spool) -> CoreResult<FinalizeResult> {
+fn finalize_blob(
+    repo: &mut Repository,
+    meta: BlobMeta,
+    spool: Spool,
+) -> CoreResult<FinalizeResult> {
     // 收齐校验（manifest 在账 + part 文件长度双重校验）先行，缺片早退。
     let outcome = if !spool.is_complete() {
         Err(CoreError::BlobIncomplete)
     } else {
-        spool.assemble().and_then(|ct| meta.into_frame(ct)).and_then(|frame| {
-            repo.verify_blob_frame(&frame)
-                .and_then(|_| repo.write_blob_frame(frame))
-        })
+        spool
+            .assemble()
+            .and_then(|ct| meta.into_frame(ct))
+            .and_then(|frame| {
+                repo.verify_blob_frame(&frame)
+                    .and_then(|_| repo.write_blob_frame(frame))
+            })
     };
     spool.discard();
     match outcome? {
@@ -492,7 +503,14 @@ pub fn pull_missing(
         .filter(|r| !repo.has_blob(r))
         .collect();
     want.sort();
-    send_blob(stream, sync_key, session_id, next_seq, now, &BlobMessage::Pull { want })?;
+    send_blob(
+        stream,
+        sync_key,
+        session_id,
+        next_seq,
+        now,
+        &BlobMessage::Pull { want },
+    )?;
 
     let mut report = BlobPhaseReport::default();
     let peer_missing: Vec<String>;
@@ -529,7 +547,11 @@ pub fn pull_missing(
             continue;
         }
         match msg {
-            BlobMessage::Data { blob_ref, index, ct_slice } => {
+            BlobMessage::Data {
+                blob_ref,
+                index,
+                ct_slice,
+            } => {
                 if skip_remaining > 0 {
                     // 容量拒绝的 ref：消费并丢弃，保持两侧报文序对齐。
                     skip_remaining = skip_remaining.saturating_sub(1);
@@ -541,7 +563,10 @@ pub fn pull_missing(
                     .ok_or_else(|| CoreError::Validation("blob_chunk_orphan".to_string()))?;
                 spool.write_chunk(index, &ct_slice)?;
             }
-            BlobMessage::End { completed: _, missing } => {
+            BlobMessage::End {
+                completed: _,
+                missing,
+            } => {
                 peer_missing = missing;
                 break;
             }
@@ -595,7 +620,14 @@ pub fn serve_pull(
     for r in want {
         match repo.blob_frame(&r) {
             Some(frame) => {
-                send_blob(stream, sync_key, session_id, next_seq, now, &meta_of(&r, &frame))?;
+                send_blob(
+                    stream,
+                    sync_key,
+                    session_id,
+                    next_seq,
+                    now,
+                    &meta_of(&r, &frame),
+                )?;
                 for (i, slice) in frame.ct.chunks(SYNC_BLOB_CHUNK_BYTES).enumerate() {
                     send_blob(
                         stream,
@@ -622,7 +654,10 @@ pub fn serve_pull(
         session_id,
         next_seq,
         now,
-        &BlobMessage::End { completed: served, missing },
+        &BlobMessage::End {
+            completed: served,
+            missing,
+        },
     )?;
     Ok(served_count)
 }

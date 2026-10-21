@@ -12,11 +12,7 @@ use crate::model::vault::KdfParams;
 /// 由主密码 + 盐 + 参数派生主密钥 MK（32B）。
 ///
 /// 使用文件内存储的参数，保证跨端可复现。
-pub fn derive_master_key(
-    password: &str,
-    salt: &[u8],
-    params: &KdfParams,
-) -> CoreResult<MasterKey> {
+pub fn derive_master_key(password: &str, salt: &[u8], params: &KdfParams) -> CoreResult<MasterKey> {
     let argon_params = Params::new(
         params.memory_kib,
         params.iterations,
@@ -55,8 +51,8 @@ pub fn derive_verify_key(mk: &[u8]) -> CoreResult<VerifyKey> {
 
 /// 供同步握手使用的 HKDF-Expand。
 pub fn hkdf_expand(prk: &[u8], info: &[u8], out_len: usize) -> CoreResult<Vec<u8>> {
-    let hk = Hkdf::<Sha256>::from_prk(prk)
-        .map_err(|_| CoreError::Crypto("hkdf prk".to_string()))?;
+    let hk =
+        Hkdf::<Sha256>::from_prk(prk).map_err(|_| CoreError::Crypto("hkdf prk".to_string()))?;
     let mut out = vec![0u8; out_len];
     hk.expand(info, &mut out)
         .map_err(|_| CoreError::Crypto("hkdf expand".to_string()))?;

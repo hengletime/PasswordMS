@@ -73,23 +73,36 @@ pub fn parse(content: &str) -> CoreResult<ImportPreview> {
                 _ if type_val.is_empty() => "unknown",
                 _ => "unknown",
             };
-            *preview.skipped_by_type.entry(label.to_string()).or_insert(0) += 1;
+            *preview
+                .skipped_by_type
+                .entry(label.to_string())
+                .or_insert(0) += 1;
             continue;
         }
 
         let title = get("name").unwrap_or_default();
         if title.trim().is_empty() {
-            *preview.skipped_by_type.entry("unknown".to_string()).or_insert(0) += 1;
+            *preview
+                .skipped_by_type
+                .entry("unknown".to_string())
+                .or_insert(0) += 1;
             continue;
         }
 
         // 分组：按名称惰性创建。
         let folder_id = match get("folder") {
-            Some(name) => Some(ensure_folder(&name, &mut folder_map, &mut preview.folders, &mut sort_order)),
+            Some(name) => Some(ensure_folder(
+                &name,
+                &mut folder_map,
+                &mut preview.folders,
+                &mut sort_order,
+            )),
             None => None,
         };
 
-        let favorite = get("favorite").map(|v| v.eq_ignore_ascii_case("true") || v == "1").unwrap_or(false);
+        let favorite = get("favorite")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
 
         // 其余非已知列归入 custom_fields。
         let mut custom_fields: Vec<CustomField> = Vec::new();

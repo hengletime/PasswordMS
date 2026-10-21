@@ -121,8 +121,11 @@ fn pair_first(
 
     let mut joiner_session = Session::create(joiner_vault, JOINER_PWD, true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
-    let mut joiner = client::pair(&qr, &joiner_id, "DelJoiner", 0, now_ms()).expect("回环配对握手失败");
-    joiner_session.adopt_vault_key(joiner.host_vault_key()).unwrap();
+    let mut joiner =
+        client::pair(&qr, &joiner_id, "DelJoiner", 0, now_ms()).expect("回环配对握手失败");
+    joiner_session
+        .adopt_vault_key(joiner.host_vault_key())
+        .unwrap();
     let result = {
         let repo = joiner_session.repo_mut().unwrap();
         joiner.persist_host_device(repo).unwrap();
@@ -217,7 +220,11 @@ fn case1_remote_delete_lands_in_trash_and_restore_converges() {
         .unwrap()
         .delete_item(&item_id, false)
         .unwrap();
-    assert!(joiner_session.repo().unwrap().get_item_opt(&item_id).is_none());
+    assert!(joiner_session
+        .repo()
+        .unwrap()
+        .get_item_opt(&item_id)
+        .is_none());
 
     // 同步 → Host 走软删（进回收站，非物理删）。
     let (host_out, _j1o) = run_resync(&host_vault, resync_server, &mut joiner_session, &host_id);
@@ -244,10 +251,19 @@ fn case1_remote_delete_lands_in_trash_and_restore_converges() {
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let host_rev = hs.repo().unwrap().get_item(&item_id).unwrap().rev;
-        let joiner_rev = joiner_session.repo().unwrap().get_item(&item_id).unwrap().rev;
+        let joiner_rev = joiner_session
+            .repo()
+            .unwrap()
+            .get_item(&item_id)
+            .unwrap()
+            .rev;
         assert_eq!(host_rev, 2);
         assert_eq!(joiner_rev, 2, "两端存活 rev 一致");
-        assert!(joiner_session.repo().unwrap().get_item_opt(&item_id).is_some());
+        assert!(joiner_session
+            .repo()
+            .unwrap()
+            .get_item_opt(&item_id)
+            .is_some());
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -269,7 +285,11 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     let (_h1, _j1, host_id) = pair_first(&host_vault, resync_port, &joiner_vault);
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    joiner_session.repo_mut().unwrap().delete_item(&item_id, false).unwrap();
+    joiner_session
+        .repo_mut()
+        .unwrap()
+        .delete_item(&item_id, false)
+        .unwrap();
     // Host 未同步前修改 → rev2。
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
@@ -287,7 +307,10 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
         let repo = hs.repo().unwrap();
         let conflicts = repo.list_conflicts();
         assert_eq!(conflicts.len(), 1);
-        assert_eq!(conflicts[0].remote_snapshot.rev, 1, "remote_snapshot = 死亡前快照");
+        assert_eq!(
+            conflicts[0].remote_snapshot.rev, 1,
+            "remote_snapshot = 死亡前快照"
+        );
         assert!(conflicts[0].remote_deleted, "删除冲突标记");
         assert_eq!(conflicts[0].local_snapshot.rev, 2);
         assert!(repo.get_item_opt(&item_id).is_some(), "保留本机为正式条目");
@@ -296,7 +319,10 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let cid = hs.repo().unwrap().list_conflicts()[0].conflict_id.clone();
-        hs.repo_mut().unwrap().resolve_conflict(&cid, ConflictChoice::KeepLocal).unwrap();
+        hs.repo_mut()
+            .unwrap()
+            .resolve_conflict(&cid, ConflictChoice::KeepLocal)
+            .unwrap();
     }
     let server2 = rebind(resync_port);
     let (_h2, _j2) = run_resync(&host_vault, server2, &mut joiner_session, &host_id);
@@ -304,7 +330,12 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         assert_eq!(hs.repo().unwrap().get_item(&item_id).unwrap().rev, 2);
         assert_eq!(
-            joiner_session.repo().unwrap().get_item(&item_id).unwrap().rev,
+            joiner_session
+                .repo()
+                .unwrap()
+                .get_item(&item_id)
+                .unwrap()
+                .rev,
             2,
             "「保留本机」→ 两端复活收敛"
         );
@@ -324,7 +355,11 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     let (_h1, _j1, host_id) = pair_first(&host_vault, resync_port, &joiner_vault);
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    joiner_session.repo_mut().unwrap().delete_item(&item_id, false).unwrap();
+    joiner_session
+        .repo_mut()
+        .unwrap()
+        .delete_item(&item_id, false)
+        .unwrap();
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         touch_item(&mut hs, &item_id, "tug-item-b-modified");
@@ -334,9 +369,15 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let cid = hs.repo().unwrap().list_conflicts()[0].conflict_id.clone();
-        hs.repo_mut().unwrap().resolve_conflict(&cid, ConflictChoice::TakeRemote).unwrap();
+        hs.repo_mut()
+            .unwrap()
+            .resolve_conflict(&cid, ConflictChoice::TakeRemote)
+            .unwrap();
         let repo = hs.repo().unwrap();
-        assert!(repo.get_item_opt(&item_id).is_none(), "采用远端删除 → 本端软删");
+        assert!(
+            repo.get_item_opt(&item_id).is_none(),
+            "采用远端删除 → 本端软删"
+        );
         assert_eq!(repo.list_trash().len(), 1);
     }
     let server2 = rebind(resync_port);
@@ -346,7 +387,11 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
         assert!(hs.repo().unwrap().get_item_opt(&item_id).is_none());
     }
     assert!(
-        joiner_session.repo().unwrap().get_item_opt(&item_id).is_none(),
+        joiner_session
+            .repo()
+            .unwrap()
+            .get_item_opt(&item_id)
+            .is_none(),
         "「采用远端」→ Joiner 陈旧 live 变更不得复活对端，最终软删收敛"
     );
     // 第三次同步：墓碑零重发、零重复应用。
@@ -374,7 +419,11 @@ fn case3_peer_base_filter_suppresses_reexport() {
     let joiner_id = joiner_device_id(&host_vault, &host_id);
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    joiner_session.repo_mut().unwrap().delete_item(&item_id, false).unwrap();
+    joiner_session
+        .repo_mut()
+        .unwrap()
+        .delete_item(&item_id, false)
+        .unwrap();
 
     // 正例控制：删除后首导出含墓碑。
     assert_eq!(
@@ -424,7 +473,13 @@ fn case4_folder_deletion_two_strategies_no_spontaneous_cascade() {
         let item0 = make_login(&mut hs, "free-item", None);
         let item1 = make_login(&mut hs, "g1-item", Some(g1.folder_id.clone()));
         let item2 = make_login(&mut hs, "g2-item", Some(g2.folder_id.clone()));
-        (g1.folder_id, g2.folder_id, item0.item_id, item1.item_id, item2.item_id)
+        (
+            g1.folder_id,
+            g2.folder_id,
+            item0.item_id,
+            item1.item_id,
+            item2.item_id,
+        )
     };
     let resync_server = ResyncServer::start(0, "DelHost".to_string()).unwrap();
     let (_h1, _j1, host_id) = pair_first(&host_vault, resync_server.port(), &joiner_vault);
@@ -433,8 +488,10 @@ fn case4_folder_deletion_two_strategies_no_spontaneous_cascade() {
     {
         let repo = joiner_session.repo_mut().unwrap();
         assert!(repo.get_item_opt(&item1_id).is_some());
-        repo.delete_folder(&g1_id, FolderDeleteStrategy::ToTrash).unwrap();
-        repo.delete_folder(&g2_id, FolderDeleteStrategy::ToUngrouped).unwrap();
+        repo.delete_folder(&g1_id, FolderDeleteStrategy::ToTrash)
+            .unwrap();
+        repo.delete_folder(&g2_id, FolderDeleteStrategy::ToUngrouped)
+            .unwrap();
     }
     let (_host_out, _joiner_out) =
         run_resync(&host_vault, resync_server, &mut joiner_session, &host_id);
@@ -443,10 +500,18 @@ fn case4_folder_deletion_two_strategies_no_spontaneous_cascade() {
         let repo = hs.repo().unwrap();
         // 两形态：g1 级联进回收站（靠 A 端逐条 item 墓碑过线）。
         assert!(repo.list_folders().is_empty(), "两个分组壳均应消失");
-        assert!(repo.get_item_opt(&item1_id).is_none(), "ToTrash 条目离开活跃表");
-        assert!(repo.list_trash().iter().any(|t| t.item_snapshot.item_id == item1_id));
+        assert!(
+            repo.get_item_opt(&item1_id).is_none(),
+            "ToTrash 条目离开活跃表"
+        );
+        assert!(repo
+            .list_trash()
+            .iter()
+            .any(|t| t.item_snapshot.item_id == item1_id));
         // ToUngrouped：条目存活、移出分组。
-        let item2 = repo.get_item_opt(&item2_id).expect("ToUngrouped 条目应存活");
+        let item2 = repo
+            .get_item_opt(&item2_id)
+            .expect("ToUngrouped 条目应存活");
         assert!(item2.folder_id.is_none(), "应移至未分组");
         // 对端无自发级联：未分组条目与 g2 条目都不因分组删除被连带清除。
         assert!(repo.get_item_opt(&item0_id).is_some(), "未分组条目不受影响");
@@ -486,10 +551,17 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
     let (_h1, _j1, host_id) = pair_first(&host_vault, resync_port, &joiner_vault);
 
     let mut joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
-    assert!(joiner_session.repo().unwrap().has_blob(&att_id), "配对后 blob 应已同步");
+    assert!(
+        joiner_session.repo().unwrap().has_blob(&att_id),
+        "配对后 blob 应已同步"
+    );
 
     // Joiner 软删父条目 → Host 软删且 blob 保留（trash 快照仍引用，§3.14.4）。
-    joiner_session.repo_mut().unwrap().delete_item(&parent_id, false).unwrap();
+    joiner_session
+        .repo_mut()
+        .unwrap()
+        .delete_item(&parent_id, false)
+        .unwrap();
     let (_h1o, _j1o) = run_resync(&host_vault, resync_server, &mut joiner_session, &host_id);
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
@@ -501,16 +573,33 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
 
     // Joiner purge（彻底删其回收站快照）→ GC 清 blob，仅本地生效。
     {
-        let trash_id = joiner_session.repo().unwrap().list_trash()[0].trash_id.clone();
-        joiner_session.repo_mut().unwrap().purge_item(&trash_id).unwrap();
-        assert!(!joiner_session.repo().unwrap().has_blob(&att_id), "purge 应清 blob");
+        let trash_id = joiner_session.repo().unwrap().list_trash()[0]
+            .trash_id
+            .clone();
+        joiner_session
+            .repo_mut()
+            .unwrap()
+            .purge_item(&trash_id)
+            .unwrap();
+        assert!(
+            !joiner_session.repo().unwrap().has_blob(&att_id),
+            "purge 应清 blob"
+        );
     }
     // purge 事件不过线：TRASH 墓碑（白名单外）与 blob 墓碑（不独立导出）均不出网，
     // Host 的 blob 与回收站不受影响。
-    let (_h2o, _j2o) = run_resync(&host_vault, rebind(resync_port), &mut joiner_session, &host_id);
+    let (_h2o, _j2o) = run_resync(
+        &host_vault,
+        rebind(resync_port),
+        &mut joiner_session,
+        &host_id,
+    );
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        assert!(hs.repo().unwrap().has_blob(&att_id), "对端 blob 不受本端 purge 影响");
+        assert!(
+            hs.repo().unwrap().has_blob(&att_id),
+            "对端 blob 不受本端 purge 影响"
+        );
         assert_eq!(hs.repo().unwrap().list_trash().len(), 1, "purge 事件不过线");
     }
 
@@ -524,12 +613,28 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
             .unwrap()
             .export_attachment(&parent_id, &att_id, &dest)
             .unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), original, "还原后导出字节一致");
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            original,
+            "还原后导出字节一致"
+        );
     }
-    let (_h3o, j3) = run_resync(&host_vault, rebind(resync_port), &mut joiner_session, &host_id);
+    let (_h3o, j3) = run_resync(
+        &host_vault,
+        rebind(resync_port),
+        &mut joiner_session,
+        &host_id,
+    );
     assert!(j3.applied >= 1, "还原变更应过线");
-    assert!(joiner_session.repo().unwrap().get_item_opt(&parent_id).is_some());
-    assert!(joiner_session.repo().unwrap().has_blob(&att_id), "存活父条目缺失 blob 应经 D-53 阶段补齐");
+    assert!(joiner_session
+        .repo()
+        .unwrap()
+        .get_item_opt(&parent_id)
+        .is_some());
+    assert!(
+        joiner_session.repo().unwrap().has_blob(&att_id),
+        "存活父条目缺失 blob 应经 D-53 阶段补齐"
+    );
     {
         let dest = dir.join("joiner-export.bin");
         joiner_session
@@ -551,7 +656,11 @@ fn case6_export_payload_whitelist_no_internal_records() {
     let mut session = Session::create(&vault, HOST_PWD, true).unwrap();
     let live_item = make_login(&mut session, "keep-alive", None);
     let doomed = make_login(&mut session, "to-delete", None);
-    session.repo_mut().unwrap().delete_item(&doomed.item_id, false).unwrap();
+    session
+        .repo_mut()
+        .unwrap()
+        .delete_item(&doomed.item_id, false)
+        .unwrap();
 
     // 造全量内部 live 记录：TRASH（上一步已产生）、CONFLICT、DEVICE、SYNC_STATE。
     {
@@ -574,7 +683,10 @@ fn case6_export_payload_whitelist_no_internal_records() {
             device_id: peer_id.clone(),
             device_name: "qa".to_string(),
             fingerprint: String::new(),
-            sync_key_wrapped: WrappedKey { nonce: vec![0u8; 24], ct: vec![0u8; 48] },
+            sync_key_wrapped: WrappedKey {
+                nonce: vec![0u8; 24],
+                ct: vec![0u8; 48],
+            },
             paired_at: now_ms(),
             last_sync_at: None,
             peer_ip: None,
@@ -588,20 +700,26 @@ fn case6_export_payload_whitelist_no_internal_records() {
         let repo = session.repo().unwrap();
         let empty = repo.sync_state("qa-peer");
         let changes: Vec<ChangeRecord> = repo.export_changes(&empty);
-        let deleted_ids: Vec<String> =
-            changes.iter().filter(|c| c.deleted).map(|c| c.record_id.clone()).collect();
+        let deleted_ids: Vec<String> = changes
+            .iter()
+            .filter(|c| c.deleted)
+            .map(|c| c.record_id.clone())
+            .collect();
         let types: Vec<u8> = changes.iter().map(|c| c.record_type).collect();
         (deleted_ids, types)
     };
-    assert_eq!(deleted_ids, vec![doomed.item_id], "墓碑恰好一条（deleted=true）");
+    assert_eq!(
+        deleted_ids,
+        vec![doomed.item_id],
+        "墓碑恰好一条（deleted=true）"
+    );
     assert!(
-        types.iter().all(|&t| t == RECORD_TYPE_ITEM || t == RECORD_TYPE_FOLDER),
+        types
+            .iter()
+            .all(|&t| t == RECORD_TYPE_ITEM || t == RECORD_TYPE_FOLDER),
         "载荷类型越界（TRASH/CONFLICT/DEVICE/SYNC_STATE 不得出网）：{types:?}"
     );
-    assert!(
-        types.contains(&RECORD_TYPE_ITEM),
-        "活跃条目仍应导出"
-    );
+    assert!(types.contains(&RECORD_TYPE_ITEM), "活跃条目仍应导出");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -614,7 +732,10 @@ fn case7_tombstone_ciphertext_fault_tolerant_export_and_replay() {
     let item_id = {
         let mut s = Session::create(&vault, HOST_PWD, true).unwrap();
         let item = make_login(&mut s, "TombSite-SECRET", None);
-        s.repo_mut().unwrap().delete_item(&item.item_id, false).unwrap();
+        s.repo_mut()
+            .unwrap()
+            .delete_item(&item.item_id, false)
+            .unwrap();
         item.item_id
     };
 
@@ -627,7 +748,10 @@ fn case7_tombstone_ciphertext_fault_tolerant_export_and_replay() {
             record_type: RECORD_TYPE_ITEM,
             flags: FLAG_TOMBSTONE,
             record_id: rid,
-            wrapped_key: WrappedKey { nonce: vec![0u8; 24], ct: vec![0u8; 48] },
+            wrapped_key: WrappedKey {
+                nonce: vec![0u8; 24],
+                ct: vec![0u8; 48],
+            },
             nonce: [0u8; 24],
             plaintext_len: 10,
             ct: vec![7u8; 26],
@@ -640,8 +764,7 @@ fn case7_tombstone_ciphertext_fault_tolerant_export_and_replay() {
         let repo = session.repo().unwrap();
         let empty = repo.sync_state("qa-peer");
         let changes = repo.export_changes(&empty);
-        let tombs: Vec<ChangeRecord> =
-            changes.iter().filter(|c| c.deleted).cloned().collect();
+        let tombs: Vec<ChangeRecord> = changes.iter().filter(|c| c.deleted).cloned().collect();
         (tombs, changes.len())
     };
     assert_eq!(all_count, 1, "损坏墓碑被跳过，仅导出真实墓碑（不中断）");
@@ -650,10 +773,17 @@ fn case7_tombstone_ciphertext_fault_tolerant_export_and_replay() {
     // A-01：导出的墓碑 ciphertext 不含明文标题；本端 VK 可解出死亡快照（roundtrip）。
     let title = b"TombSite-SECRET";
     assert!(
-        !tomb_changes[0].ciphertext.windows(title.len()).any(|w| w == title),
+        !tomb_changes[0]
+            .ciphertext
+            .windows(title.len())
+            .any(|w| w == title),
         "墓碑载荷必须仍是密文"
     );
-    let snapshot = session.repo().unwrap().change_to_item(&tomb_changes[0]).unwrap();
+    let snapshot = session
+        .repo()
+        .unwrap()
+        .change_to_item(&tomb_changes[0])
+        .unwrap();
     assert_eq!(snapshot.item_id, item_id);
     assert_eq!(snapshot.title(), "TombSite-SECRET");
     assert_eq!(snapshot.rev, 1);

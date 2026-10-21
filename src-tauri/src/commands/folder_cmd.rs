@@ -11,7 +11,11 @@ use crate::state::AppState;
 pub fn list_folders(state: tauri::State<'_, AppState>) -> IpcResult<Vec<FolderDto>> {
     let session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo()?;
-    Ok(repo.list_folders().into_iter().map(FolderDto::from).collect())
+    Ok(repo
+        .list_folders()
+        .into_iter()
+        .map(FolderDto::from)
+        .collect())
 }
 
 /// 新建分组。
@@ -53,7 +57,11 @@ pub fn delete_folder(
     let parsed = match strategy.as_str() {
         "to_trash" => FolderDeleteStrategy::ToTrash,
         "to_ungrouped" => FolderDeleteStrategy::ToUngrouped,
-        _ => return Err(IpcError::from(passwordms_core::CoreError::Validation("strategy".to_string()))),
+        _ => {
+            return Err(IpcError::from(passwordms_core::CoreError::Validation(
+                "strategy".to_string(),
+            )))
+        }
     };
     let mut session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo_mut()?;

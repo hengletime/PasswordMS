@@ -16,7 +16,11 @@ pub fn parse(content: &str) -> CoreResult<ImportPreview> {
         serde_json::from_str(content).map_err(|_| CoreError::ImportParse("json".to_string()))?;
 
     // 加密导出（含 encrypted=true）不支持。
-    if root.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if root
+        .get("encrypted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         return Err(CoreError::ImportEncryptedExport);
     }
 
@@ -33,8 +37,17 @@ pub fn parse(content: &str) -> CoreResult<ImportPreview> {
     let mut sort_order = 0i32;
     if let Some(folders) = root.get("folders").and_then(|v| v.as_array()) {
         for f in folders {
-            let old_id = f.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let name = f.get("name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            let old_id = f
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = f
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if name.is_empty() {
                 continue;
             }
@@ -53,7 +66,11 @@ pub fn parse(content: &str) -> CoreResult<ImportPreview> {
         }
     }
 
-    let items = root.get("items").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let items = root
+        .get("items")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     preview.total = items.len();
 
     for raw in items {
@@ -118,7 +135,10 @@ fn build_login(raw: &Value, folder_map: &HashMap<String, String>) -> Option<Item
             custom_fields,
         }),
         folder_id: map_folder(raw, folder_map),
-        favorite: raw.get("favorite").and_then(|v| v.as_bool()).unwrap_or(false),
+        favorite: raw
+            .get("favorite")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         created_at: now,
         updated_at: now,
         rev: 1,
@@ -140,7 +160,10 @@ fn build_secure_note(raw: &Value, folder_map: &HashMap<String, String>) -> Optio
             body: str_field(raw, "notes").unwrap_or_default(),
         }),
         folder_id: map_folder(raw, folder_map),
-        favorite: raw.get("favorite").and_then(|v| v.as_bool()).unwrap_or(false),
+        favorite: raw
+            .get("favorite")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         created_at: now,
         updated_at: now,
         rev: 1,
@@ -154,8 +177,16 @@ fn map_fields(fields: Option<&Value>) -> Vec<CustomField> {
     let mut out = Vec::new();
     if let Some(arr) = fields.and_then(|v| v.as_array()) {
         for f in arr {
-            let key = f.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let value = f.get("value").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let key = f
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let value = f
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let hidden = f.get("type").and_then(|v| v.as_i64()).unwrap_or(0) == 1;
             if key.is_empty() && value.is_empty() {
                 continue;

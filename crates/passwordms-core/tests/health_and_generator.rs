@@ -60,7 +60,10 @@ fn generator_rejects_empty_charset_and_bad_length() {
         exclude_ambiguous: false,
         symbol_set: None,
     };
-    assert_eq!(generator::generate(&none).unwrap_err().code(), "ERR_VALIDATION");
+    assert_eq!(
+        generator::generate(&none).unwrap_err().code(),
+        "ERR_VALIDATION"
+    );
 
     let too_short = GeneratorOptions {
         length: 4,
@@ -71,7 +74,10 @@ fn generator_rejects_empty_charset_and_bad_length() {
         exclude_ambiguous: false,
         symbol_set: None,
     };
-    assert_eq!(generator::generate(&too_short).unwrap_err().code(), "ERR_VALIDATION");
+    assert_eq!(
+        generator::generate(&too_short).unwrap_err().code(),
+        "ERR_VALIDATION"
+    );
 }
 
 #[test]
@@ -185,7 +191,10 @@ fn custom_symbol_set_restricts_output() {
     let allowed: Vec<char> = "=@#".chars().collect();
     for _ in 0..200 {
         let pw = generator::generate(&opts).expect("gen");
-        assert!(pw.chars().any(|c| allowed.contains(&c)), "自选集内符号应参与生成：{pw}");
+        assert!(
+            pw.chars().any(|c| allowed.contains(&c)),
+            "自选集内符号应参与生成：{pw}"
+        );
         for c in pw.chars() {
             assert!(
                 c.is_ascii_alphanumeric() || allowed.contains(&c),
@@ -201,14 +210,23 @@ fn symbol_set_filter_and_fallback() {
     use passwordms_core::model::vault::GeneratorOptions as Opts;
 
     // 字母/数字/空格被过滤，重复去重：'@@aa 5' → 生效集 = {'@'}。
-    let o = Opts { symbol_set: Some("@@aa 5".to_string()), ..Opts::default() };
+    let o = Opts {
+        symbol_set: Some("@@aa 5".to_string()),
+        ..Opts::default()
+    };
     assert_eq!(o.effective_symbol_set(), "@");
 
     // 空字符串 → 回退默认精编集。
-    let o = Opts { symbol_set: Some(String::new()), ..Opts::default() };
+    let o = Opts {
+        symbol_set: Some(String::new()),
+        ..Opts::default()
+    };
     assert_eq!(o.effective_symbol_set(), "+-_.,:");
 
     // None → 默认精编集。
-    let o = Opts { symbol_set: None, ..Opts::default() };
+    let o = Opts {
+        symbol_set: None,
+        ..Opts::default()
+    };
     assert_eq!(o.effective_symbol_set(), "+-_.,:");
 }

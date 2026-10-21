@@ -46,7 +46,10 @@ fn json_mapping_and_skip_count() {
     }
     assert!(login.favorite);
     // folder 映射到预览内新分组 ID。
-    assert_eq!(login.folder_id.as_deref(), Some(preview.folders[0].folder_id.as_str()));
+    assert_eq!(
+        login.folder_id.as_deref(),
+        Some(preview.folders[0].folder_id.as_str())
+    );
 }
 
 #[test]

@@ -32,7 +32,11 @@ fn set_auto_lock_persists_across_reopen() {
                 5,
                 "新建库默认档位应为 5"
             );
-            session.repo_mut().unwrap().set_auto_lock_minutes(minutes).unwrap();
+            session
+                .repo_mut()
+                .unwrap()
+                .set_auto_lock_minutes(minutes)
+                .unwrap();
         }
 
         // drop 后重开：读回一致（持久化验证——只验内存的话 update_header 白写）。
