@@ -284,6 +284,29 @@ input[type='password']::-ms-clear { display: none; }
 .pms-hint.is-danger  { color: var(--pms-danger); }
 .pms-hint.is-warning { color: var(--pms-warning); }
 
+/* ---------- 内联链接按钮（D-63：勾选行的「免责声明 / 用户协议」入口） ---------- */
+.pms-link {
+  display: inline;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: var(--pms-accent);
+  font: inherit;
+  font-size: .86rem;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.pms-link:hover {
+  color: var(--pms-accent-hover);
+}
+.pms-link:focus-visible {
+  outline: 2px solid var(--pms-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .pms-badge {
   display: inline-flex; align-items: center; gap: .25rem;
   padding: .1rem .5rem; border-radius: var(--pms-r-pill);

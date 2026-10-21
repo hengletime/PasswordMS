@@ -66,7 +66,12 @@ export const enUS: Messages = {
     mismatch: 'The passwords do not match.',
     too_short: 'Master password must be at least {n} characters.',
     weak_hint: 'The password is short. A longer passphrase is recommended; check to continue.',
-    acknowledge: 'I acknowledge the disclaimer & terms of use',
+    // D-63: the acknowledgement row is split into prefix + disclaimer link + "&" + terms link —
+    // both links are siblings of the checkbox label, so clicking them never toggles the checkbox.
+    acknowledge_prefix: 'I acknowledge the',
+    disclaimer_link: 'Disclaimers',
+    acknowledge_middle: '&',
+    terms_link: 'Terms of Use',
     submit: 'Create and unlock',
     warning_body: 'The master password cannot be recovered. If lost, your vault data cannot be restored.',
   },
@@ -249,6 +254,7 @@ export const enUS: Messages = {
     group_generator: 'Generator defaults',
     group_health: 'Health thresholds',
     group_sync: 'Sync',
+    group_about: 'About',
     clipboard_ttl: 'Clipboard clear (seconds)',
     auto_lock: 'Auto-lock (minutes)',
     auto_lock_updated: 'Auto-lock updated ({n} min)',
@@ -267,6 +273,13 @@ export const enUS: Messages = {
     size: 'Size',
     weak_max_len: 'Weak length threshold',
     stale_days: 'Stale days',
+    // D-63: "About" group (version / author / license / homepage / legal entries).
+    about_version: 'Version',
+    about_author: 'Author',
+    about_license: 'License',
+    about_homepage: 'Homepage',
+    about_disclaimer: 'Disclaimer',
+    about_terms: 'Terms of Use',
     saved: 'Settings saved',
   },
   sync: {
@@ -318,6 +331,14 @@ export const enUS: Messages = {
     local_title: 'Local title',
     remote_title: 'Remote title',
     detected_at: 'Detected',
+  },
+  // D-63: legal dialog (disclaimer / terms) titles and button label.
+  // The body text lives in src/lib/legal-content.ts, not in i18n.
+  legal: {
+    disclaimer_title: 'Disclaimer',
+    terms_title: 'Terms of Use',
+    understood: 'Got it',
+    updated: 'Last updated',
   },
   err: {
     unlock_failed: 'Unlock failed, please try again.',

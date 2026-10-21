@@ -107,7 +107,14 @@ describe('createAutoLock —— D-61 自动锁定计时（假时钟）', () => {
     expect(h.lockCount()).toBe(1); // 回前台补判 → 立即锁
   });
 
-  it('回前台恰好达档（== 边界）：立即锁（Q-2：钉死 >= 含边界的语义，> 变异必红）', async () => {
+  // 边界契约文档化（恰好 == 档位）：实现 `onReturnFromBackground` 用 `>=`，本条把
+  // 「后台停留时间恰好等于档位也立即锁」这条语义写进测试，防止日后被顺手改成「只有超过才锁」。
+  // 诚实说明（QA 独立实测）：把 `>=` 改成 `>` **不会**让这条变红——变异后会落到 `reschedule()`，
+  // 而 `reschedule()` 的 `remaining <= 0` 兜底在边界同样算出 remaining = 0 → 同样立即 `lock()`；
+  // 又因 `lastActivity <= hiddenAt` 恒成立，两个实现在所有可达状态下行为等价。
+  // 即这是**双保险冗余**下的等价变异，本用例是「契约文档」而非「变异杀手」。
+  // 只有当 `reschedule()` 的 `remaining <= 0` 兜底被一并删掉时，本条才会成为能杀掉 `>` 变异的用例。
+  it('回前台恰好达档（== 边界）：立即锁（边界契约文档化，非可判别变异）', async () => {
     const h = makeHarness();
 
     await h.controller.start();

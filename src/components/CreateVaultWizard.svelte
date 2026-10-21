@@ -8,6 +8,7 @@
   import StrengthMeter from './common/StrengthMeter.svelte';
   import Spinner from './common/Spinner.svelte';
   import ThemeToggle from './common/ThemeToggle.svelte';
+  import LegalDialog from './LegalDialog.svelte';
   import { MIN_MASTER_PASSWORD_LEN } from '../lib/constants';
   import { session } from '../lib/stores/session.svelte';
   import { ui } from '../lib/stores/ui.svelte';
@@ -16,6 +17,15 @@
   let confirm = $state('');
   let acknowledged = $state(false);
   let showPassword = $state(false);
+  // D-63：「免责声明 / 用户协议」可点击查看（弹窗打开不改变勾选状态）。
+  let legalOpen = $state(false);
+  let legalKind = $state<'disclaimer' | 'terms'>('disclaimer');
+
+  /** 打开指定法律文档弹窗（只改弹窗状态，绝不触碰 acknowledged）。 */
+  function openLegal(docKind: 'disclaimer' | 'terms'): void {
+    legalKind = docKind;
+    legalOpen = true;
+  }
 
   let tooShort = $derived(password.length > 0 && password.length < MIN_MASTER_PASSWORD_LEN);
   let mismatch = $derived(confirm.length > 0 && confirm !== password);
@@ -111,10 +121,20 @@
       </div>
 
       <div class="wz-ack">
+        <!-- D-63：勾选文字拆成「label（仅 checkbox + 前缀）+ 链接按钮」——
+             被点区域严格分离：点 label 内文字切换勾选，点链接只开弹窗、勾选状态不变
+             （链接是 label 的兄弟节点，不触发 label 的隐式 toggle，无需 preventDefault）。 -->
         <label class="pms-check">
           <input type="checkbox" bind:checked={acknowledged} disabled={session.busy} />
-          <span>{ui.t('create.acknowledge')}</span>
+          <span>{ui.t('create.acknowledge_prefix')}</span>
         </label>
+        <button class="pms-link" type="button" onclick={() => openLegal('disclaimer')}>
+          {ui.t('create.disclaimer_link')}
+        </button>
+        <span class="wz-ack-mid">{ui.t('create.acknowledge_middle')}</span>
+        <button class="pms-link" type="button" onclick={() => openLegal('terms')}>
+          {ui.t('create.terms_link')}
+        </button>
       </div>
 
       <button class="pms-btn is-primary is-block is-lg" type="submit" disabled={!canSubmit}>
@@ -135,6 +155,9 @@
     </form>
   </div>
 </main>
+
+<!-- D-63：法律条款弹窗（点击「免责声明 / 用户协议」链接打开）。 -->
+<LegalDialog bind:open={legalOpen} kind={legalKind} />
 
 <style>
   .wz-screen {
@@ -183,6 +206,15 @@
     border-radius: var(--pms-r);
     padding: 0.7rem 0.85rem;
     margin-bottom: 0.9rem;
+    /* D-63：label（checkbox + 前缀）+ 两个链接按钮 + 连接词横排，窄屏自动换行。 */
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .wz-ack-mid {
+    font-size: 0.86rem;
+    color: var(--pms-fg);
   }
   .wz-back {
     margin-top: 0.4rem;

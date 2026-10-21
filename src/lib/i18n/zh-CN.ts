@@ -64,7 +64,12 @@ export const zhCN = {
     mismatch: '两次输入的主密码不一致。',
     too_short: '主密码至少需要 {n} 位。',
     weak_hint: '主密码较短，建议使用更长的口令；继续请勾选确认。',
-    acknowledge: '我已知晓并同意免责声明与用户协议',
+    // D-63：勾选行拆成「前缀 + 免责声明链接 + 与 + 用户协议链接」——
+    // 两个链接是 checkbox 所在 label 的**兄弟节点**，点击只开法律弹窗、不切换勾选。
+    acknowledge_prefix: '我已知晓并同意',
+    disclaimer_link: '免责声明',
+    acknowledge_middle: '与',
+    terms_link: '用户协议',
     submit: '创建并解锁',
     warning_body: '主密码无法找回。请妥善保管，遗失将无法恢复保险库数据。',
   },
@@ -247,6 +252,7 @@ export const zhCN = {
     group_generator: '生成器默认值',
     group_health: '体检阈值',
     group_sync: '同步',
+    group_about: '关于',
     clipboard_ttl: '剪贴板清空（秒）',
     auto_lock: '自动锁定（分钟）',
     auto_lock_updated: '自动锁定档位已更新（{n} 分钟）',
@@ -265,6 +271,13 @@ export const zhCN = {
     size: '大小',
     weak_max_len: '弱口令长度阈值',
     stale_days: '超期天数',
+    // D-63：「关于」分组（版本 / 作者 / 许可证 / 项目主页 / 法律条款入口）。
+    about_version: '版本',
+    about_author: '作者',
+    about_license: '许可证',
+    about_homepage: '项目主页',
+    about_disclaimer: '免责声明',
+    about_terms: '用户协议',
     saved: '设置已保存',
   },
   sync: {
@@ -316,6 +329,14 @@ export const zhCN = {
     local_title: '本机标题',
     remote_title: '远端标题',
     detected_at: '发现于',
+  },
+  // D-63：法律条款弹窗（免责声明 / 用户协议）的标题与按钮文案；
+  // 正文不从 i18n 取，见 src/lib/legal-content.ts（逐条实质内容 + 统一 updated）。
+  legal: {
+    disclaimer_title: '免责声明',
+    terms_title: '用户协议',
+    understood: '我知道了',
+    updated: '最后更新',
   },
   err: {
     unlock_failed: '解锁失败，请重试。',

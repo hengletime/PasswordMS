@@ -4,8 +4,10 @@
   // → 设备 → 改密码 → 库文件。高频项置顶，低频/危险项沉底。
   // 顶栏原来的「语言 / 导入」入口移到这里（D-38：顶栏只留高频动作）。
   import { save } from '@tauri-apps/plugin-dialog';
+  import { getVersion } from '@tauri-apps/api/app';
   import Icon from './common/Icon.svelte';
   import ImportWizard from './ImportWizard.svelte';
+  import LegalDialog from './LegalDialog.svelte';
   import Modal from './common/Modal.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
   import { toAppError } from '../lib/errors';
@@ -16,7 +18,11 @@
   import { theme } from '../lib/stores/theme.svelte';
   import { ui } from '../lib/stores/ui.svelte';
   import { runVaultExport } from '../lib/vault-export';
+  import { isSafeUrl } from '../lib/url-safety';
   import type { VaultFileInfoDto, VaultSettings } from '../types';
+
+  /** D-63：项目主页（「关于」分组打开外链，走与详情页相同的安全校验 + IPC 链路）。 */
+  const HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS';
 
   // 语言分段钮的显示名：语言名用母语书写（中文/English），属于专有名词，不做翻译。
   const LOCALE_NAMES: Record<Locale, string> = { 'zh-CN': '中文', 'en-US': 'English' };
@@ -30,6 +36,29 @@
   let newPassword = $state('');
   let newPassword2 = $state('');
   let importOpen = $state(false);
+  // D-63：「关于」分组 —— 版本号运行时读取（禁硬编码），失败显示「—」不阻塞页面。
+  let appVersion = $state<string | null>(null);
+  let legalOpen = $state(false);
+  let legalKind = $state<'disclaimer' | 'terms'>('disclaimer');
+
+  /** 打开法律条款弹窗（免责声明 / 用户协议）。 */
+  function openLegal(docKind: 'disclaimer' | 'terms'): void {
+    legalKind = docKind;
+    legalOpen = true;
+  }
+
+  /** 打开项目主页：与详情页 openUrl 同一链路（url-safety 白名单校验 → IPC opener）。 */
+  async function openHomepage(): Promise<void> {
+    if (!isSafeUrl(HOMEPAGE_URL)) {
+      ui.toast('error', 'err.unsafe_url');
+      return;
+    }
+    try {
+      await api.system.openUrl(HOMEPAGE_URL);
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
   // D-61：自动锁定档位真持久化（`Vault.auto_lock_minutes` 明文头部）——
   // 初始化读 IPC（get_auto_lock），换档即写（set_auto_lock）；失败回滚 select 显示值。
   let autoLockMinutes = $state<number>(AUTO_LOCK_OPTIONS[1] ?? 5);
@@ -52,6 +81,14 @@
         autoLockMinutes = minutes;
       })
       .catch((): void => {});
+    // D-63：版本号运行时读取（@tauri-apps/api/app getVersion；失败保持 null → 显示「—」）。
+    void getVersion()
+      .then((version: string): void => {
+        appVersion = version;
+      })
+      .catch((): void => {
+        appVersion = null;
+      });
   });
 
   /** D-61：换档 → set_auto_lock → success toast；失败 error toast 并回滚显示值。 */
@@ -293,11 +330,42 @@
       </p>
     {/if}
   </div>
+
+  <!-- D-63：「关于」分组（需求：软件里必须有版本与作者等信息）。 -->
+  <div class="pms-card set-card">
+    <h3>{ui.t('settings.group_about')}</h3>
+    <div class="set-row">
+      <span class="set-name">PasswordMS</span>
+      <span class="pms-meta">{ui.t('settings.about_version')}: {appVersion ?? '—'}</span>
+    </div>
+    <div class="set-row">
+      <span class="set-label">{ui.t('settings.about_author')}</span>
+      <span class="pms-meta">hengletime</span>
+    </div>
+    <div class="set-row">
+      <span class="set-label">{ui.t('settings.about_license')}</span>
+      <span class="pms-meta">MIT License</span>
+    </div>
+    <div class="set-row">
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openHomepage()}>
+        <Icon name="external" size={14} />{ui.t('settings.about_homepage')}
+      </button>
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => openLegal('disclaimer')}>
+        {ui.t('settings.about_disclaimer')}
+      </button>
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => openLegal('terms')}>
+        {ui.t('settings.about_terms')}
+      </button>
+    </div>
+  </div>
 </section>
 
 <Modal open={importOpen} titleKey="import.title" onclose={() => (importOpen = false)}>
   <ImportWizard ondone={() => (importOpen = false)} />
 </Modal>
+
+<!-- D-63：法律条款弹窗（「关于」分组打开）。 -->
+<LegalDialog bind:open={legalOpen} kind={legalKind} />
 
 <style>
   .set {

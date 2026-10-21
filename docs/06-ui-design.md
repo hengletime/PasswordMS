@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线**
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）**
 
 ---
 
@@ -252,6 +252,21 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
   accent-color: var(--pms-accent); cursor: pointer;
 }
 
+/* ---------- 内联链接按钮（D-63：勾选行的「免责声明 / 用户协议」入口） ---------- */
+/* 语义 = 按钮但长得像链接；不继承 .pms-btn 的盒子（padding/bg/border 全清）。
+   字号跟随 0.86rem 与 .pms-check 对齐；下划线 offset 2px 防止贴住中文笔画。
+   与 checkbox 的 label 必须互为**兄弟节点**（见 §5.5「点链接不切换勾选」）。 */
+.pms-link {
+  display: inline;
+  border: none; background: none; padding: 0; margin: 0;
+  color: var(--pms-accent);
+  font: inherit; font-size: .86rem;
+  cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.pms-link:hover { color: var(--pms-accent-hover); }
+.pms-link:focus-visible { outline: 2px solid var(--pms-accent); outline-offset: 2px; border-radius: 2px; }
+
 /* ---------- 容器与文字 ---------- */
 .pms-card {
   background: var(--pms-surface);
@@ -357,7 +372,11 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
       {mismatch} p.pms-hint（--pms-danger）
 
     .pms-wizard__ack      /* 浅底圆角块，包住 checkbox 行，视觉上独立成区 */
-      label.pms-check  "我已知晓并同意免责声明与用户协议"
+      /* v2.7（D-63）：一行四项，flex-wrap 允许窄屏换行 */
+      label.pms-check  "我已知晓并同意"      /* 只包 checkbox + create.acknowledge_prefix */
+      button.pms-link  "免责声明"            /* ← label 的**兄弟节点**，点它只开弹窗 */
+      span.wz-ack-mid  "与"                  /* create.acknowledge_middle */
+      button.pms-link  "用户协议"            /* ← 同上 */
 
     button.pms-btn.is-primary.is-block.is-lg  "创建并解锁"
     button.pms-btn.is-ghost.is-block  "返回"
@@ -365,6 +384,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 
 > `MIN_MASTER_PASSWORD_LEN` 的硬拦截、`acknowledged` 门禁、`canSubmit` 逻辑**一律不许改**，只动样式与结构。
 > 新增 i18n key：`lock.password_label`、`create.password_label`、`create.confirm_placeholder`、`create.hint`。
+> **v2.7（D-63）**：`create.acknowledge` 一条整串拆成 `acknowledge_prefix` / `disclaimer_link` / `acknowledge_middle` / `terms_link` 四键（旧键已删）。**两个链接严禁写进 `<label>` 内部**——label 的隐式关联会让点击冒泡成 toggle，用户点「用户协议」顺手把勾选取消掉。详见 §5.5。
 
 ### 5.3 主界面外壳 `MainLayout.svelte` / `FolderSidebar.svelte`
 
@@ -385,7 +405,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `ItemDetail.svelte` | 字段用"标签 + 值 + 行尾复制按钮"三段式；密码值用 `--pms-mono`；复制按钮是 `.pms-icon-btn`。**D-60：登录/笔记条目详情底部渲染附件区**（`<AttachmentView {item} />`，仅 `login`/`secure_note` 两类父条目；遗留独立附件条目经解锁迁移后不可达） |
 | `ItemEditor.svelte` | 全部换成 `.pms-field` / `.pms-input-group`；自定义字段区用 .pms-card 内嵌浅底块；底部操作条 sticky |
 | `AttachmentView.svelte` | **D-60 改造为父条目附件区**（不再是独立附件条目的整页详情）：区头 = `paperclip` 图标 + 区标题（`attach.section_title`）+「添加附件」ghost 按钮（`attach.add`，常驻可点——空附件数组时行列表隐藏但入口保留）；附件行 = `--pms-bg-2` 浅底圆角卡（图标 + 文件名 600 + `MIME · 大小` meta 行 + 行尾两个 `.pms-icon-btn` 导出/移除）。**待同步态（D-53 语义保留）**：`attachment_blob_ready(attachment_id) = false` 时行内展示 `attach.pending_sync`（`--pms-warning` 色）并禁用导出按钮（强导会报 `ERR_BLOB_MISSING`）。导出保留明文风险二次确认（`attach.export_confirm_*`）；移除走二次确认（`attach.remove_confirm_*`，确认体带文件名插值）→ `remove_attachment` → blob 交孤儿 GC。添加/移除成功后 `vault.load()` 刷新（父条目 rev+1） |
-| `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`）。**导出的是整库的加密副本而非明文（D-54）**，且**文件的修改时间 = 库数据的最后写入时间**（`fs::copy` 保留 LastWriteTime）；备份可在锁屏页用「从备份恢复」（D-55）导入。**自动锁定档位真持久化（D-61 A 案）**：`auto_lock_minutes` 经 `get_auto_lock`/`set_auto_lock` 读写库明文头部（初始化读 IPC，换档即写 + success toast `settings.auto_lock_updated`，失败 error toast 并回滚 select 显示值）；执行层为全局闲置计时——`pointerdown`/`keydown`（passive）重置闲置起点，闲置达档位即走既有 `lockNow()`（reset 三个 store + 切锁屏路由）；Android 后台冻结计时器由 `visibilitychange` 补判（回前台超档立即锁，未超档后台时间计入闲置重排剩余）；无「从不」档；纯逻辑层 `src/lib/auto-lock.ts` 依赖注入可测（假时钟 7 例） |
+| `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`）。**导出的是整库的加密副本而非明文（D-54）**，且**文件的修改时间 = 库数据的最后写入时间**（`fs::copy` 保留 LastWriteTime）；备份可在锁屏页用「从备份恢复」（D-55）导入。**自动锁定档位真持久化（D-61 A 案）**：`auto_lock_minutes` 经 `get_auto_lock`/`set_auto_lock` 读写库明文头部（初始化读 IPC，换档即写 + success toast `settings.auto_lock_updated`，失败 error toast 并回滚 select 显示值）；执行层为全局闲置计时——`pointerdown`/`keydown`（passive）重置闲置起点，闲置达档位即走既有 `lockNow()`（reset 三个 store + 切锁屏路由）；Android 后台冻结计时器由 `visibilitychange` 补判（回前台超档立即锁，未超档后台时间计入闲置重排剩余）；无「从不」档；纯逻辑层 `src/lib/auto-lock.ts` 依赖注入可测（假时钟 8 例）。**「关于」分组（D-63 v2.7）**：末尾追加独立卡片（`settings.group_about`），四行 = 产品名 + 版本 / 作者 / 许可证 / 三按钮（项目主页 + 免责声明 + 用户协议，均为 `is-ghost is-sm`）；版本经 `getVersion()` **运行时读取，禁硬编码**，读取失败显示 `—`。详见 §5.5 |
 | `PasswordGenerator.svelte` / `PasswordGeneratorModal.svelte` | 结果用 `--pms-mono` 大字 + `.pms-input-group` 承载复制/刷新按钮；选项区两列网格。**一律以弹窗形态出现**（`PasswordGeneratorModal` 内 Modal 自带 `{#if open}` 包裹 → 关闭即卸载，不残留请求/toast）。位数用**数字输入框**（输入中不钳制，失焦/回车才 clamp 到 8–64）；四类字符复选；**一类都不选时生成按钮 `disabled` 并给出提示**；结果下方带 `StrengthMeter`。**生成器参数（位数 / 四类字符 / 排除易混 / 自选符号集）变更后防抖 300ms 静默持久化**（D-52：走 `SettingsStore.saveQuiet` 不弹 toast，用显式变更点触发而非 `$effect` → 初始化不会把未变更默认值写回）；初始值优先级 `initial`（调用方显式传入）> 设置里持久化的偏好 > 默认值，`symbol_set` 空时回退 `+-_.,:` |
 | `common/ThemeToggle.svelte` | 三态循环（系统 → 浅色 → 暗色），图标用 `sun` / `moon`，并带 `title`。切换时**同时**更新 `document.documentElement` 的 `data-theme` **和**原生窗口标题栏（见 §4 D-32）。挂载点：解锁页右上角、主界面顶栏右区。 |
 | `HealthCheck.svelte` | 健康分做大字环形/大数字 + 4 个统计卡（弱口令/重复/超期/总数），弱项用 `.pms-badge.is-danger` |
@@ -395,6 +415,64 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `common/Toast.svelte` | 右下角；`--pms-r`；左侧 3px 状态色竖条。**时长自适应（D-58a）**：success 3000ms；info 5000ms；error 按当前语言渲染后文案长度自适应 `min(12000, max(6000, 字数 × 150))`（6s 起步、每字 150ms、12s 封顶）——长错误文案必须给足阅读时间。关闭按钮不变 |
 | `common/StrengthMeter.svelte` | 4 段；弱=红 / 一般=橙 / 强=青绿 / 很强=青绿加粗；带文字标签。**空态（未输入）不要"压暗到看不见"，也不要让空 label 占位**：轨道用中性可见色 `--pms-track`，并 `.meter[data-score='0'] .label { display:none }` 让 4 段占满整行。<br>（修正 v1.1：原写法实测暗色下条带与卡片 RGB 差仅 24，肉眼不可见，且右侧凭空多 47px 留白。） |
 | `common/Spinner.svelte` | 用 `currentColor`，随按钮文字色走 |
+
+### 5.5 「关于」分组与法律条款弹窗（D-63，v2.7）
+
+> 需求来源（客户原话）：「我已知晓并同意免责申明和用户协议，免责申明和用户协议应该可以点击进去，并有实质内容。」「请添加关于内容，否则不知道软件的版本是多少，作者是谁。」
+> 两个文件：`src/components/LegalDialog.svelte`（弹窗）、`src/lib/legal-content.ts`（正文数据源）。正文**不进 i18n**——它是长文，混进 key 表会污染键位校验与翻译流程。
+
+#### 5.5.1 勾选行：链接与 checkbox 必须互为兄弟节点（硬约束）
+
+```
+.wz-ack                     /* display:flex; flex-wrap:wrap; align-items:center; gap:.25rem */
+  label.pms-check           /* ← 只包 input[type=checkbox] + create.acknowledge_prefix */
+    input[type=checkbox]
+    span                    /* 「我已知晓并同意」 */
+  button.pms-link           /* 「免责声明」 create.disclaimer_link  ← 兄弟节点 */
+  span.wz-ack-mid           /* 「与」      create.acknowledge_middle */
+  button.pms-link           /* 「用户协议」 create.terms_link      ← 兄弟节点 */
+```
+
+**为什么不能把 `<button>` 塞进 `<label>`**：`<label>` 对内部任意可点元素的点击都会**隐式转发**给关联控件（HTML 规范行为，不是 bug）。链接一旦进了 label，点击就会冒泡成「勾选/取消勾选」——用户在同意页点「用户协议」，弹窗打开的同时勾选被取消，关掉弹窗才发现按钮变灰。绕过方式只有 `preventDefault() + stopPropagation()` 这种「靠人记得写」的写法；**拆成兄弟节点是从结构上消灭这个 bug**，任何后续改动都复现不出来。
+
+- 尺寸：`.pms-link` 与 `.pms-check` 同为 `0.86rem`，视觉上是一条完整句子；`text-underline-offset: 2px` 防止下划线贴中文字脚。
+- 触控：行内 `padding: 0`，靠 `.wz-ack` 的 `gap:.25rem` 与 `.pms-check` 的 `gap:.55rem` 留白；移动端 `<768px` 由 `flex-wrap` 自然折行，**不要**给 `.pms-link` 加 `min-height:44px`（会把一行句子撑成大块，视觉上不再是「一句话」）。
+- 门禁不变：`acknowledged`、`canSubmit`、`MIN_MASTER_PASSWORD_LEN` 一个字都不动；链接回调 `openLegal(kind)` **只写弹窗状态**（`legalOpen` / `legalKind`），**从不写 `acknowledged`**。
+
+#### 5.5.2 法律条款弹窗 `LegalDialog.svelte`
+
+| 项 | 规范 |
+|---|---|
+| 承载 | 复用 `common/Modal.svelte`（遮罩 `rgba(0,0,0,.55)` + 模糊，卡片 `--pms-r-lg` + `--pms-shadow`，宽度 `min(560px,100%)`） |
+| props | `open`（`$bindable(false)`，父组件 `bind:open`）+ `kind: 'disclaimer' \| 'terms'`。**不传 open 时默认 false**，避免误挂载 |
+| 标题 | `modal titleKey` = `legal.disclaimer_title` / `legal.terms_title`；同时作为 `aria-label` |
+| 语言 | `$derived`：`ui.locale === 'en-US' ? 'en' : 'zh'`，**跟随 UI 语言即时切换**（不缓存、不落盘） |
+| 滚动区 | `.legal { max-height: min(60vh, 420px); overflow-y: auto; padding-right: .4rem }` —— `padding-right` 是给滚动条留槽位，避免长短文档切换时正文横向抖动 |
+| 排版 | `legal.updated` meta 行（`.pms-meta`）置顶 → 每节 `h4`（0.9rem / 600 / `--pms-fg`，编号 `N.` 由渲染时拼）→ 每段 `p`（0.85rem / line-height 1.65 / `--pms-muted`）。节间距 `h4 { margin: 1rem 0 .35rem }`，首节 `margin-top: .5rem` |
+| 底部 | `{#snippet footer()}` 单个 `pms-btn.is-primary`「我知道了」（`legal.understood`）→ `open = false`；右上角 × 与点遮罩同样关闭 |
+| 正文数据 | `src/lib/legal-content.ts`：免责 6 条 / 用户协议 8 条，每条 1–2 段实质内容（生效日期等条目可为 1 段）；`LEGAL_UPDATED = '2026-10-20'` 四份文档统一；导出 `getDisclaimer(lang)` / `getTerms(lang)` |
+
+**样式落点**：`.legal*` 三条规则写在 `LegalDialog.svelte` 的 `<style>` 内（组件私有，不污染 `global.css`）；只有 `.pms-link` 进 `global.css`（跨组件共享类，见 §3）。
+
+#### 5.5.3 Settings「关于」分组
+
+```
+div.pms-card.set-card
+  h3                              settings.group_about
+  .set-row  span.set-name  "PasswordMS"   +   span.pms-meta  "版本: {appVersion ?? '—'}"
+  .set-row  span.set-label 作者    +   span.pms-meta  "hengletime"
+  .set-row  span.set-label 许可证  +   span.pms-meta  "MIT License"
+  .set-row  button.pms-btn.is-ghost.is-sm ×3
+              ① Icon(name="external",14) + settings.about_homepage
+              ② settings.about_disclaimer
+              ③ settings.about_terms
+```
+
+- **版本禁止硬编码**：`getVersion()`（`@tauri-apps/api/app`）在 `$effect` 里读一次，失败置 `null` → 模板渲染 `appVersion ?? '—'`。写死 `1.2.2` 会在下个版本立刻变成假信息。
+- **项目主页**：常量 `HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS'`，点击前先过 `isSafeUrl()`（复用 `src/lib/url-safety.ts`，与条目 URL 同一套白名单），再走既有 `api.system.openUrl`。**不要**引 `@tauri-apps/plugin-opener` 新依赖——已有 IPC 够了。
+- **图标**：主页按钮用 `external`（Icon 里没有 `link`，写错名会静默不渲染）。按钮尺寸 `is-ghost is-sm`，与卡片内其它行同高，不用主色，避免「关于」抢走安全设置的注意力。
+- 这一组**必须排在最后**（在「保险库文件」卡之后）：关于信息是低频内容，不给它抢首屏。
+
 
 ---
 
@@ -623,3 +701,5 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 - [ ] **D-38** 顶栏信息架构：桌面顶栏右区只有 `密码生成`/`锁定` 两钮（无语言/导入）；语言与主题在设置页「外观」组、导入在「数据」组且弹窗可用；设置页分组顺序为 外观→安全→体检→同步→数据→设备→改密码→库文件；移动端「⋯」菜单只剩 生成/锁定 两项
 - [ ] **桌面端红线**（1100×720）：三栏布局（分组 240 / 列表 300 / 详情 flex）与移动端改造前**逐像素一致**；顶栏导航与右区按钮照旧、无底部导航、无汉堡按钮
 - [ ] **D-60**（v2.5 已实现前端批）：附件改依附父条目——列表「添加附件」入口已撤销（回退 D-59 入口部分）；登录/笔记详情页附件区已上线（区头「添加附件」+ 附件行：文件名/MIME/大小 + 导出/移除，导出保留明文风险二次确认与待同步态，移除二次确认）；`AttachmentView` 已改造为附件区组件；流程逻辑 `runAttachmentImport(deps, itemId)` 改按父条目注入（守卫四分支单测照过）；i18n `item.new_attachment` 已删、`attach.add/remove/remove_confirm_*/section_title` 中英双份、`err.attachment_limit` 已补。**回收站父条目附件数徽标本批未做**（Trash 组件，随核批补）
+- [ ] **D-61**（v2.6 已实现）：设置页「自动锁定」换档后**重启应用仍保持**（`get_auto_lock` 读回）；无操作达档位时**真的锁屏**（不是只弹 toast）；锁屏后再解锁可继续使用；安卓端切后台超过档位、回到前台**立即锁屏**，未超档则后台时间计入闲置；无「从不」档
+- [ ] **D-63**（v2.7 已实现）：创建向导勾选行的「免责声明 / 用户协议」**可点击**且**点它们不会改变勾选状态**（判据：两个链接是 `label.pms-check` 的兄弟节点，`openLegal()` 只写弹窗状态；`src/lib/legal-ui.test.ts` 8 例 + 对抗实验「把链接塞回 label → 2 例变红」守门）；两份文档**有实质内容**（免责 6 条 / 协议 8 条，每条 1–2 段）；弹窗语言跟随 UI 语言切换；设置页「关于」显示**运行时版本号**（非硬编码）、作者 hengletime、MIT、项目主页可打开且过 `isSafeUrl` 白名单
