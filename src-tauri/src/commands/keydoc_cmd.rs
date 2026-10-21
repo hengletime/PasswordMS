@@ -10,68 +10,28 @@
 //! `DialogPlugin.kt`：`uris.add(uri?.toString())`），不是文件系统路径。此前后端把它
 //! 直接当路径交给 `Repository::add_attachment`，第一步 `std::fs::metadata("content://…")`
 //! 就必然 `NotFound` → `ERR_IO` → toast「文件读写出错。」，手机上永远加不进附件。
-//! 修法：`content://` 走 `tauri-plugin-fs` 的 `getFileDescriptor` 读字节 →
-//! `Repository::add_attachment_bytes`，文件名由
+//! 修法：`content://` 走 [`crate::content_uri::read_to_bytes`]（provider fd，带 20 MB 上限）
+//! → `Repository::add_attachment_bytes`，文件名由
 //! [`passwordms_core::attachment_name::filename_from_source`] 百分号解码得到。
+//!
+//! D-71 根因（Android 导出附件必失败）：`saveFileDialog` 走
+//! `Intent.ACTION_CREATE_DOCUMENT`，回调同样是 `content://`（`DialogPlugin.kt`：
+//! `callResult.put("file", uri.toString())`）。此前它被当路径交给
+//! `Repository::export_attachment` 的 `std::fs::write` → `EINVAL` → `ERR_IO`。
+//! 修法：`content://` 用 [`Repository::export_attachment_bytes`] 取字节（锁内），
+//! **出锁后**再经 [`crate::content_uri::write_bytes`] 落盘。
 
 use std::path::Path;
 
 #[cfg(target_os = "android")]
 use passwordms_core::attachment_name::filename_from_source;
-use passwordms_core::CoreError;
+// content:// 通道只在 Android 分支使用；桌面下该导入会变成 unused（-D warnings 下报错）。
+#[cfg(target_os = "android")]
+use crate::content_uri;
 
 use crate::dto::ItemDto;
-use crate::error::{lock_err, IpcError, IpcResult};
+use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
-
-/// 读取 `content://` URI 指向文件的内容（**有上限**，见下）。
-///
-/// 为什么不能 `std::fs::read`：Android 的文件选择器返回的是 ContentProvider URI，
-/// 内核里没有对应路径；必须经 provider 的 file descriptor 才能读。`tauri-plugin-fs`
-/// 的 Android 实现正是这么做的（`src/android.rs::resolve_content_uri` →
-/// `run_mobile_plugin("getFileDescriptor")`），且插件已在 `lib.rs` 用
-/// `tauri_plugin_fs::init()` 注册，Rust 侧直接调插件 API 不经 IPC 权限，**无需改
-/// capabilities**。
-///
-/// 平台说明：函数体**不加 `cfg` 门控**——桌面侧 `tauri-plugin-fs` 的 `Fs::open` 与
-/// Android 同名同签名（`FilePath` / `OpenOptions` 都是跨平台类型），因此本函数在桌面
-/// 目标下同样参与编译，可被 `cargo check` / `clippy` 验证；只有 Android 才会真正走到
-/// 这里（桌面 `cfg` 分支不调用它）。虚拟文件（如云盘）provider 可能不返回 fd，
-/// 插件以 `ErrorKind::Unsupported` 报错 → 仍映射 `ERR_IO`，不新增错误码。
-///
-/// **内存上限**：最多只读 [`passwordms_core::constants::MAX_ATTACHMENT_BYTES`] + 1 字节，
-/// 超限直接 `ERR_ATTACHMENT_TOO_LARGE`——SAF 允许用户选中几百 MB 的视频，不能先整份
-/// 读进内存再让 core 拒掉（Android 上那是一次 OOM 级别的内存尖峰）。
-/// 因此返回的 `data.len()` **只保证**「≤ `MAX_ATTACHMENT_BYTES`」或「超限时已被拒绝」，
-/// **不是文件真实大小**：调用方不得据此推断文件尺寸（≤ 20 MB 时二者相同，超过则已提前
-/// 报错返回）。真实大小判定仍由 `Repository::insert_attachment` 按同一常量负责。
-#[cfg_attr(not(target_os = "android"), allow(dead_code))]
-fn read_content_uri(app: &tauri::AppHandle, uri: &str) -> Result<Vec<u8>, IpcError> {
-    use std::io::Read as _;
-    use tauri_plugin_fs::{FilePath, FsExt as _, OpenOptions};
-
-    // 非 UTF-8 / 非合法 URI → 与文件读写失败同码（ERR_IO），不引入新错误语义。
-    let url = tauri::Url::parse(uri).map_err(|_| IpcError::io("invalid_content_uri"))?;
-    let mut opts = OpenOptions::new();
-    opts.read(true);
-    // `take` 按值消费 `File`（`&mut` 只加在 `Take` 适配器上），故 `file` 无需 `mut`。
-    let file = app
-        .fs()
-        .open(FilePath::Url(url), opts)
-        .map_err(|e| IpcError::from(CoreError::from(e)))?;
-    // D-66：只读到「上限 + 1」字节即停——超限文件在读进内存前就判死，避免手机
-    // 选到几百 MB 视频时整份读入触发 OOM（桌面路径由 `add_attachment` 的 metadata
-    // 预检承担同一职责，两条路径的内存峰值都被钉在 20 MB + 1 字节）。
-    let limit = passwordms_core::constants::MAX_ATTACHMENT_BYTES;
-    let mut data = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut data)
-        .map_err(|e| IpcError::from(CoreError::from(e)))?;
-    if data.len() as u64 > limit {
-        return Err(IpcError::from(CoreError::AttachmentTooLarge));
-    }
-    Ok(data)
-}
 
 /// F-12 向父条目添加附件（§3.14.5）。
 ///
@@ -98,7 +58,7 @@ pub fn add_attachment(
     #[cfg(target_os = "android")]
     if source_path.starts_with("content://") {
         // 先在锁外把字节读出来：ContentProvider 读取可能慢，不占会话锁。
-        let data = read_content_uri(&app, &source_path)?;
+        let data = content_uri::read_to_bytes(&app, &source_path)?;
         let name = filename_from_source(&source_path);
         let mut session = state.session.lock().map_err(lock_err)?;
         let repo = session.repo_mut()?;
@@ -126,13 +86,32 @@ pub fn remove_attachment(
 ///
 /// D-53 语义保留：附件元数据在但 blob 未同步到本机时报 `ERR_BLOB_MISSING`，
 /// 经 `From<CoreError>` 原样透传给前端。
+///
+/// D-71：Android 上 `dest_path` 可能是 `content://…`（SAF 保存对话框），此时
+/// **锁内取字节 → 出锁写 provider**，其余情况（桌面任意路径、Android 普通路径）走原
+/// `export_attachment`，行为与修复前完全一致。
 #[tauri::command(rename_all = "snake_case")]
 pub fn export_attachment(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     item_id: String,
     attachment_id: String,
     dest_path: String,
 ) -> IpcResult<()> {
+    #[cfg(not(target_os = "android"))]
+    let _ = &app;
+
+    #[cfg(target_os = "android")]
+    if dest_path.starts_with("content://") {
+        // 取字节在锁内完成，块结束即释放会话锁——写 provider 可能慢，不持锁做 I/O。
+        let data = {
+            let session = state.session.lock().map_err(lock_err)?;
+            let repo = session.repo()?;
+            repo.export_attachment_bytes(&item_id, &attachment_id)?
+        };
+        return content_uri::write_bytes(&app, &dest_path, &data);
+    }
+
     let session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo()?;
     repo.export_attachment(&item_id, &attachment_id, Path::new(&dest_path))?;

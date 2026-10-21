@@ -664,4 +664,52 @@ v1.2.5 出包前的权威门禁抓到一条真红：`add_attachment_bytes::bytes
 - **验收**：① 新↔新：电脑「设备」页能看到手机的 16 位 hex 稳定指纹，重配对不变；
   ② 新电脑↔老手机：留空、不渲染、不报错；③ 电脑端**永远**不拿临时公钥算指纹（现有测试 `host_side_leaves_peer_fingerprint_empty` 继续钉住）。
 
+### 13.8 backlog：「读侧」对话取消归一（**形状债，不是缺陷**）
 
+- **现状**：D-71/D-72 只把**写侧**（选保存位置 + 写盘）收进 `src/lib/save-dialog.ts`；
+  **读侧**（`AttachmentView.svelte` 的 `pickFile` / `ImportWizard` 的 `choose`）仍是每个调用点自己
+  `try/catch` 把 Android 的 reject 归一成 `null`。
+- **为什么不一起改**：两侧在用户视角**已经正确**（取消安静、不弹红）。统一形状不改变任何一个可见结果，
+  纯属为一致性付改动量 —— 而且 `runAttachmentImport` / `runVaultExport` 的入参契约要跟着动，
+  收益不抵风险。
+- **何时该做**：如果再出现第四处「选文件」入口，或某处读侧取消开始弹红，就一并收进
+  `src/lib/open-dialog.ts`（对标 `save-dialog.ts`），**一次收口四处**，别再来一轮「漏一处补一处」。
+
+
+## 14. IPC 契约不变量：`rename_all = "snake_case"` 必须 100% 覆盖
+
+> 2026-10-21（D-72）由前端工程师以证据顶回既定错误后的定论。**这是一条不变量，不是一条约定**——
+> 打破它之前必须先说明理由，并同步改前端。
+
+### 14.1 事实与语义
+
+- 本仓 `src-tauri/src` 里 `tauri::command` 共 **51 处，其中 51 处带 `rename_all = "snake_case"`，0 例外**。
+  （D-72 落地前是 50/50；新增 `save_import_template` 后同步变为 51/51。**数会涨，比例必须恒为 1:1**。）
+- 该属性的语义是「**JS 传的 wire 键 = Rust 形参名**」。因此 wire 键恒为 **snake_case**：
+  ```ts
+  // 变量名可以 camelCase，wire 键必须 snake_case
+  exportAttachment: (itemId: string, attachmentId: string, destPath: string) =>
+    invoke<void>('export_attachment', { item_id: itemId, attachment_id: attachmentId, dest_path: destPath })
+  ```
+- **不要凭 Tauri 默认值（camelCase）推断本仓写法**。D-72 派工时我正是这么推的，派工消息里写「传 `destPath`」——错的。
+  正确做法：写契约前 `grep -c 'tauri::command'` 对 `grep -c 'rename_all = "snake_case"'`，两个数必须相等。
+
+### 14.2 为什么「100% 全同」本身有工程价值
+
+正因为 **100% 全同**（当前 51/51），任何人 30 秒就能判定「新命令该怎么写」，不需要逐个读命令。
+若只有 90% 覆盖，这条判断就退化为「必须逐条核」——**不变量一旦被打破，成本不是那一处，而是所有人的每次判断**。
+所以：新增命令**必须**带上该属性；确实要省，先在交付报告里说明并同步改前端（一行），不允许静默偏移。
+
+### 14.3 违反后的失败形态（为什么难查）
+
+去掉该属性 → wire 键变回 camelCase → 前端以 `invalid args` 失败。
+若前端调用点外面还包了 `try/catch`（例如为吞掉 Android 取消时的 `reject`），
+**表现就是「点了没反应、一条红提示都没有」**——没有堆栈、没有错误码、没有日志。
+这类缺陷在真机上极难定位，因此宁可用「全仓 100% 覆盖」把风险压到 0。
+
+### 14.4 与命令集合锚点的关系
+
+`src/lib/ipc-contract.test.ts` 对两侧命令集合做**精确相等**断言。前端先落、后端未注册时，
+该断言会以 `invoked 51 / registered 50` 的形式变红——**这是正确的红，不是需要被宽容的红**。
+处置只有一个：等后端注册进 `generate_handler!` 后自愈。**禁止**加白名单、跳过、或改软断言
+（那等于把「前端调了一个后端不存在的命令」这个最危险的状态放行）。

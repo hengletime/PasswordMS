@@ -43,6 +43,18 @@ const typeModules = import.meta.glob('../types.ts', {
 const typesTs = typeModules['../types.ts'] ?? '';
 
 /**
+ * docs §14：**全树** Rust 源码（含 `commands/` 子目录）。
+ *
+ * ⚠️ 必须用 `**` 递归：命令都在 `src-tauri/src/commands/*.rs`，只写 `*.rs` 会漏掉全部命令，
+ * 得到一个 `0 === 0` 的假绿 —— 这正是 §13 讨论过的「跑了个空」。
+ */
+const rustTree = import.meta.glob('../../src-tauri/src/**/*.rs', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+/**
  * 取出 `export interface <name> { ... }` 的字段名集合（只取顶层一行一个字段的形态）。
  *
  * 本仓的 DTO 都是扁平结构（字段一行一个，JSDoc 注释单独成行），
@@ -116,6 +128,15 @@ describe('ipc command contract', () => {
     expect(invoked).toContain('rename_paired_device');
     expect(registered).toContain('rename_paired_device');
   });
+
+  it('keeps save_import_template wired on both sides (D-72 CSV 模板下载回归锚点)', () => {
+    // D-72：模板下载是同一形状的全链新命令（ipc.ts → commands/import_cmd.rs →
+    // generate_handler!）。两侧缺一侧 → 运行期 `command not found`，界面表现为
+    // 「点下载没反应」；而 Android 上还叠加一层「取消走 reject」，会被 catch 吞掉，
+    // 于是连错误提示都不会出现 —— 这正是必须用结构锚点钉死、不能只靠人点一次的原因。
+    expect(invoked).toContain('save_import_template');
+    expect(registered).toContain('save_import_template');
+  });
 });
 
 // D-67 / D-69：指纹与会话码字段的**镜像契约**。
@@ -177,5 +198,35 @@ describe('指纹 / 会话码字段前后端镜像契约（D-67 / D-69）', () =>
     const ts = interfaceFields(typesTs, 'PairResultDto');
     expect(rust.length).toBeGreaterThan(0);
     expect(ts).toEqual(rust);
+  });
+});
+
+// docs §14：`rename_all = "snake_case"` 必须 **100% 覆盖** —— 这是一条不变量，不是约定。
+//
+// 为什么需要机器守门：本仓 `tauri::command` 全部带该属性（当前 51/51），所以任何人 30 秒
+// 就能判定「新命令该怎么写」，不必逐条读。一旦有人漏写一个，这条判断就退化为「必须逐条核」
+// —— **不变量被打破的成本不是那一处，而是所有人的每次判断**。
+//
+// 漏写的失败形态极难查（§14.3）：wire 键变回 camelCase → 前端 `invalid args` → 若调用点
+// 外层还包了取消归一（`save-dialog.ts` 就是），用户看到的是**点了没反应、无堆栈、无日志**。
+// 名称集合锚点（上面的 `invoked` / `registered`）抓不到这个：命令名两侧都有，只是参数对不上。
+describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
+  it('扫描面覆盖 commands/ 子目录（glob 写错会退化成假绿）', () => {
+    const paths = Object.keys(rustTree);
+    expect(paths.length).toBeGreaterThan(10);
+    expect(paths.some((p) => p.includes('/commands/'))).toBe(true);
+    expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
+  });
+
+  it('所有 tauri::command 都带 rename_all = "snake_case"（51/51）', () => {
+    const all = Object.values(rustTree).join('\n');
+    const total = (all.match(/tauri::command/g) ?? []).length;
+    const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
+    // 防空扫描假绿：`rustTree` 的 glob 若漏了 `**`（只匹配 `src-tauri/src/*.rs`），
+    // commands/ 子目录一个都扫不到，total 会是 0，而 0 === 0 会静默通过。
+    expect(total).toBeGreaterThan(40);
+    // 死数字是有意的：新增命令时必须来改这两个数，等于强制作者看一眼这条不变量。
+    expect(total).toBe(51);
+    expect(withAttr).toBe(51);
   });
 });

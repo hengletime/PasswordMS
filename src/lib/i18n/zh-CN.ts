@@ -211,6 +211,13 @@ export const zhCN = {
     mapping_known: '已识别列',
     mapping_custom: '自定义字段列',
     encrypted_hint: '不支持加密导出文件，请导出为未加密格式。',
+    // D-72：支持范围 + CSV 列清单。10 个列名与 `src/lib/import.ts` 的 `KNOWN_COLUMNS`
+    // 及 core 的 `import::bitwarden_csv::KNOWN_COLUMNS` 逐项一致 —— 改列名要三处同改。
+    // `type` 取值那句必须留在界面上：用户最常问的就是「我这条为什么被跳过」。
+    supported_hint: '仅支持 Bitwarden 未加密导出（JSON / CSV）。加密导出与其它密码管理器的格式需先转换。',
+    template_hint: 'CSV 识别这 10 列：folder / favorite / type / name / notes / login_uri / login_username / login_password / login_totp / fields；其它列会保留为自定义字段。type 只有 login 或 1（登录）、secure note / note / 2（安全笔记）会导入，其余类型跳过。',
+    download_template: '下载 CSV 模板',
+    template_saved: '模板已保存',
   },
   health: {
     title: '密码体检',

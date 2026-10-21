@@ -213,6 +213,15 @@ export const enUS: Messages = {
     mapping_known: 'Mapped columns',
     mapping_custom: 'Custom field columns',
     encrypted_hint: 'Encrypted export files are not supported. Export an unencrypted file instead.',
+    // D-72: supported scope + CSV column list. The 10 column names must match
+    // `KNOWN_COLUMNS` in src/lib/import.ts and core's `import::bitwarden_csv::KNOWN_COLUMNS`.
+    // The `type` sentence has to stay on screen — "why was my row skipped" is the top question.
+    supported_hint:
+      "Only unencrypted Bitwarden exports (JSON / CSV) are supported. Encrypted exports and other password managers' formats must be converted first.",
+    template_hint:
+      'The CSV reader recognises these 10 columns: folder / favorite / type / name / notes / login_uri / login_username / login_password / login_totp / fields; any other column is kept as a custom field. Only type values login or 1 (login) and secure note / note / 2 (secure note) are imported; other types are skipped.',
+    download_template: 'Download CSV template',
+    template_saved: 'Template saved',
   },
   health: {
     title: 'Password health',

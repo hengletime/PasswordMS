@@ -876,12 +876,29 @@ impl Repository {
     /// 导出附件到目标路径（§3.14.5：按 `(item_id, attachment_id)` 定位）。
     ///
     /// D-53 语义保留：附件元数据存在但 blob 未同步到本机时，报 `ERR_BLOB_MISSING`。
+    /// D-71：本方法只服务**文件系统路径**；`content://` 的落盘由外壳层用
+    /// [`Self::export_attachment_bytes`] 取到字节后自行写入（Android SAF）。
     pub fn export_attachment(
         &self,
         item_id: &str,
         attachment_id: &str,
         dest_path: &Path,
     ) -> CoreResult<()> {
+        let data = self.export_attachment_bytes(item_id, attachment_id)?;
+        std::fs::write(dest_path, &data)?;
+        Ok(())
+    }
+
+    /// 取附件明文**字节**（D-71：`content://` 导出用，照 `add_attachment_bytes` 的既有范式）。
+    ///
+    /// 校验顺序与错误码与 `export_attachment` 的路径版**逐条一致**（两条入口共用本实现）：
+    /// 父条目存在（`ItemNotFound`）→ 附件在父条目内（`ItemNotFound`）→
+    /// blob 已同步到本机（`BlobMissing`）→ 解密读取。
+    pub fn export_attachment_bytes(
+        &self,
+        item_id: &str,
+        attachment_id: &str,
+    ) -> CoreResult<Vec<u8>> {
         let item = self.get_item(item_id)?;
         let meta = item
             .attachments
@@ -891,9 +908,7 @@ impl Repository {
         if !self.has_blob(&meta.attachment_id) {
             return Err(CoreError::BlobMissing);
         }
-        let data = self.read_blob(&meta.attachment_id)?;
-        std::fs::write(dest_path, &data)?;
-        Ok(())
+        self.read_blob(&meta.attachment_id)
     }
 
     /// 附件分片（同步用，`U4`：≤ 1 MB）。

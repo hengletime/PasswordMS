@@ -12,6 +12,7 @@
   import { formatBytes } from '../lib/constants';
   import { toAppError } from '../lib/errors';
   import { runAttachmentImport } from '../lib/attachment-import';
+  import { runSaveToDestination } from '../lib/save-dialog';
   import { api } from '../lib/ipc';
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
@@ -69,22 +70,35 @@
     }
   }
 
-  /** 导出单个附件（明文风险二次确认；待同步态禁用）。 */
+  /**
+   * 导出单个附件（明文风险二次确认；待同步态禁用）。
+   *
+   * D-71/D-72：取消/失败归一交给 `src/lib/save-dialog.ts`。
+   * 旧实现用**一个 try 同时包住「选目标 + 写盘」**，于是 Android 上用户点取消
+   * （对话框 reject）会被 catch 当成故障 → **弹一条红「内部错误」**。
+   * 主人这次报的就是附件导出，写盘修好了但「点取消也弹红」还留着 —— 修一半交出去，
+   * 下次点取消还得再报一次缺陷。
+   *
+   * ⚠️ 原来 `dest === null` 那个判断已被模块统一接管，**不要加回来**：
+   * 两处判定就是两个口径，空串那条路会漏（详见模块内的锚点用例）。
+   */
   async function exportAttachment(att: AttachmentMetaDto): Promise<void> {
     const confirmed = await ui.confirm('attach.export_confirm_title', 'attach.export_confirm_body');
     if (!confirmed) {
       return;
     }
-    try {
-      const dest = await save({ defaultPath: att.filename || 'attachment.bin' });
-      if (dest === null) {
-        return;
-      }
-      await api.keydocs.exportAttachment(item.item_id, att.attachment_id, dest);
+    const outcome = await runSaveToDestination({
+      pickDestination: async (): Promise<string | null> =>
+        save({ defaultPath: att.filename || 'attachment.bin' }),
+      write: (dest: string): Promise<void> =>
+        api.keydocs.exportAttachment(item.item_id, att.attachment_id, dest),
+    });
+    if (outcome.kind === 'saved') {
       ui.toast('success', 'common.ok');
-    } catch (err) {
-      ui.toast('error', toAppError(err).messageKey);
+    } else if (outcome.kind === 'failed') {
+      ui.toast('error', outcome.messageKey);
     }
+    // cancelled：用户取消，静默（Android reject 与桌面 null 都走这条）。
   }
 
   /** 移除单个附件（二次确认；blob 交孤儿 GC）。 */

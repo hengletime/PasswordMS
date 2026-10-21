@@ -1,12 +1,15 @@
 <script lang="ts">
   // 导入向导（PRD F-14）：Bitwarden JSON/CSV，含字段映射预览与跳过计数。
-  import { open } from '@tauri-apps/plugin-dialog';
+  // D-72：补「支持范围说明 + CSV 模板下载」。模板由后端写盘 —— Android 的 `save()` 返回
+  // `content://…` URI，WebView 侧没有能直接写它的 API（同一个原因导致 D-71 导出失败）。
+  import { open, save } from '@tauri-apps/plugin-dialog';
   import { readTextFile } from '@tauri-apps/plugin-fs';
   import Icon from './common/Icon.svelte';
   import Spinner from './common/Spinner.svelte';
   import { toAppError } from '../lib/errors';
   import { api, type ImportFormat } from '../lib/ipc';
   import { mapCsvHeader } from '../lib/import';
+  import { runSaveToDestination } from '../lib/save-dialog';
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import type { ImportPreviewDto } from '../types';
@@ -88,6 +91,34 @@
       busy = false;
     }
   }
+
+  /**
+   * D-72：下载（另存）内置 CSV 导入模板。
+   *
+   * 取消/失败归一交给 `src/lib/save-dialog.ts`（D-71/D-72 三处同源缺陷的统一出口）：
+   * 桌面取消 `null`、**Android 取消 reject**、Android 确认是 `content://…` URI ——
+   * 三条平台差异都在那个模块里吃掉，这里只按结局分流文案。
+   *
+   * ⚠️ `failed` **必须** toast：旧实现是空 catch，把「写盘失败 / invalid args /
+   * 命令未注册」一起吞掉，表现就是「点下载没反应、再点还是没反应」
+   * （`docs/03-impl.md` §14.3 描述的形态），真机上极难定位。
+   */
+  async function downloadTemplate(): Promise<void> {
+    const outcome = await runSaveToDestination({
+      pickDestination: async (): Promise<string | null> =>
+        save({
+          defaultPath: 'passwordms-import-template.csv',
+          filters: [{ name: 'CSV', extensions: ['csv'] }],
+        }),
+      write: (dest: string): Promise<void> => api.importer.saveTemplate(dest),
+    });
+    if (outcome.kind === 'saved') {
+      ui.toast('success', 'import.template_saved');
+    } else if (outcome.kind === 'failed') {
+      ui.toast('error', outcome.messageKey);
+    }
+    // cancelled：用户主动放弃，什么都不做（不是错误，弹红会让人以为坏了）。
+  }
 </script>
 
 <div class="imp">
@@ -106,6 +137,17 @@
     </select>
     <button class="pms-btn is-ghost" type="button" onclick={() => void doPreview()} disabled={sourcePath.length === 0 || busy}>
       {ui.t('import.preview')}
+    </button>
+  </div>
+
+  <!-- D-72：支持范围 + CSV 列清单**常驻**显示。放在选文件之前，是因为这两条决定
+       「我这个文件能不能导」—— 等导完再看一堆跳过计数才知道，就晚了。
+       `.pms-meta` = 中性说明（支持范围），`.pms-hint` = 细则（列清单与 type 取值）。 -->
+  <p class="pms-meta">{ui.t('import.supported_hint')}</p>
+  <p class="pms-hint">{ui.t('import.template_hint')}</p>
+  <div class="imp-row">
+    <button class="pms-btn is-ghost" type="button" onclick={() => void downloadTemplate()}>
+      <Icon name="download" size={15} />{ui.t('import.download_template')}
     </button>
   </div>
 

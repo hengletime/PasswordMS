@@ -26,7 +26,8 @@ export interface AttachmentImportDeps {
    *
    * ⚠️ D-66：**实现方**必须保证「用户取消 → resolve null」，不得 reject。Android 上
    * `@tauri-apps/plugin-dialog` 取消时是 **reject("File picker cancelled")**，桌面端返回
-   * null —— 注入处需自行 try/catch 归一（见 `AttachmentView.svelte` 的 `pickFile`）。
+   * null —— 注入处需自行 try/catch 归一（见 `AttachmentView.svelte` 的 `pickFile`（**读侧**）
+   * / `src/lib/save-dialog.ts`（**写侧**，D-71/D-72））。
    * 本模块按契约不额外兜底：`pickFile` 一旦 reject，整个流程会抛出、无人接。
    */
   pickFile: () => Promise<string | null>;

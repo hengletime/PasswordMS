@@ -146,6 +146,22 @@ export const importer = {
       format,
       preview_token: previewToken,
     }),
+  /**
+   * D-72：把内置的 CSV 导入模板写到用户选定的位置。
+   *
+   * 为什么前端不自己写文件：Android 的 `save()` 返回的是 **`content://…` URI**
+   * （`DialogPlugin.kt` 的 `saveFileDialog` 用 `ACTION_CREATE_DOCUMENT`，回调里
+   * `put("file", uri.toString())`），WebView 侧没有能直接写它的 API，必须交给后端
+   * 用 Android 的文件描述符通路写（同一个原因也导致 D-71 的导出报「文件读写出错」）。
+   * 前端只负责把用户选到的位置**原样**传下去，不做任何路径解析/拼接。
+   *
+   * 参数名用 snake_case `dest_path`：本仓 `tauri::command` 全部带
+   * `rename_all = "snake_case"`（`src-tauri/src/commands/import_cmd.rs` 同文件的
+   * `import_preview` / `import_apply` 也是），所以 wire 上的键必须与 Rust 形参同名。
+   * 若某天该命令去掉 `rename_all`，这里要同步改成 `destPath`，否则会 invalid args。
+   */
+  saveTemplate: (destPath: string): Promise<void> =>
+    invoke<void>('save_import_template', { dest_path: destPath }),
 };
 
 /** 回收站类。 */

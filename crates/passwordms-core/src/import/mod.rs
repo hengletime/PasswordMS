@@ -5,6 +5,7 @@
 
 pub mod bitwarden_csv;
 pub mod bitwarden_json;
+pub mod template;
 
 use std::collections::HashMap;
 use std::path::Path;

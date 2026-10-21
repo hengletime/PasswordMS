@@ -3,6 +3,7 @@
 //! 业务逻辑全部下沉到 `passwordms-core`；本层只做「参数解包 → 调核心 → 错误映射」。
 
 pub mod commands;
+mod content_uri;
 pub mod dto;
 pub mod error;
 pub mod state;
@@ -58,6 +59,7 @@ pub fn run() {
             // import
             commands::import_cmd::import_preview,
             commands::import_cmd::import_apply,
+            commands::import_cmd::save_import_template,
             // trash
             commands::trash_cmd::list_trash,
             commands::trash_cmd::restore_item,

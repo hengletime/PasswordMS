@@ -12,7 +12,11 @@ use crate::model::item::{CustomField, Item, ItemKind, LoginData, SecureNoteData}
 use crate::model::now_ms;
 
 /// 已知基础列（其余列进入 `custom_fields`）。
-const KNOWN_COLUMNS: [&str; 10] = [
+///
+/// D-72：改为 `pub` —— 内置 CSV 模板（[`crate::import::template::CSV_TEMPLATE`]）的
+/// 表头顺序必须与本数组**逐字一致**，该约束由 `tests/import_template.rs` 断言守住，
+/// 否则「模板改了、解析器没跟上」会静默把示例值映射到别的列。
+pub const KNOWN_COLUMNS: [&str; 10] = [
     "folder",
     "favorite",
     "type",

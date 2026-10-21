@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`）
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`） · **v2.11 文件落盘与「取消不是错误」（D-71 / D-72）**：Android 上保存对话框返回的是 `content://` SAF URI（不是内核路径），`std::fs::write` 必失败 → 附件导出报「文件读写出错」（D-71，改走 provider fd 的 `"wt"` 写入）；同时**收口「取消 → 弹红」的三处散乱实现**（`vault-export` 未捕获 rejection / `AttachmentView` 取消弹红 / `ImportWizard` 空 catch 吞真错）为唯一口径 `runSaveToDestination`（D-72）；导入面板补格式说明 + **可下载 CSV 模板**（`save_import_template`），模板与解析器表头一致性由 `tests/import_template.rs` 锁死
 
 ---
 
@@ -407,7 +407,8 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `ItemList.svelte` | 行高 56px；标题 600、副行 `.pms-meta`；悬停 `--pms-bg-2`；选中左侧 2px 青绿竖条；空态 = 居中图标 + 文案。**列表头两入口**：「新建登录」（主按钮）+「新建笔记」（ghost）。**（v2.5 D-60 回退 v2.4 的第三按钮）**：附件入口移入详情页附件区（附件是父条目附属内容，不再有独立附件条目） |
 | `ItemDetail.svelte` | 字段用"标签 + 值 + 行尾复制按钮"三段式；密码值用 `--pms-mono`；复制按钮是 `.pms-icon-btn`。**D-60：登录/笔记条目详情底部渲染附件区**（`<AttachmentView {item} />`，仅 `login`/`secure_note` 两类父条目；遗留独立附件条目经解锁迁移后不可达） |
 | `ItemEditor.svelte` | 全部换成 `.pms-field` / `.pms-input-group`；自定义字段区用 .pms-card 内嵌浅底块；底部操作条 sticky |
-| `AttachmentView.svelte` | **D-60 改造为父条目附件区**（不再是独立附件条目的整页详情）：区头 = `paperclip` 图标 + 区标题（`attach.section_title`）+「添加附件」ghost 按钮（`attach.add`，常驻可点——空附件数组时行列表隐藏但入口保留）；附件行 = `--pms-bg-2` 浅底圆角卡（图标 + 文件名 600 + `MIME · 大小` meta 行 + 行尾两个 `.pms-icon-btn` 导出/移除）。**待同步态（D-53 语义保留）**：`attachment_blob_ready(attachment_id) = false` 时行内展示 `attach.pending_sync`（`--pms-warning` 色）并禁用导出按钮（强导会报 `ERR_BLOB_MISSING`）。导出保留明文风险二次确认（`attach.export_confirm_*`）；移除走二次确认（`attach.remove_confirm_*`，确认体带文件名插值）→ `remove_attachment` → blob 交孤儿 GC。添加/移除成功后 `vault.load()` 刷新（父条目 rev+1） |
+| `AttachmentView.svelte` | **D-60 改造为父条目附件区**（不再是独立附件条目的整页详情）：区头 = `paperclip` 图标 + 区标题（`attach.section_title`）+「添加附件」ghost 按钮（`attach.add`，常驻可点——空附件数组时行列表隐藏但入口保留）；附件行 = `--pms-bg-2` 浅底圆角卡（图标 + 文件名 600 + `MIME · 大小` meta 行 + 行尾两个 `.pms-icon-btn` 导出/移除）。**待同步态（D-53 语义保留）**：`attachment_blob_ready(attachment_id) = false` 时行内展示 `attach.pending_sync`（`--pms-warning` 色）并禁用导出按钮（强导会报 `ERR_BLOB_MISSING`）。导出保留明文风险二次确认（`attach.export_confirm_*`）；**导出的选目标与写盘走 `runSaveToDestination`（D-71/D-72）——取消安静返回、失败才弹红**，Android 的 `content://` 由后端经 provider fd 写入（详见 §5.8）；移除走二次确认（`attach.remove_confirm_*`，确认体带文件名插值）→ `remove_attachment` → blob 交孤儿 GC。添加/移除成功后 `vault.load()` 刷新（父条目 rev+1） |
+| `ImportWizard.svelte` | 三步走：①「选择文件」+ 路径回显 ②格式单选（`json` / `csv`）③「解析预览」。**格式选择器下方必须有格式说明，不能让用户点完解析才知道文件不合法（D-72）**：`.pms-meta` 一行写支持范围（`import.supported_hint`）、`.pms-hint` 一行写细则（`import.template_hint`：CSV 列清单与 `type` 取值），两行都**常显**、不随格式切换隐藏。下一行是 `.pms-btn.is-ghost` 的「下载 CSV 模板」按钮（`download` 图标 + `import.download_template`）→ 系统保存对话框 → `save_import_template` 写盘 → success toast `import.template_saved`。**取消/失败的判定见 §5.8.2**（取消必须安静，失败必须红）。CSV 解析后展示映射表：已知列用 `.pms-badge.is-accent` 芯片、扩展列用 `.pms-badge-muted` |
 | `Settings.svelte` | 分组标题 1rem/600 + 分组卡；每行 label 左、控件右；危险操作（改主密码、导出）用 `.pms-alert` 提示。**「导出保险库」卡片含当前主密码输入框**（D-51：后端导出用它做 `unlock_check`，为空时前端不发 IPC、直接提示 `settings.export_password_required`）。**导出的是整库的加密副本而非明文（D-54）**，且**文件的修改时间 = 库数据的最后写入时间**（`fs::copy` 保留 LastWriteTime）；备份可在锁屏页用「从备份恢复」（D-55）导入。**自动锁定档位真持久化（D-61 A 案）**：`auto_lock_minutes` 经 `get_auto_lock`/`set_auto_lock` 读写库明文头部（初始化读 IPC，换档即写 + success toast `settings.auto_lock_updated`，失败 error toast 并回滚 select 显示值）；执行层为全局闲置计时——`pointerdown`/`keydown`（passive）重置闲置起点，闲置达档位即走既有 `lockNow()`（reset 三个 store + 切锁屏路由）；Android 后台冻结计时器由 `visibilitychange` 补判（回前台超档立即锁，未超档后台时间计入闲置重排剩余）；无「从不」档；纯逻辑层 `src/lib/auto-lock.ts` 依赖注入可测（假时钟 8 例）。**「关于」分组（D-63 v2.7）**：末尾追加独立卡片（`settings.group_about`），四行 = 产品名 + 版本 / 作者 / 许可证 / 三按钮（项目主页 + 免责声明 + 用户协议，均为 `is-ghost is-sm`）；版本经 `getVersion()` **运行时读取，禁硬编码**，读取失败显示 `—`。详见 §5.5 |
 | `PasswordGenerator.svelte` / `PasswordGeneratorModal.svelte` | 结果用 `--pms-mono` 大字 + `.pms-input-group` 承载复制/刷新按钮；选项区两列网格。**一律以弹窗形态出现**（`PasswordGeneratorModal` 内 Modal 自带 `{#if open}` 包裹 → 关闭即卸载，不残留请求/toast）。位数用**数字输入框**（输入中不钳制，失焦/回车才 clamp 到 8–64）；四类字符复选；**一类都不选时生成按钮 `disabled` 并给出提示**；结果下方带 `StrengthMeter`。**生成器参数（位数 / 四类字符 / 排除易混 / 自选符号集）变更后防抖 300ms 静默持久化**（D-52：走 `SettingsStore.saveQuiet` 不弹 toast，用显式变更点触发而非 `$effect` → 初始化不会把未变更默认值写回）；初始值优先级 `initial`（调用方显式传入）> 设置里持久化的偏好 > 默认值，`symbol_set` 空时回退 `+-_.,:` |
 | `common/ThemeToggle.svelte` | 三态循环（系统 → 浅色 → 暗色），图标用 `sun` / `moon`，并带 `title`。切换时**同时**更新 `document.documentElement` 的 `data-theme` **和**原生窗口标题栏（见 §4 D-32）。挂载点：解锁页右上角、主界面顶栏右区。 |
@@ -664,6 +665,82 @@ hasSessionCode(value: string | null | undefined): boolean
 
 ---
 
+### 5.8 文件落盘：Android SAF 与「取消不是错误」（D-71 / D-72，v2.11）
+
+> 需求来源（客户原话）：「手机端想把附件下载保存时，提示：文件读写错误。」「在设置有个导入功能，对导入内容的格式有什么要求？是否需要给用户一个模板？」
+
+#### 5.8.1 症状与根因：两个独立缺陷，同一条流程
+
+| 缺陷 | 症状 | 根因 |
+|---|---|---|
+| **D-71** | 手机导出附件 → 红字「文件读写出错。」 | 保存对话框回传的是 `content://` SAF URI，被当内核路径交给 `std::fs::write` → `EINVAL` → `ERR_IO` |
+| **D-72** | ① 导入面板不说格式要求、无模板可抄 ② 保存流程「点取消弹红」「真失败静默」 | ① 能力缺口 ② 「Android 取消是 reject」这条约定被外包给每个调用点，三处各写一遍、三种错法 |
+
+D-71 因果链（**不是权限问题、不是路径分隔符问题**）：
+
+1. `@tauri-apps/plugin-dialog` 的 `save()` 在 Android 走 `Intent.ACTION_CREATE_DOCUMENT`，回传 `content://com.android.providers.downloads.documents/…`（`DialogPlugin.kt`：`callResult.put("file", uri.toString())`）；
+2. 前端把这个字符串当路径交给后端，后端 `std::fs::write(&dest_path, …)` → **ContentProvider URI 没有内核路径** → `ERR_IO`；
+3. 前端 toast `err.io`「文件读写出错。」（`src/lib/i18n/zh-CN.ts:390`）。
+
+修复收敛在 `src-tauri/src/content_uri.rs`，经 provider 的 file descriptor 读写（`tauri-plugin-fs` 的 Android 实现 → `FsPlugin.kt::openAssetFileDescriptor`）：
+
+| 决策 | 取值 | 理由 |
+|---|---|---|
+| 读模式 | `"r"` | 只读打开 |
+| **写模式** | **`"wt"`** | `OpenOptions` = read=false + write=true + truncate=**true** → `android_mode()` 映射 `"wt"` |
+| 为何必须 truncate | — | `ACTION_CREATE_DOCUMENT` **已经建好**目标文件；新内容比旧的短时不截断会留尾部残字节 |
+| 为何不用 `"rwt"` | — | 多要一个读权限，部分 provider 直接拒 |
+| 为何不带 create | — | 文件由系统创建，`"wt"` 不含 `O_CREAT` 语义 |
+| capabilities | **无需改动** | Rust 侧直接调插件 API，不经 IPC 权限层 |
+| 读上限 | `MAX_ATTACHMENT_BYTES` + 1 字节 | SAF 允许选中几百 MB 视频，不能先整份读进内存再让 core 拒掉（Android 上是 OOM 级尖峰）；超限即 `ERR_ATTACHMENT_TOO_LARGE` |
+
+⚠️ `content_uri.rs` 的两个函数**不加 `cfg` 门控**：桌面侧 `Fs::open` / `FilePath` / `OpenOptions` 与 Android 同名同签名，不门控才能被 `cargo check` / clippy 在桌面目标下覆盖（**没编过等于没写过**）。只有 **Android 才会真正调用**，故各命令的 `content://` 分支都在 `cfg(target_os = "android")` 内。
+
+#### 5.8.2 「取消不是错误」的唯一口径（硬约束）
+
+Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历史实现散落三处、三种错法：
+
+| 位置 | 错法 | 用户实际看到 |
+|---|---|---|
+| `src/lib/vault-export.ts` `pickDestination()` 写在 try **外** | Android 取消 = reject 逃出函数，`Settings.svelte` 那侧无 try/catch → **未捕获 rejection** | 点取消**毫无反应**（控制台一条未捕获异常） |
+| `AttachmentView.exportAttachment` try 包住 save + IPC | 取消被当成失败 | **点取消弹红「内部错误」** |
+| `ImportWizard.downloadTemplate` 空 `catch { return }` | 真失败也被一起吞掉 | 写盘真失败 → **静默无反应** |
+
+**硬约束一：判定只有一处。** 一律走 `src/lib/save-dialog.ts` 的 `runSaveToDestination(deps): Promise<SaveOutcome>`，其中 `SaveOutcome = { kind: 'cancelled' } | { kind: 'saved' } | { kind: 'failed'; messageKey: string }`。三个调用点（`vault-export` / `AttachmentView` / `ImportWizard`）**全部走它**，组件里**禁止**再出现 `catch {}` 或 `dest === null` 之类的判定——留两处判断就是留两个口径。
+
+**硬约束二：try 里只放对话框调用。** 对话框抛 = 取消（用户主动行为，不是错误）；`write` 抛 = 真实失败（必须红）。这样**不用赌**插件取消时到底走 reject 还是 resolve(null)，两条都判成取消。
+
+**硬约束三：取消必须完全安静，失败必须红。** 取消 → 无 toast、且 `write` **一次都不得被调用**；失败 → error toast，文案取 `toAppError(err).messageKey`，**不得自定义**（保持 `err.io` 等既有码位可解释）。
+
+**硬约束四：空串按取消处理**（`typeof dest !== 'string' || dest.length === 0`）。只判 `dest === null` 会在「插件回空串」时漏掉，`save-dialog.test.ts` 有专门一例钉住。
+
+#### 5.8.3 导入格式说明与模板按钮（D-72）
+
+导入面板必须在**用户选文件之前**就说清「什么能导、列名叫什么」——而不是等解析完给一堆跳过计数让用户自己猜。三件套：
+
+| 元素 | 类名 | 文案键 | 内容 |
+|---|---|---|---|
+| 支持范围 | `.pms-meta` | `import.supported_hint` | 一行说清支持 Bitwarden JSON / CSV |
+| 细则 | `.pms-hint` | `import.template_hint` | CSV 列清单 + `type` 取值，可照着填 |
+| 模板按钮 | `.pms-btn.is-ghost` | `import.download_template` | `download` 图标（15px）；成功后 toast `import.template_saved` |
+
+- 两行说明**常显**，不随格式单选切换而隐藏（用户要判断的正是「我手上这个 json / csv 能不能导」）。
+- 模板内容固定取 `passwordms_core::import::template::CSV_TEMPLATE`，**禁止在前端拼字符串**——前端拼的模板迟早和解析器漂移。
+- **模板自身导入必须 0 跳过**：表头 10 列与 `KNOWN_COLUMNS` **逐字同序**；示例行**不得溢出到 `custom_fields`**（列数 = 表头数）。两条均由 `crates/passwordms-core/tests/import_template.rs` 锁死，改模板必须同步改测试。
+- 模板只做「照着填」的示范，**不做通用列映射向导**（主人本轮拍板：不做）。
+
+#### 5.8.4 样式与交互硬约束
+
+| 约束 | 规则 |
+|---|---|
+| 类名 | 说明两行用 `.pms-meta`（中性说明）/ `.pms-hint`（细则），**不新造类**；按钮复用 `.pms-btn.is-ghost` |
+| 顺序 | 格式单选 → `.pms-meta` → `.pms-hint` → 模板按钮 → 映射表。**说明必须在解析按钮之前**，这是本条缺陷的核心 |
+| 图标 | `Icon name="download"`，`size={15}`（与生成器同一档 ghost 按钮） |
+| 禁用态 | 模板按钮**不因「未选文件」而禁用**——用户常常先拿模板、再填文件 |
+| 模板文件名 | `passwordms-import-template.csv`（`filters` 限 `csv`），桌面 `defaultPath` 即此名 |
+
+---
+
 ## 6. 移动端布局（<768px）
 
 > 客户拍板 **方案 A：单栏推进 + 底部导航**。目标机型：安卓 APK（手机竖屏，视口 ≈ 390×844）。
@@ -913,3 +990,17 @@ hasSessionCode(value: string | null | undefined): boolean
   - **会话码 ≠ 设备指纹（硬）**：会话码每次配对都变（`session_code_rotates_but_device_fingerprint_is_stable` 钉住），因此**不得**把它当设备身份、不得在文案里叫「设备指纹」、不得写进 `PairedDevice.fingerprint`。
   - **缺失不显示空块**：`PairingDto.session_code` / `PairResultDto.session_code` 为空或缺失（老后端过渡期）时，核对块**整块不渲染**，不出现「核对码：」后面空白的半截 UI（`hasSessionCode()` 单测守门：正常值 / `null` / `undefined` / 空串与纯空白）。
   - **不一致的处置可见**：两屏都显示 `sync.session_code_hint`，文案里含「立即解除配对并重试」的具体动作；手机屏用 `.pms-hint.is-warning`（警示色），电脑屏用 `.pms-meta`（中性）。
+- [ ] **D-71**（v2.11 已实现）：**Android 导出附件不再报「文件读写出错」**
+  - **真机判据**：详情页附件行点导出 → 明文风险二次确认 → 系统保存对话框选位置 → **出现成功 toast**，且用系统「文件」App 打开该位置能读到原文件（大小与源一致）。
+  - **不走文件系统 API**：`dest_path` 以 `content://` 开头时后端必须经 provider fd 写入（`src-tauri/src/content_uri.rs::write_bytes`，`OpenOptions` read=false + write=true + **truncate=true** → `"wt"`）。**判据：文件比同名旧文件短时不得残留尾部旧字节**（不 truncate 的典型症状）。
+  - **桌面不受影响**：非 `content://`（Windows 任意路径）仍走 `std::fs::write`，导出结果与 v1.2.4 一致。
+  - **读侧同源**：Android `import_attachment` 的 `content://` 源码同样经 `read_to_bytes`（上限 `MAX_ATTACHMENT_BYTES` + 1 字节，超限 `ERR_ATTACHMENT_TOO_LARGE`，不得先整份读进内存）。
+  - **capabilities 不得改动**：Rust 侧直调插件 API，不经 IPC 权限层。
+- [ ] **D-72**（v2.11 已实现）：**「取消不是错误」唯一口径 + 导入格式说明与 CSV 模板**
+  - **取消安静**（三处同判）：附件导出 / 导出保险库 / 下载模板，在保存对话框点取消 → **无 toast、无写盘、无控制台未捕获 rejection**（`vault-export` 那条历史上是 unhandled rejection，`runVaultExport` 必须**正常 resolve** 且 `invoked === false`）。
+  - **失败必红**：对话框确认后写盘真失败（如磁盘只读）→ error toast，文案取 `toAppError(err).messageKey`，**不得被 catch 吞掉**（`ImportWizard` 那条历史上是空 catch）。
+  - **判定单点**：三处一律走 `src/lib/save-dialog.ts::runSaveToDestination`，组件内**不得**再出现 `catch {}` 或 `dest === null` 判断。try 里**只放对话框调用**——取消时 `write` **一次都不得被调用**（单测钉住）。
+  - **空串按取消**：`typeof dest !== 'string' || dest.length === 0`，不只判 `null`。
+  - **导入面板说清格式**：格式单选下方常显 `import.supported_hint`（`.pms-meta`）+ `import.template_hint`（`.pms-hint`），再下面是 `.pms-btn.is-ghost` 的「下载 CSV 模板」按钮；**说明出现在解析按钮之前**，且不随格式切换隐藏。
+  - **模板可导入**：下载得到的 CSV **直接喂回本应用必须 0 跳过**（`total == 2` / `items.len() == 2` / `skipped == 0`），表头 10 列与 `KNOWN_COLUMNS` 逐字同序，示例行**不得溢出到 `custom_fields`**——全部由 `crates/passwordms-core/tests/import_template.rs` 锁死。
+  - **模板内容不在前端拼**：固定取 `passwordms_core::import::template::CSV_TEMPLATE`。

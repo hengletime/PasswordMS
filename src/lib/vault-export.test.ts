@@ -86,6 +86,25 @@ describe('runVaultExport —— D-51 导出守卫', () => {
     expect(result).toEqual({ invoked: false, cleared: false });
   });
 
+  it('保存对话框 cancel（Android reject）→ 正常返回、不发 IPC（未捕获 rejection 回归锚点）', async () => {
+    // D-71/D-72：Android 上 dialog 插件取消是 reject（桌面是 resolve null）。
+    // 旧实现把 `pickDestination()` 放在 try 外面 → 异常逃出 runVaultExport →
+    // `Settings.svelte` 的 `await runVaultExport(...)` 无 try/catch → 未捕获 rejection，
+    // 用户点取消毫无反应。本用例**故意不在外层加 try/catch**：
+    // 一旦实现又把异常抛出来，这里会直接失败（而不是变成一条安静的红）。
+    const deps = makeDeps({
+      pickDestination: vi.fn(async (): Promise<string | null> => {
+        throw new Error('File picker cancelled');
+      }),
+    });
+
+    const result = await runVaultExport(deps);
+
+    expect(deps.exportVault).not.toHaveBeenCalled();
+    expect(deps.toast).not.toHaveBeenCalled();
+    expect(result).toEqual({ invoked: false, cleared: false });
+  });
+
   it('IPC 失败：error toast（统一错误码映射）、不清空', async () => {
     const deps = makeDeps({
       exportVault: vi.fn(

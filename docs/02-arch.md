@@ -846,6 +846,67 @@ pub struct Item {
 - **测试**：`crates/passwordms-core/tests/pairing_session_code.rs` 三例（替换原 `pairing_fingerprint_consistency.rs`）——
   ① 两屏同值且为 16 位小写 hex；② 会话码跨配对必变、设备指纹跨配对不变、两者不相等；③ 电脑端对端指纹留空。
 
+#### 3.14.11 v1.2.5 增量（D-71 / D-72：Android `content://` 写盘 + 「取消不是错误」口径 + 导入模板）
+
+> 客户真机反馈（2026-10-21）：「手机端想把附件下载保存时，提示：文件读写错误。」
+> 「在设置有个导入功能，对导入内容的格式有什么要求？是否需要给用户一个模板？」
+> 拍板：**导出＋导入一起修**；**加说明＋可下载 CSV 模板**，不做通用列映射向导。
+
+**A. D-71：`content://` 是 ContentProvider URI，不是内核路径**
+
+Android 的保存对话框（`ACTION_CREATE_DOCUMENT`）回传的是 `content://com.android.providers.…`，
+内核里不存在对应路径 → `std::fs::write` 必返 `EINVAL` → `ERR_IO` →「文件读写出错。」。
+**这不是权限问题，也不是分隔符问题**——SAF URI 根本不该被交给文件系统 API。
+
+- **收敛点**：`src-tauri/src/content_uri.rs`（`read_to_bytes` / `write_bytes`），经
+  `tauri-plugin-fs` 的 Android 实现 `resolve_content_uri` → `run_mobile_plugin("getFileDescriptor")`
+  → `FsPlugin.kt::openAssetFileDescriptor(uri, mode)` 拿到 provider fd。
+- **写模式 = `"wt"`**：`OpenOptions` read=false + write=true + **truncate=true** → `android_mode()` 映射 `"wt"`。
+  必须 truncate，因为 `ACTION_CREATE_DOCUMENT` **已经建好**目标文件，新内容比旧的短时会留尾部残字节；
+  不用 `"rwt"`（多要一个读权限，部分 provider 直接拒）；不设 `create`（文件由系统创建）。
+- **读有上限**：最多读 `MAX_ATTACHMENT_BYTES` + 1 字节，超限即 `AttachmentTooLarge`——
+  SAF 允许选中几百 MB 视频，先整份读进内存再让 core 拒掉是 OOM 级尖峰。
+- **两个函数不加 `cfg` 门控**：桌面侧 `Fs::open` / `FilePath` / `OpenOptions` 与 Android 同名同签名，
+  不门控才能在桌面目标下被 `cargo check` / clippy 覆盖（**没编过等于没写过**）；
+  只有调用点的 `content://` 分支在 `cfg(target_os = "android")` 内。
+- **capabilities 零改动**：Rust 侧直调插件 API，不经 IPC 权限层，`default.json` 不动。
+- **打包侧证据**（插件源码）：`DialogPlugin.kt:199-235` 的 `saveFileDialog` 用 `ACTION_CREATE_DOCUMENT`
+  且 `callResult.put("file", uri.toString())`；`FsPlugin.kt:60` 的 `openAssetFileDescriptor(uri, mode)` 支持写模式。
+- **同源缺陷 D-66 的读路径**：`import_preview` 的 `content://` 也走 `read_to_bytes`（读字节后按 UTF-8 解析，
+  非法编码复用 `ERR_IMPORT_PARSE`，**不新增错误码**）。
+
+**B. D-72：把「取消归一」从约定升级为代码**
+
+原约定（`src/lib/attachment-import.ts` 的 doc）是「Android 取消是 reject，由**注入方自行** try/catch 归一成 null」。
+把归一动作外包给每个调用点，就必然漂移——实测三处、三种错法：
+
+| 调用点 | 错法 | 用户可见后果 |
+|---|---|---|
+| `vault-export.ts` `pickDestination()` 在 try 外 | reject 逃出函数（`Settings.svelte` 无 try/catch） | **未捕获 rejection**，点取消毫无反应 |
+| `AttachmentView.exportAttachment` try 包住 save + IPC | 取消被当失败 | **点取消弹红「内部错误」** |
+| `ImportWizard.downloadTemplate` 空 `catch {}` | 真失败被吞 | 写盘真失败 → **静默无反应** |
+
+- **唯一口径**：`src/lib/save-dialog.ts::runSaveToDestination(deps)` →
+  `SaveOutcome = cancelled | saved | failed{messageKey}`。三处全部改走它。
+- **判定矩阵（结构判据，不赌插件行为）**：
+
+  | 抛点 | 语义 | 结果 |
+  |---|---|---|
+  | `pickDestination()` 抛（Android reject） | 用户取消 | `cancelled`，**`write` 不被调用** |
+  | `pickDestination()` 返回非字符串/空串 | 用户取消（桌面 null） | `cancelled`，`write` 不被调用 |
+  | `write(dest)` 抛 | 真实失败 | `failed`，`messageKey = toAppError(err).messageKey` |
+  | `write(dest)` 成功 | 成功 | `saved` |
+
+  这样**不需要知道**插件取消时走 reject 还是 resolve(null)，两条都判成取消。
+- **IPC 形状**：新增命令 `save_import_template(app, dest_path)`，`rename_all = "snake_case"`，
+  wire 键 `dest_path`（见 `docs/03-impl.md` §14 不变量：全仓 50 → **51** 处 `tauri::command`，51 处带该属性，0 例外）。
+  **既有命令形状一律未变**（`export_attachment` 仍是 `item_id` / `attachment_id` / `dest_path`）。
+- **模板一致性靠测试锁，不靠人眼**：`passwordms_core::import::template::CSV_TEMPLATE` 的表头
+  必须与 `import::bitwarden_csv::KNOWN_COLUMNS` **逐字同序**，且模板自身导入 0 跳过、示例行不溢出到 `custom_fields`
+  ——`crates/passwordms-core/tests/import_template.rs` 逐条断言。**改模板必须同步改测试**，
+  否则「模板改了、解析器没跟上」会静默把示例值映射到别的列。
+- **前端不拼模板**：内容只从 core 常量取，避免两份文本各自演化。
+
 
 
 > 客户实测（2026-10-21）：手机删某条目一个附件并在手机上点「立即同步」（该方向成功）→
