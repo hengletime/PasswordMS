@@ -119,10 +119,34 @@ fn session_id_of(transcript: &[u8; 32]) -> Vec<u8> {
     transcript[..16].to_vec()
 }
 
-/// 由设备 ID 生成便于识别的展示名（不含任何隐私信息）。
+/// 当前运行平台的展示标签（D-66：让设备列表能区分「手机 / 电脑」）。
+///
+/// 纯编译期常量，不含主机名、用户名等任何隐私信息。
+fn platform_label() -> &'static str {
+    if cfg!(target_os = "android") {
+        "Android"
+    } else if cfg!(target_os = "ios") {
+        "iOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        "Linux"
+    }
+}
+
+/// 由设备 ID 生成便于识别的展示名（D-66：`<平台>-<8 位短 ID>`，不含任何隐私信息）。
+///
+/// 旧实现固定 `PasswordMS-<8 位短 ID>`：两台同型号手机短 ID 撞车时（或用户只看到
+/// 前缀）在设备列表里完全无法分辨。加入平台前缀后，至少「手机 vs 电脑」一眼可分；
+/// 剩余歧义由 `Repository::rename_paired_device` 的手动改名兜底。
+///
+/// wire 校验**一律不受影响**：本名只作为 `client_name` 之类的展示字段传输，
+/// 设备身份始终是 `device_id`（见 `resync_with_peer` 的 `server_id` 校验）。
 pub fn device_display_name(device_id: &str) -> String {
     let short: String = device_id.chars().take(8).collect();
-    format!("PasswordMS-{short}")
+    format!("{}-{short}", platform_label())
 }
 
 /// 发起一次直连重同步（客户端侧）。
@@ -177,10 +201,12 @@ pub fn resync_with_peer(
         nonce_c: nonce_c.clone(),
         sync_port: local_port,
     });
-    transport::send_frame(&mut stream, &serde_json::to_vec(&hello)?).map_err(|e| stage_io(e, "hello_send"))?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&hello)?)
+        .map_err(|e| stage_io(e, "hello_send"))?;
 
     // 5) CHALLENGE。
-    let challenge_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "challenge_recv"))?;
+    let challenge_bytes =
+        transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "challenge_recv"))?;
     let challenge = match serde_json::from_slice::<ResyncMessage>(&challenge_bytes)? {
         ResyncMessage::Challenge(c) => c,
         ResyncMessage::Reject(r) => return Err(reject_to_error(&r.code)),
@@ -191,7 +217,12 @@ pub fn resync_with_peer(
     }
 
     // 6) 派生会话密钥 + 校验响应方确认。
-    let transcript = transcript_of(&client_id, &challenge.server_id, &nonce_c, &challenge.nonce_s);
+    let transcript = transcript_of(
+        &client_id,
+        &challenge.server_id,
+        &nonce_c,
+        &challenge.nonce_s,
+    );
     let sk = handshake::derive_session_sk(&sync_key, &nonce_c, &challenge.nonce_s)?;
     let expected_s = handshake::confirm_mac(&sk, ROLE_SERVER, &transcript)?;
     if !handshake::verify_mac(&expected_s, &challenge.mac) {
@@ -201,7 +232,8 @@ pub fn resync_with_peer(
     // 7) 回送本端确认。
     let mac_c = handshake::confirm_mac(&sk, ROLE_CLIENT, &transcript)?;
     let confirm = ResyncMessage::Confirm(ResyncConfirm { mac: mac_c });
-    transport::send_frame(&mut stream, &serde_json::to_vec(&confirm)?).map_err(|e| stage_io(e, "confirm_send"))?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&confirm)?)
+        .map_err(|e| stage_io(e, "confirm_send"))?;
 
     let session_id = session_id_of(&transcript);
     let mut state: DeviceSyncState = repo.sync_state(peer_device_id);
@@ -219,7 +251,8 @@ pub fn resync_with_peer(
         blob_support: true,
     };
     let push_env = seal_envelope(&sk[..], &session_id, c1, now, &push)?;
-    transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?).map_err(|e| stage_io(e, "push_send"))?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?)
+        .map_err(|e| stage_io(e, "push_send"))?;
     // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发；失败路径不落盘自动重发）。
     merge::note_sent_tombstones(&mut state, &push.changes);
 
@@ -240,7 +273,8 @@ pub fn resync_with_peer(
         blob_support: true,
     };
     let done_env = seal_envelope(&sk[..], &session_id, c2, now, &done)?;
-    transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?).map_err(|e| stage_io(e, "done_send"))?;
+    transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?)
+        .map_err(|e| stage_io(e, "done_send"))?;
 
     // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
     // 发起方次序：先拉后供（与响应方镜像）。
@@ -250,11 +284,23 @@ pub fn resync_with_peer(
     if blob_transfer::blob_phase_enabled(true, reply.blob_support) {
         sent = c2 + 1;
         let phase = blob_transfer::pull_missing(
-            &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &mut replay,
+            repo,
+            &mut sent,
+            now,
         )?;
         blobs = phase.appended;
         blob_transfer::serve_pull(
-            &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &mut replay,
+            repo,
+            &mut sent,
+            now,
         )?;
     }
 
@@ -338,7 +384,8 @@ impl ResyncServer {
             .map_err(|_| CoreError::SyncAborted)?;
 
         // 1) HELLO。
-        let hello_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
+        let hello_bytes =
+            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
         let hello = match serde_json::from_slice::<ResyncMessage>(&hello_bytes)? {
             ResyncMessage::Hello(h) => h,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -376,10 +423,12 @@ impl ResyncServer {
             nonce_s: nonce_s.clone(),
             mac: mac_s,
         });
-        transport::send_frame(&mut stream, &serde_json::to_vec(&challenge)?).map_err(|e| stage_io(e, "challenge_send"))?;
+        transport::send_frame(&mut stream, &serde_json::to_vec(&challenge)?)
+            .map_err(|e| stage_io(e, "challenge_send"))?;
 
         // 5) 校验发起方确认。
-        let confirm_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "confirm_recv"))?;
+        let confirm_bytes =
+            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "confirm_recv"))?;
         let confirm = match serde_json::from_slice::<ResyncMessage>(&confirm_bytes)? {
             ResyncMessage::Confirm(c) => c,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -394,7 +443,8 @@ impl ResyncServer {
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
         // 6) 收发起方 Push 并合并。
-        let push_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "push_recv"))?;
+        let push_bytes =
+            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "push_recv"))?;
         let push_env: SyncEnvelope = serde_json::from_slice(&push_bytes)?;
         replay.accept(push_env.seq, push_env.ts, now)?;
         let push = open_envelope(&sk[..], &session_id, &push_env)?;
@@ -411,12 +461,14 @@ impl ResyncServer {
             blob_support: true,
         };
         let reply_env = seal_envelope(&sk[..], &session_id, s1, now, &reply)?;
-        transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
+        transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?)
+            .map_err(|e| stage_io(e, "reply_send"))?;
         // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发）。
         merge::note_sent_tombstones(&mut state, &reply.changes);
 
         // 8) 收 Done。
-        let done_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "done_recv"))?;
+        let done_bytes =
+            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "done_recv"))?;
         let done_env: SyncEnvelope = serde_json::from_slice(&done_bytes)?;
         replay.accept(done_env.seq, done_env.ts, now)?;
         let done_payload = open_envelope(&sk[..], &session_id, &done_env)?;
@@ -430,10 +482,22 @@ impl ResyncServer {
         if blob_transfer::blob_phase_enabled(true, done_payload.blob_support) {
             sent = s1 + 1;
             blob_transfer::serve_pull(
-                &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+                &mut stream,
+                &sk[..],
+                &session_id,
+                &mut replay,
+                repo,
+                &mut sent,
+                now,
             )?;
             let phase = blob_transfer::pull_missing(
-                &mut stream, &sk[..], &session_id, &mut replay, repo, &mut sent, now,
+                &mut stream,
+                &sk[..],
+                &session_id,
+                &mut replay,
+                repo,
+                &mut sent,
+                now,
             )?;
             blobs = phase.appended;
         }
@@ -481,4 +545,55 @@ fn reject_to_error(code: &str) -> CoreError {
 #[allow(dead_code)]
 fn _zeroizing_marker() -> Zeroizing<[u8; 32]> {
     Zeroizing::new([0u8; 32])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D-66：默认展示名 = `<当前平台>-<8 位短 ID>`。
+    #[test]
+    fn device_display_name_uses_platform_prefix() {
+        let id = "3dd4390a-1111-2222-3333-444455556666";
+        let name = device_display_name(id);
+        assert_eq!(
+            name,
+            format!("{}-3dd4390a", platform_label()),
+            "默认名必须带当前平台前缀"
+        );
+        assert!(name.starts_with(platform_label()));
+        assert!(!name.contains("PasswordMS"), "旧固定前缀不得残留");
+    }
+
+    /// 短 ID 恰为 8 位（不足 8 位时按实际长度截断，不补位）。
+    #[test]
+    fn device_display_name_short_id_is_eight_chars() {
+        let name = device_display_name("abcdef0123456789");
+        let short = name.rsplit('-').next().unwrap();
+        assert_eq!(short, "abcdef01");
+        assert_eq!(short.chars().count(), 8);
+
+        // 极短 ID：不 panic、不补位。
+        assert_eq!(
+            device_display_name("ab"),
+            format!("{}-ab", platform_label())
+        );
+        // 空 ID 也安全。
+        assert_eq!(device_display_name(""), format!("{}-", platform_label()));
+    }
+
+    /// 平台标签取值封闭（避免以后误写出自由文本）。
+    #[test]
+    fn platform_label_is_one_of_known_values() {
+        assert!(
+            ["Android", "iOS", "Windows", "macOS", "Linux"].contains(&platform_label()),
+            "未知平台标签: {}",
+            platform_label()
+        );
+        // 本仓库只在 Windows / Android 上出包：桌面 Windows 构建必须命中 Windows。
+        #[cfg(target_os = "windows")]
+        assert_eq!(platform_label(), "Windows");
+        #[cfg(target_os = "android")]
+        assert_eq!(platform_label(), "Android");
+    }
 }

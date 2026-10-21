@@ -71,6 +71,7 @@ pub fn run() {
             commands::sync_cmd::sync_join,
             commands::sync_cmd::sync_accept_pair,
             commands::sync_cmd::list_paired_devices,
+            commands::sync_cmd::rename_paired_device,
             commands::sync_cmd::unpair,
             commands::sync_cmd::sync_now,
             commands::sync_cmd::sync_status,

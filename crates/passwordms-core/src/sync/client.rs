@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use zeroize::Zeroizing;
 
-use crate::constants::{SYNC_TIME_WINDOW_SECS};
+use crate::constants::SYNC_TIME_WINDOW_SECS;
 use crate::crypto::keys;
 use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
@@ -33,7 +33,14 @@ pub struct JoinerSession {
     session_id: Vec<u8>,
     host_id: String,
     host_name: String,
-    host_fingerprint: String,
+    /// 本次配对的**会话码**（`sha256(Accept.host_pub)`，D-69）：只用于两屏人工核对。
+    ///
+    /// 每次配对都变——它绑的是本次握手的临时密钥，不是设备身份。
+    session_code: String,
+    /// Host 的**设备指纹**（长期身份密钥，取自二维码 `fp`，D-67/D-69）。
+    ///
+    /// 稳定不变，写进 `PairedDevice.fingerprint` 供设备列表辨识；**不参与**本次核对。
+    device_fingerprint: String,
     /// Host 的局域网地址与其持久重同步端口（供 `sync_now` 记录，D-11）。
     host_ip: String,
     host_sync_port: u16,
@@ -61,9 +68,14 @@ impl JoinerSession {
         &self.host_name
     }
 
-    /// Host 身份指纹（供用户比对）。
-    pub fn host_fingerprint(&self) -> &str {
-        &self.host_fingerprint
+    /// 本次配对的会话码（供两屏核对，D-69）。
+    pub fn session_code(&self) -> &str {
+        &self.session_code
+    }
+
+    /// Host 的长期设备指纹（稳定，供设备列表辨识）。
+    pub fn device_fingerprint(&self) -> &str {
+        &self.device_fingerprint
     }
 
     /// Host 下发的 VK（供会话层决定是否采用）。
@@ -85,7 +97,7 @@ impl JoinerSession {
         let device = PairedDevice {
             device_id: self.host_id.clone(),
             device_name: self.host_name.clone(),
-            fingerprint: self.host_fingerprint.clone(),
+            fingerprint: self.device_fingerprint.clone(),
             sync_key_wrapped: wrapped,
             paired_at: now_ms(),
             last_sync_at: None,
@@ -98,7 +110,11 @@ impl JoinerSession {
     /// 执行一次双向同步交换：发 Push → 收 Host 变更并合并 → 发 Done。
     ///
     /// 序号在持久化的 `last_sent_seq` 基础上单调递增，以支持「配对后再同步」（D-11）。
-    pub fn push_and_sync(&mut self, repo: &mut Repository, now: i64) -> CoreResult<JoinerSyncResult> {
+    pub fn push_and_sync(
+        &mut self,
+        repo: &mut Repository,
+        now: i64,
+    ) -> CoreResult<JoinerSyncResult> {
         let mut state: DeviceSyncState = repo.sync_state(&self.host_id);
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
@@ -208,11 +224,11 @@ pub fn pair(
     let mut connected: Option<TcpStream> = None;
     let mut last_err: Option<CoreError> = None;
     for ip in &candidates {
-            match transport::connect_with_timeout(
-                ip,
-                qr.port,
-                std::time::Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS),
-            ) {
+        match transport::connect_with_timeout(
+            ip,
+            qr.port,
+            std::time::Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS),
+        ) {
             Ok(stream) => {
                 connected = Some(stream);
                 break;
@@ -265,7 +281,8 @@ pub fn pair(
 
     // 双向密钥确认（拦截未持有 shared 的中间人）。
     let transcript = handshake::transcript_hash(&[&hello_frame[..], &accept_bytes[..]]);
-    let expected_h = handshake::confirm_mac(&keys.confirm_key, handshake::ROLE_SERVER, &transcript)?;
+    let expected_h =
+        handshake::confirm_mac(&keys.confirm_key, handshake::ROLE_SERVER, &transcript)?;
     if !handshake::verify_mac(&expected_h, &confirm_h.mac) {
         return Err(CoreError::FingerprintMismatch);
     }
@@ -289,7 +306,8 @@ pub fn pair(
         session_id: accept.session_id.clone(),
         host_id: accept.host_id,
         host_name: accept.host_name,
-        host_fingerprint: handshake::fingerprint_of(&host_pub),
+        session_code: handshake::fingerprint_of(&host_pub),
+        device_fingerprint: qr.fp.clone(),
         host_ip: qr.ip.clone(),
         host_sync_port: qr.sync_port,
         host_vault_key,

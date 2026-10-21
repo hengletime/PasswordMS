@@ -47,8 +47,14 @@
     const result = await runAttachmentImport(
       {
         pickFile: async (): Promise<string | null> => {
-          const picked = await open({ multiple: false, directory: false });
-          return typeof picked === 'string' ? picked : null;
+          try {
+            const picked = await open({ multiple: false, directory: false });
+            return typeof picked === 'string' ? picked : null;
+          } catch {
+            // D-66：Android 上 dialog 插件在用户取消时是 reject("File picker cancelled")，
+            // 桌面端返回 null。统一按「用户取消」处理（不弹错误 toast）。
+            return null;
+          }
         },
         addAttachment: (itemId: string, sourcePath: string, title: string): Promise<ItemDto> =>
           api.keydocs.addAttachment(itemId, sourcePath, title),

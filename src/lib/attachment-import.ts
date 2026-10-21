@@ -21,7 +21,14 @@ export const ATTACHMENT_OK_KEY = 'common.ok';
 
 /** 附件添加流程所需的外部依赖（组件注入真实实现，测试注入替身）。 */
 export interface AttachmentImportDeps {
-  /** 系统文件选择对话框（单选）；resolve null = 用户取消。 */
+  /**
+   * 系统文件选择对话框（单选）；resolve null = 用户取消。
+   *
+   * ⚠️ D-66：**实现方**必须保证「用户取消 → resolve null」，不得 reject。Android 上
+   * `@tauri-apps/plugin-dialog` 取消时是 **reject("File picker cancelled")**，桌面端返回
+   * null —— 注入处需自行 try/catch 归一（见 `AttachmentView.svelte` 的 `pickFile`）。
+   * 本模块按契约不额外兜底：`pickFile` 一旦 reject，整个流程会抛出、无人接。
+   */
   pickFile: () => Promise<string | null>;
   /** 添加 IPC（对应 `api.keydocs.addAttachment(item_id, source_path, title)`），返回父条目。 */
   addAttachment: (itemId: string, sourcePath: string, title: string) => Promise<ItemDto>;

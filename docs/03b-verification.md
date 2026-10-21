@@ -568,7 +568,7 @@ dist/assets/index-*.js       271.08 kB │ gzip: 95.47 kB
 
 ## 8. 附：非管理员 Windows 上的 Rust 工具链搭建（踩坑记录）
 
-本机**无 Visual Studio Build Tools、无 mingw**，且沙箱对部分操作有限制。为让"代码能被真实编译"成为可能，主理人完成如下引导，**结果已固化进 `.cargo/config.toml`**，后续任何人 clone 后可直接 `cargo test`：
+本机**无 Visual Studio Build Tools、无 mingw**，且沙箱对部分操作有限制。为让"代码能被真实编译"成为可能，主理人完成如下引导，**结果已固化进 `.cargo/config.toml`**（该文件被 `.gitignore` 排除，**换机器请从 `.cargo/config.toml.example` 复制**，模板里 `rustflags` 与 `rustdocflags` 都已备齐，见 §8.3），按模板填好占位符后即可 `cargo test`：
 
 1. **rustup 代理 0 字节**：在沙箱内运行 `rustup-init.exe` 导致 `~/.cargo/bin/{cargo,rustc,...}.exe` 全部为 0 字节（硬链接被拦）。→ 修复：`cp -f rustup.exe cargo.exe` 等，逐个替换为同一份二进制（rustup 多路复用）。
 2. **`dlltool.exe: program not found`**：`x86_64-pc-windows-gnu` 目标的 `getrandom` 走 raw-dylib，需要 dlltool；自带的是 LLVM 版且不认 rustc 的 `--64` 参数。→ **改用 `x86_64-pc-windows-gnullvm` 目标**（LLVM ABI，无需 mingw）。
@@ -591,6 +591,8 @@ rustflags = [
 [build]
 incremental = false
 ```
+
+> ⚠️ 上面这份是 **2026-10-13 的快照，已不完整**：2026-10-21 又补了一份 `rustdocflags`（逐字镜像 `rustflags` 的三条），否则 `cargo test --doc` 链接失败。**以 `.cargo/config.toml.example` 为准**，缘由见 §8.3。
 
 ### 8.1 补记（2026-10-13 晚）：让**主机侧**也能编译 —— `src-tauri` 的最后一道坎
 
@@ -651,6 +653,44 @@ called `Result::unwrap()` on an `Err` value: NotAttempted("windres")
 放在 `build.rs` 的理由与文件头「附加职责一」完全一致：**build script 必须自己保证前置条件**，而不是指望操作者记得 export。换机器只需设一个 `PMS_WINRES_DIR`。
 
 **验证方式**：PATH 上**只保留** `~/.cargo/bin`（确认 `mingw-bin` 不在其中），直接 `npx tauri build`；成不成完全取决于 build.rs 的兜底是否生效。
+
+### 8.3 补记（2026-10-21）：`rustdocflags` 必须与 `rustflags` **成对出现** —— doctest 的隐形依赖
+
+**现象**：`bash scripts/gate-all.sh` 首跑 FAIL，Rust 全量门 rc=101，失败点是**唯一一个 doctest**：
+
+```
+---- crates\passwordms-core\src\attachment_name.rs - attachment_name::filename_from_source (line 50) stdout ----
+error: linking with `lld` failed: exit code: 1
+  = note: lld: error: unable to find library -lkernel32
+```
+
+**看起来像 §8 那类环境问题（工具链又坏了），实际不是**。本机只在 `.cargo/config.toml` 里配了 `rustflags`，而：
+
+> **cargo 不会把 `target.<triple>.rustflags` 转发给 rustdoc 发起的编译过程。**
+> doctest 是 `rustdoc` 自己再调 rustc 编出来的，那条命令**只吃 `rustdocflags`**。
+
+于是 §8 第 4/5/6 条辛苦补上的两处 `-L native=…` 与 `link-self-contained=yes` 对 doctest **全部失效**：缺前两条 → `unable to find library -lkernel32/-lbcrypt/…`（找不到 wsllibs 里的导入库）；缺第三条 → `undefined symbol: mainCRTStartup`（缺 CRT 入口）。
+
+**处置**：在 `.cargo/config.toml` 的**同一个** `[target.x86_64-pc-windows-gnullvm]` 段里镜像一份 `rustdocflags`（三条与 `rustflags` 逐字相同），并同步写进 **`.cargo/config.toml.example`**（`config.toml` 被 `.gitignore` 排除，模板才是换机器时真正被复制的那个 —— 只改本机私有文件等于没修）。
+
+**证据（2026-10-21 实测）**：
+
+```
+$ cargo test -p passwordms-core --doc --target x86_64-pc-windows-gnullvm
+     Running unittests …（略）
+   Doc-tests passwordms_core
+test crates\passwordms-core\src\attachment_name.rs - attachment_name::filename_from_source (line 50) ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+复跑 `bash scripts/gate-all.sh` → **7 门全 PASS**（Rust 全量 **109/109**，含这 1 个 doctest）。
+
+**铁律（写进本节，避免半年后从头再查一遍）**：
+
+1. **`rustflags` 与 `rustdocflags` 是同一件事的两次声明，改一处必须同步另一处**（包括 `config.toml` 与 `config.toml.example` 两份文件，共四处）。
+2. 本节第 4/5/6 条列的任何一个链接参数，都必须**在 `rustdocflags` 里重复一遍**，否则 `cargo test --doc` 会红。
+3. **门禁 6 条命令只覆盖 `cargo test -p passwordms-core`，它包含 doc-tests** —— 所以**任何新增 `///` 示例的提交，都必须就地跑一次 `cargo test --doc`**，别等总门来发现（它报出来的样子很像环境坏了，极易误判）。
+4. 排障顺序（省时间）：先确认报的是 `-lkernel32` 还是 `mainCRTStartup` —— 前者缺 `-L native=`，后者缺 `-C link-self-contained=yes`；**路径用正斜杠**（反斜杠在本机实测仍失败）。
 
 ---
 

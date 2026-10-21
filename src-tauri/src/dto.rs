@@ -208,6 +208,14 @@ pub struct PairingDto {
     /// 全部候选局域网 IPv4（多网卡时主选在前，D-44）。
     pub ips: Vec<String>,
     pub port: u16,
+    /// D-69：本次配对的**会话码**，`sha256(host_eph 公钥)` 前 8 字节的小写 hex（16 位）。
+    ///
+    /// 与 `PairResultDto.session_code`（joining 侧由 `Accept.host_pub` 算出）**同值**，
+    /// 两屏构造上必然相等 —— 这才是用户能核对的量。
+    ///
+    /// **不是**「设备指纹」：会话码每次配对都会变（绑的是本次临时密钥），
+    /// 而设备指纹（`DeviceDto.fingerprint`，长期身份密钥）稳定不变。两者不可混用。
+    pub session_code: String,
     pub expires_at: i64,
 }
 
@@ -216,7 +224,10 @@ pub struct PairingDto {
 pub struct PairResultDto {
     pub device_id: String,
     pub device_name: String,
-    pub fingerprint: String,
+    /// Host 的**长期设备指纹**（取自二维码 `fp`，稳定），用于设备列表辨识。
+    pub device_fingerprint: String,
+    /// 本次配对的**会话码**（`sha256(Accept.host_pub)`），与电脑屏显示的必须是同一个值。
+    pub session_code: String,
     pub applied: usize,
     pub conflicts: Vec<String>,
     /// D-53：blob 阶段实际入库的附件数（老前端缺省 0）。

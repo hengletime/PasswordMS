@@ -3,6 +3,7 @@
 //! PasswordMS 的纯逻辑核心：不依赖任何 GUI/外壳，可独立单测、可被任意前端外壳复用。
 //!
 //! 模块划分（架构文档 §4.3）：
+//! - [`attachment_name`] 附件展示名解析（路径 / Android `content://` URI，D-66）
 //! - [`error`]     统一错误类型与错误码
 //! - [`constants`] 全部常量（KDF 参数、大小上限、超时、协议版本）
 //! - [`securemem`] 敏感内存类型别名与清零辅助
@@ -21,6 +22,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod attachment_name;
 pub mod constants;
 pub mod crypto;
 pub mod error;

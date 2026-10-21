@@ -9,6 +9,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use tauri::Manager;
 
+use passwordms_core::constants::{SYNC_PORT_MAX, SYNC_PORT_MIN};
 use passwordms_core::crypto::rng;
 use passwordms_core::model::conflict::ConflictChoice;
 use passwordms_core::model::now_ms;
@@ -17,7 +18,6 @@ use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::protocol::{qr_svg, QRPayload};
 use passwordms_core::sync::resync;
 use passwordms_core::sync::server::SyncServer;
-use passwordms_core::constants::{SYNC_PORT_MAX, SYNC_PORT_MIN};
 
 use crate::dto::{ConflictDto, DeviceDto, PairResultDto, PairingDto, SyncResultDto, SyncStatusDto};
 use crate::error::{lock_err, IpcError, IpcResult};
@@ -45,6 +45,11 @@ pub fn sync_start_pairing(
     let host_name = host_display_name(&host_id);
     let port = random_port();
     let server = SyncServer::start(port, host_id, host_name, identity, sync_port, now_ms())?;
+    // D-69：会话码（= `sha256(host_eph 公钥)` 前 8 字节 hex）。
+    // **不是**设备指纹：它绑的是本次握手的临时密钥，手机端由 `Accept.host_pub` 算出同一个值，
+    // 两屏构造上必然相等，用户核对才有意义。临时密钥在 `SyncServer::start` 内一次生成，
+    // 因此这里在手机连上之前就能拿到（这正是把生成点从每连接前移到 start 的原因）。
+    let session_code = server.session_code();
     // D-44：二维码携带全部候选局域网 IPv4（多网卡机器上主选地址可能手机路由不到）。
     let ips = passwordms_core::sync::transport::local_ipv4s();
     let qr = server.qr_payload(ips.clone())?;
@@ -56,6 +61,7 @@ pub fn sync_start_pairing(
         ip: qr.ip.clone(),
         ips,
         port: qr.port,
+        session_code,
         expires_at: qr.exp,
     };
     *state.pairing.lock().map_err(lock_err)? = Some(server);
@@ -143,7 +149,9 @@ fn sync_join_impl(
     Ok(PairResultDto {
         device_id: joiner.host_id().to_string(),
         device_name: joiner.host_name().to_string(),
-        fingerprint: joiner.host_fingerprint().to_string(),
+        device_fingerprint: joiner.device_fingerprint().to_string(),
+        // 与电脑屏 `PairingDto.session_code` 同一把临时密钥算出的同一个值（D-69）。
+        session_code: joiner.session_code().to_string(),
         applied: result.applied,
         conflicts: result.conflicts,
         blobs: result.blobs,
@@ -173,6 +181,25 @@ pub fn list_paired_devices(state: tauri::State<'_, AppState>) -> IpcResult<Vec<D
 pub fn unpair(state: tauri::State<'_, AppState>, device_id: String) -> IpcResult<()> {
     let mut session = state.session.lock().map_err(lock_err)?;
     session.repo_mut()?.remove_paired_device(&device_id)?;
+    Ok(())
+}
+
+/// D-66：重命名已配对设备（返回 `void`，前端据 `list_paired_devices` 刷新）。
+///
+/// 背景：默认展示名由 `resync::device_display_name` 生成（`<平台>-<8 位短 ID>`），
+/// 两台同型号手机的短 ID 也可能被用户看成同一个，设备列表无法分辨 → 提供手动改名。
+/// 校验（空 / 超 64 字节 / 未配对）全部在 core：`Repository::rename_paired_device`。
+/// 契约：前端 `invoke('rename_paired_device', { device_id, name })` → `void`。
+#[tauri::command(rename_all = "snake_case")]
+pub fn rename_paired_device(
+    state: tauri::State<'_, AppState>,
+    device_id: String,
+    name: String,
+) -> IpcResult<()> {
+    let mut session = state.session.lock().map_err(lock_err)?;
+    session
+        .repo_mut()?
+        .rename_paired_device(&device_id, &name)?;
     Ok(())
 }
 
@@ -285,9 +312,12 @@ fn load_or_create_identity(app: &tauri::AppHandle) -> IpcResult<HostIdentity> {
 }
 
 /// 便于用户识别的本机展示名（不含任何隐私信息）。
+///
+/// D-66：改为委托 core 的 `resync::device_display_name`（`<平台>-<8 位短 ID>`），
+/// 让「配对时通告给对端的名字」与「重同步 HELLO 里的 client_name」**同源同格式**，
+/// 否则对端设备列表里的本机名仍是旧的无平台前缀形态。
 fn host_display_name(device_id: &str) -> String {
-    let short: String = device_id.chars().take(8).collect();
-    format!("PasswordMS-{short}")
+    resync::device_display_name(device_id)
 }
 
 /// 在协议端口范围内选取随机端口。
@@ -332,7 +362,10 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                             Ok(repo) => server.poll_accept_and_sync(repo, now_ms()),
                             // 会话已锁定 → 终止等待。落盘留痕：这类静默退出曾让"二维码还挂着但会话已死"无从排查。
                             Err(_) => {
-                                crate::state::append_log(&app, "[pairing] worker exiting: session lock busy");
+                                crate::state::append_log(
+                                    &app,
+                                    "[pairing] worker exiting: session lock busy",
+                                );
                                 break;
                             }
                         }
@@ -344,8 +377,17 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
             match outcome {
                 Ok(None) => continue,
                 Ok(Some(result)) => {
-                    eprintln!("[pairing] host session completed: applied={}", result.applied);
-                    crate::state::append_log(&app, &format!("[pairing] host session completed: applied={}", result.applied));
+                    eprintln!(
+                        "[pairing] host session completed: applied={}",
+                        result.applied
+                    );
+                    crate::state::append_log(
+                        &app,
+                        &format!(
+                            "[pairing] host session completed: applied={}",
+                            result.applied
+                        ),
+                    );
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }
@@ -356,7 +398,10 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                 Err(e) => {
                     // 诊断留痕：CoreError 的 Debug 只有错误码（Io 额外带 stage|kind），无隐私载荷。落盘到数据目录 passwordms.log。
                     eprintln!("[pairing] host session aborted: {e:?}");
-                    crate::state::append_log(&app, &format!("[pairing] host session aborted: {e:?}"));
+                    crate::state::append_log(
+                        &app,
+                        &format!("[pairing] host session aborted: {e:?}"),
+                    );
                     if let Ok(mut g) = state.pairing.lock() {
                         *g = None;
                     }

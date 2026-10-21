@@ -1,8 +1,11 @@
 <script lang="ts">
   // 同步状态与手动同步（F-09）。失败原因按错误码映射为文案（由 store 统一 Toast）。
+  // D-66：「立即同步」的忙碌态**按设备隔离**（`sync.syncingDeviceId`）——
+  // 被点的那台转圈 + `sync.syncing`，其余台只置灰不转圈（判定见 lib/device-label.ts）。
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
   import { formatDateTime } from '../../lib/constants';
+  import { syncButtonState } from '../../lib/device-label';
   import { sync } from '../../lib/stores/sync.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
 
@@ -42,10 +45,11 @@
   {:else}
     <ul class="sync-list">
       {#each sync.devices as device (device.device_id)}
+        {@const st = syncButtonState(sync.syncingDeviceId, device.device_id)}
         <li class="sync-row">
           <span class="sync-name">{device.device_name}</span>
-          <button class="pms-btn is-sm" type="button" onclick={() => void sync.syncNow(device.device_id)} disabled={sync.busy}>
-            {#if sync.busy}
+          <button class="pms-btn is-sm" type="button" onclick={() => void sync.syncNow(device.device_id)} disabled={st.disabled}>
+            {#if st.syncing}
               <Spinner size={13} />
               {ui.t('sync.syncing')}
             {:else}

@@ -23,8 +23,41 @@ class SyncStore {
   conflicts = $state<ConflictDto[]>([]);
   /** 每个冲突的当前选择（默认 null，**禁止自动选择**）。 */
   choices = $state<Record<string, ConflictChoice | null>>({});
-  /** 是否进行中。 */
+  /**
+   * 是否进行中。
+   *
+   * **D-66 语义收窄**：仅表示「**配对流程**进行中」（`PairScan.svelte` / `PairShow.svelte` 用）。
+   * 「立即同步」（`syncNow`）**不再**碰这个标志——原实现复用它当全局忙碌态，
+   * 导致设备列表里点一台、所有设备行同时显示「正在同步…」（详见 `syncingDeviceId`）。
+   */
   busy = $state(false);
+  /**
+   * D-66：正在「立即同步」的设备 id（null = 空闲）。
+   *
+   * 为什么必须按设备隔离：同步按钮是**每台设备行一个**，而原 `busy` 是 store 级**单一**
+   * 布尔，一台在同步则 `{#each}` 里所有行都命中 `{#if sync.busy}` → 两台手机同时转圈，
+   * 主人分不清在等哪一台。占用态收敛到「哪一台」这一个字符串后，行为判定交给纯函数
+   * `syncButtonState()`（`src/lib/device-label.ts`，有单测守门）。
+   */
+  syncingDeviceId = $state<string | null>(null);
+  /**
+   * D-69：上一次 join 成功时拿到的**会话码**，供 `PairScan` 与电脑屏逐字核对。
+   *
+   * 为什么从「指纹」改成「会话码」（主人真机实测得出的结论）：原实现里电脑屏显示的是
+   * `identity.fingerprint()`（**长期身份密钥**的指纹），手机屏显示的是握手时那把
+   * **每次配对重新生成的临时 X25519 公钥**的指纹 —— 两个不同的量，两屏必然不等。
+   * 用户照着核对，每次都会看到「不一致」，要么误判被中间人劫持，要么从此不再核对。
+   *
+   * 会话码 = `sha256(本次临时公钥)` 前 8 字节的小写 hex，两屏算的是**同一把临时公钥**，
+   * 构造上必然相等，这才是有意义的核对量。方向仍然固定：手机屏显示的是
+   * 「我要连的那台电脑」的会话码，不是手机自己的。
+   *
+   * 代价必须说清：会话码只证明「本次握手两端看到同一把临时公钥」（防本次中间人），
+   * **不证明**「对端是上次那台电脑」—— 后者要靠 `DeviceDto.fingerprint`（长期指纹）。
+   */
+  lastPairSessionCode = $state<string | null>(null);
+  /** D-68：上一次 join 成功时的对端设备名（与会话码一起显示，便于用户确认是哪台）。 */
+  lastPairDeviceName = $state<string>('');
 
   /** 发起配对（生成二维码）。 */
   async startPairing(): Promise<void> {
@@ -53,8 +86,16 @@ class SyncStore {
   /** 加入配对（扫码文本或手动输入）。 */
   async join(qrText: string): Promise<boolean> {
     this.busy = true;
+    // D-69：先清掉上一次的核对结果，避免把「上一台电脑」的会话码显示成「这一台」的。
+    this.lastPairSessionCode = null;
+    this.lastPairDeviceName = '';
     try {
       const result = await api.sync.join(qrText);
+      // D-69：留 join 结果里的**本次会话码**（`PairResultDto.session_code`，与电脑屏同值）。
+      // 失败路径不写（`return false` 前不碰），所以「上一台的码」不会残留到这一台。
+      // 只写状态、不 toast —— 核对是用户动作，不是通知。
+      this.lastPairSessionCode = result.session_code ?? null;
+      this.lastPairDeviceName = result.device_name;
       ui.toast('success', 'sync.paired');
       if (result.applied > 0) {
         ui.toast('info', 'sync.result_applied', { n: result.applied });
@@ -123,9 +164,41 @@ class SyncStore {
     }
   }
 
+  /**
+   * D-66：重命名已配对设备（本地昵称，不参与同步）。
+   *
+   * 语义：昵称只存在**本机**的设备表里（不回写对端、不进同步载荷），仅用于设备列表可读性。
+   * 成功后 `loadDevices()` 重新拉取（避免本地拼装脏数据），失败按错误码统一 toast。
+   *
+   * @param deviceId 目标设备 id（`DeviceDto.device_id`）。
+   * @param name 新昵称（前后空白会被裁掉；裁完为空视为无效，不发 IPC）。
+   * @returns 是否保存成功（供 UI 决定是否退出编辑态）。
+   */
+  async renameDevice(deviceId: string, name: string): Promise<boolean> {
+    const trimmed = name.trim();
+    // 空名无意义（列表会变成一行空白），前端直接拦下、不打 IPC。
+    if (trimmed.length === 0) {
+      return false;
+    }
+    try {
+      await api.sync.renameDevice(deviceId, trimmed);
+      await this.loadDevices();
+      ui.toast('success', 'sync.renamed');
+      return true;
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+      return false;
+    }
+  }
+
   /** 立即同步（直连重同步）。 */
   async syncNow(deviceId: string): Promise<void> {
-    this.busy = true;
+    // D-66：防重入——一次只允许一台设备同步；期间其它设备行的按钮由
+    // `syncButtonState()` 置灰（不转圈），不靠抛错打断用户。
+    if (this.syncingDeviceId !== null) {
+      return;
+    }
+    this.syncingDeviceId = deviceId;
     try {
       const result = await api.sync.now(deviceId);
       ui.toast('success', 'sync.result_applied', { n: result.applied });
@@ -139,7 +212,7 @@ class SyncStore {
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
     } finally {
-      this.busy = false;
+      this.syncingDeviceId = null;
     }
   }
 
@@ -178,6 +251,11 @@ class SyncStore {
     this.status = { last_sync_at: null, pending_changes: 0, device_count: 0 };
     this.conflicts = [];
     this.choices = {};
+    // D-66：锁定会中断所有在飞的同步，忙碌态必须一并复位（否则解锁后按钮永久置灰）。
+    this.syncingDeviceId = null;
+    // D-69：上一次配对的会话码不该跨解锁残留（下次解锁看到的应是空白，而非旧数据）。
+    this.lastPairSessionCode = null;
+    this.lastPairDeviceName = '';
   }
 }
 

@@ -61,6 +61,8 @@
     more: 'M5 12h.01M12 12h.01M19 12h.01',
     menu: 'M3 6h18M3 12h18M3 18h18',
     arrow_left: 'M19 12H5M12 19l-7-7 7-7',
+    // D-66：设备重命名（铅笔）。feather edit-3 的等价比路径，单 d 限制兼容。
+    pencil: 'M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z',
   };
 
   let d = $derived(PATHS[name] ?? '');

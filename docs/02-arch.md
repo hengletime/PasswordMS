@@ -788,7 +788,65 @@ pub struct Item {
 - **回收站**：整父呈现（附件数徽标），不提供单附件粒度还原——附件操作只在活跃父条目上；
 - **迁移触发时机**：解锁后同步前执行，避免迁移产物与远端旧语义帧竞态；两端各自幂等迁移，收敛一致。
 
-### 3.15 同步可用性缺陷（增量设计 · v1.2.4 批）
+#### 3.14.9 v1.2.5 增量（D-66：Android `content://` 附件 + 已配对设备可辨识）
+
+> 真机反馈两条：① Android 上**永远加不进附件**；② 两台手机在设备列表里都叫 `Android-3dd4390a`，无法分辨。前者是根因级缺陷，后者是可用性缺陷。
+
+**A. Android 文件选择返回 `content://`，不能当路径读（缺陷根因）**
+
+- **根因**：`@tauri-apps/plugin-dialog` 的 Android 实现在 `open()` 里返回的是 ContentProvider URI 字符串（`tauri-plugin-dialog` 的 `DialogPlugin.kt`：`uris.add(uri?.toString())`），而 §3.14.5 的 `add_attachment` 把它当文件系统路径直接交给 `Repository::add_attachment(&item_id, Path::new(&source_path), &title)`；core 第一步 `std::fs::metadata(source_path)?` 对 `content://…` 必然失败 → `CoreError::Io` → `ERR_IO` → 前端 toast「文件读写出错。」。
+- **修法（分层，IPC 形状零变更）**：
+
+| 层 | 变更 |
+|----|------|
+| `passwordms-core` | 新增 `attachment_name::filename_from_source(&str) -> String`：`content://` → 取最后一个 `/` 后的段 → 百分号解码（手写 `%XX`，不新增依赖）→ 再取 `/` 后段 → 剥 provider 前缀（`document/`、`primary:`、`raw:`、`home:`）；其它按路径取最后一段；空结果兜底 `attachment`。provider 不给真名时**原样保留**（如 `image:1000000123`），不伪造扩展名。 |
+| `passwordms-core` | `Repository` 抽出私有 `insert_attachment(item_id, filename, data: &[u8])` 承载**全部**校验与落库逻辑；公开入口两个：`add_attachment(item_id, source_path, title)`（保留 `metadata` 预检避免超大文件进内存）与新增 `add_attachment_bytes(item_id, filename, data)`。校验**顺序与错误码逐条不变**（legacy → `AttachmentLimit` → `AttachmentTooLarge` → `VaultCapacityExceeded` → `filename_too_long`），大小判定由 `meta.len()` 改为 `data.len()`。 |
+| `src-tauri` | `add_attachment` 新增注入参数 `app: tauri::AppHandle`；`#[cfg(target_os = "android")]` 且 `source_path.starts_with("content://")` 时，用 `tauri_plugin_fs::{FilePath, FsExt, OpenOptions}` 打开该 URI（插件 Android 侧走 `getFileDescriptor` 解析 content URI）读字节 → `add_attachment_bytes`；其余情况（桌面全部路径、Android 普通路径）原样走 `add_attachment`。Rust 侧直接调插件 API 不经 IPC 权限，**capabilities 无需改动**；`tauri::Url` 即 `url::Url` 的再导出，`Cargo.toml` 无新增依赖。 |
+
+- **错误映射**：fs 插件 `open` / `read_to_end` 失败 → `std::io::Error` → `CoreError::Io` → 仍是 `ERR_IO`，**不新增错误码**。虚拟文件（云盘类 provider 不返回 fd）同样落 `ERR_IO`，用户可换用「下载到本地再添加」。
+- **兼容性**：桌面行为零变化；Android 普通路径（极少数第三方选择器）仍走原路径分支；`tests/attachment_sync.rs` 三例语义不变。
+
+**B. 已配对设备默认名加平台前缀 + 支持重命名**
+
+- **默认名**：`resync::device_display_name` 由固定 `PasswordMS-<8 位短 ID>` 改为 `<平台>-<8 位短 ID>`（`Android-3dd4390a`、`Windows-a1b2c3d4`），平台由 `cfg!(target_os = …)` 判定（`Android` / `iOS` / `Windows` / `macOS` / 其它 `Linux`）。纯函数、无隐私字段；wire 校验（`server_id` / 指纹 / MAC）**一律不动**——展示名只作为 `client_name` / 配对通告名传输。外壳侧 `host_display_name` 改为委托同一函数，保证「配对时通告的名字」与「重同步 HELLO 里的 `client_name`」同源。
+- **手动改名**：core 新增 `Repository::rename_paired_device(device_id, name) -> CoreResult<PairedDevice>`：trim 后空 → `Validation("device_name_empty")`；trim 后 > 64 **字节** → `Validation("device_name_too_long")`；设备不存在 → `NotPaired`；**只改 `device_name`**（`peer_ip` / `peer_port` / `sync_key_wrapped` / `fingerprint` / `paired_at` / `last_sync_at` 一字不动）；trim 后与现值相同不重写记录（与 `update_paired_addr` 的「值未变化不重写」一致）。
+- **IPC 契约**：新增命令 `rename_paired_device { device_id, name } → void`（`DeviceDto` 结构不变，前端自行显示 `paired_at`）。
+
+#### 3.14.10 v1.2.5 修订（D-69：配对核对改「会话码」口径，修正 D-68）
+
+> 出包前的门禁抓到的**真红**（不是环境问题）：`bytes_entry_keeps_validation_order_of_path_entry`
+> 失败 → 顺藤查出 `repository.rs` 里残留着 QA 变异实验的注入代码（文件名校验被提到大小校验之前，
+> 与同函数文档承诺相反）。回滚后转绿。**同一轮还查出 D-68 首版实现是负收益**，一并修正。
+
+**A. 残留变异实验代码（真红根因）**
+
+- 现象：`insert_attachment` 里有一句 `// [QA125 变异实验 e] …` 的注入块，把 ⑥ 文件名校验搬到 ④ 大小校验之前。
+- 为何是 defect 而不是测试错：同函数的 doc 明确承诺「④ 大小 → ⑤ 容量 → ⑥ 文件名」，测试守的正是文档；
+  **代码与文档不一致时，按 §0 约定以文档为准 → 回滚代码**。回滚后 6/6 绿。
+- 纪律：变异实验的注入块**必须带可检索标记**（本轮靠 `grep 变异实验|QA125|MUTATION` 唯一命中定位），
+  且**回滚后才能提交**；`docs/03-impl.md` §13.5 已把「落盘前对抗实验」写成流程，需补「回滚自检」一步。
+
+**B. D-68 → D-69：会话码必须是**同一次握手**绑定的量**
+
+| 项 | 首版（D-68，错误） | 修正（D-69） |
+|----|----|----|
+| 电脑屏显示 | `identity.fingerprint()`＝`sha256(长期身份公钥)` | `SyncServer::session_code()`＝`sha256(host_eph 公钥)` |
+| 手机屏显示 | `fingerprint_of(&Accept.host_pub)`＝`sha256(临时公钥)` | 同一把 `host_eph` 的公钥 → **同一个值** |
+| 结果 | 两把不同密钥 → **必然不等**，每台设备都被报成中间人 | 构造上必然相等；中继式中间人两侧公钥不同 → 两码不等，**能抓出** |
+| 临时密钥生成点 | `handle_stream` 每条连接新生成 | `SyncServer::start()` 一次生成（否则电脑屏在手机连上前无值可显示） |
+| 命名 | 两处都叫 `fingerprint` | 拆成 `session_code`（每次变）与 `device_fingerprint`（稳定），DTO 字段同步改名 |
+
+- **为什么不在 `Accept` 里带长期身份公钥**：那是 wire 变更 + 双方必须同时升级（老板已裁定本轮不做协议变更）。
+  会话码方案不动 wire，且安全性上真正成立——它绑的是 ECDH 实际使用的公钥。
+- **电脑端不再写对端指纹**：`HostSyncResult.fingerprint` 由 `fingerprint_of(&joiner_pub)`（临时公钥）改为**空串**。
+  HELLO 只带 Joiner 的临时公钥，拿它算「设备指纹」就是 D-67 同类错误的重演。
+  要恢复「电脑端也能看到手机长期指纹」需扩展 HELLO 携带 `joiner_identity_pub`（加法式、向后兼容）→ **backlog D-70**。
+- **手机端设备指纹改真**：`JoinerSession.device_fingerprint` 改取**二维码 `QRPayload.fp`**（长期身份指纹，
+  与电脑「本机身份」同源），不再取临时公钥指纹；写进 `PairedDevice.fingerprint` 后跨重配对稳定。
+- **测试**：`crates/passwordms-core/tests/pairing_session_code.rs` 三例（替换原 `pairing_fingerprint_consistency.rs`）——
+  ① 两屏同值且为 16 位小写 hex；② 会话码跨配对必变、设备指纹跨配对不变、两者不相等；③ 电脑端对端指纹留空。
+
+
 
 > 客户实测（2026-10-21）：手机删某条目一个附件并在手机上点「立即同步」（该方向成功）→
 > 电脑上该附件仍在；随后在电脑点「立即同步」→ 报「无法连接到电脑…」且确实连不上。

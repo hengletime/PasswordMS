@@ -51,6 +51,12 @@ pub struct SyncServer {
     session_salt: [u8; 32],
     session_id: [u8; 16],
     identity: HostIdentity,
+    /// 本次配对会话的临时 X25519 密钥对（D-69）。
+    ///
+    /// 在 `start()` 里一次生成、整个配对窗口内复用，**不再每连接新生成**：
+    /// 因为「会话码」必须在手机连上之前就能显示在电脑屏上（两屏同值的前提）。
+    /// 复用是安全的——令牌用后即焚（`used`），一个 `SyncServer` 生命周期内只允许完成一次配对。
+    host_eph: EphemeralKeypair,
     host_id: String,
     host_name: String,
     /// 本机持久重同步监听端口（随二维码通告给 Joiner，D-11）。
@@ -74,6 +80,7 @@ impl SyncServer {
         let token = rng::random_token()?;
         let session_salt = to_arr32(&rng::random_bytes(32)?)?;
         let session_id = to_arr16(&rng::random_bytes(16)?)?;
+        let host_eph = EphemeralKeypair::generate()?;
         Ok(Self {
             listener,
             token,
@@ -82,10 +89,22 @@ impl SyncServer {
             session_salt,
             session_id,
             identity,
+            host_eph,
             host_id,
             host_name,
             sync_port,
         })
+    }
+
+    /// 本次配对的**会话码**：`sha256(host_eph 公钥)` 前 8 字节 hex（D-69）。
+    ///
+    /// 与手机屏核对的是**同一个值**——手机端由 `Accept.host_pub` 算出
+    /// （`client.rs` 的 `JoinerSession::session_code`），两屏构造上必然相等。
+    ///
+    /// 刻意与「设备指纹」（`HostIdentity::fingerprint`，长期身份密钥、稳定不变）
+    /// 区分命名：会话码每次配对都变，只用于**本次**人工核对，不能当设备身份用。
+    pub fn session_code(&self) -> String {
+        handshake::fingerprint_of(&self.host_eph.public_bytes())
     }
 
     /// 本机持久重同步监听端口（D-11）。
@@ -138,7 +157,11 @@ impl SyncServer {
     }
 
     /// 接受一次连接：完成握手 + 双向同步交换（阻塞式）。
-    pub fn accept_and_sync(&mut self, repo: &mut Repository, now: i64) -> CoreResult<HostSyncResult> {
+    pub fn accept_and_sync(
+        &mut self,
+        repo: &mut Repository,
+        now: i64,
+    ) -> CoreResult<HostSyncResult> {
         let (stream, peer) = self.listener.accept().map_err(|_| CoreError::SyncAborted)?;
         let peer_ip = peer.ip().to_string();
         self.handle_stream(stream, &peer_ip, repo, now)
@@ -188,7 +211,8 @@ impl SyncServer {
             .set_read_timeout(Some(Duration::from_secs(30)))
             .map_err(|_| CoreError::SyncAborted)?;
         // 1) HELLO + 令牌校验。
-        let hello_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
+        let hello_bytes =
+            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
         let hello = match serde_json::from_slice::<HandshakeMessage>(&hello_bytes)? {
             HandshakeMessage::Hello(h) => h,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -207,10 +231,9 @@ impl SyncServer {
             return Err(CoreError::PairTokenInvalid);
         }
 
-        // 2) ECDH + 派生会话密钥。
-        let host_eph = EphemeralKeypair::generate()?;
+        // 2) ECDH + 派生会话密钥（用 `start()` 生成的那把临时密钥，见 `host_eph` 字段注释）。
         let joiner_pub = to_arr32(&hello.joiner_pub)?;
-        let shared = host_eph.shared_secret(&joiner_pub)?;
+        let shared = self.host_eph.shared_secret(&joiner_pub)?;
         let keys = handshake::derive_session_keys(&shared, &self.session_salt)?;
 
         // 3) ACCEPT（含 sync_key 包裹的 VK 信封）。
@@ -220,14 +243,15 @@ impl SyncServer {
             v: QR_PROTOCOL_VERSION,
             host_id: self.host_id.clone(),
             host_name: self.host_name.clone(),
-            host_pub: host_eph.public_bytes().to_vec(),
+            host_pub: self.host_eph.public_bytes().to_vec(),
             session_id: self.session_id.to_vec(),
             session_salt: self.session_salt.to_vec(),
             vk_nonce,
             vk_ct,
         };
         let accept_frame = serde_json::to_vec(&HandshakeMessage::Accept(accept))?;
-        transport::send_frame(&mut stream, &accept_frame).map_err(|e| stage_io(e, "accept_send"))?;
+        transport::send_frame(&mut stream, &accept_frame)
+            .map_err(|e| stage_io(e, "accept_send"))?;
 
         // 4) 双向密钥确认。
         let transcript = handshake::transcript_hash(&[&hello_bytes[..], &accept_frame[..]]);
@@ -238,7 +262,8 @@ impl SyncServer {
         )
         .map_err(|e| stage_io(e, "confirm_send"))?;
 
-        let joiner_confirm = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "confirm_recv"))?;
+        let joiner_confirm =
+            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "confirm_recv"))?;
         let mac_j = match serde_json::from_slice::<HandshakeMessage>(&joiner_confirm)? {
             HandshakeMessage::Confirm(c) => c.mac,
             _ => return Err(CoreError::FingerprintMismatch),
@@ -251,7 +276,12 @@ impl SyncServer {
 
         // 5) 令牌用后即焚；持久化配对设备与同步状态。
         self.used = true;
-        let fingerprint = handshake::fingerprint_of(&joiner_pub);
+        // D-69：**不写指纹**。HELLO 只带 Joiner 的临时公钥（`joiner_pub`），拿它算出的
+        // 指纹每次重配对都变，写进 `PairedDevice.fingerprint` 就是又一个「冒充设备指纹」
+        // （D-67 同类错误）。电脑端要拿到手机的**长期**身份公钥，需扩展 HELLO 携带
+        // `joiner_identity_pub`（加法式、向后兼容）——已登记 backlog **D-70**，本轮不做。
+        // 空串的语义 = 「本端不掌握对端长期身份」，UI 侧据此**不渲染**指纹行，回退到设备名。
+        let fingerprint = String::new();
         let peer_port = if hello.sync_port == 0 {
             None
         } else {
@@ -278,8 +308,15 @@ impl SyncServer {
         // 增量重同步通道（ResyncServer）的重放红线**不受影响**，维持严格单调。
         state.last_recv_seq = 0;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
-        let (applied, conflicts, blobs) =
-            run_exchange(&mut stream, &keys, &self.session_id, &mut replay, &mut state, repo, now)?;
+        let (applied, conflicts, blobs) = run_exchange(
+            &mut stream,
+            &keys,
+            &self.session_id,
+            &mut replay,
+            &mut state,
+            repo,
+            now,
+        )?;
         state.last_recv_seq = replay.last_recv_seq();
         repo.save_sync_state(state)?;
         repo.touch_device_sync(&hello.joiner_id, now)?;
@@ -360,7 +397,8 @@ fn run_exchange(
         blob_support: true,
     };
     let reply_env = seal_envelope(&keys.sync_key[..], session_id, out_seq, now, &reply)?;
-    transport::send_frame(stream, &serde_json::to_vec(&reply_env)?).map_err(|e| stage_io(e, "reply_send"))?;
+    transport::send_frame(stream, &serde_json::to_vec(&reply_env)?)
+        .map_err(|e| stage_io(e, "reply_send"))?;
     // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发）。
     merge::note_sent_tombstones(state, &reply.changes);
 

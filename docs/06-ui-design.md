@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）**
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`）
 
 ---
 
@@ -413,7 +413,7 @@ textarea.pms-input { padding: .6rem .75rem; line-height: 1.6; resize: vertical; 
 | `common/ThemeToggle.svelte` | 三态循环（系统 → 浅色 → 暗色），图标用 `sun` / `moon`，并带 `title`。切换时**同时**更新 `document.documentElement` 的 `data-theme` **和**原生窗口标题栏（见 §4 D-32）。挂载点：解锁页右上角、主界面顶栏右区。 |
 | `HealthCheck.svelte` | 健康分做大字环形/大数字 + 4 个统计卡（弱口令/重复/超期/总数），弱项用 `.pms-badge.is-danger` |
 | `Trash.svelte` | 与 ItemList 同构；到期时间用 `.pms-badge.is-warning` |
-| `sync/*.svelte` | 4 个 tab 统一；配对二维码容器加 `.pms-card` 与留白；设备行 = 图标 + 名称 + 指纹 `.pms-meta` + 解绑 ghost 按钮。**初始标签按配对状态（D-58b）**：主菜单进入「同步」时，若用户从未手动点过任何 tab，则已有配对设备（`sync.devices.length > 0`）优先显示「状态」，无配对设备优先显示「配对」；用户一旦手动点过任何 tab 即永久尊重其选择（`syncTabTouched`），不再自动调整；不做持久化 |
+| `sync/*.svelte` | 4 个 tab 统一；配对二维码容器加 `.pms-card` 与留白；设备行 = 图标 + 名称（**可重命名，行内编辑，D-66**）+ **指纹**（= `DeviceDto.fingerprint`，16 位小写 hex；**不是** `device_id`，D-67）+ **配对时间** + 上次同步 + 铅笔改名 `.pms-icon-btn` + 解绑 ghost 按钮。**初始标签按配对状态（D-58b）**：主菜单进入「同步」时，若用户从未手动点过任何 tab，则已有配对设备（`sync.devices.length > 0`）优先显示「状态」，无配对设备优先显示「配对」；用户一旦手动点过任何 tab 即永久尊重其选择（`syncTabTouched`），不再自动调整；不做持久化。**「立即同步」忙碌态按设备隔离（D-66）**：占用态是 `sync.syncingDeviceId`（单个设备 id，不是 store 级布尔）——被点的那台显示 `<Spinner>` + `sync.syncing`，其余台仅 `disabled` **不转圈**，期间**全部**不可点（禁止并发重同步）；判定收敛在纯函数 `syncButtonState()`（`src/lib/device-label.ts`，5 例单测守门）。设备行内改名的硬约束见 §5.6，指纹取值规则见 §5.6.3。**配对两屏显示会话码（D-68 立项 / D-69 修正口径）**：电脑屏在二维码/配对文本下方显示 `PairingDto.session_code`（本次配对核对码）+ `sync.session_code_hint`，手机屏在加入表单下方显示 `sync.lastPairSessionCode`（电脑的会话码）+ 对端设备名 + 同一句提示；判定走纯函数 `hasSessionCode()`，无值则**整块不渲染**（不显示空标签）。**会话码每次配对都变，不是设备指纹**；方向硬约束与样式约束见 §5.7 |
 | `common/Modal.svelte` / `ConfirmDialog.svelte` | 遮罩 `rgba(0,0,0,.55)` + 轻微模糊；卡片 `--pms-r-lg` + `--pms-shadow`；确认按钮危险态用 `is-danger` |
 | `common/Toast.svelte` | 右下角；`--pms-r`；左侧 3px 状态色竖条。**时长自适应（D-58a）**：success 3000ms；info 5000ms；error 按当前语言渲染后文案长度自适应 `min(12000, max(6000, 字数 × 150))`（6s 起步、每字 150ms、12s 封顶）——长错误文案必须给足阅读时间。关闭按钮不变 |
 | `common/StrengthMeter.svelte` | 4 段；弱=红 / 一般=橙 / 强=青绿 / 很强=青绿加粗；带文字标签。**空态（未输入）不要"压暗到看不见"，也不要让空 label 占位**：轨道用中性可见色 `--pms-track`，并 `.meter[data-score='0'] .label { display:none }` 让 4 段占满整行。<br>（修正 v1.1：原写法实测暗色下条带与卡片 RGB 差仅 24，肉眼不可见，且右侧凭空多 47px 留白。） |
@@ -476,6 +476,191 @@ div.pms-card.set-card
 - **图标**：主页按钮用 `external`（Icon 里没有 `link`，写错名会静默不渲染）。按钮尺寸 `is-ghost is-sm`，与卡片内其它行同高，不用主色，避免「关于」抢走安全设置的注意力。
 - 这一组**必须排在最后**（在「保险库文件」卡之后）：关于信息是低频内容，不给它抢首屏。
 
+### 5.6 设备行内改名与同步忙碌态隔离（D-66 / D-67，v2.9）
+
+> 需求来源（主人真机反馈）：「设备」页两台手机都显示 `PasswordMS-3dd4390a` 这类名字，**分不清哪台是哪台**；
+> 点其中一台「立即同步」，**两台同时显示正在同步**，看不出在等哪台。
+
+#### 5.6.1 忙碌态按设备隔离（硬约束）
+
+```
+同步 store
+  syncingDeviceId: string | null     ← **唯一**占用态真相（D-66 新增）
+  busy: boolean                      ← 语义收窄为「**配对流程**进行中」（PairScan / PairShow 用）
+```
+
+- **禁止**用 store 级单一布尔控制 `{#each}` 里的每行按钮 —— 那正是本缺陷成因：一台在同步，
+  所有行都命中 `{#if sync.busy}`，两台手机一起转圈。
+- 每行状态由纯函数解算，**不在模板里写判定表达式**：
+  ```ts
+  // src/lib/device-label.ts
+  syncButtonState(syncingDeviceId, deviceId): { syncing: boolean; disabled: boolean }
+  //   全空闲                → { syncing: false, disabled: false }
+  //   命中那台              → { syncing: true,  disabled: true  }
+  //   未命中但整体忙碌      → { syncing: false, disabled: true  }   ← 只置灰，不转圈
+  ```
+- `syncNow(deviceId)`：**不再碰 `busy`**；进函数先 `if (syncingDeviceId !== null) return;` 防重入，
+  然后 `syncingDeviceId = deviceId`，`finally` 置回 `null`。`reset()`（锁定）必须一并置 `null`，
+  否则解锁后所有同步按钮永久置灰。
+- 空字符串 `deviceId` **永不判为命中**（空 id 不是合法设备，跟着转圈等于把「查不到设备」
+  伪装成「正在同步」）。
+
+#### 5.6.2 行内改名（交互硬约束）
+
+```
+li.sync-device
+  span.sync-device-icon        Icon(name="device")
+  div.sync-device-meta         纵向
+    {#if 编辑态}
+      input.pms-input           ← 初值 = 当前名，挂载即聚焦并全选（`use:` action）
+      div.sync-rename-actions   保存 is-primary is-sm + 取消 is-ghost is-sm
+    {:else}
+      span.sync-device-name
+    {/if}
+    span.sync-device-sub       指纹 fingerprint（.sync-mono，title=device_id）
+    span.sync-device-sub       配对时间 paired_at
+    span.sync-device-sub       上次同步 last_sync_at
+  button.pms-icon-btn          pencil（非编辑态才渲染）
+  button.pms-btn.is-ghost.is-sm.sync-danger   解除配对
+```
+
+| 约束 | 规则 |
+|---|---|
+| 编辑态唯一性 | **同时只允许一行**处于编辑态。用 `let editingId = $state<string \| null>(null)` **单一状态源**，禁止再拆一个 `isEditing` 布尔（同 D-31 的教训） |
+| 键盘 | `Enter` 保存、`Esc` 取消，两者都 `preventDefault()`（防 Enter 触发表单默认提交 / Esc 冒泡） |
+| 空名 | `draft.trim().length === 0` → 保存按钮 `disabled`，且 `saveEdit` 提前返回（不打 IPC） |
+| 字节口径 | 数字节**必须在 `trim()` 之后**（模板的 `tooLong` 与 `saveEdit` 的守卫都用 `draft.trim()`），且与后端 `name.trim()` 同序。**两处必须调同一个 trim 方法**：不许一处 `draft.trim()`、另一处 `draft.trimEnd()`，否则「尾部空格算不算进 64 字节」在「提示」和「保存」之间会不一致 —— 提示说不超、保存却被拒（或反过来），用户会以为按钮坏了。反例：拿原始 `draft` 数，「21 个汉字 + 首尾各一空格」= 65 字节会被前端误拦，而后端 trim 后（63 字节）本来收得下 → 前端比后端严，用户会觉得「明明放得下却不让存」 |
+| 超长 | 上限 **64 字节**（与 core 的 `MAX_DEVICE_NAME_BYTES` 同口径），**按 UTF-8 字节算**：22 个汉字 = 66 字节即超限。超限时同样 `disabled` + 就地 `.pms-hint`（`--pms-danger`）显示 `sync.rename_too_long`。**光靠 `maxlength` 不够**——它只数 UTF-16 码元，会放过 64 个汉字的名称，让后端回笼统的「输入无效。」。改这个数字要**四处同改**：前端常量 / core 常量 / core 测试 `rename_rejects_over_64_bytes` 的边界构造 / `sync.rename_too_long` 中英文案（其中「约 21 个汉字」= `floor(64/3)`；Emoji 4 字节/个，故文案只说汉字、不说「或 N 个字符」） |
+| 提交中 | `saving` 为真时保存/取消按钮都 `disabled`，防重复提交 |
+| 输入框样式 | **必须** `class="pms-input"`，**不得**在组件 `<style>` 里重写 `border` / `background` / `font-size`（只允许父级布局类） |
+| 按钮文案 | 复用既有 `common.rename`（铅笔 `title` / `aria-label`、输入框 `aria-label`）、`common.save`、`common.cancel`；**不新建重复键** |
+| 成功后 | 由 store 的 `loadDevices()` 刷新数据（含后端返回的新名称），组件只负责 `editingId = null` |
+| 副行顺序 | 指纹 → **配对时间** → 上次同步（配对时间用 `DeviceDto.paired_at` + `formatDateTime`，为 0 时回退 `common.unknown`） |
+| 指纹来源 | 必须显示 `DeviceDto.fingerprint`（16 位小写 hex），**不得**用 `device_id` 冒充；判定走纯函数 `fingerprintText()`，详见 §5.6.3 |
+| 昵称语义 | **本地昵称**：只存在本机设备表，不回写对端、不进同步载荷；文案不承诺「会同步到手机」。**这不是约定而是结构保证**——`Repository::export_changes` 的类型白名单只放行 `RECORD_TYPE_ITEM` / `RECORD_TYPE_FOLDER`，`RECORD_TYPE_DEVICE` 等其余记录一律 `continue`（搜 `repository.rs` 里 `export_changes` 函数体第一个 `if`），所以设备名**在结构上不可能**进 wire。同时改名只写 `device_name` 后 `upsert_paired_device`，不调 `touch_device_sync` → `last_sync_at` / `paired_at` / 指纹 / 共享密钥均不变（core 测试 `rename_touches_only_device_name` 钉死）。**引用源码位置一律给符号名不给行号**——本条白名单从 `1259` 漂到 `1528` 只用了一天（D-66 插入 + `cargo fmt` 各贡献一段），行号的保鲜期是「天」级 |
+
+#### 5.6.3 指纹必须是真指纹（D-67，硬约束）
+
+**缺陷回顾**：设备行的「设备指纹」一行原先渲染的是 `device.device_id`（36 位 UUID），而 `DeviceDto.fingerprint` 字段一直存在、却**在 UI 上一处都没露过**（全仓 `sync.fingerprint` 只此一处；旧键 `sync.confirm_fingerprint` 长期零调用，已在 D-68 删除）。
+
+这不只是显示难看 —— 是**安全提示在说谎**：
+
+| | 真指纹 | 被冒充的 `device_id` |
+|---|---|---|
+| 来源 | `handshake::fingerprint_of()` = `sha256(对端公钥)` 前 8 字节 | 随机 UUID（v4） |
+| 形式 | **16 位小写 hex** | 36 位带连字符 |
+| 写入点 | 配对握手时写入 `PairedDevice.fingerprint`（主机侧 `server.rs` / 加入侧 `client.rs`） | 配对时生成 |
+| 安全含义 | 与对端公钥绑定 → 中间人无法伪造出相同值 | **零**：与公钥无关，中间人隔开两端时用户照 UUID 比对也永远「一致」 |
+
+硬约束：
+
+```
+{#if hasSessionCode(device.fingerprint)}
+  {ui.t('sync.fingerprint')}: <span class="sync-mono" title={device.device_id}>
+    {fingerprintText(device.fingerprint)}
+  </span>
+{/if}
+```
+
+| 约束 | 规则 |
+|---|---|
+| 取值 | 必须 `DeviceDto.fingerprint`，**禁止**把 `device_id` 当指纹渲染 |
+| 判定位置 | 走纯函数 `hasSessionCode()`（非空判定）+ `fingerprintText()`（仅 `trim`）（`src/lib/device-label.ts`），**不在模板里写 `||` / 三元判定** |
+| 空值**不渲染** | 指纹为空串 / 纯空白 / `null` / `undefined` → **该行整行不渲染**（不是回退 `device_id`、也不是留空白）。**D-69 改口径**：回退 `device_id` 等于用 UUID 冒充指纹，正是 D-67 定性过的错误。空值不是假设——`PairedDevice.fingerprint` 带 `#[serde(default)]`，老记录读出来就是空串；且**电脑端记录手机设备时现在恒为空**（HELLO 不含手机长期身份公钥，见 §5.7.1 与 backlog D-70） |
+| `device_id` 的位置 | 只挂 `<span title={device.device_id}>`，悬停可查（排查用）；**不单独占一行**，副行已够挤且 UUID 对用户零意义 |
+| 大小写 | 后端输出即小写 hex，前端**不做**大小写变换（比对的是同一个串，改了反而对不上） |
+| 单测 | `device-label.test.ts` 覆盖：正常 / 前后空白 / 空串 / 纯空白 / `null` / `undefined`，且断言**任何输入都不返回 `device_id` 顶替** |
+
+### 5.7 配对**会话码**核对（D-69，v2.9 修正 D-68）
+
+> 缺陷背景（分两层，别混）：
+>
+> **第一层（D-68 立项理由）**：i18n 里曾躺着一条 `sync.confirm_fingerprint`「请核对两端显示的设备指纹是否一致。」——
+> **只叫用户核对、不告诉他核对出问题怎么办**，且**全仓零调用点**。因为配对两屏都不显示指纹：
+> 电脑屏（`PairShow`）只出二维码/地址/配对文本，手机屏（`PairScan`）配对成功后只弹一句「配对成功」。
+> **核对动作在 UI 上无处可做**，那句文案等于一句没人能执行的嘱咐。（D-67 修的是「设备页不再说谎」，不等于「能核对」。）
+>
+> **第二层（D-68 首版实现是负收益，D-69 修正）**：首版让电脑屏显示 `identity.fingerprint()`
+> （`sha256(长期身份公钥)`，与二维码 `QRPayload.fp` 同源），却让手机屏显示
+> `fingerprint_of(&Accept.host_pub)` —— 而 `Accept.host_pub` 是**每次配对重新生成的临时 X25519 公钥**
+> （`server.rs` 的 `handle_stream`）。两把不同的密钥 → **两屏必然不等**，用户按提示核对必然看到
+> 「不一致」。根因是 `Accept`（`protocol.rs`）里**根本没有长期身份公钥**，手机端拿不到能与电脑屏对齐的值。
+> 结论：**显示一个永远不等的值，比不显示更糟**——它会把每台设备都报成中间人。
+
+#### 5.7.1 三个量必须分清（**混用就是缺陷本身**）
+
+| 量 | 数据来源 | 稳定吗 | 用途 | 出现在哪 |
+|---|---|---|---|---|
+| **会话码** `session_code` | `sha256(host_eph 公钥)` 前 8 字节 hex（16 位小写） | **每次配对都变**（绑本次握手的临时密钥） | **本次**人工核对（中间人检测） | 电脑屏 `PairShow`、手机屏 `PairScan` |
+| **设备指纹** `DeviceDto.fingerprint` | `sha256(长期身份公钥)` 前 8 字节 hex（16 位小写） | **稳定不变** | 设备列表辨识「这台是谁」 | 「同步 → 设备」页副行（§5.6.3） |
+| `device_id` | 随机 UUID v4 | 稳定 | 排查用（只做 `title` 悬停） | 悬停提示，**永不作为指纹文本渲染** |
+
+会话码**不能**当设备身份用（下次配对就变），设备指纹**不能**当核对码用（它不绑本次握手，
+中继式中间人两侧看到的是同一台电脑的同一个长期指纹，比对永远「一致」→ 检测不出任何东西）。
+
+#### 5.7.2 方向硬约束（**禁止反过来**）
+
+| 屏幕 | 显示谁的会话码 | 数据来源 |
+|---|---|---|
+| 电脑 `PairShow.svelte` | **电脑自己的**（主机侧本次会话） | `PairingDto.session_code`（=`SyncServer::session_code()`） |
+| 手机 `PairScan.svelte` | **电脑的**（对端本次会话） | `PairResultDto.session_code`（=`JoinerSession::session_code()`，由 `Accept.host_pub` 算出）→ 落在 `sync.lastPairSessionCode` |
+
+**为什么两屏「必然相同」**（这是核对能成立的根据，不是巧合）：
+
+- 电脑屏的值来自 `SyncServer::start()` 里一次生成的 `host_eph`，`session_code()` 就是 `fingerprint_of(host_eph.public_bytes())`；
+- 手机收到的 `Accept.host_pub` **就是同一把 `host_eph` 的公钥**（`server.rs` 的 `handle_stream` 用 `self.host_eph` 组包）；
+- 两者输入完全相同的 32 字节 → 输出必然逐字相同。**没有第二把密钥参与**，所以不存在时序差。
+
+临时密钥**从每连接生成前移到 `start()` 一次生成**，正是为了让电脑屏在手机连上之前就能显示这个值
+（否则要等握手完成才知道，用户没得比）。配对令牌用后即焚（`used`），一个 `SyncServer` 生命周期内
+只允许完成一次配对，因此复用这把临时密钥不引入额外风险。
+
+**中间人为什么能被抓出来**：中继式攻击者必须对两侧分别用自己的临时公钥，于是电脑屏算的是
+`fp(真实 host_eph)`、手机屏算的是 `fp(攻击者的公钥)` → 两码不等 → 用户看到不一致即中止。
+（反过来说，若两屏显示的是同一个**长期**指纹，中继两侧看到的仍是同一个值，比对必然「一致」——这就是
+首版负收益的技术原因。）
+
+前端**不做任何自动比对、也不做任何格式化**（不转大小写、不插分隔空格、不截断）：一旦美化就会让「逐字比对」失效。
+折行只用 `word-break: break-all`，它改变的是**渲染换行**、不改变字符内容。
+
+**手机不显示自己的会话码**：电脑的「设备」页已经能看到手机这台设备（§5.6.3 / D-67），
+配对屏再显示一遍只会让用户不知道该拿哪个和哪个比 —— 方向一乱，核对本身就失效了。
+
+#### 5.7.3 文案键与判定
+
+| 位置 | 键 | 说明 |
+|---|---|---|
+| 电脑屏标签 | `sync.session_code` | 「本次配对核对码」/ "Pairing code (this session)" |
+| 手机屏标签 | `sync.peer_session_code` | 「电脑上的核对码」/ "Code shown on the computer" |
+| 手机屏对端设备名 | 直接渲染 `sync.lastPairDeviceName` | 让用户确认「是哪台」，非 i18n 键 |
+| 两屏共同提示 | `sync.session_code_hint` | 含**不一致时的处置**：立即解除配对并重试 |
+
+> 文案纪律：这两处**不得**再出现「设备指纹」字样。会话码每次配对都变，叫成指纹会诱导用户
+> 把它记下来当身份凭据（那是 §5.6.3 「设备指纹」的职责，稳定不变）。
+
+显示判定必须走纯函数，**模板里不写 `if (x)` 判定**：
+
+```ts
+// src/lib/device-label.ts
+hasSessionCode(value: string | null | undefined): boolean
+//   string 且 trim() 后非空 → true；null / undefined / 空串 / 纯空白 → false
+```
+
+**缺失时整块不渲染**（不是渲染一个空标签）—— 「核对码：」后面留空的危害比不显示更大：
+用户会读成「码是空的，那应该没事吧」。这条同时兜住「老后端 `PairingDto` 还没带
+`session_code` 字段」的过渡期：拿到 `undefined` → 静默不显示，不会崩也不会显示半个空块。
+
+#### 5.7.4 样式与交互硬约束
+
+| 约束 | 规则 |
+|---|---|
+| 类名 | 块容器 `.sync-fp`、等宽码 `.sync-mono.sync-fp-code`；标签用 `.pms-label`、说明用 `.pms-meta` / `.pms-hint` |
+| 只做布局 | `.sync-fp` 仅 `display:flex; flex-direction:column; gap`；`.sync-fp-code` 仅 `font-family: var(--pms-mono)` + `word-break: break-all`。**不得**自写 `font-size` / `color` / `border` / `background` |
+| 断行 | 16 位 hex 在窄屏（手机 390px）必须能整块看到，故必须 `word-break: break-all`，禁止 `text-overflow: ellipsis`（截断后无法逐字核对） |
+| 提示色 | 手机屏用 `.pms-hint.is-warning`（`--pms-warning`）—— 这是**要求用户执行的安全动作**，不是普通说明；电脑屏用 `.pms-meta`（中性说明） |
+| 位置 | 电脑屏：二维码 + 配对文本 + 有效期之后、取消按钮之前；手机屏：加入表单之后 |
+| 生命周期 | `join()` 进门先清 `lastPairSessionCode = null` / `lastPairDeviceName = ''`（防止把「上一台电脑」的码显示成「这一台」的）；`reset()`（锁定）同样清空，不跨解锁残留 |
+| 配对完成后 | 配对页的块只服务于**配对当下**的核对；事后再想认设备看「同步 → 设备」页的**设备指纹**（§5.6.3），两者不是同一个量 |
 
 ---
 
@@ -706,3 +891,25 @@ div.pms-card.set-card
 - [ ] **D-60**（v2.5 已实现前端批）：附件改依附父条目——列表「添加附件」入口已撤销（回退 D-59 入口部分）；登录/笔记详情页附件区已上线（区头「添加附件」+ 附件行：文件名/MIME/大小 + 导出/移除，导出保留明文风险二次确认与待同步态，移除二次确认）；`AttachmentView` 已改造为附件区组件；流程逻辑 `runAttachmentImport(deps, itemId)` 改按父条目注入（守卫四分支单测照过）；i18n `item.new_attachment` 已删、`attach.add/remove/remove_confirm_*/section_title` 中英双份、`err.attachment_limit` 已补。**回收站父条目附件数徽标本批未做**（Trash 组件，随核批补）
 - [ ] **D-61**（v2.6 已实现）：设置页「自动锁定」换档后**重启应用仍保持**（`get_auto_lock` 读回）；无操作达档位时**真的锁屏**（不是只弹 toast）；锁屏后再解锁可继续使用；安卓端切后台超过档位、回到前台**立即锁屏**，未超档则后台时间计入闲置；无「从不」档
 - [ ] **D-63**（v2.7 已实现）：创建向导勾选行的「免责声明 / 用户协议」**可点击**且**点它们不会改变勾选状态**（判据：两个链接是 `label.pms-check` 的兄弟节点，`openLegal()` 只写弹窗状态；`src/lib/legal-ui.test.ts` 8 例 + 对抗实验「把链接塞回 label → 2 例变红」守门）；两份文档**有实质内容**（免责 6 条 / 协议 8 条，每条 1–2 段）；弹窗语言跟随 UI 语言切换；设置页「关于」显示**运行时版本号**（非硬编码）、作者 hengletime、MIT、项目主页可打开且过 `isSafeUrl` 白名单
+- [ ] **D-66**（v2.9 已实现）：**设备可辨识 + 同步状态不串台**
+  - **忙碌态隔离**（核心判据）：设备页有 A、B 两台时点 A 的「立即同步」→ **只有 A 转圈并显示「正在同步…」**，B **保持「立即同步」文案、仅置灰不转圈**；期间 B 点不动（并发重同步被拦）；A 完成后两个按钮同时恢复可点。判定由 `syncButtonState()` 5 例单测守门（含「三台设备只有一台转圈」与「空字符串 id 不误命中」）。
+  - **重命名**：点设备行铅笔 → 名称变输入框（初值 = 当前名，已聚焦全选）→ 改名 + Enter（或「保存」）→ success toast `sync.renamed`，行内名称立即更新；**重启应用 / 切页回来仍在**（后端持久化）。
+  - **空名不可保存**：清空输入框 → 「保存」按钮 disabled；此时按 Enter 无任何请求（不发 IPC、无 toast）。
+  - **超长不可保存**：粘贴 22 个汉字（66 字节 > 64 字节上限）→ 保存按钮 disabled + 就地红字提示 `sync.rename_too_long`；21 个汉字（63 字节）可正常保存。
+  - **Esc 取消**：改名后按 Esc → 恢复原名、不发请求。
+  - **一次只编辑一行**：A 行处于编辑态时点 B 行铅笔 → 只有 B 行变输入框（`editingId` 单一状态源，A 自动退出）。
+  - **配对时间可见**：设备行副行顺序为 指纹 → **配对时间** → 上次同步，配对时间为格式化时间（`formatDateTime`）。
+  - **本地昵称**：改名**不影响**对端手机上的设备名，也不改变「上次同步 / 待同步变更」任何计数（昵称只存本机设备表；不进 wire 由 `export_changes` 的 ITEM/FOLDER 白名单结构性保证，core 测试 `rename_touches_only_device_name` 断言 `last_sync_at` / `paired_at` / 指纹 / 共享密钥全不变）。
+- [ ] **D-67**（v2.9 已实现）：**设备行「指纹」必须是真指纹，不得用 `device_id` 冒充**
+  - **形式判据**：设备行「设备指纹」显示的是 **16 位小写 hex**（`sha256(对端长期身份公钥)` 前 8 字节），不是 36 位带连字符的 UUID。
+  - **口径一致性**：手机端该值取自**二维码 `QRPayload.fp`**（长期身份指纹，D-69 修正；不再取临时公钥指纹）；电脑端因 HELLO 只带临时公钥而**留空**（backlog D-70 再补），前端只负责如实显示。
+  - **`device_id` 不再当指纹**：完整 UUID 只出现在指纹的 `title` 悬停提示里，副行不单独占一行。
+  - **空指纹整行不渲染**：构造一条 `fingerprint` 为空串的配对记录（老记录无该字段时 `#[serde(default)]` 的结果，以及电脑端的手机行）→ **该行整行不渲染**，既不留空白、**也不回退显示 `device_id`**（D-69 改口径：回退 UUID 正是本条要消灭的行为）。
+  - 判定收敛在 `hasSessionCode()`（非空判定）+ `fingerprintText()`（仅 `trim`，无回退分支），单测覆盖：正常 / 前后空白 / 空串 / 纯空白 / `null` / `undefined`。
+- [ ] **D-69**（v2.9 已实现，修正 D-68 首版）：**配对两屏显示同一次会话的会话码，中间人核对可执行**
+  - **电脑屏**：点「生成配对二维码」后，二维码下方出现「本次配对核对码」= `PairingDto.session_code`，**16 位小写 hex**，来源于 `SyncServer::session_code()`（`sha256(host_eph 公钥)`）。**手机连上之前就有值**（临时密钥在 `SyncServer::start` 一次生成）。
+  - **手机屏**：`sync_join` 成功（出现「配对成功」toast）后，加入表单下方出现「电脑上的核对码」= 电脑的会话码 + 电脑设备名 + 核对提示；**之前不显示**（进门时 `lastPairSessionCode` 已清空）。
+  - **两屏必然同值**：同一对设备配对时两屏**逐字相同**——两侧算的是同一把 `host_eph` 公钥（`Accept.host_pub` 就是它），不是「一般相同」。core 测试 `pairing_session_code::both_screens_show_the_same_session_code` 钉住。
+  - **会话码 ≠ 设备指纹（硬）**：会话码每次配对都变（`session_code_rotates_but_device_fingerprint_is_stable` 钉住），因此**不得**把它当设备身份、不得在文案里叫「设备指纹」、不得写进 `PairedDevice.fingerprint`。
+  - **缺失不显示空块**：`PairingDto.session_code` / `PairResultDto.session_code` 为空或缺失（老后端过渡期）时，核对块**整块不渲染**，不出现「核对码：」后面空白的半截 UI（`hasSessionCode()` 单测守门：正常值 / `null` / `undefined` / 空串与纯空白）。
+  - **不一致的处置可见**：两屏都显示 `sync.session_code_hint`，文案里含「立即解除配对并重试」的具体动作；手机屏用 `.pms-hint.is-warning`（警示色），电脑屏用 `.pms-meta`（中性）。

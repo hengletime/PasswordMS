@@ -1,8 +1,12 @@
 <script lang="ts">
   // 配对二维码展示（U3：扫码为主 + 文本配对码兜底）。
+  // D-69：二维码下方显示**本次配对的会话码**，供手机屏逐字核对，防中间人劫持。
+  // 这里显示的必须与会话（临时密钥）绑定，**不能**显示本机长期身份指纹 ——
+  // 手机屏算的是临时公钥的指纹，两者永远不等（详见 store 的 lastPairSessionCode 注释）。
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
   import { formatDateTime } from '../../lib/constants';
+  import { hasSessionCode } from '../../lib/device-label';
   import { api } from '../../lib/ipc';
   import { toAppError } from '../../lib/errors';
   import { sync } from '../../lib/stores/sync.svelte';
@@ -58,6 +62,16 @@
     </div>
     <p class="pms-hint">{ui.t('common.expires')}: {formatDateTime(sync.pairing.expires_at, ui.locale)}</p>
 
+    <!-- D-69：本次会话码。手机端配对成功后显示的是同一个值（同一把临时公钥算出来的），
+         用户对一眼即可判中间人。 -->
+    {#if sync.pairing !== null && hasSessionCode(sync.pairing.session_code)}
+      <div class="sync-fp">
+        <span class="pms-label">{ui.t('sync.session_code')}</span>
+        <span class="sync-mono sync-fp-code">{sync.pairing.session_code}</span>
+        <p class="pms-meta">{ui.t('sync.session_code_hint')}</p>
+      </div>
+    {/if}
+
     <button class="pms-btn is-ghost" type="button" onclick={() => void cancel()}>{ui.t('sync.cancel')}</button>
   {/if}
 </div>
@@ -99,5 +113,18 @@
   }
   .pair-ended {
     color: var(--pms-warning);
+  }
+  /* D-69：会话码核对块。只做布局与断行（§5.7：不得自写外观 —— 字号/颜色一律继承
+     `.pms-label` / `.pms-meta` / `.pms-hint`，边框底色也交给既有类）。 */
+  .sync-fp {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .sync-mono {
+    font-family: var(--pms-mono);
+  }
+  .sync-mono.sync-fp-code {
+    word-break: break-all;
   }
 </style>

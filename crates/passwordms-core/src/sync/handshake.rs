@@ -115,7 +115,11 @@ pub fn derive_session_sk(
     salt.extend_from_slice(nonce_a);
     salt.extend_from_slice(nonce_b);
     let prk = kdf::hkdf_extract(&salt, sync_key);
-    let sk = kdf::hkdf_expand(&prk, crate::constants::HKDF_INFO_SYNC_SESSION.as_bytes(), 32)?;
+    let sk = kdf::hkdf_expand(
+        &prk,
+        crate::constants::HKDF_INFO_SYNC_SESSION.as_bytes(),
+        32,
+    )?;
     to_arr32(&sk)
 }
 
@@ -132,7 +136,11 @@ pub fn transcript_hash(parts: &[&[u8]]) -> [u8; 32] {
 }
 
 /// `HMAC(confirm_key, role ‖ transcript)`。
-pub fn confirm_mac(confirm_key: &[u8; 32], role: &[u8], transcript: &[u8; 32]) -> CoreResult<Vec<u8>> {
+pub fn confirm_mac(
+    confirm_key: &[u8; 32],
+    role: &[u8],
+    transcript: &[u8; 32],
+) -> CoreResult<Vec<u8>> {
     let mut mac = HmacSha256::new_from_slice(confirm_key)
         .map_err(|_| CoreError::Crypto("hmac key".to_string()))?;
     mac.update(role);
@@ -213,4 +221,46 @@ pub fn to_arr32(bytes: &[u8]) -> CoreResult<Zeroizing<[u8; 32]>> {
     let mut out = [0u8; 32];
     out.copy_from_slice(bytes);
     Ok(Zeroizing::new(out))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// D-68：指纹必须是 `sha256(本机公钥)` 前 8 字节的小写 hex（16 字符），
+    /// 且**来自本机公钥本身**——不做大小写/分组美化，否则两屏「逐字比对」失效。
+    #[test]
+    fn fingerprint_is_16_lowercase_hex_of_own_public_key() {
+        let identity = HostIdentity::generate().unwrap();
+        let fp = identity.fingerprint();
+        assert_eq!(fp.len(), 16, "指纹必须恰为 16 个字符（8 字节 hex）");
+        assert!(
+            fp.chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "指纹必须是小写 hex，实际: {fp}"
+        );
+        // 方向校验：等价于对本机公钥字节求指纹（不是对端指纹、也不是 device_id 派生）。
+        assert_eq!(fp, fingerprint_of(&identity.public_bytes()));
+    }
+
+    /// D-68：同一把私钥恒得同一指纹（两屏可比对的前提），不同身份必须不同。
+    #[test]
+    fn fingerprint_is_deterministic_per_secret() {
+        let secret = [0x42u8; 32];
+        let a = HostIdentity::from_secret_bytes(&secret);
+        let b = HostIdentity::from_secret_bytes(&secret);
+        assert_eq!(
+            a.fingerprint(),
+            b.fingerprint(),
+            "同一私钥两次构造指纹必须相同"
+        );
+        assert_eq!(a.public_bytes(), b.public_bytes());
+
+        let other = HostIdentity::generate().unwrap();
+        assert_ne!(
+            a.fingerprint(),
+            other.fingerprint(),
+            "不同身份的指纹必须不同（否则中间人不可辨）"
+        );
+    }
 }

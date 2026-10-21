@@ -304,7 +304,6 @@ export const enUS: Messages = {
     pairing: 'Waiting for peer…',
     paired: 'Paired',
     fingerprint: 'Device fingerprint',
-    confirm_fingerprint: 'Verify that both devices show the same fingerprint.',
     devices: 'Paired devices',
     no_devices: 'No paired devices yet',
     unpair: 'Unpair',
@@ -318,6 +317,22 @@ export const enUS: Messages = {
     result_conflicts: '{n} conflicts created',
     adopt_requires_empty: 'The local vault is not empty ({n} items), so the peer key cannot be adopted directly. If these devices were paired before, use "Devices → Sync now" instead; if they are separate vaults, they cannot be merged directly — export and clear one side first, or re-create the vault from the peer.',
     never: 'Never',
+    // D-66: device readability. "Rename / Save / Cancel" reuse the existing common.*
+    // keys (no duplicates); only the device-list-specific strings live here.
+    rename_hint: 'Give this device a recognisable name',
+    renamed: 'Device name updated',
+    paired_at: 'Paired at',
+    // Backend limit is 64 **bytes** (22 CJK chars overflow), unlike `maxlength` (UTF-16 units).
+    rename_too_long: 'Name too long: max 64 bytes (about 21 Chinese characters)',
+    // D-69: the two pairing screens verify a **session code** (replaces the D-68 fingerprint
+    // check — the screens hashed different keys: the host showed its long-term identity
+    // fingerprint, the joining side showed the ephemeral key's, so they could never match).
+    // Direction is fixed: the host shows this session's code, the joining side shows the
+    // same value as computed from the host's ephemeral key.
+    // NOTE: these three strings must never say "fingerprint" — that is a different value.
+    session_code: 'Pairing code (this session)',
+    peer_session_code: 'Code shown on the computer',
+    session_code_hint: 'Compare this with the code shown on the other device. If they differ, the connection may be intercepted — unpair and try again immediately.',
   },
   conflict: {
     title: 'Conflict resolution',

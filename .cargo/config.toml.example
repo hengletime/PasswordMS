@@ -42,6 +42,25 @@ rustflags = [
     "-C", "link-self-contained=yes",
 ]
 
+# ⛔ 上面这组必须**再写一遍**给 rustdoc，否则 `cargo test --doc` 会炸（门禁命令 6 会假红）。
+# doctest 必须单独再给一遍：cargo **不会**把 target.*.rustflags 转发给 rustdoc 起的
+# 编译过程（rustdoc 自己再调 rustc 编 doctest，那条命令只吃 rustdocflags）。缺了它，
+# 一旦有 `///` 下的 ``` 示例（doc 测试），链接就会报
+#   lld: error: unable to find library -lkernel32/-lbcrypt/...   （缺 wsllibs 的导入库）
+#   lld: error: <root>: undefined symbol: mainCRTStartup          （缺 link-self-contained）
+# 2026-10-21 实测：本机只配 rustflags 时 doctest 链接失败（报错长得像工具链坏了，
+# 极易误判成环境问题）；镜像下面三条后 `cargo test -p passwordms-core --doc --target
+# x86_64-pc-windows-gnullvm` 1 passed ——
+#   test crates\passwordms-core\src\attachment_name.rs - attachment_name::filename_from_source (line 50) ... ok
+# ⚠ 两个列表的占位符是**同一组路径**，改一处必须同步另一处——它们是"同一件事的两次声明"。
+rustdocflags = [
+    # 与上方 rustflags 第一条完全相同（同一组 <占位符>，换成你机器上的真实路径）
+    "-L", "native=<RUSTUP_TOOLCHAIN_ROOT>/lib/rustlib/x86_64-pc-windows-gnu/lib/self-contained",
+    # 与上方 rustflags 第二条完全相同
+    "-L", "native=<MINGW_W64_LIB_DIR>",
+    "-C", "link-self-contained=yes",
+]
+
 # 关掉增量编译最省心：开着时，增量会话锁文件的清理会被「批量删除守卫」拦截
 # （报 os error 5 拒绝访问），偶发把 cargo 卡死。
 [build]

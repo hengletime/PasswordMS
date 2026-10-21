@@ -200,6 +200,17 @@ export interface PairingDto {
   /** 全部候选局域网 IPv4（多网卡时主选在前，D-44）。 */
   ips: string[];
   port: number;
+  /**
+   * D-69：本次配对的**会话码**，`sha256(host_eph 公钥)` 前 8 字节的小写 hex（16 位）。
+   *
+   * 与 `PairResultDto.session_code`（加入侧由 `Accept.host_pub` 算出）**必然同值** ——
+   * 两屏算的是同一把临时公钥，这才是用户能核对、且核对得出意义的量。
+   *
+   * **不是**「设备指纹」：会话码每次配对都换（绑本次临时密钥），设备指纹
+   * （`DeviceDto.fingerprint`，长期身份密钥）稳定不变。二者混用会让两屏永远对不上，
+   * 用户每次配对都看到「不一致」→ 要么误判被劫持，要么从此不再核对。
+   */
+  session_code: string;
   expires_at: number;
 }
 
@@ -207,7 +218,10 @@ export interface PairingDto {
 export interface PairResultDto {
   device_id: string;
   device_name: string;
-  fingerprint: string;
+  /** D-69：Host 的**长期设备指纹**（取自二维码 `fp`，稳定不变），用于设备列表辨识。 */
+  device_fingerprint: string;
+  /** D-69：本次配对的**会话码**，与电脑屏显示的必须是同一个值（16 位小写 hex）。 */
+  session_code: string;
   applied: number;
   conflicts: string[];
   /** D-53：blob 阶段实际入库的附件数。 */

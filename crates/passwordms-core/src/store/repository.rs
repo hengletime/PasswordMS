@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::constants::{
-    ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENT_FILENAME_BYTES,
-    MAX_ATTACHMENTS_PER_ITEM, MAX_NOTE_BYTES, MAX_VAULT_BYTES, MS_PER_DAY, RECORD_TYPE_CONFLICT,
-    RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM, RECORD_TYPE_SYNC_STATE,
-    RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS,
+    ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENT_BYTES,
+    MAX_ATTACHMENT_FILENAME_BYTES, MAX_NOTE_BYTES, MAX_VAULT_BYTES, MS_PER_DAY,
+    RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM,
+    RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS,
 };
 use crate::crypto::keys::{self, VaultKey};
 use crate::crypto::{aead, rng};
@@ -148,7 +148,9 @@ impl Repository {
     ///   （`update_header` 返回 rewrote）则重建索引（业务数据仍在内存，无需重解密）。
     pub fn set_auto_lock_minutes(&mut self, minutes: u16) -> CoreResult<()> {
         if !crate::constants::AUTO_LOCK_OPTIONS.contains(&minutes) {
-            return Err(CoreError::Validation(format!("invalid_auto_lock_minutes: {minutes}")));
+            return Err(CoreError::Validation(format!(
+                "invalid_auto_lock_minutes: {minutes}"
+            )));
         }
         if self.container.header().auto_lock_minutes == minutes {
             return Ok(());
@@ -256,10 +258,17 @@ impl Repository {
     // ===== 记录读写原语 =====
 
     /// 用独立 IK 加密 payload 并组装帧。
-    fn build_frame(&self, record_type: u8, record_id: &[u8; 16], flags: u8, payload: &[u8]) -> CoreResult<Frame> {
+    fn build_frame(
+        &self,
+        record_type: u8,
+        record_id: &[u8; 16],
+        flags: u8,
+        payload: &[u8],
+    ) -> CoreResult<Frame> {
         let aad = keys::record_aad(record_type, record_id);
         let ik = rng::random_key()?;
-        let wrapped_key = keys::wrap_item_key(&self.vault_key, &ik, &aad)?;        let nonce = rng::random_nonce()?;
+        let wrapped_key = keys::wrap_item_key(&self.vault_key, &ik, &aad)?;
+        let nonce = rng::random_nonce()?;
         let ct = aead::seal(&ik, &nonce, &aad, payload)?;
         Ok(Frame {
             record_type,
@@ -280,7 +289,13 @@ impl Repository {
     }
 
     /// 写入（新增或更新）一条记录。
-    fn write_record(&mut self, record_type: u8, id: &str, flags: u8, payload: &[u8]) -> CoreResult<()> {
+    fn write_record(
+        &mut self,
+        record_type: u8,
+        id: &str,
+        flags: u8,
+        payload: &[u8],
+    ) -> CoreResult<()> {
         let rid = record_id_to_bytes(id)?;
         let frame = self.build_frame(record_type, &rid, flags, payload)?;
 
@@ -317,7 +332,8 @@ impl Repository {
     /// 长度不变则原位移位写入（A-02）；否则旧帧置墓碑并在尾部追加新帧。
     fn place_frame(&mut self, idx: usize, frame: Frame) -> CoreResult<usize> {
         if self.slots[idx].frame.encoded_len() == frame.encoded_len() {
-            self.container.pwrite_frame(self.slots[idx].offset, &frame)?;
+            self.container
+                .pwrite_frame(self.slots[idx].offset, &frame)?;
             self.slots[idx].frame = frame;
             return Ok(idx);
         }
@@ -373,7 +389,11 @@ impl Repository {
     }
 
     /// 更新密钥材料（改主密码时仅重包裹 VK，不动任何条目密文）。
-    pub fn update_key_material(&mut self, wrapped_vault_key: WrappedKey, verify_mac: Vec<u8>) -> CoreResult<()> {
+    pub fn update_key_material(
+        &mut self,
+        wrapped_vault_key: WrappedKey,
+        verify_mac: Vec<u8>,
+    ) -> CoreResult<()> {
         let mut header = self.container.header().clone();
         header.wrapped_vault_key = wrapped_vault_key;
         header.verify_mac = verify_mac;
@@ -403,7 +423,13 @@ impl Repository {
     ) -> CoreResult<Folder> {
         let name = name.trim().to_string();
         self.validate_folder_name(&name, None)?;
-        let sort_order = self.folders.values().map(|f| f.sort_order).max().unwrap_or(-1) + 1;
+        let sort_order = self
+            .folders
+            .values()
+            .map(|f| f.sort_order)
+            .max()
+            .unwrap_or(-1)
+            + 1;
         let folder = Folder {
             folder_id: uuid::Uuid::new_v4().to_string(),
             name,
@@ -413,8 +439,14 @@ impl Repository {
             rev: 1,
             updated_at: now_ms(),
         };
-        self.write_record(RECORD_TYPE_FOLDER, &folder.folder_id, 0, &serde_json::to_vec(&folder)?)?;
-        self.folders.insert(folder.folder_id.clone(), folder.clone());
+        self.write_record(
+            RECORD_TYPE_FOLDER,
+            &folder.folder_id,
+            0,
+            &serde_json::to_vec(&folder)?,
+        )?;
+        self.folders
+            .insert(folder.folder_id.clone(), folder.clone());
         self.persist_header()?;
         Ok(folder)
     }
@@ -439,13 +471,22 @@ impl Repository {
         folder.color = color;
         folder.rev += 1;
         folder.updated_at = now_ms();
-        self.write_record(RECORD_TYPE_FOLDER, folder_id, 0, &serde_json::to_vec(&folder)?)?;
+        self.write_record(
+            RECORD_TYPE_FOLDER,
+            folder_id,
+            0,
+            &serde_json::to_vec(&folder)?,
+        )?;
         self.folders.insert(folder_id.to_string(), folder.clone());
         Ok(folder)
     }
 
     /// 删除分组（其下条目按策略处置）。
-    pub fn delete_folder(&mut self, folder_id: &str, strategy: FolderDeleteStrategy) -> CoreResult<()> {
+    pub fn delete_folder(
+        &mut self,
+        folder_id: &str,
+        strategy: FolderDeleteStrategy,
+    ) -> CoreResult<()> {
         if !self.folders.contains_key(folder_id) {
             return Err(CoreError::FolderNotFound);
         }
@@ -463,7 +504,12 @@ impl Repository {
                     item.rev += 1;
                     item.updated_at = now_ms();
                     item.modified_by = self.device_id.clone();
-                    self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &serde_json::to_vec(&item)?)?;
+                    self.write_record(
+                        RECORD_TYPE_ITEM,
+                        &item.item_id,
+                        0,
+                        &serde_json::to_vec(&item)?,
+                    )?;
                     self.items.insert(item.item_id.clone(), item);
                 }
             }
@@ -489,7 +535,12 @@ impl Repository {
                 folder.rev += 1;
                 folder.updated_at = now_ms();
                 let snapshot = folder.clone();
-                self.write_record(RECORD_TYPE_FOLDER, &snapshot.folder_id, 0, &serde_json::to_vec(&snapshot)?)?;
+                self.write_record(
+                    RECORD_TYPE_FOLDER,
+                    &snapshot.folder_id,
+                    0,
+                    &serde_json::to_vec(&snapshot)?,
+                )?;
             } else {
                 return Err(CoreError::FolderNotFound);
             }
@@ -502,7 +553,12 @@ impl Repository {
         ordered.sort_by_key(|f| (f.sort_order, f.folder_id.clone()));
         for (pos, mut folder) in ordered.into_iter().enumerate() {
             folder.sort_order = pos as i32;
-            self.write_record(RECORD_TYPE_FOLDER, &folder.folder_id, 0, &serde_json::to_vec(&folder)?)?;
+            self.write_record(
+                RECORD_TYPE_FOLDER,
+                &folder.folder_id,
+                0,
+                &serde_json::to_vec(&folder)?,
+            )?;
             self.folders.insert(folder.folder_id.clone(), folder);
         }
         Ok(())
@@ -526,8 +582,15 @@ impl Repository {
     // ===== 条目 =====
 
     /// 列出条目（支持分组过滤 / 仅收藏 / 模糊搜索）。
-    pub fn list_items(&self, folder_id: Option<&str>, favorite_only: bool, query: Option<&str>) -> Vec<Item> {
-        let needle = query.map(|q| q.trim().to_lowercase()).filter(|q| !q.is_empty());
+    pub fn list_items(
+        &self,
+        folder_id: Option<&str>,
+        favorite_only: bool,
+        query: Option<&str>,
+    ) -> Vec<Item> {
+        let needle = query
+            .map(|q| q.trim().to_lowercase())
+            .filter(|q| !q.is_empty());
         let mut out: Vec<Item> = self
             .items
             .values()
@@ -561,7 +624,10 @@ impl Repository {
 
     /// 取单条。
     pub fn get_item(&self, item_id: &str) -> CoreResult<Item> {
-        self.items.get(item_id).cloned().ok_or(CoreError::ItemNotFound)
+        self.items
+            .get(item_id)
+            .cloned()
+            .ok_or(CoreError::ItemNotFound)
     }
 
     /// 新建条目。
@@ -579,7 +645,12 @@ impl Repository {
             modified_by: self.device_id.clone(),
             attachments: Vec::new(),
         };
-        self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.write_record(
+            RECORD_TYPE_ITEM,
+            &item.item_id,
+            0,
+            &serde_json::to_vec(&item)?,
+        )?;
         self.items.insert(item.item_id.clone(), item.clone());
         self.persist_header()?;
         Ok(item)
@@ -638,7 +709,12 @@ impl Repository {
             deleted_at: now,
             expire_at: now + TRASH_RETENTION_DAYS * MS_PER_DAY,
         };
-        self.write_record(RECORD_TYPE_TRASH, &entry.trash_id, 0, &serde_json::to_vec(&entry)?)?;
+        self.write_record(
+            RECORD_TYPE_TRASH,
+            &entry.trash_id,
+            0,
+            &serde_json::to_vec(&entry)?,
+        )?;
         self.trash.insert(entry.trash_id.clone(), entry);
         self.tombstone(RECORD_TYPE_ITEM, &item.item_id)?;
         self.items.remove(&item.item_id);
@@ -668,6 +744,11 @@ impl Repository {
     ///
     /// `title` 仅用于校验兼容（D-59 遗留参数）：附件展示名就是 `filename`，
     /// 空串原样接受；未来如需自定义展示名再扩展 `AttachmentMeta`。
+    ///
+    /// D-66：本入口只服务**文件系统路径**。先做一次 `std::fs::metadata` 预检，
+    /// 让超大文件在**读进内存之前**就被 `ERR_ATTACHMENT_TOO_LARGE` 拦下；
+    /// 真正的校验与落库逻辑全在 [`Self::insert_attachment`]，与
+    /// [`Self::add_attachment_bytes`] 共用，保证两条入口的校验顺序/错误码逐字一致。
     #[allow(deprecated)]
     pub fn add_attachment(
         &mut self,
@@ -676,7 +757,49 @@ impl Repository {
         title: &str,
     ) -> CoreResult<Item> {
         let _ = title; // 展示名 = filename；参数保留以维持 IPC 形状（§3.14.5）
-        let item = self.get_item(item_id)?.clone();
+                       // 预检：超大文件不必读进内存（正式判定仍由 insert_attachment 按 data.len() 负责）。
+        if std::fs::metadata(source_path)?.len() > MAX_ATTACHMENT_BYTES {
+            return Err(CoreError::AttachmentTooLarge);
+        }
+        let data = std::fs::read(source_path)?;
+        let filename = source_path
+            .file_name()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "attachment".to_string());
+        self.insert_attachment(item_id, &filename, &data)
+    }
+
+    /// 按**字节**向父条目添加附件（D-66）。
+    ///
+    /// Android 文件选择器返回 `content://` URI，不能直接 `std::fs::read`；外壳层
+    /// 先用 `tauri-plugin-fs` 的 `getFileDescriptor` 把字节读出来，再走本方法。
+    /// `filename` 由调用方给定（见 [`crate::attachment_name::filename_from_source`]）。
+    ///
+    /// 校验链、错误码、落库语义与 [`Self::add_attachment`] **完全一致**（同一实现）。
+    pub fn add_attachment_bytes(
+        &mut self,
+        item_id: &str,
+        filename: &str,
+        data: &[u8],
+    ) -> CoreResult<Item> {
+        self.insert_attachment(item_id, filename, data)
+    }
+
+    /// 附件落库的**唯一**校验 + 写入实现（D-66 抽出，供两条入口共用）。
+    ///
+    /// 顺序（改动会让错误码语义漂移，务必保持）：
+    /// ① 父条目存在（`ItemNotFound`）→ ② 非遗留 attachment 型
+    /// （`Validation("legacy_attachment_item")`）→ ③ 附件数上限（`AttachmentLimit`）
+    /// → ④ 单文件大小（`AttachmentTooLarge`）→ ⑤ 库容量（`VaultCapacityExceeded`）
+    /// → ⑥ 文件名长度（`Validation("filename_too_long")`）→ 写 blob 帧 → 父 rev+1。
+    #[allow(deprecated)]
+    fn insert_attachment(
+        &mut self,
+        item_id: &str,
+        filename: &str,
+        data: &[u8],
+    ) -> CoreResult<Item> {
+        let mut item = self.get_item(item_id)?;
         if matches!(item.kind, ItemKind::Attachment(_)) {
             // 遗留型条目在迁移后不应存在；防御性拒绝。
             return Err(CoreError::Validation("legacy_attachment_item".to_string()));
@@ -685,8 +808,7 @@ impl Repository {
             return Err(CoreError::AttachmentLimit);
         }
 
-        let meta = std::fs::metadata(source_path)?;
-        let size = meta.len();
+        let size = data.len() as u64;
         if size > MAX_ATTACHMENT_BYTES {
             return Err(CoreError::AttachmentTooLarge);
         }
@@ -695,39 +817,32 @@ impl Repository {
         if current + size + 4096 > MAX_VAULT_BYTES {
             return Err(CoreError::VaultCapacityExceeded);
         }
-
-        let data = std::fs::read(source_path)?;
-        let filename = source_path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "attachment".to_string());
         if filename.len() > MAX_ATTACHMENT_FILENAME_BYTES {
             return Err(CoreError::Validation("filename_too_long".to_string()));
         }
-        let mime = guess_mime(&filename);
+        let mime = guess_mime(filename);
 
         let attachment_id = uuid::Uuid::new_v4().to_string();
         let blob_ct_len = data.len() + crate::constants::AEAD_TAG_LEN;
         let attachment = AttachmentMeta {
             attachment_id: attachment_id.clone(),
-            filename,
+            filename: filename.to_string(),
             mime_type: mime,
             size_bytes: size,
             blob_size_bytes: blob_ct_len as u64,
         };
 
         // blob 帧：record_id = attachment_id（§3.14.1 解耦；spool / 拉取清单同键）。
-        self.write_record(RECORD_TYPE_ITEM, &attachment_id, FLAG_BLOB, &data)?;
+        self.write_record(RECORD_TYPE_ITEM, &attachment_id, FLAG_BLOB, data)?;
 
-        let mut updated = item;
-        updated.attachments.push(attachment);
-        updated.rev += 1;
-        updated.updated_at = now_ms();
-        updated.modified_by = self.device_id.clone();
-        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&updated)?)?;
-        self.items.insert(item_id.to_string(), updated.clone());
+        item.attachments.push(attachment);
+        item.rev += 1;
+        item.updated_at = now_ms();
+        item.modified_by = self.device_id.clone();
+        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.items.insert(item_id.to_string(), item.clone());
         self.persist_header()?;
-        Ok(updated)
+        Ok(item)
     }
 
     /// 从父条目移除单个附件（§3.14.5 `remove_attachment`）。
@@ -737,7 +852,8 @@ impl Repository {
     pub fn remove_attachment(&mut self, item_id: &str, attachment_id: &str) -> CoreResult<Item> {
         let mut item = self.get_item(item_id)?.clone();
         let before = item.attachments.len();
-        item.attachments.retain(|a| a.attachment_id != attachment_id);
+        item.attachments
+            .retain(|a| a.attachment_id != attachment_id);
         if item.attachments.len() == before {
             return Err(CoreError::ItemNotFound);
         }
@@ -924,7 +1040,9 @@ impl Repository {
     ///
     /// 供发送端**零解密**切片：直接取帧内 `ct` 切块过线，全程不触碰明文（A-01）。
     pub fn blob_frame(&self, blob_ref: &str) -> Option<Frame> {
-        self.blobs.get(blob_ref).map(|&idx| self.slots[idx].frame.clone())
+        self.blobs
+            .get(blob_ref)
+            .map(|&idx| self.slots[idx].frame.clone())
     }
 
     /// 接收端入库一个远端 blob 帧（幂等，不覆盖本地）。
@@ -950,7 +1068,11 @@ impl Repository {
                 && local.nonce == frame.nonce
                 && local.plaintext_len == frame.plaintext_len
                 && local.ct == frame.ct;
-            return Ok(if same { BlobWriteOutcome::Skipped } else { BlobWriteOutcome::KeptLocal });
+            return Ok(if same {
+                BlobWriteOutcome::Skipped
+            } else {
+                BlobWriteOutcome::KeptLocal
+            });
         }
         let offset = self.container.append_frame(&frame)?;
         self.slots.push(Slot { offset, frame });
@@ -978,12 +1100,21 @@ impl Repository {
 
     /// 还原条目。
     pub fn restore_item(&mut self, trash_id: &str) -> CoreResult<Item> {
-        let entry = self.trash.get(trash_id).cloned().ok_or(CoreError::ItemNotFound)?;
+        let entry = self
+            .trash
+            .get(trash_id)
+            .cloned()
+            .ok_or(CoreError::ItemNotFound)?;
         let mut item = entry.item_snapshot;
         item.rev += 1;
         item.updated_at = now_ms();
         item.modified_by = self.device_id.clone();
-        self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.write_record(
+            RECORD_TYPE_ITEM,
+            &item.item_id,
+            0,
+            &serde_json::to_vec(&item)?,
+        )?;
         self.items.insert(item.item_id.clone(), item.clone());
         self.tombstone(RECORD_TYPE_TRASH, trash_id)?;
         self.trash.remove(trash_id);
@@ -1031,13 +1162,22 @@ impl Repository {
 
     /// 列出未仲裁冲突。
     pub fn list_conflicts(&self) -> Vec<ConflictEntry> {
-        let mut out: Vec<ConflictEntry> = self.conflicts.values().filter(|c| !c.resolved).cloned().collect();
+        let mut out: Vec<ConflictEntry> = self
+            .conflicts
+            .values()
+            .filter(|c| !c.resolved)
+            .cloned()
+            .collect();
         out.sort_by(|a, b| b.detected_at.cmp(&a.detected_at));
         out
     }
 
     /// 三选一仲裁。
-    pub fn resolve_conflict(&mut self, conflict_id: &str, choice: ConflictChoice) -> CoreResult<()> {
+    pub fn resolve_conflict(
+        &mut self,
+        conflict_id: &str,
+        choice: ConflictChoice,
+    ) -> CoreResult<()> {
         let entry = self
             .conflicts
             .get(conflict_id)
@@ -1061,7 +1201,12 @@ impl Repository {
                     remote.rev = entry.local_snapshot.rev.max(remote.rev) + 1;
                     remote.updated_at = now_ms();
                     remote.modified_by = self.device_id.clone();
-                    self.write_record(RECORD_TYPE_ITEM, &remote.item_id, 0, &serde_json::to_vec(&remote)?)?;
+                    self.write_record(
+                        RECORD_TYPE_ITEM,
+                        &remote.item_id,
+                        0,
+                        &serde_json::to_vec(&remote)?,
+                    )?;
                     self.items.insert(remote.item_id.clone(), remote);
                 }
             }
@@ -1074,7 +1219,12 @@ impl Repository {
                 dup.created_at = now_ms();
                 dup.updated_at = now_ms();
                 dup.modified_by = self.device_id.clone();
-                self.write_record(RECORD_TYPE_ITEM, &dup.item_id, 0, &serde_json::to_vec(&dup)?)?;
+                self.write_record(
+                    RECORD_TYPE_ITEM,
+                    &dup.item_id,
+                    0,
+                    &serde_json::to_vec(&dup)?,
+                )?;
                 self.items.insert(dup.item_id.clone(), dup);
             }
         }
@@ -1082,7 +1232,12 @@ impl Repository {
         // 标记冲突已仲裁（写回 resolved=true）。
         let mut updated = entry;
         updated.resolved = true;
-        self.write_record(RECORD_TYPE_CONFLICT, &updated.conflict_id, 0, &serde_json::to_vec(&updated)?)?;
+        self.write_record(
+            RECORD_TYPE_CONFLICT,
+            &updated.conflict_id,
+            0,
+            &serde_json::to_vec(&updated)?,
+        )?;
         self.conflicts.insert(updated.conflict_id.clone(), updated);
         self.persist_header()?;
         Ok(())
@@ -1090,21 +1245,36 @@ impl Repository {
 
     /// 写入冲突箱（供同步合并使用）。
     pub fn add_conflict(&mut self, entry: ConflictEntry) -> CoreResult<()> {
-        self.write_record(RECORD_TYPE_CONFLICT, &entry.conflict_id, 0, &serde_json::to_vec(&entry)?)?;
+        self.write_record(
+            RECORD_TYPE_CONFLICT,
+            &entry.conflict_id,
+            0,
+            &serde_json::to_vec(&entry)?,
+        )?;
         self.conflicts.insert(entry.conflict_id.clone(), entry);
         Ok(())
     }
 
     /// 直接落库（同步应用远端变更；不改写 rev 语义由调用方决定）。
     pub fn put_item_direct(&mut self, item: Item) -> CoreResult<()> {
-        self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.write_record(
+            RECORD_TYPE_ITEM,
+            &item.item_id,
+            0,
+            &serde_json::to_vec(&item)?,
+        )?;
         self.items.insert(item.item_id.clone(), item);
         Ok(())
     }
 
     /// 直接落库分组（同步）。
     pub fn put_folder_direct(&mut self, folder: Folder) -> CoreResult<()> {
-        self.write_record(RECORD_TYPE_FOLDER, &folder.folder_id, 0, &serde_json::to_vec(&folder)?)?;
+        self.write_record(
+            RECORD_TYPE_FOLDER,
+            &folder.folder_id,
+            0,
+            &serde_json::to_vec(&folder)?,
+        )?;
         self.folders.insert(folder.folder_id.clone(), folder);
         Ok(())
     }
@@ -1169,7 +1339,12 @@ impl Repository {
 
     /// 写入 / 覆盖已配对设备（`sync_key_wrapped` 由 VK 包裹）。
     pub fn upsert_paired_device(&mut self, device: PairedDevice) -> CoreResult<()> {
-        self.write_record(RECORD_TYPE_DEVICE, &device.device_id, 0, &serde_json::to_vec(&device)?)?;
+        self.write_record(
+            RECORD_TYPE_DEVICE,
+            &device.device_id,
+            0,
+            &serde_json::to_vec(&device)?,
+        )?;
         self.devices.insert(device.device_id.clone(), device);
         Ok(())
     }
@@ -1185,12 +1360,15 @@ impl Repository {
 
     /// 取某设备的同步状态（缺省则新建）。
     pub fn sync_state(&self, device_id: &str) -> DeviceSyncState {
-        self.sync_states.get(device_id).cloned().unwrap_or(DeviceSyncState {
-            device_id: device_id.to_string(),
-            base: std::collections::HashMap::new(),
-            last_recv_seq: 0,
-            last_sent_seq: 0,
-        })
+        self.sync_states
+            .get(device_id)
+            .cloned()
+            .unwrap_or(DeviceSyncState {
+                device_id: device_id.to_string(),
+                base: std::collections::HashMap::new(),
+                last_recv_seq: 0,
+                last_sent_seq: 0,
+            })
     }
 
     /// 持久化某设备的同步状态。
@@ -1255,6 +1433,50 @@ impl Repository {
         Ok(())
     }
 
+    /// 重命名已配对设备（D-66）。
+    ///
+    /// 背景：默认展示名由 [`crate::sync::resync::device_display_name`] 生成，形如
+    /// `Android-3dd4390a`——两台同型号手机**前缀与短 ID 都可能相同**，用户在
+    /// 设备列表里无法分辨，手动同步时点错的代价是同步到错误的机器。
+    ///
+    /// 语义：
+    /// - `name.trim()` 后为空 → [`CoreError::Validation`] `"device_name_empty"`；
+    /// - trim 后**字节**长度 > 64 → [`CoreError::Validation`] `"device_name_too_long"`
+    ///   （上限比 [`crate::constants::MAX_ATTACHMENT_FILENAME_BYTES`] 更紧：这是人看的
+    ///   短标签，不是文件名）；
+    /// - 设备不存在 → [`CoreError::NotPaired`]；
+    /// - **只改 `device_name`**：`peer_ip` / `peer_port` / `sync_key_wrapped` /
+    ///   `fingerprint` / `paired_at` / `last_sync_at` 一字不动（改个名字绝不能影响
+    ///   连通性与密钥绑定）；
+    /// - trim 后与现值相同 → 不重写记录（与 [`Self::update_paired_addr`] 的
+    ///   「值未变化不重写」保持一致，避免白写 device 帧）；
+    /// - 成功返回更新后的 `PairedDevice`。
+    pub fn rename_paired_device(
+        &mut self,
+        device_id: &str,
+        name: &str,
+    ) -> CoreResult<PairedDevice> {
+        const MAX_DEVICE_NAME_BYTES: usize = 64;
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            return Err(CoreError::Validation("device_name_empty".to_string()));
+        }
+        if trimmed.len() > MAX_DEVICE_NAME_BYTES {
+            return Err(CoreError::Validation("device_name_too_long".to_string()));
+        }
+        let mut device = self
+            .devices
+            .get(device_id)
+            .cloned()
+            .ok_or(CoreError::NotPaired)?;
+        if device.device_name == trimmed {
+            return Ok(device);
+        }
+        device.device_name = trimmed.to_string();
+        self.upsert_paired_device(device.clone())?;
+        Ok(device)
+    }
+
     // ===== 设置 =====
 
     /// 读取设置。
@@ -1279,11 +1501,17 @@ impl Repository {
     /// 导出保险库副本（需重新验证主密码，见 O-03）。
     pub fn export_vault(&self, dest_path: &Path, master_password: &str) -> CoreResult<()> {
         let header = self.container.header();
-        let mk = crate::crypto::kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf)?;
+        let mk =
+            crate::crypto::kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf)?;
         let kek = crate::crypto::kdf::derive_kek(&mk[..])?;
         let verify_key = crate::crypto::kdf::derive_verify_key(&mk[..])?;
         // 复用统一解锁校验：任何失败都映射为同一错误。
-        crate::crypto::verify::unlock_check(&kek, &verify_key, &header.verify_mac, &header.wrapped_vault_key)?;
+        crate::crypto::verify::unlock_check(
+            &kek,
+            &verify_key,
+            &header.verify_mac,
+            &header.wrapped_vault_key,
+        )?;
         std::fs::copy(self.container.path(), dest_path)?;
         Ok(())
     }

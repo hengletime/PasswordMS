@@ -1,7 +1,10 @@
 <script lang="ts">
   // 加入配对（U3）：扫码为主 + 手动输入配对码兜底。
+  // D-69：join 成功后显示**本次配对的会话码**，与电脑屏显示的那个值逐字核对，
+  // 即可判断有没有被中间人隔开。方向固定：这里显示的是电脑（对端）的会话码。
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
+  import { hasSessionCode } from '../../lib/device-label';
   import { decodeQrFromVideo, isPairingPayload } from '../../lib/qr';
   import { sync } from '../../lib/stores/sync.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
@@ -102,6 +105,17 @@
       {ui.t('sync.join')}
     </button>
   </form>
+
+  <!-- D-69：提示用 .pms-hint.is-warning —— 这是要求用户执行的安全动作，不是普通说明。
+       两屏必须一致；不一致说明连接可能被中间人隔开。 -->
+  {#if hasSessionCode(sync.lastPairSessionCode)}
+    <div class="sync-fp">
+      <span class="pms-label">{ui.t('sync.peer_session_code')}</span>
+      <span class="sync-mono sync-fp-code">{sync.lastPairSessionCode}</span>
+      {#if sync.lastPairDeviceName}<p class="pms-meta">{sync.lastPairDeviceName}</p>{/if}
+      <p class="pms-hint is-warning">{ui.t('sync.session_code_hint')}</p>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -138,5 +152,17 @@
   .sync-manual-input {
     font-family: var(--pms-mono);
     font-size: 0.76rem;
+  }
+  /* D-69：会话码核对块。只做布局与断行（§5.7：不得自写外观）。 */
+  .sync-fp {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .sync-mono {
+    font-family: var(--pms-mono);
+  }
+  .sync-mono.sync-fp-code {
+    word-break: break-all;
   }
 </style>

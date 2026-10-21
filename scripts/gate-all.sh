@@ -9,9 +9,10 @@
 # 门清单（顺序即执行顺序，逐段汇报 + 计时）：
 #   1. 前端三门     npm run test / npm run check / npm run check:css
 #   2. Rust 全量    cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm
-#                   （timing_sidechannel 单例 ~106s 属正常耗时；全量约 3–4 分钟）
+#                   （timing_sidechannel 单例 106~151s 属正常耗时（KDF 烧时序），
+#                     全量约 4–6 分钟，取决于是否需重新编译）
 #   3. Rust 静态    cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm
-#                   （0 error 阻塞；warning 数如实汇报不阻塞，当前基线 ≤3）
+#                   （0 error 阻塞；warning 数如实汇报不阻塞，当前基线 ≤7）
 #   4. 体积门       bash scripts/check-size.sh desktop --allow-missing
 #                   （日常门语义：本机未出包时跳过不判负；出包门在 build-android.sh
 #                    与显式构建流程内，见 docs/07-quality-gate.md §2）
@@ -88,7 +89,7 @@ rust_test_gate() {
     cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm
 }
 
-# ===== 3. clippy（0 error 阻塞；warning 如实汇报不阻塞，基线 ≤3）=====
+# ===== 3. clippy（0 error 阻塞；warning 如实汇报不阻塞，基线 ≤7）=====
 clippy_gate() {
   local t0 t1 rc warn_count
   info "▶ Rust 静态检查(cargo clippy --workspace --all-targets)"
@@ -108,17 +109,17 @@ clippy_gate() {
     record "clippy" FAIL "$((t1 - t0))" "rc=${rc}"
     return 1
   fi
-  pass "clippy 0 error（warning ${warn_count} 条，非阻塞；基线 ≤3）"
+  pass "clippy 0 error（warning ${warn_count} 条，非阻塞；基线 ≤7）"
   record "clippy" PASS "$((t1 - t0))" "warnings=${warn_count}"
-  if [ "${warn_count:-0}" -gt 3 ]; then
-    info "⚠ warning 数超过已知基线 3，请核对是否新引入（不阻塞，如实登记）"
+  if [ "${warn_count:-0}" -gt 7 ]; then
+    info "⚠ warning 数超过已知基线 7，请核对是否新引入（不阻塞，如实登记）"
   fi
   return 0
 }
 
 # ===== 4. 体积门 =====
 size_gate() {
-  local rc=0 apk f bytes mb
+  local rc=0 apk f bytes mb t0 t1
   run_gate "体积门-桌面(check-size.sh desktop)" \
     bash scripts/check-size.sh desktop --allow-missing || rc=1
   if [ "$rc" -eq 1 ] && [ "$KEEP_GOING" -eq 0 ]; then return 1; fi
@@ -134,6 +135,7 @@ size_gate() {
     record "体积门-Android" SKIP "-" "未出包"
     return "$rc"
   fi
+  t0=$(date +%s)
   for f in "${apks[@]}"; do
     bytes=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
     mb=$(awk "BEGIN { printf \"%.2f\", $bytes/1048576 }")
@@ -144,7 +146,14 @@ size_gate() {
       rc=1
     fi
   done
-  record "体积门-Android" PASS "-" "${#apks[@]} 个产物"
+  t1=$(date +%s)
+  # ⚠ 结果必须跟着 rc 走：以前这里写死 PASS，APK 超标时上面已 fail 却仍在汇总里
+  # 记一行「PASS」，汇总与真实判定互相矛盾（总判定靠返回值仍是对的，但汇总行在骗人）。
+  if [ "$rc" -eq 0 ]; then
+    record "体积门-Android" PASS "$((t1 - t0))" "${#apks[@]} 个产物"
+  else
+    record "体积门-Android" FAIL "$((t1 - t0))" "APK 超 12MB"
+  fi
   return "$rc"
 }
 
@@ -168,13 +177,15 @@ info "════ 汇总 ════"
 TOTAL_PASS=0 TOTAL_FAIL=0 TOTAL_SKIP=0
 for row in "${RESULTS[@]}"; do
   IFS='|' read -r name result secs note <<< "$row"
+  # 耗时字段可能是 "-"（不适用），别直接拼成 "${secs}s" → 会打印出「— -s」
+  if [ "$secs" = "-" ]; then secs_disp=""; else secs_disp="${secs}s "; fi
   case "$result" in
     PASS)
-      pass "${name} — ${secs}s ${note}"
+      pass "${name} — ${secs_disp}${note}"
       TOTAL_PASS=$((TOTAL_PASS + 1))
       ;;
     FAIL)
-      fail "${name} — ${secs}s ${note}"
+      fail "${name} — ${secs_disp}${note}"
       TOTAL_FAIL=$((TOTAL_FAIL + 1))
       ;;
     SKIP)

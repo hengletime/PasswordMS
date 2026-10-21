@@ -139,24 +139,41 @@ fn unlock_failure_timing_has_no_password_vs_corruption_gap() {
     let corrupt = make_content_corrupted(&ok_bytes, "corrupt");
     let structural = make_structural_corrupted(&ok_bytes, "structural");
 
-    let time_path = |label: &str, path: &PathBuf, pass: &str| -> Vec<f64> {
-        for _ in 0..WARMUP {
-            let r = Session::unlock(path, pass);
-            assert!(r.is_err(), "{label}: 预热样本应为失败");
-        }
-        let mut out = Vec::with_capacity(n);
-        for _ in 0..n {
-            let t = Instant::now();
-            let r = Session::unlock(path, pass);
-            out.push(t.elapsed().as_secs_f64() * 1000.0);
-            assert!(r.is_err(), "{label}: 样本应为失败");
-        }
-        out
-    };
+    // 预热三条路径。
+    for _ in 0..WARMUP {
+        assert!(Session::unlock(&base, "definitely_wrong_password").is_err());
+        assert!(Session::unlock(&corrupt, pw).is_err());
+        assert!(Session::unlock(&structural, pw).is_err());
+    }
 
-    let wrong = time_path("错误密码", &base, "definitely_wrong_password");
-    let corrupt_t = time_path("内容损坏", &corrupt, pw);
-    let structural_t = time_path("结构性损坏", &structural, pw);
+    // **轮转采样**（2026-10-21 修，见 docs/07-quality-gate.md §1.2「测量口径」）。
+    //
+    // 原实现是「一条路径连续跑满 N 次，再换下一条」，于是相位顺序固定为
+    // 错误密码 → 内容损坏 → 结构性损坏。实测（同一棵代码树连跑 3 次）：
+    //   错误密码 median 1750 / 2684 / 2885（两档跳、p10–p90 宽达 900ms）
+    //   内容损坏 median 1726 / 1744 / 1787（三次几乎不动）
+    // 形态说明偏差来自**相位**而不是路径：第一相位独自承担机器上升期（CPU 升频收敛、
+    // Argon2id 64MB 内存页首次触碰、杀软扫新产物的尾巴），比值随之假红。
+    // 每轮三条路径各跑一次 → 同一时刻的负载对三条路径等量施加，比值只反映代码差异。
+    let mut wrong = Vec::with_capacity(n);
+    let mut corrupt_t = Vec::with_capacity(n);
+    let mut structural_t = Vec::with_capacity(n);
+    for _ in 0..n {
+        let t = Instant::now();
+        let r = Session::unlock(&base, "definitely_wrong_password");
+        wrong.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(r.is_err(), "错误密码: 样本应为失败");
+
+        let t = Instant::now();
+        let r = Session::unlock(&corrupt, pw);
+        corrupt_t.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(r.is_err(), "内容损坏: 样本应为失败");
+
+        let t = Instant::now();
+        let r = Session::unlock(&structural, pw);
+        structural_t.push(t.elapsed().as_secs_f64() * 1000.0);
+        assert!(r.is_err(), "结构性损坏: 样本应为失败");
+    }
 
     let m_wrong = median(&wrong);
     let m_corrupt = median(&corrupt_t);

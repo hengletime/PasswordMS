@@ -173,6 +173,9 @@ export const sync = {
     invoke<void>('sync_accept_pair', { session_id: sessionId }),
   listDevices: (): Promise<DeviceDto[]> => invoke<DeviceDto[]>('list_paired_devices'),
   unpair: (deviceId: string): Promise<void> => invoke<void>('unpair', { device_id: deviceId }),
+  // D-66：重命名已配对设备（本地昵称，不参与同步）。
+  renameDevice: (deviceId: string, name: string): Promise<void> =>
+    invoke<void>('rename_paired_device', { device_id: deviceId, name }),
   now: (deviceId: string): Promise<SyncResultDto> =>
     invoke<SyncResultDto>('sync_now', { device_id: deviceId }),
   status: (): Promise<SyncStatusDto> => invoke<SyncStatusDto>('sync_status'),
