@@ -8,12 +8,16 @@
 #
 # 门清单（顺序即执行顺序，逐段汇报 + 计时）：
 #   1. 前端三门     npm run test / npm run check / npm run check:css
-#   2. Rust 全量    cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm
+#   2. Rust 格式    cargo fmt --all -- --check
+#                   （Q-2，2026-10-22 起纳入。秒级开销，**0 处差异才通过**；
+#                     基线从 v1.2.11 拉平前的 12 处 / 3 文件降到 0。
+#                     放在重活前面：格式红是最容易修的，不该让人等 6 分钟测试才发现）
+#   3. Rust 全量    cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm
 #                   （timing_sidechannel 单例 106~151s 属正常耗时（KDF 烧时序），
 #                     全量约 4–6 分钟，取决于是否需重新编译）
-#   3. Rust 静态    cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm
+#   4. Rust 静态    cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm
 #                   （0 error 阻塞；warning 数如实汇报不阻塞，当前基线 ≤7）
-#   4. 体积门       bash scripts/check-size.sh desktop --allow-missing
+#   5. 体积门       bash scripts/check-size.sh desktop --allow-missing
 #                   （日常门语义：本机未出包时跳过不判负；出包门在 build-android.sh
 #                    与显式构建流程内，见 docs/07-quality-gate.md §2）
 #                   Android：target/PasswordMS-*-arm64.apk 存在则逐个核验 ≤12MB，
@@ -83,13 +87,40 @@ frontend_gate() {
   return "$rc"
 }
 
-# ===== 2. Rust 全量测试 =====
+# ===== 2. rustfmt 格式基线（Q-2：0 处差异才通过）=====
+#
+# 为什么设成阻塞门：拉平前的 `--check` 在本机长期为红（v1.2.11 实测 12 处 / 3 文件），
+# 靠「记得顺手跑一下」守不住 —— 和 D-33 那条「前置条件必须写进脚本」同一条原则。
+# 输出格式：rustfmt 每处差异打印 `Diff in <路径>:<起行>:`，故用 ^Diff in 计数。
+# `grep -c` 在 0 匹配时返回 1，必须 `|| echo 0` 兜底，否则差别数会变成空串。
+fmt_gate() {
+  local t0 t1 rc diffs
+  info "▶ Rust 格式基线(cargo fmt --all -- --check)"
+  t0=$(date +%s)
+  cargo fmt --all -- --check > /tmp/pms-gate-fmt.log 2>&1
+  rc=$?
+  t1=$(date +%s)
+  if [ "$rc" -ne 0 ]; then
+    diffs=$(grep -c '^Diff in' /tmp/pms-gate-fmt.log 2>/dev/null || echo 0)
+    # 只列前 20 行坐标，不刷屏；完整 diff 见 /tmp/pms-gate-fmt.log
+    grep '^Diff in' /tmp/pms-gate-fmt.log 2>/dev/null \
+      | sed 's|.*PasswordMS.||' | head -20
+    fail "fmt 失败（$((t1 - t0))s，${diffs} 处差异）—— 跑 cargo fmt --all 后重试"
+    record "fmt" FAIL "$((t1 - t0))" "diffs=${diffs}"
+    return 1
+  fi
+  pass "fmt 0 处差异（$((t1 - t0))s）"
+  record "fmt" PASS "$((t1 - t0))" ""
+  return 0
+}
+
+# ===== 3. Rust 全量测试 =====
 rust_test_gate() {
   run_gate "Rust 全量(cargo test -p passwordms-core)" \
     cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm
 }
 
-# ===== 3. clippy（0 error 阻塞；warning 如实汇报不阻塞，基线 ≤7）=====
+# ===== 4. clippy（0 error 阻塞；warning 如实汇报不阻塞，基线 ≤7）=====
 clippy_gate() {
   local t0 t1 rc warn_count
   info "▶ Rust 静态检查(cargo clippy --workspace --all-targets)"
@@ -117,7 +148,7 @@ clippy_gate() {
   return 0
 }
 
-# ===== 4. 体积门 =====
+# ===== 5. 体积门 =====
 size_gate() {
   local rc=0 apk f bytes mb t0 t1
   run_gate "体积门-桌面(check-size.sh desktop)" \
@@ -161,6 +192,9 @@ size_gate() {
 info "════ PasswordMS 一键质量总门 ════"
 FAILED=0
 frontend_gate  || FAILED=1
+if [ "$FAILED" -eq 0 ] || [ "$KEEP_GOING" -eq 1 ]; then
+  fmt_gate      || FAILED=1
+fi
 if [ "$FAILED" -eq 0 ] || [ "$KEEP_GOING" -eq 1 ]; then
   rust_test_gate || FAILED=1
 fi

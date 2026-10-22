@@ -125,9 +125,7 @@ pub fn vault_file_info(
 /// 就能给结论，因此先于压缩上线。与 `vault_file_info` 一样是廉价调用（只读文件元数据
 /// + 解密少量墓碑帧取 rev），不必 `spawn_blocking`。
 #[tauri::command(rename_all = "snake_case")]
-pub fn vault_compaction_stats(
-    state: tauri::State<'_, AppState>,
-) -> IpcResult<CompactionStatsDto> {
+pub fn vault_compaction_stats(state: tauri::State<'_, AppState>) -> IpcResult<CompactionStatsDto> {
     let session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo()?;
     let stats = repo.compaction_stats().map_err(IpcError::from)?;

@@ -1,7 +1,7 @@
 # 07 · 质量门与出包门禁（权威）
 
 > **本文档的性质**：PasswordMS 交付前的**唯一门禁权威**。§1 日常门 = 一条命令跑完的自动化总门；§2 出包门 = 产出安装包/APK 的**唯一正道**与出包后的人工验收；§3 安全验收点 A-01~A-10 与测试证据的映射；§4 已知边界（**未验证 ≠ 通过**）。
-> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-22 14:10（v1.2.11）实跑刷新**（总判定 **PASS**，7 门全过 / 0 失败 / 0 跳过；Rust **148 例通过 + 1 例 `#[ignore]`**、前端 **26 文件 204 例**；各门耗时 12s / 11s / 4s / 341s / 12s / 28s / 13s；门禁期间 `find … -newermt 14:10:48` **空输出** = 零改动）；2026-10-22 12:51（v1.2.10，145 例 / 204 例）、2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
+> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-22 16:19（v1.2.11 + Q-2，**8 门**）实跑刷新**（总判定 **PASS**，8 门全过 / 0 失败 / 0 跳过；Rust **148 例通过 + 1 例 `#[ignore]`**、前端 **26 文件 204 例**；各门耗时 12s / 11s / 4s / 2s / 325s / 12s / 30s / 15s；门禁期间 `find … -newermt 16:19:14` **空输出** = 零改动）；2026-10-22 14:10（v1.2.11，**7 门**——Q-2 尚未纳入，148 例 / 204 例，12s / 11s / 4s / 341s / 12s / 28s / 13s）；2026-10-22 12:51（v1.2.10，145 例 / 204 例）、2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
 > **记录人**：工程师（寇豆码）　**最近一次执行**：2026-10-22
 
 ---
@@ -30,18 +30,19 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 ### 1.2 门清单与本次实跑数字
 
-| # | 门 | 命令 | 本次实测（2026-10-22 v1.2.11） | 判定 |
+| # | 门 | 命令 | 本次实测（2026-10-22 16:19 · v1.2.11 + Q-2） | 判定 |
 |---|----|------|---------|------|
 | 1 | 前端单测 | `npm run test`（vitest） | **26 文件 204/204 通过**（与 v1.2.10 同数——D-80 全是后端，`src/` 零改动） | ✅ 12s |
 | 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 11s |
 | 3 | CSS 层叠契约 | `npm run check:css` | **0 FAIL / 6 WARN**（6 WARN 为既有浅色主/危险按钮对比度 3.74~4.38:1，过控件底线 3.0 未达 AA 4.5，已知项） | ✅ 4s |
-| 4 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **148 通过 / 0 失败 / 1 忽略**（**24 条** `test result` 行；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过——它要读真实库，不进日常门。较 v1.2.10 的 145 新增 **3 例**：D-80 已仲裁冲突停止保活，GC 出口 / 压缩出口 / `KeepBoth` 防过修各 1 例） | ✅ 341s |
-| 5 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，lint 种类与 v1.2.10 完全一致，**无新增**；`repository.rs` 行号因 D-80 文档块下移，明细见 §1.4） | ✅ 12s |
-| 6 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.42 MB**（2,539,520 B）+ NSIS **1.60 MB**（1,679,584 B），均 ≤ 10 MB；绿色版 zip **1.95 MB**（2,044,590 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 逐字节相同，sha256 `e79fec35…`**） | ✅ 28s |
-| 7 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.66 MB ≤ 12 MB**（`PasswordMS-1.2.11-arm64.apk`，6,983,315 B / sha256 `8f8c6f94…`；字节数与 v1.2.10 **恰好相同**——D-80 只多一个 `if` 分支且真身 .so 按页对齐，**hash 与 mtime（14:26）不同，非旧包**；V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书） | ✅ 13s |
+| 4 | **Rust 格式基线**（**Q-2 新增**） | `cargo fmt --all -- --check` | **0 处差异**（拉平前基线为红：**12 处 / 3 文件**，见 §1.6） | ✅ 2s |
+| 5 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **148 通过 / 0 失败 / 1 忽略**（**24 条** `test result` 行；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过——它要读真实库，不进日常门。较 v1.2.10 的 145 新增 **3 例**：D-80 已仲裁冲突停止保活，GC 出口 / 压缩出口 / `KeepBoth` 防过修各 1 例） | ✅ 325s |
+| 6 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，lint 种类与 v1.2.10 完全一致，**无新增**；`repository.rs` 行号因 D-80 文档块下移，明细见 §1.4） | ✅ 12s |
+| 7 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.42 MB**（2,539,520 B）+ NSIS **1.60 MB**（1,679,584 B），均 ≤ 10 MB；绿色版 zip **1.95 MB**（2,044,590 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 逐字节相同，sha256 `e79fec35…`**） | ✅ 30s |
+| 8 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.66 MB ≤ 12 MB**（`PasswordMS-1.2.11-arm64.apk`，6,983,315 B / sha256 `8f8c6f94…`；字节数与 v1.2.10 **恰好相同**——D-80 只多一个 `if` 分支且真身 .so 按页对齐，**hash 与 mtime（14:26）不同，非旧包**；V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书；`target/` 下**共 13 个** APK 逐个核验全达标） | ✅ 15s |
 
-> **§1.2 的读数口径（重要）**：第 1~5 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-22 12:51 前端起跑，**7 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
-> 第 6~7 行的字节数来自**同一棵树**的 v1.2.10 正式出包产物（`--allow-missing` 口径不变）。
+> **§1.2 的读数口径（重要）**：第 1~6 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-22 16:19:14 前端起跑，**8 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
+> 第 7~8 行的字节数来自**同一棵树**的 v1.2.11 正式出包产物（`--allow-missing` 口径不变）。
 > ⚠️ **门禁输出必须落日志再 grep**：`bash scripts/gate-all.sh | tail -N` 会把前端例数等关键读数截掉，且日志含 ANSI 色码 —— 用 `grep -a` 才读得到。
 > **「门禁起跑后零改动」是这个读数成立的唯一凭据**（2026-10-21 当天因并行写入报废过两轮读数，见 §1.5）。固定收尾断言（**必须排除构建缓存**，否则 `.gradle` 里的 lock/bin 会把断言变成噪音）：
 > ```bash
@@ -145,6 +146,36 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 1. 派工时就约定「门禁期间冻 `src/` `crates/` `src-tauri/`」，改动排队；
 2. 同一文件**只许一个人改**（本轮两人各改半个 `Settings.svelte`，是读数报废的直接成因）；
 3. 出包前的最后一轮门禁，跑完立刻做那条 `find`；非空就重跑，不解释、不豁免。
+
+### 1.6 fmt 基线（Q-2，2026-10-22 拉平）
+
+**拉平前状态**：`cargo fmt --all -- --check` 在本机**长期为红**（`EXIT=1`），v1.2.11 实测 **12 处 / 3 个文件**：
+`crates/passwordms-core/tests/compaction.rs` **10 处**、`crates/passwordms-core/src/store/repository.rs` **1 处**（`precompact_backup_path` 的
+`let mut name = path.file_name()…` 单行超宽）、`src-tauri/src/commands/system_cmd.rs` **1 处**。
+**全部是换行重排**（rustfmt 把超宽调用拆成多行），**没有一处语义改动**，也不是某一轮引入的——是长期累积。
+
+**为什么没顺手做**：其中两个文件（`compaction.rs` / `repository.rs`）正是功能改动的热点文件。
+在功能分支上跑 `cargo fmt --all`，格式噪音会混进同一笔 diff，评审时「哪几行是真的」就看不出来了。
+故按 **Q-2 单开一单**处理：功能提交落地后再格式化，`git log` 里一眼能看出「这笔只动空白」。
+
+**拉平后验证**（三项，缺一不可）：
+
+| 检查 | 拉平前 | 拉平后 |
+|------|--------|--------|
+| `cargo fmt --all -- --check` | **EXIT=1（12 处）** | **EXIT=0** |
+| `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | 0 error / 7 条 | **0 error / 7 条**（不变） |
+| `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | 148 / 0 / 1 | **148 / 0 / 1**（24 条 `test result` 行，逐数一致） |
+
+> **已按 A 案纳入 `gate-all.sh`（2026-10-22，主人拍板）**：`cargo fmt --all -- --check` 成为**第 4 门**（执行序；总门数 **7 → 8**），
+> 位置在前端三门之后、Rust 全量之前 —— 格式红是最容易修的一类，不该让人先等 5 分钟跑完测试才发现。
+> 实现见 `scripts/gate-all.sh` 的 `fmt_gate()`：用 `grep -c '^Diff in'` 计数（**`grep -c` 在 0 匹配时返回 1**，已用 `|| echo 0` 兜底，
+> 否则差别数会变成空串）；判红时只打印前 20 行坐标不刷屏，完整 diff 落 `/tmp/pms-gate-fmt.log`。
+
+> **这个门被验证过「真的会红」**（没红过的门等于没设）——负向探针（2026-10-22）：
+> 把 `src-tauri/src/commands/system_cmd.rs` 换回格式化前的版本（sha256 `cd35b305…`）后跑 `gate-all.sh`，
+> 得到 `NEG_EXIT=1`、`[FAIL] fmt 失败（2s，1 处差异）`、坐标精确打在 `src-tauri\src\commands\system_cmd.rs:125`、
+> 汇总 `[FAIL] 总判定：FAIL（通过 3 / 失败 1 / 跳过 0）`，且 **fail-fast 使 Rust 全量门根本没启动**（省掉约 5 分钟）。
+> 还原后 `--check` 立刻回到 `EXIT=0`，8 门重新全 PASS。
 
 ---
 
@@ -252,6 +283,6 @@ bash scripts/check-size.sh android   # ≤12 MB（扫 src-tauri/gen 与 gen）
 | A-05 release 构建时序分布 | timing_sidechannel 为 **debug** 构建，绝对值不可外推 release | release profile 复测 |
 | APK 签名与真机安装 | signed APK 已产出（断言①~④过） | 真机安装走查 |
 | check:css 6 WARN（浅色主/危险按钮对比度） | 已知既有项，过控件底线未达 AA 正文 | 设计决策（改色 or 维持） |
-| `cargo fmt` 代码格式统一 | **已执行（未提交）**：v1.2.5 交付窗口已跑过 `cargo fmt --all`，工作树里 58 个文件是纯格式化改动（换行/空行/缩进，零语义），由主理人以**独立 `style:` commit** 提交，**不含任何功能改动**。<br>**因 §1.4 的 7 个行号系 fmt 之后实测的定值，该提交不会造成行号漂移**——下次不必重测。<br>提交时建议 `git diff --stat -w`（忽略空白）自证零语义变化。同批应把 `cargo fmt --all -- --check` 加入 `gate-all.sh` 成为第 8 门 | 独立 `style:` commit 提交 |
+| `cargo fmt` 代码格式统一 | **已闭合（Q-2，2026-10-22）**：基线拉平并**纳入门禁**。<br>① v1.2.5 窗口的 58 文件纯格式化改动已由主理人以独立 `style:` commit 提交；② v1.2.11 后残留的 **12 处 / 3 文件**差异（`tests/compaction.rs` 10、`store/repository.rs` 1、`src-tauri/commands/system_cmd.rs` 1，全是换行重排）已再次拉平，`--check` EXIT=1 → **0**，clippy 7 条与 Rust 148/0/1 均不变；③ `cargo fmt --all -- --check` 已作为**第 4 门**加入 `gate-all.sh`（总门数 7 → 8），并做过**负向探针**（换回未格式化版本 → 门确实红、fail-fast 生效）。底账与验证矩阵见 **§1.6** | 已闭合，无需再排期 |
 
 > 引用 `docs/03b-verification.md` 综合判定：CONDITIONAL PASS，剩余阻塞项已收敛为环境类。**任何一项上表内容的验证完成，须回写本文档并更新对应判定。**

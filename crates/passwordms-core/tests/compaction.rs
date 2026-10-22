@@ -82,7 +82,9 @@ fn stats_separate_live_and_dead_attachment_bytes() {
 
     let item = repo.create_item(login_draft("带附件", None)).unwrap();
     let payload = vec![0x5Au8; 128 * 1024];
-    let item = repo.add_attachment_bytes(&item.item_id, "big.bin", &payload).unwrap();
+    let item = repo
+        .add_attachment_bytes(&item.item_id, "big.bin", &payload)
+        .unwrap();
     let attachment_id = item.attachments[0].attachment_id.clone();
 
     // 附件仍被父条目引用 → 不产生「已删附件」字节。
@@ -99,7 +101,8 @@ fn stats_separate_live_and_dead_attachment_bytes() {
     assert!(referenced.file_bytes > payload.len() as u64);
 
     // 摘掉引用（模拟主人「删除附件」）——此时 blob 帧还在，只是没人引用。
-    repo.remove_attachment(&item.item_id, &attachment_id).unwrap();
+    repo.remove_attachment(&item.item_id, &attachment_id)
+        .unwrap();
 
     let after = repo.compaction_stats().unwrap();
     assert!(
@@ -138,7 +141,8 @@ fn compact_reclaims_deleted_attachment_bytes() {
         .add_attachment_bytes(&item.item_id, "huge.bin", &payload)
         .unwrap();
     let attachment_id = item.attachments[0].attachment_id.clone();
-    repo.remove_attachment(&item.item_id, &attachment_id).unwrap();
+    repo.remove_attachment(&item.item_id, &attachment_id)
+        .unwrap();
     let before_bytes = repo.file_size().unwrap();
     let stats_before = repo.compaction_stats().unwrap();
 
@@ -200,11 +204,13 @@ fn compact_keeps_item_tombstone_for_sync() {
     let deletion = changes
         .iter()
         .find(|c| c.record_id == item_id)
-        .unwrap_or_else(|| panic!("压缩后必须仍导出该条目的删除变更，实际变更 {} 条", changes.len()));
-    assert!(
-        deletion.deleted,
-        "压缩后该条目的变更必须是 deleted = true"
-    );
+        .unwrap_or_else(|| {
+            panic!(
+                "压缩后必须仍导出该条目的删除变更，实际变更 {} 条",
+                changes.len()
+            )
+        });
+    assert!(deletion.deleted, "压缩后该条目的变更必须是 deleted = true");
     assert_eq!(deletion.record_type, RECORD_TYPE_ITEM);
 
     let tomb_rev = repo
@@ -262,10 +268,7 @@ fn compact_keeps_blob_referenced_by_trash_snapshot() {
     repo.empty_trash().unwrap();
     let before_bytes = repo.file_size().unwrap();
     let outcome = repo.compact().unwrap();
-    assert!(
-        !repo.has_blob(&attachment_id),
-        "回收站清空后附件应可回收"
-    );
+    assert!(!repo.has_blob(&attachment_id), "回收站清空后附件应可回收");
     assert!(outcome.reclaimed_bytes >= payload.len() as u64);
     assert!(outcome.after_bytes < before_bytes);
 
@@ -278,7 +281,9 @@ fn compact_drops_churn_tombstones_of_live_records() {
     let (dir, _vault, mut session) = setup("churn");
     let repo = session.repo_mut().unwrap();
 
-    let item = repo.create_item(login_draft("会被反复编辑", Some("v0"))).unwrap();
+    let item = repo
+        .create_item(login_draft("会被反复编辑", Some("v0")))
+        .unwrap();
     let item_id = item.item_id.clone();
     // 反复编辑并改变长度 → place_frame 每次留一条中转墓碑（同一 id 多条）。
     for i in 1..=6 {
@@ -324,10 +329,10 @@ fn compact_preserves_header_counts_and_master_password() {
     let (dir, vault, mut session) = setup("preserve");
     {
         let repo = session.repo_mut().unwrap();
-        let folder = repo
-            .create_folder("分组A".to_string(), None, None)
+        let folder = repo.create_folder("分组A".to_string(), None, None).unwrap();
+        let a = repo
+            .create_item(login_draft("条目A", Some("note-a")))
             .unwrap();
-        let a = repo.create_item(login_draft("条目A", Some("note-a"))).unwrap();
         let b = repo
             .create_item(ItemDraft {
                 folder_id: Some(folder.folder_id.clone()),
@@ -364,7 +369,10 @@ fn compact_preserves_header_counts_and_master_password() {
         repo.list_conflicts().len(),
         repo.list_paired_devices().len(),
     );
-    assert_eq!(counts_after, counts_before, "压缩前后各集合计数必须逐项相等");
+    assert_eq!(
+        counts_after, counts_before,
+        "压缩前后各集合计数必须逐项相等"
+    );
 
     let header_after = repo.header().clone();
     // 头部逐字段沿用：主密码相关的三件套一个字节都不能变（否则用户被锁在门外）。
@@ -859,7 +867,10 @@ fn real_vault_ledger() {
 
     println!("file_bytes        = {file_bytes}");
     println!("header_bytes      = {header_bytes}");
-    println!("frames            = {} (live {live_frames} / tomb {tomb_frames})", frames.len());
+    println!(
+        "frames            = {} (live {live_frames} / tomb {tomb_frames})",
+        frames.len()
+    );
     println!("live_bytes        = {live_bytes}");
     println!("tombstone_bytes   = {tombstone_bytes}");
     println!("blob_live_bytes   = {blob_live_bytes}");
@@ -873,4 +884,3 @@ fn real_vault_ledger() {
         "帧账本必须与文件长度相等（存在尾料则说明容器不干净）"
     );
 }
-

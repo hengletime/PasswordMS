@@ -1885,7 +1885,10 @@ impl Repository {
     /// 压缩备份路径：`<vault>.precompact-<unix_ms>`。
     fn precompact_backup_path(&self) -> std::path::PathBuf {
         let path = self.container.path().to_path_buf();
-        let mut name = path.file_name().map(|s| s.to_os_string()).unwrap_or_default();
+        let mut name = path
+            .file_name()
+            .map(|s| s.to_os_string())
+            .unwrap_or_default();
         name.push(format!(".precompact-{}", now_ms()));
         path.with_file_name(name)
     }
