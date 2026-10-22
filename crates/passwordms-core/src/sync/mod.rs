@@ -3,6 +3,7 @@
 
 pub mod blob_transfer;
 pub mod client;
+pub mod discovery;
 pub mod handshake;
 pub mod merge;
 pub mod protocol;

@@ -140,8 +140,19 @@ fn compact_reclaims_deleted_attachment_bytes() {
     let attachment_id = item.attachments[0].attachment_id.clone();
     repo.remove_attachment(&item.item_id, &attachment_id).unwrap();
     let before_bytes = repo.file_size().unwrap();
+    let stats_before = repo.compaction_stats().unwrap();
 
     let outcome = repo.compact().unwrap();
+    let stats_after = repo.compaction_stats().unwrap();
+
+    // 硬不变量：压缩**只许回收死数据**，活跃帧字节数必须逐字节不变。
+    // 这条同时排除两种错误："把活帧也丢了"与"kept 算法算错了"（后者会让
+    // `after_bytes` 与磁盘不一致，但 `live_bytes` 仍可能对 —— 反过来也成立）。
+    assert_eq!(
+        stats_after.live_bytes, stats_before.live_bytes,
+        "压缩改变了活跃帧字节数（{} → {}）：有活数据被误伤",
+        stats_before.live_bytes, stats_after.live_bytes
+    );
     assert_eq!(outcome.before_bytes, before_bytes);
     assert!(
         outcome.reclaimed_bytes >= payload.len() as u64,

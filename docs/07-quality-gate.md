@@ -1,7 +1,7 @@
 # 07 · 质量门与出包门禁（权威）
 
 > **本文档的性质**：PasswordMS 交付前的**唯一门禁权威**。§1 日常门 = 一条命令跑完的自动化总门；§2 出包门 = 产出安装包/APK 的**唯一正道**与出包后的人工验收；§3 安全验收点 A-01~A-10 与测试证据的映射；§4 已知边界（**未验证 ≠ 通过**）。
-> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-22 09:25（v1.2.9）实跑刷新**（总判定 **PASS**，7 门全过 / 0 失败 / 0 跳过；Rust **134 例通过 + 1 例 `#[ignore]`**、前端 **26 文件 204 例**；各门耗时 13s / 13s / 5s / 290s / 12s / 27s / 13s，前端起跑 09:25:54）；2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
+> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-22 12:51（v1.2.10）实跑刷新**（总判定 **PASS**，7 门全过 / 0 失败 / 0 跳过；Rust **145 例通过 + 1 例 `#[ignore]`**、前端 **26 文件 204 例**；各门耗时 12s / 13s / 5s / 323s / 15s / 28s / 14s）；2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
 > **记录人**：工程师（寇豆码）　**最近一次执行**：2026-10-21
 
 ---
@@ -30,18 +30,18 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 ### 1.2 门清单与本次实跑数字
 
-| # | 门 | 命令 | 本次实测（2026-10-22 v1.2.9） | 判定 |
+| # | 门 | 命令 | 本次实测（2026-10-22 v1.2.10） | 判定 |
 |---|----|------|---------|------|
-| 1 | 前端单测 | `npm run test`（vitest） | **26 文件 204/204 通过**（门禁 09:25:54 启动；与 v1.2.8 同数——本轮是纯 Rust 修复，`src/` 零改动） | ✅ 13s |
+| 1 | 前端单测 | `npm run test`（vitest） | **26 文件 204/204 通过**（与 v1.2.9 同数——D-78/D-74 全是后端，`src/` 零改动） | ✅ 12s |
 | 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 13s |
 | 3 | CSS 层叠契约 | `npm run check:css` | **0 FAIL / 6 WARN**（6 WARN 为既有浅色主/危险按钮对比度 3.74~4.38:1，过控件底线 3.0 未达 AA 4.5，已知项） | ✅ 5s |
-| 4 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **134 通过 / 0 失败 / 1 忽略**（23 条 `test result` 行；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过——它要读真实库，不进日常门。较 v1.2.8 的 131 新增 3 例：D-79 冲突快照引用保活） | ✅ 290s |
-| 5 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，明细见 §1.4），rc=0 | ✅ 12s |
-| 6 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.41 MB**（2,531,328 B）+ NSIS **1.60 MB**（1,672,667 B），均 ≤ 10 MB；绿色版 zip **1.94 MB**（2,034,758 B，4 件含 `WebView2Loader.dll`） | ✅ 27s |
-| 7 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.64 MB ≤ 12 MB**（`PasswordMS-1.2.9-arm64.apk`，6,962,835 B；V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书） | ✅ 13s |
+| 4 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **145 通过 / 0 失败 / 1 忽略**（**24 条** `test result` 行；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过——它要读真实库，不进日常门。较 v1.2.9 的 134 新增 **11 例**：D-78 容器头部容量 4 例 + D-74 局域网发现 7 例） | ✅ 323s |
+| 5 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，位置与 v1.2.9 完全一致，**无新增**；明细见 §1.4） | ✅ 15s |
+| 6 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.42 MB**（2,539,520 B）+ NSIS **1.60 MB**（1,679,871 B），均 ≤ 10 MB；绿色版 zip **1.95 MB**（2,044,299 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 同哈希 `35a22f6e…`**） | ✅ 28s |
+| 7 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.66 MB ≤ 12 MB**（`PasswordMS-1.2.10-arm64.apk`，6,983,315 B；V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书） | ✅ 14s |
 
-> **§1.2 的读数口径（重要）**：第 1~5 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-22 09:25:54 前端起跑，**7 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
-> 第 6~7 行的字节数来自**同一棵树**的 v1.2.9 正式出包产物（`--allow-missing` 口径不变）。
+> **§1.2 的读数口径（重要）**：第 1~5 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-22 12:51 前端起跑，**7 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
+> 第 6~7 行的字节数来自**同一棵树**的 v1.2.10 正式出包产物（`--allow-missing` 口径不变）。
 > ⚠️ **门禁输出必须落日志再 grep**：`bash scripts/gate-all.sh | tail -N` 会把前端例数等关键读数截掉，且日志含 ANSI 色码 —— 用 `grep -a` 才读得到。
 > **「门禁起跑后零改动」是这个读数成立的唯一凭据**（2026-10-21 当天因并行写入报废过两轮读数，见 §1.5）。固定收尾断言（**必须排除构建缓存**，否则 `.gradle` 里的 lock/bin 会把断言变成噪音）：
 > ```bash
@@ -72,7 +72,7 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 > 验证：连跑 3 次比值 **0.974 / 0.990 / 1.005**；第 3 次整机抖动（三路径中位数全冲到 2500、p10 全在 1700）比值仍 1.005 —— 因为负载对三条路径等量施加。
 > **判据**：一条时序测试若把「整机负载」记成「路径差异」，它就是在随机报红；改采样口径不算放宽阈值，改阈值才算。
 
-### 1.3 Rust 全量 135 例逐 target 累加（2026-10-22 09:25 实跑，134 通过 + 1 `#[ignore]`）
+### 1.3 Rust 全量 146 例逐 target 累加（2026-10-22 12:51 实跑，145 通过 + 1 `#[ignore]`）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。
 
@@ -82,8 +82,9 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 | `add_attachment_bytes` | 6 | **D-66 新增**：`content://` 字节入口与 `source_path` 入口的校验链一致性（含 255B 文件名边界、20MB 上限、**校验顺序 ④/⑥ 不得漂移**——本轮正是它抓到残留变异注入） |
 | `attachment_sync` | 3 | **P0 T1 新增**：附件删除跨端传播（双端 loopback，双向 + 幂等） |
 | `auto_lock` | 3 | 前端 `auto-lock.ts` 的 Rust 侧对偶（假时钟） |
-| `container_roundtrip` | 3 | A-01/A-02 证据（含 Phase 4b 字节级原位分支用例） |
+| `container_roundtrip` | 7 | A-01/A-02 证据（含 Phase 4b 字节级原位分支用例）。**D-78 新增 4 例**：`header_grows_to_next_capacity_and_reopens`（8192→16384 常规翻倍不被新夹取误伤）、`header_growth_past_u16_ceiling_fails_without_corruption`、`header_at_exact_u16_max_roundtrips`（65535 是闭区间）、`header_growth_at_max_capacity_fails_fast`。四例共同判据：**失败后 `Container::open` 仍成功 + 容量字段与 `record_start()` 未变 + 帧数不变**（只断言 `is_err()` 对"先写坏再报错"无感） |
 | `crypto_vectors` | 4 | A-05 错误码维度 |
+| `discovery` | 7 | **D-74 新增**（UDP 认证发现）：① `discovery_roundtrip_on_loopback`；② `discovery_no_reply_for_unpaired`（未配对**静默不回包**）；③ `discovery_drops_mismatched_q`；④ `discovery_rejects_bad_version_and_oversized_tags`；⑤ `discovery_rate_limited_per_source`；⑥ **`resync_heals_stale_addr_via_discovery`（验收核心：把 `peer_port` 写错仍能同步成功并写回新端口）**；⑦ **`discovery_ignores_self_reply`（自应答过滤，三组断言：过滤组 / 对照组 / 弱化成只判 IP 的探针组）** |
 | `health_and_generator` | 8 | |
 | `import_bitwarden` | 3 | |
 | `import_template` | 4 | **D-72 新增**：① 模板自身导入 **0 跳过**（`total==2`/`items.len()==2`/`skipped==0`/1 个分组）；② 表头 10 列与 `KNOWN_COLUMNS` **逐字同序**；③ 示例行**不溢出** `custom_fields`；④ 无 BOM + 尾换行 + `lines()==3`。另在 ① 内钉死「notes 必须含**半角**逗号」——旧模板误用全角「，」，导致英文引号形同虚设、转义路径从未被验证 |
@@ -101,7 +102,7 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 | `zeroize_check` | 7 | A-04 证据（含 D-1b folders 擦除） |
 | `compaction` | 11 | **D-76 新增 7 + D-79 新增 3，共 10 通过 + 1 `#[ignore]`**：D-76 —— ① `stats_separate_live_and_dead_attachment_bytes`；② `compact_reclaims_deleted_attachment_bytes`；③ **`compact_keeps_item_tombstone_for_sync`（防回魂）**；④ **`compact_keeps_blob_referenced_by_trash_snapshot`（回收站保活）**；⑤ `compact_drops_churn_tombstones_of_live_records`；⑥ **`compact_preserves_header_counts_and_master_password`**；⑦ `compact_is_noop_when_nothing_to_reclaim`。D-79 —— ⑧ **`compact_keeps_blob_referenced_by_conflict_snapshot`（冲突快照保活，撤除修复即红）**；⑨ **`gc_orphan_blobs_keeps_blob_referenced_by_conflict_snapshot`（同根因的另一条出口）**；⑩ **`compact_drops_blob_referenced_by_nobody`（防过修：谁都不引用的仍必须丢）**；⑪ `#[ignore]` `real_vault_ledger`（要读真实库，不进日常门） |
 | doc-tests | 1 | `attachment_name.rs` 的 ``` 示例（**必须靠 `.cargo/config.toml` 的 `rustdocflags` 才能链接**，见 §1.1） |
-| **合计** | **135** | 134 passed / 0 failed / 1 ignored；**22 个编译目标（lib + 21 集成测试）+ 1 个 doc-test 目标 = 23 条 `test result` 行**（与 `gate-all.sh` 日志逐行累加吻合） |
+| **合计** | **146** | 145 passed / 0 failed / 1 ignored；**23 个编译目标（lib + 22 集成测试）+ 1 个 doc-test 目标 = 24 条 `test result` 行**（与 `gate-all.sh` 日志逐行累加吻合） |
 
 ### 1.4 clippy 基线（2026-10-18 实跑 11 条 → Q-1 修订后 7 条 → 2026-10-21 复核仍 7 条）
 

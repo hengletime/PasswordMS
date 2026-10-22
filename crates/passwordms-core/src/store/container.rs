@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::constants::FRAME_HEADER_LEN;
-use crate::constants::{CONTAINER_PREFIX_LEN, FORMAT_VERSION, HEADER_RESERVED_BYTES, VAULT_MAGIC};
+use crate::constants::{
+    CONTAINER_PREFIX_LEN, FORMAT_VERSION, HEADER_RESERVED_BYTES, MAX_HEADER_BYTES, VAULT_MAGIC,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::model::vault::Vault;
 use crate::store::frame::Frame;
@@ -128,17 +130,33 @@ impl Container {
             return Ok(false);
         }
 
-        // 容量不足：整文件重写，头部扩为两倍容量。
+        // 容量不足：整文件重写，头部扩为两倍容量（下界为格式默认值，上界见 `MAX_HEADER_BYTES`）。
+        //
+        // D-78：`header_len` 是 u16，`65536 as u16 == 0`；`open` 把 `header_len == 0`
+        // 判为 `zero header` → 库**永久打不开**。坏头在 rename 之前就写进了 tmp，故这条
+        // 路径必须「宁可不长，也不写坏」。
+        //
+        // 下界不是补偿而是不变量：`open` 接受任意 `header_len ≥ 1`，没有下界的畸形库
+        // （如 `header_len=100`）会 100→200→400… 一级级爬，**每级都要整文件重写**。
+        // 夹取用 `clamp`（等价于先 `.max(下界)` 再 `.min(上界)`）：顺序保证 `cap*2` 冲出
+        // u16 时先被压回 65535；两个常量本身满足 下界 ≤ 上界，不会 panic。
+        let new_capacity =
+            (self.header_capacity * 2).clamp(HEADER_RESERVED_BYTES, MAX_HEADER_BYTES);
+        if new_capacity <= self.header_capacity {
+            // 已在硬上限：再翻只会被截断成 0。此刻磁盘一字未动，直接拒绝。
+            return Err(CoreError::VaultCapacityExceeded);
+        }
+        // 先序列化并判装得下，再读整库：两条失败路径都不必付 `read_frames()` 的整库读取代价。
+        let header_bytes = try_serialize_header_padded(&header, new_capacity)?
+            .ok_or(CoreError::VaultCapacityExceeded)?;
         let frames = self.read_frames()?;
-        let new_capacity = (self.header_capacity * 2).max(HEADER_RESERVED_BYTES);
-        let header_bytes = serialize_header_padded(&header, new_capacity)?;
 
         let tmp = self.path.with_extension("vault.tmp");
         {
             let mut file = File::create(&tmp)?;
             file.write_all(VAULT_MAGIC)?;
             file.write_all(&FORMAT_VERSION.to_le_bytes())?;
-            file.write_all(&(new_capacity as u16).to_le_bytes())?;
+            file.write_all(&(new_capacity as u16).to_le_bytes())?; // new_capacity ≤ MAX_HEADER_BYTES，此 cast 不会截断
             file.write_all(&0u32.to_le_bytes())?;
             file.write_all(&header_bytes)?;
             for (_, frame) in &frames {
@@ -218,8 +236,9 @@ impl Container {
     /// 因此本方法要么留下"新库 + 已消费的 tmp"，要么留下"旧库 + 待诊断的 tmp"，
     /// **不存在"两个都残缺"的中间态**。
     pub fn rewrite_with_frames(&mut self, header: Vault, frames: &[Frame]) -> CoreResult<()> {
-        if self.header_capacity > u16::MAX as usize {
-            // header_len 是 u16；超过就写不进去（防御：正常路径下容量最多翻倍到 32768）。
+        if self.header_capacity > MAX_HEADER_BYTES {
+            // header_len 是 u16；超过就写不进去（防御：正常路径下容量最多到 65535，
+            // 见 `update_header` 的 D-78 夹取）。
             return Err(CoreError::Internal("header_capacity overflow".to_string()));
         }
         let tmp = self.path.with_extension("vault.compact.tmp");
@@ -292,19 +311,29 @@ fn rename_replace(from: &Path, to: &Path) -> CoreResult<()> {
     })
 }
 
-/// 将头部序列化并尾部填充空格至 `capacity`，超限则报错。
-fn serialize_header_padded(header: &Vault, capacity: usize) -> CoreResult<Vec<u8>> {
+/// JSON 序列化并按 `capacity` 尾部空格填充；**装不下返回 `None`**。
+///
+/// 「装不装得下」的判定**只有这一处**（D-78 裁定）：错误该是什么变体由调用方决定 ——
+/// `create` / `rewrite_with_frames` / 原地探测是 `Internal`，而 `update_header` 的
+/// 增长分支是 `VaultCapacityExceeded`（前端有 `err.vault_capacity` 人话文案）。
+///
+/// 刻意不在这里返回错误：若把两个变体的判定分叉到「预检 + 再序列化」两处，将来改填充
+/// 规则（不填充、按块对齐等）就会出现「预检说能装、实际装不下」的分叉，而这种分叉只在
+/// 冷路径暴露，最难查。
+fn try_serialize_header_padded(header: &Vault, capacity: usize) -> CoreResult<Option<Vec<u8>>> {
     let mut bytes = serde_json::to_vec(header)?;
     if bytes.len() > capacity {
-        return Err(CoreError::Internal(format!(
-            "header exceeds reserved capacity ({})",
-            capacity
-        )));
+        return Ok(None);
     }
-    while bytes.len() < capacity {
-        bytes.push(b' ');
-    }
-    Ok(bytes)
+    bytes.resize(capacity, b' ');
+    Ok(Some(bytes))
+}
+
+/// 将头部序列化并尾部填充空格至 `capacity`，超限则报错。
+fn serialize_header_padded(header: &Vault, capacity: usize) -> CoreResult<Vec<u8>> {
+    try_serialize_header_padded(header, capacity)?.ok_or_else(|| {
+        CoreError::Internal(format!("header exceeds reserved capacity ({capacity})"))
+    })
 }
 
 /// D-55 后续加固：对备份字节流做**整库帧流完整性校验**（只读，不建任何状态）。

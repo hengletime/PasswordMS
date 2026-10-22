@@ -9,6 +9,15 @@ pub const FORMAT_VERSION: u16 = 1;
 pub const CONTAINER_PREFIX_LEN: usize = 16;
 /// 头部 JSON 预留容量（字节，含尾部空格填充）。固定容量使计数更新无需移动记录区。
 pub const HEADER_RESERVED_BYTES: usize = 8192;
+/// 头部区容量的硬上限（= `u16::MAX`，D-78）。
+///
+/// `header_len` 是 u16（容器前缀 `[10..12)`），**65536 写进去会被截断成 0**，而
+/// [`crate::store::container::Container::open`] 把 `header_len == 0` 判为
+/// `zero header` → **库永久打不开**（且坏 header 在报错前已落盘）。
+///
+/// 故 `update_header` 的容量翻倍必须夹在本值内；夹不住时**返回错误**，绝不用夹住后的
+/// 容量继续写（那会把 header JSON 截掉一截，比报错糟得多）。
+pub const MAX_HEADER_BYTES: usize = u16::MAX as usize;
 /// 记录帧固定头部长度（字节）。布局见 [`crate::store::frame`]。
 pub const FRAME_HEADER_LEN: usize = 124;
 /// 二维码配对协议版本。
@@ -124,6 +133,28 @@ pub const SYNC_MAX_FRAME_BYTES: u32 = (ATTACHMENT_CHUNK_BYTES as u32) + 64 * 102
 pub const SYNC_PORT_MIN: u16 = 49152;
 /// 同步默认监听端口范围上界。
 pub const SYNC_PORT_MAX: u16 = 65535;
+
+// ===== 局域网自动发现（D-74）=====
+/// 发现协议使用的固定 UDP 端口。**双端必须一致**（编译期常量，不漂移）。
+///
+/// 刻意避开 [`SYNC_PORT_MIN`]..=[`SYNC_PORT_MAX`]：那是 **TCP** 重同步口（可因占用而
+/// 漂移），这是 **UDP** 发现口（永不变）。两者语义不同，混用会让"端口漂移即发现失效"。
+pub const DISCOVERY_PORT: u16 = 47823;
+
+/// 广播后等待应答的时长（毫秒）。
+///
+/// 取 1.5s：应用侧 200ms 轮询节拍下最多错过 7 个周期，仍留足余量；同时保证
+/// "发现失败 → 报错" 的用户等待不超过 connect 超时（4s）量级。
+pub const DISCOVERY_WAIT_MS: u64 = 1500;
+
+/// 单个请求最多携带的 tag 数（超过截断，不报错）。
+///
+/// 请求方把**所有已配对设备**的 tag 都带上，一次广播即可找到任意一台对端；
+/// 上限防止报文被恶意撑大（响应方同样按此截断）。
+pub const DISCOVERY_MAX_TAGS: usize = 8;
+
+/// 发现报文版本（`v` 字段）。不兼容变更时递增。
+pub const DISCOVERY_VERSION: u16 = 1;
 
 // ===== 生成器（§3.3 F-07）=====
 pub const GENERATOR_MIN_LEN: u8 = 8;

@@ -155,6 +155,11 @@ pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
         }
     };
     let port = server.port();
+    if !server.discovery_enabled() {
+        // D-74：UDP 发现口 bind 失败只降级（不阻断解锁）。留痕以便真机排查
+        // "为什么换网后自动发现没生效"。
+        append_log(app, "[discovery] udp bind failed, auto-discovery disabled");
+    }
     if fell_back {
         let _ = std::fs::write(&port_file, port.to_string());
         append_log(
@@ -218,7 +223,13 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
             };
             // 会话若已锁定则本轮跳过（等待解锁或停止信号）。
             match session.repo_mut() {
-                Ok(repo) => handle.server.poll_once(repo, now_ms()),
+                Ok(repo) => {
+                    // D-74：UDP 发现应答与入站重同步共用同一 200ms 节奏。
+                    // **返回值不参与下面的 match**：发现只是增强路径，它出错绝不能让
+                    // 重同步轮询循环 `break`（那会让整台设备再也不接受同步）。
+                    let _ = handle.server.poll_discovery_once(repo);
+                    handle.server.poll_once(repo, now_ms())
+                }
                 Err(_) => continue,
             }
         };

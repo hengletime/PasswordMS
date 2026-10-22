@@ -16,18 +16,20 @@
 //! 连接失败自 D-44 起保留 io kind（映射到具体网络文案），不再一律折叠为 SyncAborted。
 
 use std::io::Write;
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::constants::{QR_PROTOCOL_VERSION, SYNC_TIME_WINDOW_SECS};
-use crate::crypto::{keys, rng};
+use crate::constants::{DISCOVERY_WAIT_MS, QR_PROTOCOL_VERSION, SYNC_TIME_WINDOW_SECS};
+use crate::crypto::keys::{self, ItemKey};
+use crate::crypto::rng;
 use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::sync_state::DeviceSyncState;
 use crate::store::repository::Repository;
 use crate::sync::blob_transfer;
+use crate::sync::discovery::{self, DiscoveryResponder};
 use crate::sync::handshake::{self, ROLE_CLIENT, ROLE_SERVER};
 use crate::sync::merge;
 use crate::sync::protocol::{
@@ -149,6 +151,22 @@ pub fn device_display_name(device_id: &str) -> String {
     format!("{}-{short}", platform_label())
 }
 
+/// 发现目标策略（D-74）。
+///
+/// 生产走 [`DiscoveryMode::Broadcast`]；测试注入 loopback 单播目标——CI 上真实广播
+/// 不可靠（容器无广播路由、防火墙、虚拟网卡），若把广播写死在函数体里，用例就只能
+/// 靠"运气"绿。
+#[derive(Debug, Clone, Default)]
+pub enum DiscoveryMode {
+    /// 真实广播：各网卡广播地址 + `255.255.255.255`。
+    #[default]
+    Broadcast,
+    /// 只发这些单播目标（测试 / 诊断）。
+    Unicast(Vec<SocketAddr>),
+    /// 完全不发现（保持 D-74 之前的行为）。
+    Disabled,
+}
+
 /// 发起一次直连重同步（客户端侧）。
 ///
 /// 读取已配对设备 → 连接其持久监听端口 → 会话密钥派生 + 双向确认 → `Push/Push/Done`
@@ -157,20 +175,38 @@ pub fn device_display_name(device_id: &str) -> String {
 /// `local_port`（v1.2.4 根因 B）：**本机**持久重同步监听端口，随 HELLO 通告给对端。
 /// 对端据此刷新它记录的「我这台设备怎么连」的地址（IP 由 accept 出的 socket 得到）。
 /// 传 0 表示本机暂无监听器 —— 对端会保留其原有记录，不清空。
+///
+/// D-74：静态地址连接失败时会做一次**按需局域网发现**（见 [`DiscoveryMode`]）。
 pub fn resync_with_peer(
     repo: &mut Repository,
     peer_device_id: &str,
     now: i64,
     local_port: u16,
 ) -> CoreResult<ResyncOutcome> {
-    // 1) 读取已配对设备与地址。
+    resync_with_peer_opts(
+        repo,
+        peer_device_id,
+        now,
+        local_port,
+        &DiscoveryMode::Broadcast,
+    )
+}
+
+/// [`resync_with_peer`] 的可注入发现目标版本（生产入口的薄包装）。
+pub fn resync_with_peer_opts(
+    repo: &mut Repository,
+    peer_device_id: &str,
+    now: i64,
+    local_port: u16,
+    discovery_mode: &DiscoveryMode,
+) -> CoreResult<ResyncOutcome> {
+    // 1) 读取已配对设备。
     let peer = repo
         .get_paired_device(peer_device_id)
         .ok_or(CoreError::NotPaired)?;
-    let peer_ip = peer.peer_ip.clone().ok_or(CoreError::SyncAborted)?;
-    let peer_port = peer.peer_port.ok_or(CoreError::SyncAborted)?;
 
     // 2) 解出共享同步密钥（仅解锁态可解；AAD 绑定设备身份）。
+    //    D-74：提前到连接之前——发现报文的 tag 也要用它算，且**只解这一次**。
     let sync_key = keys::unwrap_item_key(
         repo.vault_key(),
         &peer.sync_key_wrapped,
@@ -181,12 +217,58 @@ pub fn resync_with_peer(
     // D-57：改用与配对一致的短超时（裸 connect 对不可路由地址挂 ~21s+，用户干等），
     // 并以 stage_io 标注 connect 阶段——message_key 对该阶段统一映射
     // `err.network_unreachable`（网络不通/不在同一网段），不再误报「文件读写出错」。
-    let mut stream = transport::connect_with_timeout(
-        &peer_ip,
-        peer_port,
-        std::time::Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS),
-    )
-    .map_err(|e| stage_io(e, "connect"))?;
+    //
+    // D-74：这是死锁的突破口——换网络后静态地址**必然**失败，而地址自愈只发生在
+    // 「连接已成功」的接收方。故失败后先做一次按需发现，找到新地址再连一次。
+    //
+    // **不新增错误码**（规格 §8 已撤销）：所有失败出口都复用 D-57 建立的
+    // `stage_io(e, "connect")` → `err.network_unreachable` 映射（该文案本身已含
+    // "仍失败请重新配对"）。多一个变体只会重复造文案，还要动 `code()`/`message_key()`
+    // 两个穷举 match 与前端 i18n。
+    let connect_timeout = Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS);
+    let static_addr = match (&peer.peer_ip, peer.peer_port) {
+        (Some(ip), Some(port)) => Some((ip.clone(), port)),
+        _ => None,
+    };
+    let used_addr: (String, u16);
+    let mut stream = match static_addr {
+        Some((ip, port)) => match transport::connect_with_timeout(&ip, port, connect_timeout) {
+            Ok(s) => {
+                used_addr = (ip, port);
+                s
+            }
+            Err(first_err) => {
+                // 记下**静态那次**的错误（已按 connect 阶段标注），发现无果时原样返回。
+                let first_err = stage_io(first_err, "connect");
+                match discover_addr(&sync_key, discovery_mode, local_port)? {
+                    Some((ip, port)) => {
+                        let s = transport::connect_with_timeout(&ip, port, connect_timeout)
+                            .map_err(|e| stage_io(e, "connect"))?;
+                        used_addr = (ip, port);
+                        s
+                    }
+                    None => return Err(first_err),
+                }
+            }
+        },
+        // 地址缺失（配对记录不完整，历史上不该发生）：走同一个语义出口——合成一条
+        // "没有地址"的 IO 错误并按 connect 阶段标注，落到现成的 `err.network_unreachable`。
+        None => match discover_addr(&sync_key, discovery_mode, local_port)? {
+            Some((ip, port)) => {
+                let s = transport::connect_with_timeout(&ip, port, connect_timeout)
+                    .map_err(|e| stage_io(e, "connect"))?;
+                used_addr = (ip, port);
+                s
+            }
+            None => {
+                let err = CoreError::from(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "no peer address",
+                ));
+                return Err(stage_io(err, "connect"));
+            }
+        },
+    };
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|_| CoreError::SyncAborted)?;
@@ -310,11 +392,43 @@ pub fn resync_with_peer(
     repo.save_sync_state(state)?;
     repo.touch_device_sync(peer_device_id, now)?;
 
+    // D-74：靠发现连上后**必须把新地址写回**，否则下次同步还得再发现一次。
+    // 与入站自愈（`ResyncServer::handle` 末尾）同一规则——只在**校验通过且同步成功后**写，
+    // 任何失败路径都不得篡改配对记录（防投毒）。
+    let addr_changed = peer.peer_ip.as_deref() != Some(used_addr.0.as_str())
+        || peer.peer_port != Some(used_addr.1);
+    if addr_changed {
+        repo.update_paired_addr(peer_device_id, &used_addr.0, used_addr.1)?;
+    }
+
     Ok(ResyncOutcome {
         applied: report.applied,
         conflicts: report.conflicts,
         blobs,
     })
+}
+
+/// 做一次按需发现（D-74），把 [`DiscoveryMode`] 翻译成具体的 socket 行为。
+///
+/// `local_port` 用于识别"自己应答自己"（见 [`discovery::discover_peer`]）。
+fn discover_addr(
+    sync_key: &ItemKey,
+    mode: &DiscoveryMode,
+    local_port: u16,
+) -> CoreResult<Option<(String, u16)>> {
+    let self_port = if local_port == 0 {
+        None
+    } else {
+        Some(local_port)
+    };
+    let wait = Duration::from_millis(DISCOVERY_WAIT_MS);
+    match mode {
+        DiscoveryMode::Disabled => Ok(None),
+        DiscoveryMode::Broadcast => discovery::discover_peer(sync_key, wait, self_port),
+        DiscoveryMode::Unicast(targets) => {
+            discovery::discover_peer_with(sync_key, targets, wait, self_port)
+        }
+    }
 }
 
 /// 持久重同步监听器（响应方侧）。
@@ -324,6 +438,9 @@ pub struct ResyncServer {
     listener: TcpListener,
     port: u16,
     local_name: String,
+    /// D-74：UDP 发现应答器。bind 失败（端口被占 / 双开 / 权限）时为 `None`，
+    /// **仅降级不做发现应答**——绝不能让"发现功能"把整个重同步服务拖死。
+    discovery: Option<DiscoveryResponder>,
 }
 
 impl ResyncServer {
@@ -335,12 +452,40 @@ impl ResyncServer {
             listener,
             port: actual,
             local_name,
+            discovery: DiscoveryResponder::bind().ok(),
         })
     }
 
     /// 实际监听端口（供配对时通告）。
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// D-74：本进程是否成功启用了 UDP 发现应答（供上层记录一条日志）。
+    ///
+    /// 核心层没有日志设施，`bind` 失败的事实通过本方法暴露给 `src-tauri` 侧落盘。
+    pub fn discovery_enabled(&self) -> bool {
+        self.discovery.is_some()
+    }
+
+    /// D-74：替换发现应答 socket（**测试专用**：注入任意端口的 loopback socket）。
+    ///
+    /// 生产路径永远走 [`ResyncServer::start`] 里的固定端口绑定；这个方法存在只是为了让
+    /// 用例不必抢 `47823`（并行跑会互相冲突）。
+    pub fn attach_discovery_socket(&mut self, socket: UdpSocket) {
+        self.discovery = Some(DiscoveryResponder::from_socket(socket));
+    }
+
+    /// D-74：非阻塞轮询一次发现请求，返回本次应答数。
+    ///
+    /// **任何失败都不上抛**：调用点（200ms 轮询线程）用它做"顺手应答"，发现出问题
+    /// 绝不能让重同步循环 `break`。
+    pub fn poll_discovery_once(&mut self, repo: &Repository) -> usize {
+        let port = self.port;
+        match self.discovery.as_mut() {
+            Some(responder) => responder.poll_once(repo, port),
+            None => 0,
+        }
     }
 
     /// 非阻塞轮询一次入站连接；无连接返回 `Ok(None)`。

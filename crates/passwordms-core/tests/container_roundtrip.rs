@@ -2,14 +2,18 @@
 //!
 //! 状态：已在本机实跑通过（`cargo test -p passwordms-core`，见 docs/03b-verification.md）。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use passwordms_core::constants::{CONTAINER_PREFIX_LEN, FLAG_TOMBSTONE, FRAME_HEADER_LEN};
+use passwordms_core::constants::{
+    CONTAINER_PREFIX_LEN, FLAG_TOMBSTONE, FRAME_HEADER_LEN, HEADER_RESERVED_BYTES,
+};
 use passwordms_core::crypto::keys::MasterKey;
 use passwordms_core::crypto::{kdf, keys, rng, verify};
+use passwordms_core::error::CoreError;
 use passwordms_core::model::item::{CustomField, Item, ItemKind, LoginData};
 use passwordms_core::model::now_ms;
 use passwordms_core::model::vault::Vault;
+use passwordms_core::store::container::Container;
 use passwordms_core::store::frame::Frame;
 use passwordms_core::store::repository::{ItemDraft, Repository};
 use zeroize::Zeroizing;
@@ -262,4 +266,227 @@ fn item_json_roundtrip() {
     assert_eq!(item, back);
     // 内部标签为 `type`，取值 snake_case。
     assert!(json.contains("\"type\":\"login\""));
+}
+
+// ===== D-78：头部容量增长的上界与失败语义 =====
+//
+// 缺陷：`update_header` 的翻倍没有上界，`65536 as u16 == 0` 写进 `[10..12)` 后
+// `open` 判定 `zero header` → 库永久打不开；而本次运行一切正常（内存里容量是对的
+// 65536），用户要重启才发现。以下 4 例钉住"能长多少"、"长不动时怎么失败"、
+// "失败时磁盘必须一字未动"。
+
+/// 建库并写入两个条目（记录区非空，供"帧数不变"断言），随后释放 `Repository`。
+fn seed_vault(path: &Path) {
+    let mk: MasterKey = Zeroizing::new(rng::random_key().expect("mk"));
+    let kek = kdf::derive_kek(&mk[..]).expect("kek");
+    let vk = rng::random_key().expect("vk");
+    let header = build_header(&kek, &vk);
+    {
+        let mut repo = Repository::create(
+            path,
+            header,
+            Zeroizing::new(vk),
+            "qa_test_device".to_string(),
+        )
+        .expect("create");
+        repo.create_item(login_draft("hdr_alpha")).expect("alpha");
+        repo.create_item(login_draft("hdr_beta")).expect("beta");
+    }
+}
+
+/// 构造一个**序列化后 JSON 恰好 `n` 字节**的头部。
+///
+/// 撑长手段：往 `vault_id` 尾部追加 `'a'`。选它是因为 `'a'` 不需要 JSON 转义，
+/// 序列化后 1 字节对 1 字节，长度可精确控制；容器层不校验 `vault_id` 是否为 UUID
+/// （本 helper 只用于把头部撑到指定长度，不参与任何业务断言）。
+///
+/// 末尾自校一次，避免 helper 自己算错导致用例在测别的容量段。
+fn header_with_json_len(base: &Vault, n: usize) -> Vault {
+    let mut v = base.clone();
+    let skeleton = serde_json::to_vec(&v).expect("serialize").len();
+    assert!(
+        n >= skeleton,
+        "目标 JSON 长度 {n} 小于骨架长度 {skeleton}，无法靠追加达到"
+    );
+    v.vault_id.push_str(&"a".repeat(n - skeleton));
+    assert_eq!(
+        serde_json::to_vec(&v).expect("serialize").len(),
+        n,
+        "helper 自校失败：JSON 长度不等于目标 {n}"
+    );
+    v
+}
+
+/// 文件 `[10..12)` 的 `header_len`（== 头部容量）。
+fn capacity_on_disk(path: &Path) -> u16 {
+    let data = std::fs::read(path).expect("read");
+    u16::from_le_bytes([data[10], data[11]])
+}
+
+/// 按文件里的 `header_len` 解析出的记录区帧数。
+fn frame_count(path: &Path) -> usize {
+    parse_frames(&std::fs::read(path).expect("read")).len()
+}
+
+/// **T1（防过修）**：常规翻倍没被上界改坏。
+#[test]
+fn header_grows_to_next_capacity_and_reopens() {
+    let path = tmp_vault_path("hdr_grow");
+    seed_vault(&path);
+
+    let mut container = Container::open(&path).expect("open");
+    assert_eq!(
+        container.record_start(),
+        CONTAINER_PREFIX_LEN as u64 + HEADER_RESERVED_BYTES as u64,
+        "新建库容量应为 HEADER_RESERVED_BYTES"
+    );
+    let frames_before = frame_count(&path);
+    assert!(frames_before >= 2, "构造前提：记录区至少两个条目帧");
+    let base = container.header().clone();
+
+    // 8192 装不下 9000 → 翻倍到 16384。
+    assert!(
+        container
+            .update_header(header_with_json_len(&base, 9000))
+            .expect("容量不足应成功翻倍"),
+        "发生整文件重写时必须返回 true"
+    );
+
+    assert_eq!(capacity_on_disk(&path), 16384, "`[10..12)` 应写入 16384");
+    let reopened = Container::open(&path).expect("翻倍后必须能重新打开");
+    assert_eq!(
+        reopened.record_start(),
+        CONTAINER_PREFIX_LEN as u64 + 16384,
+        "记录区偏移应随容量移动"
+    );
+    assert_eq!(frame_count(&path), frames_before, "翻倍不得丢帧");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// **T2**：涨到超过 `u16::MAX` 时**必须失败且磁盘一字未动**。
+///
+/// 这条覆盖的是"夹到 65535 仍装不下"的路径（JSON 70000）。
+#[test]
+fn header_growth_past_u16_ceiling_fails_without_corruption() {
+    let path = tmp_vault_path("hdr_overflow");
+    seed_vault(&path);
+
+    let mut container = Container::open(&path).expect("open");
+    let base = container.header().clone();
+
+    // 一段一段爬到 32768（一次最多翻一倍，且必须踩在 (cap, 2*cap] 区间内）。
+    assert!(container
+        .update_header(header_with_json_len(&base, 9000))
+        .expect("8192→16384"));
+    assert_eq!(capacity_on_disk(&path), 16384);
+    assert!(container
+        .update_header(header_with_json_len(&base, 20000))
+        .expect("16384→32768"));
+    assert_eq!(capacity_on_disk(&path), 32768);
+    let frames_before = frame_count(&path);
+
+    // 70000 > u16::MAX：夹到 65535 也装不下 → 拒绝，而不是写一个截断的容量。
+    let err = container
+        .update_header(header_with_json_len(&base, 70000))
+        .expect_err("头部超过 u16 上限时必须拒绝");
+    assert!(
+        matches!(err, CoreError::VaultCapacityExceeded),
+        "错误变体必须是 VaultCapacityExceeded，实际 code = {}",
+        err.code()
+    );
+
+    // 核心断言：**失败后库仍可打开，且容量/偏移/帧数全部未变**。
+    // 只断言 `is_err()` 对"先写坏再报错"完全无感。
+    assert_eq!(capacity_on_disk(&path), 32768, "失败时容量字段不得变化");
+    let reopened = Container::open(&path).expect("失败后库必须仍可打开");
+    assert_eq!(
+        reopened.record_start(),
+        CONTAINER_PREFIX_LEN as u64 + 32768,
+        "失败时记录区偏移不得变化"
+    );
+    assert_eq!(frame_count(&path), frames_before, "失败时帧数不得变化");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// **T3**：恰好 65535（`u16::MAX`）必须能写进去并往返成功 —— 上界是闭区间。
+#[test]
+fn header_at_exact_u16_max_roundtrips() {
+    let path = tmp_vault_path("hdr_max_ok");
+    seed_vault(&path);
+
+    let mut container = Container::open(&path).expect("open");
+    let base = container.header().clone();
+    assert!(container
+        .update_header(header_with_json_len(&base, 9000))
+        .expect("8192→16384"));
+    assert!(container
+        .update_header(header_with_json_len(&base, 20000))
+        .expect("16384→32768"));
+    assert_eq!(capacity_on_disk(&path), 32768);
+    let frames_before = frame_count(&path);
+
+    // 32768 → min(65536, 65535) = 65535，JSON 恰好 65535（`>` 严格判超限 → 不算超）。
+    assert!(
+        container
+            .update_header(header_with_json_len(&base, u16::MAX as usize))
+            .expect("恰好 u16::MAX 应成功"),
+        "发生整文件重写时必须返回 true"
+    );
+
+    assert_eq!(capacity_on_disk(&path), 65535, "`[10..12)` 应写入 65535");
+    let reopened = Container::open(&path).expect("65535 容量必须能重新打开");
+    assert_eq!(
+        reopened.record_start(),
+        CONTAINER_PREFIX_LEN as u64 + 65535,
+        "记录区偏移应为 16 + 65535"
+    );
+    assert_eq!(frame_count(&path), frames_before, "容量变化不得丢帧");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+/// **T4**：已在硬上限时再要求增长 → 立即失败（`new_capacity` 没有进展那条分支）。
+///
+/// 与 T2 是**两条不同的失败路径**：T2 是"夹住后仍装不下"，T4 是"夹住后等于原容量"。
+#[test]
+fn header_growth_at_max_capacity_fails_fast() {
+    let path = tmp_vault_path("hdr_max_full");
+    seed_vault(&path);
+
+    let mut container = Container::open(&path).expect("open");
+    let base = container.header().clone();
+    assert!(container
+        .update_header(header_with_json_len(&base, 9000))
+        .expect("8192→16384"));
+    assert!(container
+        .update_header(header_with_json_len(&base, 20000))
+        .expect("16384→32768"));
+    // 32768 → 65535
+    assert!(container
+        .update_header(header_with_json_len(&base, 40000))
+        .expect("32768→65535"));
+    assert_eq!(capacity_on_disk(&path), 65535);
+    let frames_before = frame_count(&path);
+
+    let err = container
+        .update_header(header_with_json_len(&base, 66000))
+        .expect_err("已在硬上限时必须拒绝增长");
+    assert!(
+        matches!(err, CoreError::VaultCapacityExceeded),
+        "错误变体必须是 VaultCapacityExceeded，实际 code = {}",
+        err.code()
+    );
+
+    assert_eq!(capacity_on_disk(&path), 65535, "失败时容量字段不得变化");
+    let reopened = Container::open(&path).expect("失败后库必须仍可打开");
+    assert_eq!(
+        reopened.record_start(),
+        CONTAINER_PREFIX_LEN as u64 + 65535,
+        "失败时记录区偏移不得变化"
+    );
+    assert_eq!(frame_count(&path), frames_before, "失败时帧数不得变化");
+
+    let _ = std::fs::remove_file(&path);
 }

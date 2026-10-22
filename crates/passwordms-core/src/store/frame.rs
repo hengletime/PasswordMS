@@ -22,6 +22,11 @@
 //! | 124  | ct_len | ct（含 16B tag） |
 //!
 //! 固定头部长度 = 124B（[`crate::constants::FRAME_HEADER_LEN`]）。
+//!
+//! **单帧总长 = `FRAME_HEADER_LEN(124) + ct_len` = `100 + payload_len`**。
+//! `payload_len` 已含 24 字节 AEAD nonce，且 nonce 存在头部 `[100..124)`
+//! → 不能再算 `124 + payload_len`（那是把 nonce 算了两次，写独立解析器时极易踩到：
+//! 用 `124 + payload_len` 逐帧跳，第一帧就多跳 24 B，第二帧起字段全错位）。
 
 use crate::constants::{
     AEAD_NONCE_LEN, FLAG_BLOB, FLAG_TOMBSTONE, FRAME_HEADER_LEN, WRAPPED_KEY_CT_LEN,

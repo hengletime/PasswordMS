@@ -5,6 +5,7 @@
 - **上游依据**：`docs/00-scope.md`（需求冻结书）、`docs/01-prd.md`（PRD）、`docs/01-security-req.md`（安全需求）
 - **负责人**：高见远（架构师）
 - **状态**：待评审
+- **修订记录**：§2.6 帧表曾长期滞后于实现（D-1 的 `wrapped_key` 未回写文档），2026-10-22 已与 `frame.rs` 对齐；各节修订以正文内的 `D-nn` 标注为准。
 - **设计基线**：四项冻结决策（D1 Tauri 2 / D2 二维码配对直连 / D3 P0+P1 / D4 附件+笔记都要）**只细化、不推翻**
 
 > **裁定说明**：PRD §8 五项待确认问题（Q1~Q5）已由主理人代为裁定，本文按裁定结论设计，并在对应章节标注 **【已裁定】**。
@@ -190,10 +191,13 @@ flowchart TD
 |------|------|------|----------|
 | `0x00` | 8 | `magic` | ASCII 固定 `"PMSVAULT"` |
 | `0x08` | 2 | `format_version` | `u16` 小端，当前 = **1** |
-| `0x0A` | 2 | `header_len` | `u16` 小端，`header_json` 字节长度 |
+| `0x0A` | 2 | `header_len` | `u16` 小端，**头部区容量**（= `header_json` 尾部空格补齐后的字节数，**不是** JSON 实长） |
 | `0x0C` | 4 | `reserved` | 全 0（对齐/扩展） |
-| `0x10` | `header_len` | `header_json` | UTF-8 JSON，**明文元数据**（不含任何凭据） |
+| `0x10` | `header_len` | `header_json` | UTF-8 JSON + 尾部空格填充，**明文元数据**（不含任何凭据） |
 | `0x10+header_len` | 变长 | `record_area` | 记录帧序列（每条独立 AEAD 密文） |
+
+- **头部区容量语义**：头部区**固定容量、尾部空格填充**（A-02 要求计数更新可原位移位写入），`header_len` 记的是容量，`Container::open` 直接把读到的值当 `header_capacity`。新建 = `HEADER_RESERVED_BYTES`(**8192**)；写不下时整文件重写并**翻倍**（8192 → 16384 → 32768 → 65535）。
+- **容量硬上限 65535（D-78）**：`header_len` 是 u16，翻倍必须夹在 `MAX_HEADER_BYTES`(= `u16::MAX`) 内；夹不住**返回 `ERR_VAULT_CAPACITY_EXCEEDED` 且磁盘一字不动**，绝不用夹住后的容量继续写。历史实现此处无夹取：`65536 as u16 == 0` → `header_len` 写成 0 → `open` 判 `zero header` → **库永久打不开**；且进程内 `header_capacity` 仍是正确的 65536，故**本次运行毫无异常，重启/重新解锁才暴露**。实测主人库头部 JSON 实长 808 B / 容量 8192，到达危险窗口需连踩四次区间（JSON 8193..16384 → 16385..32768 → 32769..65536），一次性跳跃会被 `serialize_header_padded` 的 `?` 挡在 Err（安全），故概率极低、后果不可回退。
 
 #### `header_json`（明文，禁止含凭据）
 
@@ -214,15 +218,20 @@ flowchart TD
 
 | 偏移 | 长度 | 字段 | 说明 |
 |------|------|------|------|
-| `0` | 1 | `record_type` | `0x01` Folder / `0x02` Item / `0x03` Trash / `0x04` Conflict / `0x05` Settings |
-| `1` | 1 | `flags` | bit0 = tombstone（墓碑，已删除占位） |
+| `0` | 1 | `record_type` | `0x01` Folder / `0x02` Item / `0x03` Trash / `0x04` Conflict / `0x05` Settings / `0x06` Device / `0x07` SyncState |
+| `1` | 1 | `flags` | bit0 = tombstone（墓碑，已删除占位）／ bit1 = blob（附件密文帧） |
 | `2` | 2 | `reserved` | 全 0 |
 | `4` | 16 | `record_id` | UUID 原始 16 字节（条目/分组 ID） |
-| `20` | 4 | `payload_len` | `u32` 小端 = `24 + ct_len` |
-| `24` | 4 | `plaintext_len` | `u32` 小端（容量统计用，不含 tag） |
-| `28` | 24 | `nonce` | XChaCha20-Poly1305 nonce |
-| `52` | `ct_len` | `ct` | 密文 + 16B tag，`ct_len = plaintext_len + 16` |
+| `20` | 24 | `wrapped_key.nonce` | 该条目 IK 的包裹 nonce |
+| `44` | 48 | `wrapped_key.ct` | 32B IK + 16B tag |
+| `92` | 4 | `payload_len` | `u32` 小端 = `24 + ct_len`（**含** `[100..124)` 那段 nonce） |
+| `96` | 4 | `plaintext_len` | `u32` 小端（容量统计用，不含 tag） |
+| `100` | 24 | `nonce` | XChaCha20-Poly1305 nonce |
+| `124` | `ct_len` | `ct` | 密文 + 16B tag，`ct_len = plaintext_len + 16` |
 
+- **固定帧头 `FRAME_HEADER_LEN` = 124 B**。
+- **单帧总长 = `124 + ct_len` = `100 + payload_len`**。`payload_len` 已含 24 字节 nonce（nonce 在帧头 `[100..124)`，不在 `ct` 里），所以**不能**用 `124 + payload_len` 算帧长——那会把 nonce 算两次。
+- **表已与实现对齐（关闭 D-1）**：原表的帧头只有 52 B、未含 `wrapped_key`，与「IK 由 VK 包裹、随条目记录存储」（§2.1／§3.6）自相矛盾。实现从一开始就把 `wrapped_key`（nonce 24B + ct 48B）纳入帧头，并在 `frame.rs` 顶部标注「与架构文档的偏差（D-1）」；自本版起本节即为真值，偏差关闭。
 - **AAD** = `record_type(1B) ‖ record_id(16B)`。
 - **更新语义（满足 A-02）**：修改单条 → 仅重写该帧；若新密文长度不变则**原地 pwrite**，否则将旧帧置墓碑（`flags.bit0=1`）并在尾部追加新帧。**未变记录帧的 nonce 与密文完全复用，字节级零差异**，故「改 1 条 → 文件字节变更量 ≈ 单条」。提供「压缩保险库」维护操作清理墓碑与空洞。
 - **记录内容**：条目/分组/回收站/冲突记录的**明文头**仅含 `record_id`（在帧头里）与极少量元信息；**全部敏感字段（标题、网址、用户名、密码、备注、TOTP、自定义字段、正文、附件元信息、分组名/图标/颜色、回收站快照）均在 `ct` 内**。
@@ -326,6 +335,8 @@ sequenceDiagram
    失败/被拒的连接不得写入地址（防投毒）。
 7. 被动同步（对端发起）成功后，壳层 `spawn_resync_worker` 向前端 emit `sync://applied`
    （载荷只有计数 `applied`/`blobs`/`conflicts`），前端据此 reload——否则本机 UI 会停留在同步前的快照。
+8. **v1.2.10（D-74）**：上述自愈**只在连接成功后**才生效，换网络时是死锁。故发起侧在静态地址
+   连接失败后增加一次**按需局域网发现**兜底，见 §3.17。
 
 ### 3.6 同步报文格式（字段级 schema）
 
@@ -1119,6 +1130,108 @@ B 删附件 → B 发起重同步 → A 侧 `attachments.len()==1`、剩的是�
 > 「分支存在且顺序对」，不是「像素长什么样」。
 > ⚠️ 块内负向断言（不含 `qr_svg`）必须配一条 `block.length > 200` 的前置断言 ——
 > 否则整块被删时切片为空，负向断言会恒绿（假绿三形态之二）。
+
+---
+
+### 3.17 局域网自动发现（增量设计 · 缺陷 D-74）
+
+#### 3.17.1 要解决的结构性死锁
+
+`resync_with_peer` 用**配对那一刻静态记录的** `peer_ip` + `peer_port` 直连；而地址自愈
+（§3.15.2）发生在**接收方**，且必须 HELLO 已到、即**连接已成功**才执行。
+
+⇒ 换网络后双方 IP 全变：A 用旧 IP 连 B 失败、B 用旧 IP 连 A 失败 ⇒ **双方都连不上，
+自愈永远触发不了** ⇒ 唯一出路是重新扫码配对。2026-10-21 主人实测确认（家里 WiFi 从公司
+网段切到 `192.168.31.0/24` 后 6 次 `sync_now` 全失败、零成功）。
+
+发现机制的作用不是"扫描设备"，是**打破这个死锁**：让发起方在连接失败后自己找到对端新地址。
+
+#### 3.17.2 三条设计取舍（不可按直觉改）
+
+1. **不做被动宣告。** 只在用户触发同步、且静态地址连接失败时广播**一次**。周期性广播
+   「我在线 + 我的 id」会让同网段的人持续追踪"这台机器装着密码管理器、此刻在活动"。
+2. **报文里不放 `device_id` / 设备名 / 指纹。** 线上只有 32B 随机数 `q` 与 32B **不可区分
+   tag**（`HMAC-SHA256(sync_key_i, ...)`）。陌生设备算不出 tag ⇒ **不会应答**，既不能确认
+   本机装了 PasswordMS，也不能把应答当放大器。**发现不是匿名的，但对未配对者不可见。**
+3. **不用 mDNS。** 需新增 crate（违反 §8.1 的 23 个硬限），Android 还要 NSD/`MulticastLock`
+   与权限；而 `if-addrs`（已是直接依赖）的 `Ifv4Addr.broadcast` 现成可用。
+
+#### 3.17.3 常量（`constants.rs`）
+
+| 常量 | 值 | 说明 |
+|---|---|---|
+| `DISCOVERY_PORT` | `47823` | UDP 固定端口，双端必须一致。**刻意避开** `SYNC_PORT_MIN..=SYNC_PORT_MAX`（49152-65535）——那是可漂移的 TCP 重同步口，这是编译期常量 |
+| `DISCOVERY_WAIT_MS` | `1500` | 广播后等应答时长；200ms 轮询节拍下最多错过 7 个周期 |
+| `DISCOVERY_MAX_TAGS` | `8` | 单请求携带 tag 上限，超出截断不报错 |
+| `DISCOVERY_VERSION` | `1` | 报文 `v` 字段 |
+
+#### 3.17.4 报文（`sync/discovery.rs`）
+
+| 方向 | 字段 | 类型 | 说明 |
+|---|---|---|---|
+| 请求（广播） | `v` | u16 | `DISCOVERY_VERSION` |
+| | `q` | base64url(32B) | 本次等待窗口内唯一，**逐次随机**，不持久化 |
+| | `tags` | `string[]` | 每项 = `b64url(HMAC-SHA256(sync_key_i, "pmsd1/req" ‖ q))` |
+| 应答（单播） | `v` | u16 | 同上 |
+| | `q` | base64url(32B) | 原样回显 |
+| | `tag` | string | `b64url(HMAC-SHA256(sync_key_i, "pmsd1/resp" ‖ q))` |
+| | `port` | u16 | 应答方 resync TCP 口（`ResyncServer::port()`） |
+
+- 两个 label（`pmsd1/req` / `pmsd1/resp`）**必须不同**：防把应答当请求回灌。
+- tag 比较一律**常量时间**（`subtle` / `handshake::verify_mac`），不做普通 `==`。
+- 应答的源 IP 就是请求方要的新地址，`port` 就是要的新端口。
+
+#### 3.17.5 发起侧
+
+```text
+静态地址 connect ──成功──▶ 原流程（HELLO 起一字不改）
+      │失败（stage_io "connect"）
+      ▼
+discover_peer(&sync_key, 1500ms)      # 复用第 2 步已解出的那把 sync_key，不重复 unwrap
+      ├─ Some((ip, port)) ──▶ 用新地址再 connect
+      │                          成功 ──▶ 原流程
+      │                          失败 ──▶ stage_io(第二次的 err, "connect")
+      └─ None ──▶ 返回**静态那次的原样错误**（不包装、不新造）
+```
+
+- 发现无果时**返回原始 connect 错误**，而不是造一条"请重新配对"：发现为空恰恰说明广播
+  出不了本网段（不同网段 / AP 隔离 / 热点），此时指引用户重配对是**错误方向**（重配对后
+  照样不通）；而 `err.network_unreachable` 的文案是「确认同一个 Wi-Fi」+「防火墙放行」+
+  「仍失败请重新配对」，三条逐级可行动。
+- **阶段名必须保持 `"connect"`**：`error.rs` 对 `stage == Some("connect")` 是精确匹配，
+  换成别的名字会掉进 kind 归一化分支、可能落到 `err.io`（就是 D-57 修掉的那个坑）。
+- 成功后（`resync.rs` 收尾）若用到的地址与记录不同，调 `update_paired_addr` 写回——
+  规则与 §3.15.2 完全一致：**只在校验通过且同步成功之后**写，失败路径不得篡改地址（防投毒）。
+
+#### 3.17.6 应答侧（与重同步共用 200ms 轮询）
+
+- `ResyncServer` 新增 `discovery: Option<DiscoveryResponder>`：**UDP bind 失败不致命**，
+  置 `None` 并由上层记一行 `[discovery] udp bind failed, auto-discovery disabled`。
+  发现功能**不允许**把解锁/建库流程拖死。
+- `poll_discovery_once(&Repository) -> usize`：非阻塞收最多 8 个包 —— 解析失败 / `v` 不符 /
+  `q.len() != 32` / tag 全不匹配 → 丢弃；**一个都不匹配就静默不回包**。
+- 逐条解 `sync_key_wrapped` 比对 tag；单条解包失败**跳过该条继续**，不整轮失败。
+- 限速：每源 IP 5 次/秒、全局 50 次/秒；统计的是**被允许处理的请求**（未命中 tag 的也占额），
+  偏保守。
+- **自应答过滤（不可删）**：本机 responder 与 requester 同进程同网卡，广播包自己的 socket
+  也收得到；且两端持**同一把 `sync_key`** ⇒ tag 校验**天然拦不住自己**。必须以
+  「`resp.port == 本机监听口` **且** `is_local_ip(源 IP)`」复合条件丢弃，否则客户端会把自己
+  当对端、连自己、握手必挂。
+- 调用点是 `state.rs` 的重同步轮询线程，在 `poll_once` **之前**一行，返回值**不参与**
+  外层 `match`（发现出错绝不能让轮询循环 `break`）。
+
+#### 3.17.7 平台与权限
+
+UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `INTERNET` + `CAMERA`。
+部分厂商 ROM 会过滤广播；若真机收不到，行为退化为「和没有发现功能一样」（静态地址 + 报
+`err.network_unreachable`），**不比现状更差**。不预先加 `MulticastLock`。
+
+#### 3.17.8 已知不覆盖
+
+- 「只判端口、不判 IP」这条错误改法在回环上**构造不出**可分辨用例（本机来源必然是本机 IP），
+  故只能测「整段删除」与「弱化成只判 IP」两条错路。
+- 无签名报文 ⇒ 同网段攻击者可**丢弃/篡改**应答（DoS），但不能伪造有效应答（无 key）；
+  也不影响握手（认证仍在 §3.4/§3.8 的通道内完成）。
 
 ---
 
