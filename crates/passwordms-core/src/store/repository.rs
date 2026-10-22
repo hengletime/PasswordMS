@@ -1018,10 +1018,21 @@ impl Repository {
     /// 另含遗留 `ItemKind::Attachment` 条目的 `blob_ref`（迁移前的存量库兼容窗口，
     /// 保证迁移前同步/GC 行为与 D-53 时代一致）。
     ///
-    /// **冲突侧刻意不按 `resolved` 过滤**（一律计入）：已仲裁残留快照是否还会被读取/回滚
-    /// 尚未定论（「已仲裁冲突永不删除」仍在 backlog）。两个方向的代价不对称——多保活
-    /// 一个 blob 只浪费空间，少保活一个是永久丢数据。「`resolved` 后可否释放引用」作为
-    /// 独立议题评估，不在本条修复里改变语义。
+    /// **冲突侧只保活未仲裁（`resolved == false`）的快照**（D-80 定论；D-76 时代是"一律计入"）。
+    /// 依据是三条已核实的事实，不是"看起来没人读"的推测：
+    ///
+    /// 1. **读不到**：[`Self::list_conflicts`] 过滤 `!resolved`，前端拿不到已仲裁冲突，
+    ///    不存在任何读取/回滚/再仲裁路径；
+    /// 2. **不需要**：[`Self::resolve_conflict`] 的写入顺序是「先写活条目/副本（或软删进回收站），
+    ///    **最后**才写 `resolved = true`」。所以磁盘上 `resolved=true` 成立的那一刻，
+    ///    被继承的附件引用已经落在活条目/回收站快照里了 —— 它们由上面两段本函数自己保活；
+    ///    逐级 `?` 上抛保证「写 conflict 失败 ⇒ resolved 仍为 false ⇒ 保活照旧」；
+    /// 3. **留着有害**：已仲裁快照 = 永久 dead weight（每条冲突最多 2×16 个引用、单个 blob 20MB），
+    ///    与 D-76「用户删掉的东西真的没了」直接冲突。
+    ///
+    /// 注意 `KeepLocal` 与 `KeepBoth` 的分野：前者是用户**明确丢弃**远端快照（其引用应当回收），
+    /// 后者把远端附件**继承进新 `item_id` 的副本条目**（引用由活条目继续保活）。
+    /// 两个分支的差别正是"停的是 dead weight、不是活引用"的证明。
     #[allow(deprecated)]
     pub fn attachment_blob_refs(&self) -> Vec<String> {
         let mut refs = Vec::new();
@@ -1049,6 +1060,12 @@ impl Repository {
         // 冲突箱：`local_snapshot` 与 `remote_snapshot` **都要收**——仲裁「保留本机」要前者、
         // 「采用远端」/「保留两者」要后者，任一侧缺引用都会在仲裁后变成 BlobMissing。
         for entry in self.conflicts.values() {
+            // D-80：已仲裁冲突前端不可见（`list_conflicts` 过滤 `!resolved`）、无回滚路径，
+            // 其快照里的附件引用是永久 dead weight。仲裁写入顺序保证「resolved 落盘时活条目
+            // 已继承引用」（resolve_conflict 先写活条目/副本、最后才写 resolved），故可停止保活。
+            if entry.resolved {
+                continue;
+            }
             for snapshot in [&entry.local_snapshot, &entry.remote_snapshot] {
                 match &snapshot.kind {
                     ItemKind::Attachment(a) => refs.push(a.blob_ref.clone()),

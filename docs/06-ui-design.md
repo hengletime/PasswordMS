@@ -997,6 +997,15 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
 **为什么单独显示「已删附件占」**：主人问的就是这一句。只给「可回收」不解释来源，用户会以为体积统计坏了。
 两个数字都走 `formatBytes()`，与既有大小同一格式函数，不许自己拼单位。
 
+> **D-80（v1.2.11）文案语义核对 —— 前端零改动，本轮不动任何 i18n 键**：
+> D-80 让**已仲裁冲突**停止保活其两端快照里的附件（`attachment_blob_refs()` 遇 `resolved` 跳过），
+> 副作用是**仲裁后 `reclaimable_bytes` 会增大**——那些 blob 从「被已仲裁快照钉住」转为「可回收」。
+> 语义核对：`reclaimable_bytes = file_bytes − (header_bytes + kept)`（`repository.rs:1822`），
+> 定义就是**「现在压缩能省多少」**，本来就该随引用集合变化 ⇒ **「可回收 / Reclaimable」文案正确，不用改**；
+> `compact_label_dead`（「已删附件占 / Deleted attachments」）对应的是**墓碑帧字节**，
+> 而仲裁**不产生新墓碑**（只改 `resolved` 标志 + 写活条目/副本）⇒ **该数字不受影响**。
+> 结论：**不需要新增或修改任何界面文案**；`settings-row-type-guard.test.ts` 的「5 + 1」信息行计数同样不变。
+
 #### 6.11.2 按钮与禁用条件（三条，缺一不可）
 
 | 条件 | 处理 | 理由 |
@@ -1258,7 +1267,8 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
   - **症状⑤ 手机「关于」组排版不散乱**（客户 1.2.6 真机截图追加）：390px 下「作者」与 `hengletime` 必须**同一行两端对齐**（标签左、值右），**不得**被拆成上下两行左对齐；「许可证 / MIT License」同理；三个按钮（项目主页 / 免责声明 / 用户协议）必须**横向排布**（必要时换行），**不得**被拉成三条满宽竖排。1100px 桌面下**逐像素不变**。结构判据由 `src/lib/settings-row-type-guard.test.ts`（8 例）锁死：恰好 3 条 `.is-info` + 1 条 `.is-actions`、全文件仅此 4 条 `is-*`、覆盖规则在同一 `@media` 块内且位于 `.set-row` 之后、媒体块外无 `is-*` 规则（⇒ 桌面不变）、无 `:has(`。
   - **症状① 在手机上也成立**：390px 下「关于」第一行显示**真实版本号**（如 `1.2.7`）而不是 `—` —— 与症状① 同源同判据，窄屏不额外退化。
   - **档位失败有出口**：`autoLockFailed = true` 时下拉旁必须出现 `settings.auto_lock_failed` 一行字（否则「5 分钟」会被误读成真实设置）。
-- [ ] **D-75**（v2.13 已实现）：**配对成功后会话码留在电脑屏上，两屏核对第一次真正可做**
+- [x] **D-75**（v2.13 已实现）：**配对成功后会话码留在电脑屏上，两屏核对第一次真正可做**
+  —— **2026-10-22 真机实测通过（v1.2.10）**：主人重新配对时电脑端保留核对码
   - **核心判据（时序）**：手机扫码成功后，**电脑屏不得收起面板** —— 面板须转为「配对成功（待核对）」态，里面仍是**本次会话**的会话码；此时手机屏的核对块也正好出现，两者逐字相同。
   - **结构判据（可单测）**：`pairing://ended` 的载荷必须经 `nextPairingState()` 翻译；`completed → { clearPairing: false, completed: true, ended: false }`；`aborted`/未知 → `{ clearPairing: true, completed: false, ended: true }`。`src/lib/pairing-state.test.ts` 16 例守门（纯函数语义 / handler 先算后清 / 组件分支存在且优先于二维码分支）。
   - **成功态约束**：`pairCompleted && pairing !== null` 时**不渲染二维码**（已扫过，留着会让人以为还能再扫），显示「配对成功」+ `sync.pair_completed_hint` + 会话码（`hasSessionCode()` 判空后）+ 主按钮「完成」（`sync.endPairing()`）。按钮文案 `sync.pair_done`。

@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use passwordms_core::constants::RECORD_TYPE_ITEM;
-use passwordms_core::model::conflict::ConflictEntry;
+use passwordms_core::model::conflict::{ConflictChoice, ConflictEntry};
 use passwordms_core::model::item::{Item, ItemKind, LoginData};
 use passwordms_core::model::sync_state::DeviceSyncState;
 use passwordms_core::session::Session;
@@ -588,6 +588,212 @@ fn compact_drops_blob_referenced_by_nobody() {
     );
     assert!(repo.has_blob(&att_keep), "被引用的 blob 必须留下");
     assert_eq!(repo.read_blob(&att_keep).unwrap(), keep_payload);
+
+    cleanup(&dir);
+}
+
+/// 与 [`add_conflict`] 同构，但把 `conflict_id` 交回调用方 —— D-80 的用例必须先仲裁它。
+fn add_conflict_get_id(repo: &mut Repository, item_id: &str, local: Item, remote: Item) -> String {
+    let conflict_id = uuid::Uuid::new_v4().to_string();
+    repo.add_conflict(ConflictEntry {
+        conflict_id: conflict_id.clone(),
+        item_id: item_id.to_string(),
+        local_snapshot: local,
+        remote_snapshot: remote,
+        local_updated_at: 0,
+        remote_updated_at: 0,
+        detected_at: 0,
+        resolved: false,
+        remote_deleted: false,
+    })
+    .unwrap();
+    conflict_id
+}
+
+/// 构造「远端快照仍带附件 A、活条目已删掉 A」的冲突素材。
+///
+/// 返回 `(item_id, A 的 attachment_id, 删附件之前的快照)`。
+/// 这正是 D-80 要处理的真实形态：A 的引用**只存在于冲突快照里**。
+///
+/// 快照必须在 `remove_attachment` **之前**取（否则快照里也不带 A，用例就退化成
+/// 在测「谁都不引用」而不是「已仲裁冲突钉住」）。
+fn conflict_pinning_detached_attachment(
+    repo: &mut Repository,
+    title: &str,
+    payload: &[u8],
+) -> (String, String, Item) {
+    let item = repo.create_item(login_draft(title, None)).unwrap();
+    let item = repo
+        .add_attachment_bytes(&item.item_id, "pinned.bin", payload)
+        .unwrap();
+    let att = item.attachments[0].attachment_id.clone();
+    let remote_snapshot = repo.get_item(&item.item_id).unwrap();
+    let live = repo.remove_attachment(&item.item_id, &att).unwrap();
+    assert!(
+        live.attachments.iter().all(|x| x.attachment_id != att),
+        "构造前提：活条目此刻已不引用该附件（引用只剩冲突快照一处）"
+    );
+    (item.item_id, att, remote_snapshot)
+}
+
+/// **D-80 用例 1**：已仲裁冲突（`KeepLocal`）不再钉住附件 —— 孤儿 GC 必须墓碑掉它。
+///
+/// 为什么可以停保活（三条已核实事实，不是推测）：
+/// 1. `list_conflicts` 过滤 `!resolved` ⇒ 已仲裁冲突前端不可见、无回滚/再仲裁路径；
+/// 2. `resolve_conflict` 的写入顺序是「先写活条目/副本，**最后**才写 `resolved = true`」
+///    ⇒ 落盘时被继承的引用已在活条目/回收站里；逐级 `?` 保证写失败则 resolved 仍为 false；
+/// 3. 留着就是永久 dead weight（每条冲突最多 2×16 个引用、单个 blob 20MB），
+///    与 D-76「用户删掉的东西真的没了」直接冲突。
+///
+/// `KeepLocal` 的语义是「用户**明确丢弃**远端快照」——它连同快照里的附件引用一起被丢弃，
+/// 所以这里期望的是**回收**，而不是保活。
+#[test]
+fn gc_orphan_blobs_reclaims_blob_of_resolved_conflict() {
+    let (dir, _vault, mut session) = setup("resolved-gc");
+    let repo = session.repo_mut().unwrap();
+
+    let payload = vec![0xD4u8; 24 * 1024];
+    let (item_id, att, remote_snapshot) =
+        conflict_pinning_detached_attachment(repo, "已仲裁冲突-回收集", &payload);
+    let live = repo.get_item(&item_id).unwrap();
+    let conflict_id = add_conflict_get_id(repo, &item_id, live, remote_snapshot);
+
+    assert!(repo.has_blob(&att), "构造前提：仲裁前 blob 帧还在库里");
+
+    repo.resolve_conflict(&conflict_id, ConflictChoice::KeepLocal)
+        .unwrap();
+    // 仲裁后盘上 resolved=true；活条目仍不含该附件（KeepLocal 不复活远端快照）。
+    assert!(
+        repo.list_conflicts().is_empty(),
+        "构造前提：已仲裁冲突不再出现在 list_conflicts（这正是它「前端不可见」的证据）"
+    );
+    assert!(
+        repo.has_blob(&att),
+        "仲裁本身不删 blob —— 删除只发生在 GC/压缩时"
+    );
+
+    let collected = repo.gc_orphan_blobs().unwrap();
+
+    assert!(
+        !repo.has_blob(&att),
+        "已仲裁冲突（KeepLocal）钉住的附件必须被 GC 回收 —— 否则用户以为删掉的附件永远留在库里（本次回收 {collected} 个孤儿）"
+    );
+    assert!(repo.read_blob(&att).is_err(), "被回收的 blob 不得仍可读");
+
+    cleanup(&dir);
+}
+
+/// **D-80 用例 2**：同一条路径的另一出口 —— 压缩必须把已仲裁冲突钉住的 blob 从文件里抹掉。
+///
+/// 与用例 1 共用 [`Repository::attachment_blob_refs`]（`gc_orphan_blobs` / `plan_compaction`
+/// 同一份引用集合），但出口不同：GC 只把帧置墓碑（密文原样留在文件里），压缩才真正缩小文件。
+/// 主人问的「删了的东西真的没了吗」只有压缩能回答，所以两个出口都要有断言。
+#[test]
+fn compact_reclaims_blob_of_resolved_conflict() {
+    let (dir, _vault, mut session) = setup("resolved-compact");
+    let repo = session.repo_mut().unwrap();
+
+    let payload = vec![0xE5u8; 40 * 1024];
+    let (item_id, att, remote_snapshot) =
+        conflict_pinning_detached_attachment(repo, "已仲裁冲突-压缩集", &payload);
+    let live = repo.get_item(&item_id).unwrap();
+    let conflict_id = add_conflict_get_id(repo, &item_id, live, remote_snapshot);
+
+    // 仲裁前：这条 blob 被**未仲裁**冲突钉着，不该计入可回收。
+    let stats_before = repo.compaction_stats().unwrap();
+    let before_bytes = repo.file_size().unwrap();
+
+    repo.resolve_conflict(&conflict_id, ConflictChoice::KeepLocal)
+        .unwrap();
+
+    // 副作用是预期的、不是 bug：仲裁后这条 blob 计入 reclaimable_bytes。
+    // 断言留到下面「blob 必须消失」之后再下 —— 让它不许抢红点（变异时红必须红在
+    // 「blob 仍存在」那条上），同时避免被「写 conflict 产生的堆叠墓碑」蒙过去：
+    // 弱化成 `>` 只能证明"有东西可回收"，证明不了"这条 blob 可回收"。
+    let stats_resolved = repo.compaction_stats().unwrap();
+
+    let outcome = repo.compact().unwrap();
+
+    assert!(
+        outcome.reclaimed_bytes > 0,
+        "压缩必须真回收字节（reclaimed_bytes = {}）",
+        outcome.reclaimed_bytes
+    );
+    assert!(
+        outcome.after_bytes < before_bytes,
+        "压缩后文件必须变小（{before_bytes} → {}）",
+        outcome.after_bytes
+    );
+    assert!(
+        !repo.has_blob(&att),
+        "已仲裁冲突（KeepLocal）钉住的 blob 必须被压缩抹掉 —— 否则「删了的东西」永远留在文件里"
+    );
+    assert!(
+        stats_resolved.reclaimable_bytes >= stats_before.reclaimable_bytes + payload.len() as u64,
+        "仲裁后至少应多出这条 blob 的密文字节可回收（{} → {}，payload {}）；\
+         只涨一点说明涨的是写 conflict 产生的堆叠墓碑，引用集合仍在保活它",
+        stats_before.reclaimable_bytes,
+        stats_resolved.reclaimable_bytes,
+        payload.len()
+    );
+    assert_eq!(repo.file_size().unwrap(), outcome.after_bytes);
+
+    cleanup(&dir);
+}
+
+/// **D-80 用例 3（防丢数据，与用例 1 的分野）**：`KeepBoth` 把远端附件**继承进新条目**，
+/// 所以那条 blob **必须继续活着**。
+///
+/// 用例 1 与用例 3 只差一个仲裁分支，结论相反，两者一起才证明「停的是 dead weight、
+/// 不是活引用」：
+/// - `KeepLocal`：远端快照被**明确丢弃** ⇒ 其中的引用应当回收（用例 1）；
+/// - `KeepBoth`：远端快照变成**新 `item_id` 的副本条目**，附件引用被继承 ⇒ 必须保活（本用例）。
+///
+/// 如果哪天有人把 `if entry.resolved { continue; }` 提前到写活条目之前，或者改坏
+/// `resolve_conflict` 的写入顺序，本用例会红在「副本条目的附件被 GC 掉了」。
+#[test]
+fn resolve_conflict_keep_both_keeps_inherited_blob_alive() {
+    let (dir, _vault, mut session) = setup("resolved-keepboth");
+    let repo = session.repo_mut().unwrap();
+
+    let payload = vec![0xF6u8; 32 * 1024];
+    let (item_id, att, remote_snapshot) =
+        conflict_pinning_detached_attachment(repo, "已仲裁冲突-继承集", &payload);
+    let live = repo.get_item(&item_id).unwrap();
+    let conflict_id = add_conflict_get_id(repo, &item_id, live, remote_snapshot);
+
+    repo.resolve_conflict(&conflict_id, ConflictChoice::KeepBoth)
+        .unwrap();
+
+    // 副本条目（新 item_id）确实继承了该附件 —— 这是本用例的前提，必须先钉住。
+    let dup = repo
+        .list_items(None, false, Some("冲突副本"))
+        .into_iter()
+        .find(|it| it.item_id != item_id)
+        .expect("KeepBoth 必须产生一个新 item_id 的副本条目");
+    assert!(
+        dup.attachments.iter().any(|x| x.attachment_id == att),
+        "构造前提：副本条目必须继承远端快照里的附件（否则本用例测不到「活引用」）"
+    );
+
+    let collected = repo.gc_orphan_blobs().unwrap();
+
+    assert!(
+        repo.has_blob(&att),
+        "KeepBoth 继承进副本条目的附件被 GC 回收了 —— 仲裁后副本会 BlobMissing（本次回收 {collected} 个孤儿）"
+    );
+    assert_eq!(
+        repo.read_blob(&att).unwrap(),
+        payload,
+        "继承下来的附件字节必须可读且一致"
+    );
+
+    // 压缩同样不得抹掉它。
+    repo.compact().unwrap();
+    assert!(
+        repo.has_blob(&att),
+        "KeepBoth 继承进副本条目的附件被压缩抹掉了 —— 这是永久丢数据"
+    );
 
     cleanup(&dir);
 }

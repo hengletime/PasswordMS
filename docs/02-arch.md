@@ -755,7 +755,8 @@ pub struct Item {
 - **引用集合 = 活跃条目 ∪ 回收站快照 ∪ 冲突快照（local_snapshot + remote_snapshot 两侧）**：
   - 活跃条目 `attachments[].attachment_id`；
   - 回收站快照的 `attachments[].attachment_id`（还原必须可用）；
-  - **冲突快照的 `local_snapshot` 与 `remote_snapshot` 各自的 `attachments[].attachment_id`**（D-79，见下方修订注记）；
+  - **冲突快照的 `local_snapshot` 与 `remote_snapshot` 各自的 `attachments[].attachment_id`**
+    ——**仅限尚未仲裁（`resolved == false`）的冲突**（D-79 引入，D-80 收窄，见下方两条修订注记）；
 - **GC 触发时机**：`purge_item` / `empty_trash` / `purge_expired_trash` / 解锁时（幂等扫描）；不在引用集合中的 blob 帧 → `tombstone_blob`；
 - **正确定性**：删除单个附件（父条目仍存活）→ 该 blob 立即脱离引用集合 → 下一次 GC 时 tombstone（密文滞留待未来 compaction，§3.13.3 量化结论不变）；KeepBoth 共享引用 → 双方任一存在即保活 ✓；
 - 容量预检（`MAX_VAULT_BYTES`）语义不变（`file_size()` 已含全部滞留密文）。
@@ -771,10 +772,35 @@ pub struct Item {
 > （代价不对称：多保活只浪费空间，少保活是永久丢数据）。
 > **不变量**：引用集合必须覆盖**所有可能恢复该 blob 的快照来源**；新增任何「暂存一份 `Item` 等用户决定」的结构，
 > 必须同步加进这里。
-> **已知遗留**：「已仲裁冲突永不删除」与本次不过滤 `resolved` **耦合** —— 一条已仲裁冲突会永久保活它两端快照里的
-> 全部附件（上限 2×16 个 / 单附件 20MB）。释放策略需先确认「已仲裁快照是否还允许被读取/回滚」，作为独立议题排期。
 > 守门测试：`tests/compaction.rs` 的 `compact_keeps_blob_referenced_by_conflict_snapshot` /
 > `gc_orphan_blobs_keeps_blob_referenced_by_conflict_snapshot` / **`compact_drops_blob_referenced_by_nobody`（防过修）**。
+
+> **🟢 二次修订（D-80 收窄：已仲裁冲突停止保活，v1.2.11）**：
+> D-79 的「一律计入」是**保守兜底**——当时没核清「已仲裁快照是否还会被读」。核实后结论是**不会**，于是收窄：
+> `attachment_blob_refs()` 遇 `resolved == true` 直接 `continue`，两端快照的引用不再计入。
+>
+> **三条依据（已核实，不是「看起来没人读」的推测）**：
+> 1. **读不到**：`list_conflicts()` 过滤 `!resolved` ⇒ 已仲裁冲突前端不可见，不存在读取 / 回滚 / 再仲裁路径；
+> 2. **不需要**：`resolve_conflict()` 的写入顺序是「先写活条目/副本（`KeepBoth` 新建 `item_id` 副本；
+>    `TakeRemote` 且 `remote_deleted` 时 `trash_item_direct` 软删），**最后**才写 `resolved = true`」。
+>    所以磁盘上 `resolved=true` 成立的那一刻，被继承的附件引用已落在活条目或回收站快照里，
+>    而这两处本来就由本函数保活；逐级 `?` 上抛保证「写 conflict 失败 ⇒ `resolved` 仍为 false ⇒ 保活照旧」；
+> 3. **留着有害**：已仲裁快照是**永久 dead weight**（每冲突最多 2×16 个引用、单 blob 20MB），
+>    与 D-76「用户删掉的东西真的没了」直接冲突。
+>
+> **`KeepLocal` / `KeepBoth` 的分野正是「停的是 dead weight、不是活引用」的证明**：
+> 前者用户明确丢弃远端快照 ⇒ 其引用应回收；后者把远端快照变成**新 `item_id` 的副本条目**、引用被继承 ⇒ 必须保活。
+>
+> **副作用（预期，非 bug）**：仲裁后 `reclaimable_bytes` 会**增大**——原来被已仲裁快照钉住的 blob 转入可回收。
+> 设置页「保险库文件」卡片里变大的是**「可回收」**这一行；**「已删附件占」不受影响**（那是墓碑帧字节），
+> 故 D-80 **不需要任何前端改动**（文案语义核对见 `06-ui-design.md` §6.11）。
+>
+> **新增守门测试**（`tests/compaction.rs`，3 例）：
+> `gc_orphan_blobs_reclaims_blob_of_resolved_conflict`（GC 出口）/ `compact_reclaims_blob_of_resolved_conflict`（压缩出口）
+> / **`resolve_conflict_keep_both_keeps_inherited_blob_alive`（防过修：`KeepBoth` 继承的 blob 必须仍活着且可读）**。
+> 变异验证：把 `if entry.resolved { continue; }` 删掉 → 前两例红、第三例**仍绿**（证明停的是 dead weight）。
+>
+> **仍未释放**：已仲裁的 **conflict 记录本身**（约 1.2KB × N）仍在库里，与 backlog「已仲裁冲突永不删除」同一件事，本轮不做。
 
 #### 3.14.5 IPC 契约变更（前后端）
 
@@ -1225,6 +1251,10 @@ discover_peer(&sync_key, 1500ms)      # 复用第 2 步已解出的那把 sync_k
 UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `INTERNET` + `CAMERA`。
 部分厂商 ROM 会过滤广播；若真机收不到，行为退化为「和没有发现功能一样」（静态地址 + 报
 `err.network_unreachable`），**不比现状更差**。不预先加 `MulticastLock`。
+
+> **真机实测（2026-10-22，v1.2.10）：通过。** 主人换网络后**未重新扫码**即同步成功，
+> Android 侧广播收发未被 ROM 过滤，未触发 `[discovery] udp bind failed`，无需补任何权限。
+
 
 #### 3.17.8 已知不覆盖
 
