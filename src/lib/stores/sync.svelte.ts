@@ -5,6 +5,7 @@ import { listen } from '@tauri-apps/api/event';
 import { DEFAULT_CONFLICT_CHOICE } from '../conflict';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
+import { nextPairingState, PAIRING_ENDED_EVENT } from '../pairing-state';
 import { PEER_SYNC_APPLIED_EVENT, shouldReloadAfterPeerSync } from '../sync-applied';
 import { vault } from './vault.svelte';
 import { ui } from './ui.svelte';
@@ -15,6 +16,18 @@ class SyncStore {
   pairing = $state<PairingDto | null>(null);
   /** 配对会话已被后端终止（D-44）：提示用户重新生成二维码。 */
   pairEnded = $state<boolean>(false);
+  /**
+   * D-75：配对**成功**（后端 `pairing://ended` 载荷为 `completed`），等待人工核对会话码。
+   *
+   * 为什么需要这个状态：D-69 让两屏显示同一次会话的会话码供核对，但「会话结束」事件
+   * 一到就把 `pairing` 清空了 —— 而手机端要核对的那块**恰好在这一瞬间才出现**，
+   * 电脑屏的码已经消失。核对动作的前提被事件本身删掉，功能从上线起不可能被用上。
+   *
+   * 语义边界：`pairCompleted === true` 时 **`pairing` 必须仍在**（会话码在里面），
+   * 由用户在核对完毕后点「完成」→ `endPairing()` 才清屏。这两者在
+   * `src/lib/pairing-state.ts::nextPairingState` 里成组返回，不许分开改。
+   */
+  pairCompleted = $state<boolean>(false);
   /** 已配对设备。 */
   devices = $state<DeviceDto[]>([]);
   /** 同步状态。 */
@@ -63,6 +76,8 @@ class SyncStore {
   async startPairing(): Promise<void> {
     this.busy = true;
     this.pairEnded = false;
+    // D-75：新一轮配对必须清掉上一轮的「成功待核对」态，否则新二维码旁边还挂着旧的成功提示。
+    this.pairCompleted = false;
     try {
       this.pairing = await api.sync.startPairing();
     } catch (err) {
@@ -80,7 +95,21 @@ class SyncStore {
       ui.toast('error', toAppError(err).messageKey);
     } finally {
       this.pairing = null;
+      // D-75：主动取消也算「这一轮结束了」，成功待核对态一并复位。
+      this.pairCompleted = false;
     }
+  }
+
+  /**
+   * D-75：结束配对成功态（「完成」按钮）。
+   *
+   * 只清内存状态、**不打 IPC** —— 后端在发 `completed` 之前已经
+   * `*state.pairing = None` 并 `break` 了 worker，会话本就不存在了。
+   */
+  endPairing(): void {
+    this.pairing = null;
+    this.pairCompleted = false;
+    this.pairEnded = false;
   }
 
   /** 加入配对（扫码文本或手动输入）。 */
@@ -247,6 +276,8 @@ class SyncStore {
   reset(): void {
     this.pairing = null;
     this.pairEnded = false;
+    // D-75：锁定后重进同步页应从「生成配对二维码」开始，不留上一轮的成功待核对态。
+    this.pairCompleted = false;
     this.devices = [];
     this.status = { last_sync_at: null, pending_changes: 0, device_count: 0 };
     this.conflicts = [];
@@ -264,13 +295,20 @@ export const sync = new SyncStore();
 
 // D-44：配对会话结束后端主动通知（worker 在 completed/aborted 时清理 pairing 并 emit）。
 // 前端收回二维码，aborted 时在配对页提示「请重新生成二维码」。
+// D-75：**必须按载荷分流**（判定收在纯函数 `nextPairingState` 里，有单测）：
+//   `completed` → **保留** `pairing`（会话码还在里面，手机端此刻才弹出核对提示），置成功态；
+//   `aborted`   → 清屏 + 提示重新生成。
+// ⚠️ 不许改回「无条件 `sync.pairing = null`」—— 那正是 D-75 的成因：会话结束事件
+//    把「核对会话码」这个动作的前提一起删掉了，功能看着有、实际用不上。
 // 仅在 Tauri WebView 环境注册监听（Node 测试环境无 window/@tauri-apps API）。
 if (typeof window !== 'undefined') {
-  void listen('pairing://ended', (ev) => {
-    sync.pairing = null;
-    if (ev.payload === 'aborted') {
-      sync.pairEnded = true;
+  void listen(PAIRING_ENDED_EVENT, (ev) => {
+    const next = nextPairingState(ev.payload);
+    if (next.clearPairing) {
+      sync.pairing = null;
     }
+    sync.pairCompleted = next.completed;
+    sync.pairEnded = next.ended;
   });
 
   // v1.2.4 根因 A：**对端（手机）发起的重同步**把数据写进了本机库，但本机前端 store

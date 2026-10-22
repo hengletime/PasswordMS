@@ -291,6 +291,35 @@ export const enUS: Messages = {
     // D-73: when the read fails, never render nothing (blank = a silent fallback that
     // disguises a failure as "there was nothing to show").
     vault_file_failed: 'Could not read the vault file path and size. Your items are unaffected.',
+
+    // D-76: vault compaction entry (size breakdown + reclaim action).
+    compact: 'Compact vault',
+    compact_dead_attachments: 'Deleted attachments use {size}',
+    compact_reclaimable: '{size} reclaimable',
+    compact_none: 'Nothing to reclaim',
+    // When the breakdown cannot be read, saying "nothing to reclaim" would be a **conclusion**
+    // we do not have (failure disguised as a result — same family as D-27 / D-73).
+    compact_stats_failed: 'Could not read the size breakdown. Your items are unaffected.',
+    compacting: 'Compacting…',
+    compact_wait_sync: 'Syncing, please wait',
+    compact_confirm_title: 'Compact the vault?',
+    compact_label_before: 'Current size',
+    compact_label_after: 'After compaction',
+    compact_label_reclaim: 'Reclaimable',
+    // NOTE: spec §6.11.6 has no *label* form for "deleted attachments" (only the full
+    // sentence compact_dead_attachments). The confirm block is a label/value table, so
+    // this label key is an addition — reported to the lead (design gap #1).
+    compact_label_dead: 'Deleted attachments',
+    compact_hint_no_password:
+      'Compaction changes no data and does not require your master password.',
+    compact_hint_trash: 'Attachments in the trash are not reclaimed; empty the trash first.',
+    compact_hint_disk:
+      'Compaction temporarily needs about twice the disk space. Do not close the app.',
+    compact_start: 'Start',
+    compact_done: 'Reclaimed {size}',
+    // Generic failure copy for compaction (replaces `err.internal` only; specific backend
+    // reasons still surface verbatim). Must state that the vault is unchanged.
+    compact_failed: 'Compaction did not finish. Your vault is unchanged.',
     weak_max_len: 'Weak length threshold',
     stale_days: 'Stale days',
     // D-63: "About" group (version / author / license / homepage / legal entries).
@@ -313,6 +342,11 @@ export const enUS: Messages = {
     pair_ip: 'LAN address: {ip}',
     firewall_hint: "Can't connect? Make sure the phone and this PC are on the same Wi‑Fi, and allow PasswordMS through Windows Firewall (private networks).",
     pair_ended: 'The pairing session ended. Generate a new QR code to sync again.',
+    // D-75: on success the panel must NOT be torn down immediately — the phone only shows
+    // its "check the code" prompt at this moment, so this screen has to keep the same code up.
+    pair_completed: 'Paired successfully',
+    pair_completed_hint: 'Check that the code on your phone matches this one.',
+    pair_done: 'Done',
     manual_hint: 'Cannot scan? Copy the pairing text below and enter it manually.',
     copy_code: 'Copy pairing text',
     cancel: 'Cancel pairing',

@@ -286,6 +286,35 @@ export const zhCN = {
     vault_file_hint: '本机全部条目都加密保存在这一个文件里；备份或换机就是复制它，路径见下。',
     // D-73：读不到时**不能留空**（空 = 静默兜底，把失败伪装成「本来就没有」）。
     vault_file_failed: '读取失败：未能取得库文件路径与大小（条目本身不受影响）。',
+
+    // D-76：保险库压缩入口（体积构成 + 回收动作）。文案语气由主人的原话决定 ——
+    // 他问的是「保险库有那么大吗？是不是被删除的附件都还保存在库里？」，
+    // 所以「已删附件占 {size}」这一行是**回答**，不是脚注。
+    compact: '压缩保险库',
+    compact_dead_attachments: '已删附件占 {size}',
+    compact_reclaimable: '可回收 {size}',
+    compact_none: '没有可回收的空间',
+    // 体积构成读不到时**不能留白、也不能说「没有可回收的空间」**——后者是结论，
+    // 而我们此刻根本不知道（失败伪装成结论 = D-27 / D-73 同族）。故单独一句。
+    compact_stats_failed: '读取失败：未能取得体积构成（条目本身不受影响）。',
+    compacting: '正在压缩…',
+    compact_wait_sync: '同步进行中，请稍候',
+    compact_confirm_title: '压缩保险库？',
+    compact_label_before: '当前大小',
+    compact_label_after: '压缩后约',
+    compact_label_reclaim: '可回收',
+    // ⚠️ 规格 §6.11.6 的 15 个键里没有「已删附件占」的**标签形态**（只给了整句
+    // compact_dead_attachments）。确认块四行是「左标签 / 右数值」，塞不进整句，
+    // 故补这一个标签键；整句那个仍用于卡片正文。已向主理人报备（设计疏漏 #1）。
+    compact_label_dead: '已删附件占',
+    compact_hint_no_password: '压缩不改任何数据，也不需要输入主密码。',
+    compact_hint_trash: '回收站里的附件不会被回收，需先清空回收站。',
+    compact_hint_disk: '压缩期间会临时占用约 2 倍磁盘空间，请勿关闭程序。',
+    compact_start: '开始压缩',
+    compact_done: '已回收 {size}',
+    // 压缩失败时的**通用**文案（仅替代 `err.internal`；后端给了具体原因时仍透出原话）。
+    // 必须说「原样保留 / 数据没有变化」：压缩是大动作，只说「内部错误」会让用户以为库被写坏。
+    compact_failed: '压缩未完成，保险库原样保留，数据没有变化。',
     weak_max_len: '弱口令长度阈值',
     stale_days: '超期天数',
     // D-63：「关于」分组（版本 / 作者 / 许可证 / 项目主页 / 法律条款入口）。
@@ -308,6 +337,11 @@ export const zhCN = {
     pair_ip: '本机局域网地址：{ip}',
     firewall_hint: '连不上？请确认手机与本机在同一 Wi‑Fi，并在 Windows 防火墙放行 PasswordMS（允许「专用网络」）。',
     pair_ended: '配对会话已结束。若需再次同步，请重新生成二维码。',
+    // D-75：配对**成功**后面板不得立刻收回 —— 手机端此刻才弹出「请核对会话码」，
+    // 电脑屏必须把同一个会话码留在屏上，否则核对动作永远没有发生的机会。
+    pair_completed: '配对成功',
+    pair_completed_hint: '请核对手机上的会话码与本机是否一致，一致才算配对安全。',
+    pair_done: '完成',
     manual_hint: '无法扫码？可复制下面的配对文本手动输入。',
     copy_code: '复制配对文本',
     cancel: '取消配对',

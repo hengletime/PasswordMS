@@ -58,6 +58,77 @@ pub enum BlobWriteOutcome {
     Appended,
 }
 
+/// 容器体积构成（D-76 §统计，**只读**，不改动任何字节）。
+///
+/// 为什么单独有这个类型：主人问的是「保险库文件有那么大吗？是不是被删除的附件都还
+/// 保存在库里」——这个问题**不需要**压缩就能回答，只要把「活跃字节 / 墓碑字节 / 其中
+/// 已删附件」分开报出来。故它是零风险的第一期能力。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionStats {
+    /// 容器文件当前字节数。
+    pub file_bytes: u64,
+    /// 头部区字节数（`16 + header_capacity`，压缩后不变）。
+    pub header_bytes: u64,
+    /// 会被保留的**非墓碑**帧字节数（含活跃 blob）。
+    pub live_bytes: u64,
+    /// 全部墓碑帧字节数（不论去留）——用于外部独立核对「死数据 = 多少」。
+    pub tombstone_bytes: u64,
+    /// 其中**必须保留**的墓碑字节数（每个已死 ITEM/FOLDER 只留 rev 最高的一条）。
+    pub kept_tombstone_bytes: u64,
+    /// 压缩能回收的字节数（= 文件现有字节 - 头部 - 保留帧）。
+    pub reclaimable_bytes: u64,
+    /// 压缩后预计的文件字节数。
+    pub after_bytes: u64,
+    /// 其中「已删/无引用附件密文」字节数——回答「删掉的附件还在不在」。
+    pub attachment_dead_bytes: u64,
+    /// 活跃附件密文字节数。
+    pub attachment_live_bytes: u64,
+    /// 保留帧数。
+    pub live_frames: u32,
+    /// 将被丢弃的帧数。
+    pub dead_frames: u32,
+}
+
+/// 一次压缩的结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionOutcome {
+    /// 压缩前文件字节数。
+    pub before_bytes: u64,
+    /// 压缩后文件字节数。
+    pub after_bytes: u64,
+    /// 实际回收字节数。
+    pub reclaimed_bytes: u64,
+    /// 丢弃的帧数。
+    pub dropped_frames: u32,
+}
+
+/// 压缩规划：保留哪些 slot、能省多少（[`Repository::plan_compaction`] 的产物）。
+struct CompactionPlan {
+    /// 保留帧在 `slots` 中的下标（按原顺序，即写入顺序）。
+    keep: Vec<usize>,
+    live_bytes: u64,
+    tombstone_bytes: u64,
+    kept_tombstone_bytes: u64,
+    attachment_live_bytes: u64,
+    attachment_dead_bytes: u64,
+    live_frames: u32,
+    dead_frames: u32,
+    reclaimable_bytes: u64,
+    after_bytes: u64,
+}
+
+/// 压缩前后用于逐项比对的计数快照（D-76：防止「结构合法但缺项」的静默丢数据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RepositoryCounts {
+    items: usize,
+    folders: usize,
+    trash: usize,
+    conflicts: usize,
+    devices: usize,
+    sync_states: usize,
+    blobs: usize,
+}
+
 /// 磁盘上的一个帧槽位。
 #[derive(Debug, Clone)]
 struct Slot {
@@ -929,10 +1000,28 @@ impl Repository {
 
     /// 收集全部附件 blob 引用（供拉取方比对缺失清单 / spool 有效性 / GC 引用集合）。
     ///
-    /// D-60 §3.14.2/§3.14.4 修订：清单来源 = **活跃条目的 `attachments[].attachment_id`**
-    /// ∪ **回收站快照的 `attachments[].attachment_id`**（还原必须可用）；
+    /// # 不变量（比实现本身重要）
+    ///
+    /// **引用集合必须覆盖所有可能恢复该 blob 的快照来源**：活条目、回收站快照、冲突快照。
+    /// 新增任何「暂存一份 `Item` 等用户决定」的结构时，**必须同步加进这里**——漏一类
+    /// 的代价不是"多留垃圾"，而是**永久丢数据**：GC 会墓碑它、压缩会把它从文件里抹掉、
+    /// 同步方也不会再去拉它，而用户一旦决定「采用那份快照」，得到的就是 `BlobMissing`。
+    ///
+    /// 已体检的调用点（四处共用本函数，改这里等于同时改它们）：
+    /// [`Self::gc_orphan_blobs`]（墓碑孤儿）、[`Self::plan_compaction`]（压缩保留集合）、
+    /// `sync::blob_transfer::cleanup_orphan_spools`（spool 清理）、
+    /// `sync::blob_transfer::send_blob` 的 `want` 清单（决定是否向对端拉取）。
+    ///
+    /// 清单来源 = **活跃条目的 `attachments[].attachment_id`**
+    /// ∪ **回收站快照的 `attachments[].attachment_id`**（还原必须可用）
+    /// ∪ **冲突箱两端快照的 `attachments[].attachment_id`**（仲裁必须可用；D-76 修复）；
     /// 另含遗留 `ItemKind::Attachment` 条目的 `blob_ref`（迁移前的存量库兼容窗口，
     /// 保证迁移前同步/GC 行为与 D-53 时代一致）。
+    ///
+    /// **冲突侧刻意不按 `resolved` 过滤**（一律计入）：已仲裁残留快照是否还会被读取/回滚
+    /// 尚未定论（「已仲裁冲突永不删除」仍在 backlog）。两个方向的代价不对称——多保活
+    /// 一个 blob 只浪费空间，少保活一个是永久丢数据。「`resolved` 后可否释放引用」作为
+    /// 独立议题评估，不在本条修复里改变语义。
     #[allow(deprecated)]
     pub fn attachment_blob_refs(&self) -> Vec<String> {
         let mut refs = Vec::new();
@@ -953,6 +1042,20 @@ impl Repository {
                 _ => {
                     for a in &entry.item_snapshot.attachments {
                         refs.push(a.attachment_id.clone());
+                    }
+                }
+            }
+        }
+        // 冲突箱：`local_snapshot` 与 `remote_snapshot` **都要收**——仲裁「保留本机」要前者、
+        // 「采用远端」/「保留两者」要后者，任一侧缺引用都会在仲裁后变成 BlobMissing。
+        for entry in self.conflicts.values() {
+            for snapshot in [&entry.local_snapshot, &entry.remote_snapshot] {
+                match &snapshot.kind {
+                    ItemKind::Attachment(a) => refs.push(a.blob_ref.clone()),
+                    _ => {
+                        for a in &snapshot.attachments {
+                            refs.push(a.attachment_id.clone());
+                        }
                     }
                 }
             }
@@ -1511,6 +1614,306 @@ impl Repository {
         Ok(settings)
     }
 
+    // ===== 容器压缩（D-76）=====
+
+    /// 统计容器体积构成（**只读**，不解密 blob、不写任何字节）。
+    ///
+    /// 这是 D-76 的第一期能力：它直接回答「24 MB 的库里有 24 MB 是已删附件吗」。
+    pub fn compaction_stats(&self) -> CoreResult<CompactionStats> {
+        let plan = self.plan_compaction()?;
+        let file_bytes = self.file_size()?;
+        let header_bytes = self.container.record_start();
+        Ok(CompactionStats {
+            file_bytes,
+            header_bytes,
+            live_bytes: plan.live_bytes,
+            tombstone_bytes: plan.tombstone_bytes,
+            kept_tombstone_bytes: plan.kept_tombstone_bytes,
+            reclaimable_bytes: plan.reclaimable_bytes,
+            after_bytes: plan.after_bytes,
+            attachment_dead_bytes: plan.attachment_dead_bytes,
+            attachment_live_bytes: plan.attachment_live_bytes,
+            live_frames: plan.live_frames,
+            dead_frames: plan.dead_frames,
+        })
+    }
+
+    /// 压缩容器：把「该丢的帧」真正从文件里去掉（重写新容器 + 原子替换）。
+    ///
+    /// # 保留集合（口径见 D-76 调研 §1.4，**按黑名单**——只定义"丢什么"，其余一律保留）
+    ///
+    /// 丢弃：
+    /// 1. 全部 blob 墓碑帧（`rebuild_index` / `read_blob` / `tombstone_changes` /
+    ///    `tombstone_rev` 四处都跳过它们，是纯本地 GC 记账，从不过线）；
+    /// 2. 未被引用的活跃 blob（GC 还没跑到的兜底；引用集合复用
+    ///    [`Self::attachment_blob_refs`]，**回收站快照里的附件算有引用**）；
+    /// 3. 全部 TRASH / CONFLICT / DEVICE / SYNC_STATE 墓碑（无任何消费者）；
+    /// 4. 仍是活跃记录的 ITEM / FOLDER 历史墓碑（`place_frame` 长度变化时留下的中转墓碑，
+    ///    导出侧 `alive` 检查会跳过、`tombstone_rev` 在记录存在时不会被查询）；
+    /// 5. 同一"已死 id"的其余低 rev 墓碑（只留 rev 最高的一条）。
+    ///
+    /// **ITEM / FOLDER 墓碑必须至少留一条**：`tombstone_changes` 是删除意图过线的唯一
+    /// 来源，`merge::apply_changes` 的复活抑制也只认 `tombstone_rev`。删掉 → 已删条目
+    /// 会被对端陈旧 live 变更复活（数据回魂）。
+    ///
+    /// # 崩溃安全
+    ///
+    /// 见 [`crate::store::container::Container::rewrite_with_frames`]：同目录 tmp →
+    /// `sync_all` → rename 前完成全部校验 → 原子替换。压缩前另存
+    /// `*.precompact-<unix_ms>` 备份，**成功即删**（不在磁盘上长期留旧库）。
+    ///
+    /// # 失败语义
+    ///
+    /// 任一环节失败都会把备份复制回原位再返回错误，`self` 保持"旧文件 + 旧内存"的
+    /// 可用状态（`slots` 偏移与恢复出的字节一致，因为备份是压缩前文件的字节副本）。
+    pub fn compact(&mut self) -> CoreResult<CompactionOutcome> {
+        let before_bytes = self.file_size()?;
+
+        // ① 先把"漏标的孤儿 blob"变成墓碑：复用已审计的引用判定（KeepBoth 共享引用、
+        //    回收站快照引用都算活），幂等。这样后续规划里"活跃但无引用的 blob"理论上
+        //    不再出现，计划与实际写入不会因为 GC 时序而漂移。
+        self.gc_orphan_blobs()?;
+
+        // ② 规划
+        let plan = self.plan_compaction()?;
+        if plan.reclaimable_bytes == 0 {
+            return Ok(CompactionOutcome {
+                before_bytes,
+                after_bytes: before_bytes,
+                reclaimed_bytes: 0,
+                dropped_frames: 0,
+            });
+        }
+        let counts_before = self.counts();
+
+        // ③ 头部：逐字段沿用（主密码不变），只重算两个计数，**不动 updated_at**
+        //    （压缩不改任何业务数据，改时间戳会让它说谎。唯一例外见下：第 ① 步的兜底 GC
+        //    若真的墓碑化了孤儿 blob，那是一次真实的数据变更，`updated_at` 由
+        //    `persist_header` 正常刷新——与解锁时的既有行为一致）。
+        let mut header = self.container.header().clone();
+        header.item_count = self.items.len() as u32;
+        header.folder_count = self.folders.len() as u32;
+
+        let frames: Vec<Frame> = plan
+            .keep
+            .iter()
+            .map(|&idx| self.slots[idx].frame.clone())
+            .collect();
+        let kept_frames = frames.len();
+
+        // ④ 备份（字节副本；压缩成功即删）
+        let path = self.container.path().to_path_buf();
+        let backup = self.precompact_backup_path();
+        std::fs::copy(&path, &backup)?;
+
+        // ⑤ 重写 + ⑥ rename 前的结构校验（都在 rewrite_with_frames 内部）
+        if let Err(err) = self.container.rewrite_with_frames(header, &frames) {
+            restore_precompact(&backup, &path);
+            return Err(err);
+        }
+
+        // ⑦ 造新实例重建索引并逐项比对（不在 self 上直接 rebuild：它先 clear 后扫描，
+        //    失败会留下半空状态；而此刻 self 的 slots 偏移已经与新文件不符）。
+        match self.reopen_after_rewrite(&counts_before, kept_frames) {
+            Ok(fresh) => *self = fresh,
+            Err(err) => {
+                restore_precompact(&backup, &path);
+                return Err(err);
+            }
+        }
+
+        // ⑧ 立即删除备份
+        let _ = std::fs::remove_file(&backup);
+
+        let after_bytes = self.file_size()?;
+        Ok(CompactionOutcome {
+            before_bytes,
+            after_bytes,
+            reclaimed_bytes: before_bytes.saturating_sub(after_bytes),
+            dropped_frames: plan.dead_frames,
+        })
+    }
+
+    /// 计算保留集合与体积账（只读）。
+    fn plan_compaction(&self) -> CoreResult<CompactionPlan> {
+        let referenced: std::collections::HashSet<String> =
+            self.attachment_blob_refs().into_iter().collect();
+        // 每个"已死" ITEM/FOLDER id 应保留的那一条墓碑（rev 最高）。
+        let best_dead = self.best_dead_tombstones();
+
+        let mut keep: Vec<usize> = Vec::with_capacity(self.slots.len());
+        let mut live_bytes = 0u64;
+        let mut tombstone_bytes = 0u64;
+        let mut kept_tombstone_bytes = 0u64;
+        let mut attachment_live_bytes = 0u64;
+        let mut attachment_dead_bytes = 0u64;
+        let mut live_frames = 0u32;
+        let mut dead_frames = 0u32;
+
+        for (idx, slot) in self.slots.iter().enumerate() {
+            let frame = &slot.frame;
+            let size = frame.encoded_len() as u64;
+            if frame.is_tombstone() {
+                tombstone_bytes += size;
+            }
+
+            let keep_it = if frame.is_blob() {
+                // blob：墓碑一律丢；活跃帧只在仍被引用时保留（含回收站快照引用）。
+                !frame.is_tombstone() && referenced.contains(&frame.record_id_string())
+            } else if !frame.is_tombstone() {
+                // 活跃业务记录：一律保留（黑名单口径 —— 未来新增的记录类型自动保住）。
+                true
+            } else {
+                // 非 blob 墓碑：只有"已死 ITEM/FOLDER 的 rev 最高那条"才有消费者。
+                matches!(frame.record_type, RECORD_TYPE_ITEM | RECORD_TYPE_FOLDER)
+                    && best_dead.get(&(frame.record_type, frame.record_id_string())) == Some(&idx)
+            };
+
+            if keep_it {
+                keep.push(idx);
+                if frame.is_tombstone() {
+                    kept_tombstone_bytes += size;
+                } else {
+                    live_bytes += size;
+                    live_frames += 1;
+                    if frame.is_blob() {
+                        attachment_live_bytes += size;
+                    }
+                }
+            } else {
+                dead_frames += 1;
+                if frame.is_blob() {
+                    attachment_dead_bytes += size;
+                }
+            }
+        }
+
+        let file_bytes = self.file_size()?;
+        let header_bytes = self.container.record_start();
+        let kept = live_bytes + kept_tombstone_bytes;
+        Ok(CompactionPlan {
+            keep,
+            live_bytes,
+            tombstone_bytes,
+            kept_tombstone_bytes,
+            attachment_live_bytes,
+            attachment_dead_bytes,
+            live_frames,
+            dead_frames,
+            // 用「文件现有字节 - 头部 - 保留帧」而不是「Σ丢弃帧」：容器若存在尾部尾料
+            // （异常历史），它同样会被重写顺手清掉，这里如实计入可回收量。
+            reclaimable_bytes: file_bytes.saturating_sub(header_bytes + kept),
+            after_bytes: header_bytes + kept,
+        })
+    }
+
+    /// 每个"已死"（无活跃帧）的 ITEM/FOLDER id → rev 最高的那条墓碑的 slot 下标。
+    ///
+    /// 选择语义与 [`Self::tombstone_changes`] / [`Self::tombstone_rev`] **逐条对齐**：
+    /// 解密失败（损坏墓碑）跳过——那两处同样跳过，所以它本来就不产生任何效果；
+    /// 同 rev 取先出现的（`best_rev >= rev` 不替换）。
+    fn best_dead_tombstones(&self) -> HashMap<(u8, String), usize> {
+        let mut best: HashMap<(u8, String), (u64, usize)> = HashMap::new();
+        for (idx, slot) in self.slots.iter().enumerate() {
+            let frame = &slot.frame;
+            if frame.is_blob() || !frame.is_tombstone() {
+                continue;
+            }
+            if frame.record_type != RECORD_TYPE_ITEM && frame.record_type != RECORD_TYPE_FOLDER {
+                continue;
+            }
+            let id = frame.record_id_string();
+            // 该记录仍活跃 → 历史墓碑不表达删除意图（导出侧 alive 检查同样跳过）。
+            let alive = match frame.record_type {
+                RECORD_TYPE_ITEM => self.items.contains_key(&id),
+                _ => self.folders.contains_key(&id),
+            };
+            if alive {
+                continue;
+            }
+            let rev = match self.open_frame(frame) {
+                Ok(pt) => {
+                    if frame.record_type == RECORD_TYPE_ITEM {
+                        serde_json::from_slice::<Item>(&pt).ok().map(|i| i.rev)
+                    } else {
+                        serde_json::from_slice::<Folder>(&pt).ok().map(|f| f.rev)
+                    }
+                }
+                Err(_) => None,
+            };
+            let Some(rev) = rev else { continue };
+            match best.get(&(frame.record_type, id.clone())) {
+                Some(&(best_rev, _)) if best_rev >= rev => {}
+                _ => {
+                    best.insert((frame.record_type, id), (rev, idx));
+                }
+            }
+        }
+        best.into_iter().map(|(key, (_, idx))| (key, idx)).collect()
+    }
+
+    /// 各业务 map 的计数快照（压缩前后比对用）。
+    fn counts(&self) -> RepositoryCounts {
+        RepositoryCounts {
+            items: self.items.len(),
+            folders: self.folders.len(),
+            trash: self.trash.len(),
+            conflicts: self.conflicts.len(),
+            devices: self.devices.len(),
+            sync_states: self.sync_states.len(),
+            blobs: self.blobs.len(),
+        }
+    }
+
+    /// 压缩备份路径：`<vault>.precompact-<unix_ms>`。
+    fn precompact_backup_path(&self) -> std::path::PathBuf {
+        let path = self.container.path().to_path_buf();
+        let mut name = path.file_name().map(|s| s.to_os_string()).unwrap_or_default();
+        name.push(format!(".precompact-{}", now_ms()));
+        path.with_file_name(name)
+    }
+
+    /// 压缩后重开文件、重建索引、逐项比对（全部一致才返回新实例）。
+    ///
+    /// 只在**新实例**上 `rebuild_index`：它先 `clear()` 再扫描，失败会留下半空状态，
+    /// 不能让 `self` 冒这个险（此刻 `self.slots` 的偏移已与新文件不符）。
+    fn reopen_after_rewrite(
+        &self,
+        expect: &RepositoryCounts,
+        expect_frames: usize,
+    ) -> CoreResult<Repository> {
+        let container = Container::open(self.container.path())?;
+        let mut fresh = Repository {
+            container,
+            vault_key: self.vault_key.clone(),
+            device_id: self.device_id.clone(),
+            slots: Vec::new(),
+            live: HashMap::new(),
+            blobs: HashMap::new(),
+            folders: BTreeMap::new(),
+            items: BTreeMap::new(),
+            trash: BTreeMap::new(),
+            conflicts: BTreeMap::new(),
+            devices: BTreeMap::new(),
+            sync_states: BTreeMap::new(),
+        };
+        // 逐帧解密归位：任何一帧解不开都会在这里暴露（这本身就是一次全量完整性校验）。
+        fresh.rebuild_index()?;
+        if fresh.slots.len() != expect_frames {
+            return Err(CoreError::Internal(format!(
+                "compacted frame count mismatch: expected {expect_frames}, reopened {}",
+                fresh.slots.len()
+            )));
+        }
+        let got = fresh.counts();
+        if got != *expect {
+            return Err(CoreError::Internal(format!(
+                "compacted record counts mismatch: expected {expect:?}, reopened {got:?}"
+            )));
+        }
+        Ok(fresh)
+    }
+
     // ===== 导出 =====
 
     /// 导出保险库副本（需重新验证主密码，见 O-03）。
@@ -1767,6 +2170,21 @@ impl Repository {
             for a in entry.remote_snapshot.attachments.iter_mut() {
                 a.wipe_plaintext();
             }
+        }
+    }
+}
+
+/// 压缩失败时把备份复制回原位（D-76）。
+///
+/// 刻意**不返回结果**：调用点已经在错误路径上，回滚失败不该覆盖原始错误。但回滚失败时
+/// **必须保留备份文件**——那是用户数据最后的副本，删掉等于把失败升级成数据丢失。
+fn restore_precompact(backup: &Path, path: &Path) {
+    match std::fs::copy(backup, path) {
+        Ok(_) => {
+            let _ = std::fs::remove_file(backup);
+        }
+        Err(_) => {
+            // 备份保留在磁盘上（文件名含 unix_ms，可由外壳层日志指引用户取回）。
         }
     }
 }

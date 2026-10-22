@@ -9,6 +9,7 @@
   import ImportWizard from './ImportWizard.svelte';
   import LegalDialog from './LegalDialog.svelte';
   import Modal from './common/Modal.svelte';
+  import Spinner from './common/Spinner.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
   import { toAppError } from '../lib/errors';
   import { LOCALES, type Locale } from '../lib/i18n/index';
@@ -20,7 +21,7 @@
   import { ui } from '../lib/stores/ui.svelte';
   import { runVaultExport } from '../lib/vault-export';
   import { isSafeUrl } from '../lib/url-safety';
-  import type { VaultFileInfoDto, VaultSettings } from '../types';
+  import type { CompactionStatsDto, VaultFileInfoDto, VaultSettings } from '../types';
 
   /** D-63：项目主页（「关于」分组打开外链，走与详情页相同的安全校验 + IPC 链路）。 */
   const HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS';
@@ -45,6 +46,26 @@
   let appVersion = $state<string | null>(null);
   let legalOpen = $state(false);
   let legalKind = $state<'disclaimer' | 'terms'>('disclaimer');
+  // D-76：保险库体积构成（只读统计）。`null` + `compactionStatsFailed` 分别表示
+  // 「还没返回」与「读取失败」—— 两者在界面上必须长得不一样（D-73 的教训）。
+  let compactionStats = $state<CompactionStatsDto | null>(null);
+  let compactionStatsFailed = $state(false);
+  /** 压缩自身进行中（重写 200MB 级容器可能几秒，必须有忙碌态）。 */
+  let compacting = $state(false);
+  /** 二次确认块是否打开（`ui.confirm()` 只支持「标题 + 一句正文」，装不下四个数字 + 三条提示）。 */
+  let compactConfirmOpen = $state(false);
+
+  /** 可回收字节数；stats 未取到按 0 处理（按钮本就不该出现）。 */
+  const reclaimableBytes = $derived(compactionStats?.reclaimable_bytes ?? 0);
+  /** 已删/无引用附件密文字节数（回答主人那句「是不是被删除的附件都还保存在库里」）。 */
+  const deadAttachmentBytes = $derived(compactionStats?.attachment_dead_bytes ?? 0);
+  /** 只有真的能回收才显示按钮：点了没反应的按钮就是假功能。 */
+  const canCompact = $derived(reclaimableBytes > 0);
+  /**
+   * 同步进行中：后端 `compact_vault` 在 `state.session` 锁内执行，与同步**结构互斥**，
+   * 不禁用的话用户会以为卡死。用现成的 `sync.syncingDeviceId` 判定（D-66 已把忙碌态按设备隔离）。
+   */
+  const syncBusy = $derived(sync.syncingDeviceId !== null);
 
   /** 打开法律条款弹窗（免责声明 / 用户协议）。 */
   function openLegal(docKind: 'disclaimer' | 'terms'): void {
@@ -68,6 +89,47 @@
   // 初始化读 IPC（get_auto_lock），换档即写（set_auto_lock）；失败回滚 select 显示值。
   let autoLockMinutes = $state<number>(AUTO_LOCK_OPTIONS[1] ?? 5);
 
+  /**
+   * 加载四块旁路数据并写回组件状态（D-73 失败隔离 / D-76 第四块）。
+   *
+   * 抽成函数而不是内联在 `$effect` 里，是因为**压缩成功后必须重新拉取**
+   * `fileInfo` 与 `compactionStats` —— 只弹 toast 不刷新，卡片上还是 24.3 MB，
+   * 用户会以为没生效（那正是这次缺陷的翻版）。
+   *
+   * @param force 压缩进行中也要读。只有 `runCompaction` 成功路径传 `true`：
+   *   那一刻 `compact_vault` 已经返回、`state.session` 锁已释放，读到的就是压缩后的真值。
+   *   **不要**用「先把 `compacting` 复位再去 reload」代替它 —— `$effect` 的依赖里
+   *   有 `compacting`，复位会触发 effect 重跑，于是成功路径变成「显式 reload + effect reload」
+   *   两次并发的四块读取；而用参数区分两个意图，语义清晰且显式那次一定真的跑。
+   */
+  async function reloadSideData(force = false): Promise<void> {
+    // D-76：压缩进行中**不许**重新拉取旁路数据。后端 `compact_vault` 在 `state.session`
+    // 锁内执行，此刻再调 `vault_compaction_stats` 不会失败、也不会超时——它会**一直阻塞**
+    // 到压缩结束。D-73 的「逐块失败隔离」在这里救不了我们：那不是失败，是挂住。
+    // 真实触发路径：压缩正在跑 → 用户离开设置页再回来 → `$effect` 重跑本函数。
+    // `!force` 必须写在前面：强制调用不能被自己的守卫拦掉。
+    if (!force && compacting) {
+      return;
+    }
+    const side = await loadSettingsPageSide(
+      {
+        loadVaultFileInfo: (): Promise<VaultFileInfoDto> => api.system.vaultFileInfo(),
+        loadAutoLock: (): Promise<number> => api.vault.getAutoLock(),
+        loadVersion: (): Promise<string> => getVersion(),
+        loadCompactionStats: (): Promise<CompactionStatsDto> => api.system.vaultCompactionStats(),
+      },
+      AUTO_LOCK_OPTIONS[1] ?? 5,
+    );
+    fileInfo = side.fileInfo;
+    fileInfoFailed = side.fileInfoFailed;
+    autoLockFailed = side.autoLockFailed;
+    // 档位读失败时模块已回落成 fallback；这里再兜一次 null，保证 select 永远有选中项。
+    autoLockMinutes = side.autoLockMinutes ?? (AUTO_LOCK_OPTIONS[1] ?? 5);
+    appVersion = side.version;
+    compactionStats = side.compactionStats;
+    compactionStatsFailed = side.compactionStatsFailed;
+  }
+
   $effect((): void => {
     // D-73：`settings.value` 是 `$state` 的**深层响应式 Proxy**，而结构化克隆算法
     // 遇到 Proxy 必抛 `DataCloneError`。这行曾是 effect 的第一行，一抛 →
@@ -77,23 +139,9 @@
     // ⚠️ 不要改成浅拷贝 `{ ...settings.value }`：`generator` / `health` 两层仍是代理，
     // 下面 `bind:value` 改草稿会**直接写穿到 store**，变成「取消不掉」的隐藏 bug。
     draft = $state.snapshot(settings.value);
-    // D-73：三块旁路数据走 `loadSettingsPageSide`，**各自隔离失败**；
-    // 任一失败只影响它自己那块的显示，不再带塌其余两项。
-    void loadSettingsPageSide(
-      {
-        loadVaultFileInfo: (): Promise<VaultFileInfoDto> => api.system.vaultFileInfo(),
-        loadAutoLock: (): Promise<number> => api.vault.getAutoLock(),
-        loadVersion: (): Promise<string> => getVersion(),
-      },
-      AUTO_LOCK_OPTIONS[1] ?? 5,
-    ).then((side): void => {
-      fileInfo = side.fileInfo;
-      fileInfoFailed = side.fileInfoFailed;
-      autoLockFailed = side.autoLockFailed;
-      // 档位读失败时模块已回落成 fallback；这里再兜一次 null，保证 select 永远有选中项。
-      autoLockMinutes = side.autoLockMinutes ?? (AUTO_LOCK_OPTIONS[1] ?? 5);
-      appVersion = side.version;
-    });
+    // D-73 / D-76：四块旁路数据走 `loadSettingsPageSide`，**各自隔离失败**；
+    // 任一失败只影响它自己那块的显示，不再带塌其余三项。
+    void reloadSideData();
   });
 
   /** D-61：换档 → set_auto_lock → success toast；失败 error toast 并回滚显示值。 */
@@ -150,6 +198,51 @@
     });
     if (result.cleared) {
       exportPassword = ''; // 导出成功后清空，避免明文主密码残留在组件状态里
+    }
+  }
+
+  /**
+   * D-76：执行压缩。
+   *
+   * 三条纪律（对应 §6.11.4）：
+   * 1. 成功后**必须**重新拉取 `fileInfo` 与 `compactionStats` —— 只弹 toast 不刷新，
+   *    卡片上还是 24.3 MB，用户会以为没生效（这正是本次缺陷的翻版）；
+   * 2. 失败时**不改动任何显示数字**（宁可显示旧值，不许显示「已压缩」），且不自动重试；
+   * 3. 防重入：这是重操作（重写整个容器 + `spawn_blocking`），双击不许跑两遍。
+   */
+  async function runCompaction(): Promise<void> {
+    if (compacting) {
+      return;
+    }
+    compacting = true;
+    compactConfirmOpen = false;
+    try {
+      const result = await api.system.compactVault();
+      ui.toast('success', 'settings.compact_done', {
+        size: formatBytes(result.reclaimed_bytes),
+      });
+      // 显式刷新必须带 `force`：此刻 `compacting` 仍是 true（复位在 `finally`），
+      // 不带 `force` 的话这一行会被守卫直接返回 —— 变成一条**永不执行**的语句，
+      // 于是「压缩成功后重新拉取」（§6.11.4 判据 4）失效，卡片还显示旧大小。
+      await reloadSideData(true);
+    } catch (err) {
+      // 压缩是大动作：失败时我们并不知道库处于什么状态，一句 `err.internal`（「内部错误」）
+      // 会让用户担心库被写坏。故**通用内部错误**换成「保险库原样保留，数据没有变化」；
+      // 后端给了**具体原因**（如未解锁）时仍照原样透出——那句更可操作，且同样不改变
+      // 「数据没变」这个事实（失败路径不改任何显示数字，见 §6.11.7 判据 5）。
+      const appErr = toAppError(err);
+      ui.toast(
+        'error',
+        appErr.messageKey === 'err.internal' ? 'settings.compact_failed' : appErr.messageKey,
+      );
+    } finally {
+      // 唯一的复位点，成功、失败、reload 抛错三条路径都经过它（别删）。
+      // 它会让 `compacting` 变一次值，而该信号是 `$effect` 的依赖 → effect 会再跑一次
+      // `reloadSideData()`（此刻 force=false、compacting=false，守卫放行）。
+      // 也就是说成功路径一共**两组**四块读取：上面那次显式 force + 这次 effect 触发的。
+      // 第二组发生在压缩结束、`state.session` 锁已释放之后，读到的同样是真值，不会阻塞也不会写错；
+      // 想省掉它得引 `untrack`，属于过度设计（statistics 只遍历内存 slots 元数据，不解密 payload）。
+      compacting = false;
     }
   }
 
@@ -345,6 +438,50 @@
     {:else}
       <p class="pms-meta">{ui.t('common.loading')}</p>
     {/if}
+
+    <!-- D-76：体积构成 + 回收入口。主人的原话是「把 2.4M 的附件删除后，设置里还是 24M，
+         是不是被删除的附件都还保存在库里？」——所以这里首先**回答**那 24MB 是怎么来的，
+         再提供动作。「已删附件占」排在按钮之前，不做小字脚注。
+         两行都走 `.set-row.is-info`：它们是纯信息行，窄屏必须避开 `.set-row` 的堆叠规则（§6.10）。 -->
+    <!-- 体积构成读不到时**不复用** `settings.vault_file_failed`：那句话的主语是「保险库文件大小」，
+         安到这里会把「路径/大小读不到」的结论错贴到「体积构成读不到」上（失败归因错位）。
+         也不能留白、更不能说「没有可回收的空间」——后者是结论，而我们此刻并不知道。 -->
+    {#if compactionStatsFailed}
+      <p class="pms-hint">{ui.t('settings.compact_stats_failed')}</p>
+    {:else if compactionStats}
+      {#if deadAttachmentBytes > 0}
+        <div class="set-row is-info">
+          <span class="pms-meta">
+            {ui.t('settings.compact_dead_attachments', { size: formatBytes(deadAttachmentBytes) })}
+          </span>
+        </div>
+      {/if}
+      {#if canCompact}
+        <div class="set-row is-info">
+          <span class="pms-meta">
+            {ui.t('settings.compact_reclaimable', { size: formatBytes(reclaimableBytes) })}
+          </span>
+        </div>
+        <!-- `reclaimable_bytes === 0` 时**不渲染按钮**（不是 disabled）：点了没反应的按钮
+             就是假功能，而「没有可回收的空间」才是真结论（见下面的 {:else} 分支）。 -->
+        <button
+          class="pms-btn is-ghost"
+          type="button"
+          disabled={compacting || syncBusy}
+          onclick={() => (compactConfirmOpen = true)}
+        >
+          {#if compacting}<Spinner size={15} />{ui.t('settings.compacting')}{:else}<Icon
+              name="file"
+              size={15}
+            />{ui.t('settings.compact')}{/if}
+        </button>
+        {#if syncBusy}
+          <p class="pms-hint">{ui.t('settings.compact_wait_sync')}</p>
+        {/if}
+      {:else}
+        <p class="pms-hint">{ui.t('settings.compact_none')}</p>
+      {/if}
+    {/if}
   </div>
 
   <!-- D-63：「关于」分组（需求：软件里必须有版本与作者等信息）。 -->
@@ -383,6 +520,48 @@
 
 <Modal open={importOpen} titleKey="import.title" onclose={() => (importOpen = false)}>
   <ImportWizard ondone={() => (importOpen = false)} />
+</Modal>
+
+<!-- D-76：压缩二次确认。用 `ui.confirm()` 不可行 —— 它只支持「标题 + 一句正文」，
+     装不下 §6.11.3 要求的四个数字 + 三条提示（三条提示缺一不可，各有一个误解要挡）。
+     这里的行用局部 `.compact-fact` 而不是 `.set-row`：确认块在 560px 弹窗内，
+     不应受设置页窄屏堆叠规则（§6.10）影响。 -->
+<Modal
+  open={compactConfirmOpen}
+  titleKey="settings.compact_confirm_title"
+  onclose={() => (compactConfirmOpen = false)}
+>
+  <div class="compact-facts">
+    <div class="compact-fact">
+      <span class="set-label">{ui.t('settings.compact_label_before')}</span>
+      <span class="pms-meta compact-num">{fileInfo ? formatBytes(fileInfo.size_bytes) : '—'}</span>
+    </div>
+    <div class="compact-fact">
+      <span class="set-label">{ui.t('settings.compact_label_after')}</span>
+      <span class="pms-meta compact-num">{formatBytes(compactionStats?.after_bytes ?? 0)}</span>
+    </div>
+    <div class="compact-fact">
+      <span class="set-label">{ui.t('settings.compact_label_reclaim')}</span>
+      <span class="pms-meta compact-num">{formatBytes(reclaimableBytes)}</span>
+    </div>
+    <div class="compact-fact">
+      <span class="set-label">{ui.t('settings.compact_label_dead')}</span>
+      <span class="pms-meta compact-num">{formatBytes(deadAttachmentBytes)}</span>
+    </div>
+  </div>
+  <ul class="compact-hints">
+    <li class="pms-hint">{ui.t('settings.compact_hint_no_password')}</li>
+    <li class="pms-hint">{ui.t('settings.compact_hint_trash')}</li>
+    <li class="pms-hint">{ui.t('settings.compact_hint_disk')}</li>
+  </ul>
+  {#snippet footer()}
+    <button class="pms-btn is-ghost" type="button" onclick={() => (compactConfirmOpen = false)}>
+      {ui.t('common.cancel')}
+    </button>
+    <button class="pms-btn is-primary" type="button" onclick={() => void runCompaction()}>
+      {ui.t('settings.compact_start')}
+    </button>
+  {/snippet}
 </Modal>
 
 <!-- D-63：法律条款弹窗（「关于」分组打开）。 -->
@@ -457,6 +636,32 @@
   }
   .set-card .pms-alert {
     margin: 0 0 0.75rem;
+  }
+  /* D-76：压缩确认块的「标签 / 数值」两列 + 三条提示。只做布局 ——
+     字号与颜色一律继承 `.set-label` / `.pms-meta` / `.pms-hint`（§5.7.4 的同一纪律：
+     组件样式里不许自写字体与配色）。 */
+  .compact-fact {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.15rem 0;
+  }
+  /* 数字用等宽，几行数值右缘对齐、便于上下对比。 */
+  .compact-num {
+    flex: 0 0 auto;
+    font-family: var(--pms-mono);
+  }
+  .compact-hints {
+    list-style: disc;
+    margin: 0.8rem 0 0;
+    padding-left: 1.1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .compact-hints .pms-hint {
+    margin: 0;
   }
   /* 移动端：每行由「label 左 / 控件右」改为上下堆叠，控件占满整宽，避免 160px 固定宽控件 + 长文案溢出。
      ⚠️ 下面 `.set-row` 的堆叠**只适用于含控件的行**（`.set-ctl` / 输入 / 分段控件）。

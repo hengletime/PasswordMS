@@ -137,6 +137,16 @@ describe('ipc command contract', () => {
     expect(invoked).toContain('save_import_template');
     expect(registered).toContain('save_import_template');
   });
+
+  it('keeps vault_compaction_stats / compact_vault wired on both sides (D-76 体积构成与压缩回归锚点)', () => {
+    // D-76：这两条命令由 Rust 侧先落（`system_cmd.rs`），前端接线晚一步 —— 那一步的窗口期里
+    // 「命令已注册但零调用」正是 D-59 的形态（后端就绪、前端不可达）。两侧都断言，
+    // 任一方向漏掉都会红：只注册不调用 = 功能不可达；只调用不注册 = 运行期 `command not found`。
+    expect(invoked).toContain('vault_compaction_stats');
+    expect(registered).toContain('vault_compaction_stats');
+    expect(invoked).toContain('compact_vault');
+    expect(registered).toContain('compact_vault');
+  });
 });
 
 // D-67 / D-69：指纹与会话码字段的**镜像契约**。
@@ -201,9 +211,32 @@ describe('指纹 / 会话码字段前后端镜像契约（D-67 / D-69）', () =>
   });
 });
 
+// D-76：体积构成 / 压缩两个 DTO 的镜像契约。
+//
+// 与 D-67 / D-69 那组同一个理由：字段名拼错时 TypeScript 读到 `undefined` → 界面显示
+// 「0 B」或「可回收 0 B」，**看起来正常、其实是错的**（比崩溃更难查）。
+// `CompactionStatsDto` 有 11 个字段、其中 4 个是「相近但不相同」的字节数
+// （`tombstone_bytes` / `kept_tombstone_bytes` / `attachment_dead_bytes` / `attachment_live_bytes`），
+// 正是最容易只改一侧、且两侧仍各自能编译的形状 → 用**字段集合完全相等**锁死。
+describe('体积构成 / 压缩 DTO 的前后端镜像契约（D-76）', () => {
+  it('CompactionStatsDto 两侧字段集合完全一致（11 个）', () => {
+    const rust = structFields(dtoRs, 'CompactionStatsDto');
+    const ts = interfaceFields(typesTs, 'CompactionStatsDto');
+    expect(rust.length).toBe(11);
+    expect(ts).toEqual(rust);
+  });
+
+  it('CompactionResultDto 两侧字段集合完全一致（4 个）', () => {
+    const rust = structFields(dtoRs, 'CompactionResultDto');
+    const ts = interfaceFields(typesTs, 'CompactionResultDto');
+    expect(rust.length).toBe(4);
+    expect(ts).toEqual(rust);
+  });
+});
+
 // docs §14：`rename_all = "snake_case"` 必须 **100% 覆盖** —— 这是一条不变量，不是约定。
 //
-// 为什么需要机器守门：本仓 `tauri::command` 全部带该属性（当前 51/51），所以任何人 30 秒
+// 为什么需要机器守门：本仓 `tauri::command` 全部带该属性（当前 53/53），所以任何人 30 秒
 // 就能判定「新命令该怎么写」，不必逐条读。一旦有人漏写一个，这条判断就退化为「必须逐条核」
 // —— **不变量被打破的成本不是那一处，而是所有人的每次判断**。
 //
@@ -218,7 +251,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（51/51）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（53/53）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
@@ -226,7 +259,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // commands/ 子目录一个都扫不到，total 会是 0，而 0 === 0 会静默通过。
     expect(total).toBeGreaterThan(40);
     // 死数字是有意的：新增命令时必须来改这两个数，等于强制作者看一眼这条不变量。
-    expect(total).toBe(51);
-    expect(withAttr).toBe(51);
+    expect(total).toBe(53);
+    expect(withAttr).toBe(53);
   });
 });

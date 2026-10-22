@@ -259,3 +259,74 @@ pub struct VaultFileInfoDto {
     pub path: String,
     pub size_bytes: u64,
 }
+
+/// 保险库体积构成 DTO（D-76，只读统计）。
+///
+/// 全部字段是字节数/帧数，**不含任何路径、ID、明文或密文**。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionStatsDto {
+    /// 容器文件当前字节数。
+    pub file_bytes: u64,
+    /// 头部区字节数（压缩后不变）。
+    pub header_bytes: u64,
+    /// 实际有效数据字节数（压缩后保留的部分）。
+    pub live_bytes: u64,
+    /// 墓碑帧总字节数（死数据总量，含必须保留的少量墓碑）。
+    pub tombstone_bytes: u64,
+    /// 其中必须保留的墓碑字节数。
+    pub kept_tombstone_bytes: u64,
+    /// 压缩可回收字节数。
+    pub reclaimable_bytes: u64,
+    /// 压缩后预计文件字节数。
+    pub after_bytes: u64,
+    /// 已删/无引用附件密文字节数（回答「删掉的附件还在不在」）。
+    pub attachment_dead_bytes: u64,
+    /// 活跃附件密文字节数。
+    pub attachment_live_bytes: u64,
+    /// 保留帧数。
+    pub live_frames: u32,
+    /// 将被丢弃的帧数。
+    pub dead_frames: u32,
+}
+
+impl From<passwordms_core::store::repository::CompactionStats> for CompactionStatsDto {
+    fn from(s: passwordms_core::store::repository::CompactionStats) -> Self {
+        Self {
+            file_bytes: s.file_bytes,
+            header_bytes: s.header_bytes,
+            live_bytes: s.live_bytes,
+            tombstone_bytes: s.tombstone_bytes,
+            kept_tombstone_bytes: s.kept_tombstone_bytes,
+            reclaimable_bytes: s.reclaimable_bytes,
+            after_bytes: s.after_bytes,
+            attachment_dead_bytes: s.attachment_dead_bytes,
+            attachment_live_bytes: s.attachment_live_bytes,
+            live_frames: s.live_frames,
+            dead_frames: s.dead_frames,
+        }
+    }
+}
+
+/// 压缩结果 DTO（D-76）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactionResultDto {
+    /// 压缩前文件字节数。
+    pub before_bytes: u64,
+    /// 压缩后文件字节数。
+    pub after_bytes: u64,
+    /// 实际回收字节数（`before_bytes - after_bytes`，恒 ≥ 0）。
+    pub reclaimed_bytes: u64,
+    /// 丢弃的帧数。
+    pub dropped_frames: u32,
+}
+
+impl From<passwordms_core::store::repository::CompactionOutcome> for CompactionResultDto {
+    fn from(o: passwordms_core::store::repository::CompactionOutcome) -> Self {
+        Self {
+            before_bytes: o.before_bytes,
+            after_bytes: o.after_bytes,
+            reclaimed_bytes: o.reclaimed_bytes,
+            dropped_frames: o.dropped_frames,
+        }
+    }
+}

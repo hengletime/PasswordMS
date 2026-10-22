@@ -528,7 +528,7 @@ pub enum BlobMessage {
 | 方法 | 职责 |
 |------|------|
 | `has_blob(blob_ref) -> bool` | `blobs` 表查询（补齐判定的依据） |
-| `attachment_blob_refs() -> Vec<String>` | 收集全部 attachment 条目的 `blob_ref` |
+| `attachment_blob_refs() -> Vec<String>` | 收集**全部可能恢复该 blob 的引用**：活跃条目 ∪ 回收站快照 ∪ 冲突快照（两侧），见 §3.14.4 与 D-79 修订注记 |
 | `blob_frame(blob_ref) -> Option<&Frame>` | 暴露完整 blob 帧（含 `wrapped_key`/`nonce`/`plaintext_len`/`ct`），供发送端零解密切片 |
 | `write_blob_frame(frame: Frame) -> BlobWriteOutcome` | 接收端入库：帧已存在且字节一致 → `Skipped`；存在但不同 → 保留本地 `KeptLocal`；不存在 → `Appended`（blob 帧内容写后不可变，不做 LWW 覆盖） |
 | `remove_item_direct`（变更） | 删除 attachment 条目时**连带 `tombstone_blob`**（先查 kind 再墓碑） |
@@ -719,7 +719,7 @@ pub struct Item {
 | 项 | 影响与裁定 |
 |----|-----------|
 | 元数据传输 | `attachments` 在父条目明文 payload 内 → 随父 `ChangeRecord` 加密过线：**自动获得**端到端加密（A-01）、rev 版本化、LWW、冲突快照、D-56 判重/墓碑——**wire 结构零变更** |
-| blob 拉取清单 | 对端 merge 应用父条目后，`attachment_blob_refs()` 改为收集**全部活跃条目 + 回收站快照**的 `attachments[].attachment_id`；缺失者即拉取清单（父帧数组即清单，无需新报文） |
+| blob 拉取清单 | 对端 merge 应用父条目后，`attachment_blob_refs()` 收集**全部活跃条目 + 回收站快照 + 冲突快照（两侧）**的 `attachments[].attachment_id`（D-79）；缺失者即拉取清单（父帧数组即清单，无需新报文） |
 | blob 阶段机制 | `BlobPull/Meta/Data/End`、`SYNC_BLOB_CHUNK_BYTES`、spool 按 `attachment_id`（原 blob_ref）目录隔离、manifest 续传、`blob_support` 协商——**全部不变**；仅 spool 键由「父 item_id」变为「attachment_id」（多附件互不干扰） |
 | D-56 级联 | 父墓碑到达 → 对端软删父（trash 快照含附件元数据）→ blob 保留；对端 purge 父 → 孤儿 GC tombstone blob。**无新增墓碑类型**，判重/复活抑制/冲突箱逻辑全部保持在父条目层 |
 | 冲突仲裁 | 「两者都留」：新条目复制 `attachments` 元数据、`attachment_id` 原样 → 两父条目**共享**同一 blob 帧（内容写后不可变，双份导出均正确）；删除其一不清 blob（GC 兜底） |
@@ -741,10 +741,29 @@ pub struct Item {
 
 取代 D-53/D-56 的 1:1「条目删 → blob 墓碑」规则：
 
-- **引用集合**：遍历全部活跃条目 `attachments[].attachment_id` ∪ 全部回收站快照的 `attachments[].attachment_id`（还原必须可用）；
+- **引用集合 = 活跃条目 ∪ 回收站快照 ∪ 冲突快照（local_snapshot + remote_snapshot 两侧）**：
+  - 活跃条目 `attachments[].attachment_id`；
+  - 回收站快照的 `attachments[].attachment_id`（还原必须可用）；
+  - **冲突快照的 `local_snapshot` 与 `remote_snapshot` 各自的 `attachments[].attachment_id`**（D-79，见下方修订注记）；
 - **GC 触发时机**：`purge_item` / `empty_trash` / `purge_expired_trash` / 解锁时（幂等扫描）；不在引用集合中的 blob 帧 → `tombstone_blob`；
 - **正确定性**：删除单个附件（父条目仍存活）→ 该 blob 立即脱离引用集合 → 下一次 GC 时 tombstone（密文滞留待未来 compaction，§3.13.3 量化结论不变）；KeepBoth 共享引用 → 双方任一存在即保活 ✓；
 - 容量预检（`MAX_VAULT_BYTES`）语义不变（`file_size()` 已含全部滞留密文）。
+
+> **🔴 修订注记（D-79 冲突快照必须计入引用集合，v1.2.9）**：
+> 上述引用集合**从 D-60 落地起就漏了 `conflicts`** —— `ConflictEntry` 持有 `local_snapshot: Item` 与
+> `remote_snapshot: Item`，两者都带 `attachments`，但 `attachment_blob_refs()` 只遍历 `items` 与 `trash`。
+> **一个函数四张嘴，四处一起错**：`gc_orphan_blobs()`（tombstone 掉）、`plan_compaction()`（D-76 压缩重写时丢弃，
+> 最彻底——帧从文件里消失）、`cleanup_orphan_spools()`（spool 被删）、`send_blob` 的 `want` 清单（对端缺该 blob 时不去拉）。
+> **触发路径**：同一 item 双端并发修改，一版删了附件 A、另一版仍含 A → 冲突快照引用 A、活条目不再引用 A
+> → 用户**尚未仲裁**时跑 GC/压缩 → 选「采用含 A 的那版」⇒ `BlobMissing`，附件永久丢失。
+> **修法**：`attachment_blob_refs()` 追加 `self.conflicts` 遍历，两个快照都收；**`resolved` 这一版不过滤、一律计入**
+> （代价不对称：多保活只浪费空间，少保活是永久丢数据）。
+> **不变量**：引用集合必须覆盖**所有可能恢复该 blob 的快照来源**；新增任何「暂存一份 `Item` 等用户决定」的结构，
+> 必须同步加进这里。
+> **已知遗留**：「已仲裁冲突永不删除」与本次不过滤 `resolved` **耦合** —— 一条已仲裁冲突会永久保活它两端快照里的
+> 全部附件（上限 2×16 个 / 单附件 20MB）。释放策略需先确认「已仲裁快照是否还允许被读取/回滚」，作为独立议题排期。
+> 守门测试：`tests/compaction.rs` 的 `compact_keeps_blob_referenced_by_conflict_snapshot` /
+> `gc_orphan_blobs_keeps_blob_referenced_by_conflict_snapshot` / **`compact_drops_blob_referenced_by_nobody`（防过修）**。
 
 #### 3.14.5 IPC 契约变更（前后端）
 
@@ -1014,6 +1033,92 @@ B 删附件 → B 发起重同步 → A 侧 `attachments.len()==1`、剩的是�
 `err.network_unreachable` 原文写死「无法连接到**电脑**…请确认**手机与电脑**…」，电脑端触发时
 方向完全反了。改为「无法连接到对端设备…若刚刚在另一台设备上同步成功过，请再试一次」。
 `network_timeout` / `network_refused` / `network_broken` 复核为方向中性，未改。
+
+---
+
+### 3.16 配对的「成功态」与核对时机（增量设计 · D-75）
+
+> 客户真机实测：手机扫码成功后，手机端弹出「请核对电脑上的会话码」，**而电脑上的配对面板在
+> 这一瞬间已经关闭**。重新生成二维码又是一个新会话、新码 —— 永远差一步。
+> ⇒ D-69（两屏显示同一次会话的会话码，防中间人）**从未真正可用**。
+
+#### 3.16.1 根因：不是显示 bug，是「完成事件与核对时机互斥」
+
+协议层没有任何问题（两端算的是同一把 `host_eph` 公钥的哈希，见 §3.5 / D-69）。缺陷在**前端状态机**：
+
+```text
+后端 sync_cmd.rs（Host worker 的两种结局，同一个事件、不同载荷）
+  成功： *state.pairing = None;  emit("pairing://ended", "completed");  break;
+  失败： *state.pairing = None;  emit("pairing://ended", "aborted");    break;
+
+前端 sync.svelte.ts（旧实现，只有「结束」一个语义）
+  listen("pairing://ended", (ev) => {
+    sync.pairing = null;                 // ← 两种结局都清空
+    if (ev.payload === "aborted") sync.pairEnded = true;
+  });
+```
+
+会话码的唯一载体是 `PairingDto.session_code`，而它挂在 `sync.pairing` 上。于是：
+
+- 手机端要核对的提示，出现在 `join()` 成功**之后**（即 `completed` 事件之后）；
+- 电脑端能核对的码，在 `completed` 事件**到达的那一帧**就被删掉。
+
+**「会话结束」这个事件把「核对会话码」这个动作的前提一起删掉了** —— 功能写着，用不上。
+这类缺陷的特征是：每一段代码单独看都对，**错在两者的时间关系**。
+
+#### 3.16.2 修法：按载荷分流，成功时保留 `pairing`
+
+判定收敛进纯函数（`src/lib/pairing-state.ts::nextPairingState`），store 只负责套用：
+
+| 载荷 | `clearPairing` | `completed` | `ended` | 面板 |
+|---|---|---|---|---|
+| `"completed"` | **false** | true | false | 成功态（保留会话码待核对） |
+| `"aborted"` | true | false | true | 失败态（提示重新生成二维码） |
+| 空串 / `null` / 未知 | true | false | true | 同上（**保守**，不留假成功态） |
+
+前端状态机（四态）：
+
+```text
+         startPairing()                 completed（保留 pairing）
+  [空] ───────────────▶ [已生成] ───────────────────────▶ [配对成功·待核对]
+   ▲                     │  aborted / 未知                 │
+   │                     ▼                                │ endPairing()（「完成」按钮）
+   └──────────────── [失败/结束] ◀────────────────────────┘
+```
+
+#### 3.16.3 为什么不把会话码「另存一份」
+
+最省事的写法是事后 `sync.lastPairSessionCode = sync.pairing?.session_code` 再清屏。**不采用**，
+理由是 D-31 的教训：**同一件事只能有一个状态源**。多存一份就有两份可能不同步的真值
+（例如重开一轮时清了 `pairing` 忘了清副本 → 旧码挂在新二维码旁边，比不显示更糟）。
+
+保留 `pairing` 本身则天然满足：会话码与「这一轮会话」同生命周期，清它一次就干净。
+`pairCompleted` 只是**这一个对象的状态标注**，不是第二份数据。
+
+#### 3.16.4 不变量（改动时守住）
+
+1. `pairCompleted === true` ⇒ `pairing !== null`（成功态必须还有码可看）。
+2. `completed` 与 `ended` **不可能同时为真**（两种结局互斥）。
+3. 退出成功态的四条路（点「完成」/ 重新生成 / 取消 / 锁定）都必须把 `pairCompleted` 复位为 `false`。
+4. `endPairing()` **不发 IPC**：后端在发 `completed` 之前已 `*state.pairing = None` 并 `break`，
+   会话本就不存在；从前端再调 `cancel_pairing` 只会制造一次无意义的错误路径。
+5. 成功态**不渲染二维码**（已扫过；留着会让人以为还能再扫一次）。
+6. 未知载荷按失败处理 —— 与「读失败不得伪装成正常值」（D-27 / D-73 同族）同一条纪律。
+
+#### 3.16.5 测试锚点
+
+`src/lib/pairing-state.test.ts`（16 例，三层）：
+
+| 层 | 断言 |
+|---|---|
+| 纯函数 | 三种载荷的完整返回值；未知载荷逐个（`''` / `null` / `undefined` / `'COMPLETED'` / `'ok'` / `0` / `{}`）必须落失败；三字段互斥 |
+| store 结构 | `listen(PAIRING_ENDED_EVENT, …)` 的回调里 `nextPairingState(` 的下标**早于**任何 `sync.pairing = null`，且清空必须在 `if (next.clearPairing)` 内；不得退回 `=== 'aborted'` 字面量比较；`pairCompleted` 有 ≥3 处复位 |
+| 组件结构 | `PairShow.svelte` 的成功态分支存在、判定含 `pairing !== null`、**位于** `qr_svg` 分支之前、块内含 `session_code` / `pair_completed_hint` / `endPairing()` / `pair_done`、块内**不含** `qr_svg` 与 `sync-qr` |
+
+> 组件层用 `?raw` 扫源码而不是渲染快照：本项目没有 DOM 测试环境，且要守的是
+> 「分支存在且顺序对」，不是「像素长什么样」。
+> ⚠️ 块内负向断言（不含 `qr_svg`）必须配一条 `block.length > 200` 的前置断言 ——
+> 否则整块被删时切片为空，负向断言会恒绿（假绿三形态之二）。
 
 ---
 

@@ -36,7 +36,25 @@
 <div class="pms-card sync-card">
   <h3>{ui.t('sync.tab_pair')}</h3>
 
-  {#if sync.pairing === null}
+  <!-- D-75：成功态**优先**判定 —— 此时 `pairing` 仍在（后端发 completed 时前端刻意不清），
+       所以不能落到下面那个「已生成」分支，否则会继续显示二维码、把核对码挤在下面。
+       成功态下刻意**不渲染二维码**：码已经扫过了，留着会让人以为还能再扫一次。 -->
+  {#if sync.pairCompleted && sync.pairing !== null}
+    <p class="pms-meta" role="status"><strong>{ui.t('sync.pair_completed')}</strong></p>
+    <p class="pms-hint">{ui.t('sync.pair_completed_hint')}</p>
+
+    <!-- 会话码：与手机屏同一值（`sha256(本次临时公钥)` 前 8 字节），全靠用户逐字核对。 -->
+    {#if hasSessionCode(sync.pairing.session_code)}
+      <div class="sync-fp">
+        <span class="pms-label">{ui.t('sync.session_code')}</span>
+        <span class="sync-mono sync-fp-code">{sync.pairing.session_code}</span>
+      </div>
+    {/if}
+
+    <button class="pms-btn is-primary" type="button" onclick={() => sync.endPairing()}>
+      {ui.t('sync.pair_done')}
+    </button>
+  {:else if sync.pairing === null}
     {#if sync.pairEnded}
       <p class="pms-hint pair-ended" role="alert">{ui.t('sync.pair_ended')}</p>
     {/if}

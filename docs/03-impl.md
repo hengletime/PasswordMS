@@ -683,8 +683,9 @@ v1.2.5 出包前的权威门禁抓到一条真红：`add_attachment_bytes::bytes
 
 ### 14.1 事实与语义
 
-- 本仓 `src-tauri/src` 里 `tauri::command` 共 **51 处，其中 51 处带 `rename_all = "snake_case"`，0 例外**。
-  （D-72 落地前是 50/50；新增 `save_import_template` 后同步变为 51/51。**数会涨，比例必须恒为 1:1**。）
+- 本仓 `src-tauri/src` 里 `tauri::command` 共 **53 处，其中 53 处带 `rename_all = "snake_case"`，0 例外**。
+  （D-72 落地前是 50/50；`save_import_template` 后 51/51；D-76 新增 `vault_compaction_stats` / `compact_vault` 后 53/53。
+  **数会涨，比例必须恒为 1:1**。）
 - 该属性的语义是「**JS 传的 wire 键 = Rust 形参名**」。因此 wire 键恒为 **snake_case**：
   ```ts
   // 变量名可以 camelCase，wire 键必须 snake_case
@@ -710,6 +711,6 @@ v1.2.5 出包前的权威门禁抓到一条真红：`add_attachment_bytes::bytes
 ### 14.4 与命令集合锚点的关系
 
 `src/lib/ipc-contract.test.ts` 对两侧命令集合做**精确相等**断言。前端先落、后端未注册时，
-该断言会以 `invoked 51 / registered 50` 的形式变红——**这是正确的红，不是需要被宽容的红**。
+该断言会以 `invoked 53 / registered 52` 的形式变红——**这是正确的红，不是需要被宽容的红**。
 处置只有一个：等后端注册进 `generate_handler!` 后自愈。**禁止**加白名单、跳过、或改软断言
 （那等于把「前端调了一个后端不存在的命令」这个最危险的状态放行）。

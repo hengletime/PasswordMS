@@ -26,6 +26,8 @@ pub fn run() {
             commands::system_cmd::clear_secret_if_own,
             commands::system_cmd::open_url,
             commands::system_cmd::vault_file_info,
+            commands::system_cmd::vault_compaction_stats,
+            commands::system_cmd::compact_vault,
             // vault
             commands::vault_cmd::create_vault,
             commands::vault_cmd::unlock,

@@ -8,12 +8,27 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { loadSettingsPageSide, type SettingsPageSideDeps } from './settings-page';
-import type { VaultFileInfoDto } from '../types';
+import type { CompactionStatsDto, VaultFileInfoDto } from '../types';
 
 /** 库文件信息的样例值（路径形如 Windows 真机返回）。 */
 const FILE_INFO: VaultFileInfoDto = {
   path: 'C:\\Users\\owner\\AppData\\Roaming\\PasswordMS\\passwordms.vault',
   size_bytes: 4096,
+};
+
+/** 体积构成样例（D-76；数值取自真实库，25 MB 里 24 MB 是已删附件）。 */
+const STATS: CompactionStatsDto = {
+  file_bytes: 25517492,
+  header_bytes: 4096,
+  live_bytes: 316952,
+  tombstone_bytes: 25192332,
+  kept_tombstone_bytes: 238,
+  reclaimable_bytes: 25160242,
+  after_bytes: 325398,
+  attachment_dead_bytes: 25168020,
+  attachment_live_bytes: 65536,
+  live_frames: 812,
+  dead_frames: 6,
 };
 
 /** 兜底档位：真实调用点传 `AUTO_LOCK_OPTIONS[1]`，当前即 5 分钟。 */
@@ -25,12 +40,13 @@ function makeDeps(overrides: Partial<SettingsPageSideDeps> = {}): SettingsPageSi
     loadVaultFileInfo: vi.fn(async (): Promise<VaultFileInfoDto> => FILE_INFO),
     loadAutoLock: vi.fn(async (): Promise<number> => 15),
     loadVersion: vi.fn(async (): Promise<string> => '1.2.6'),
+    loadCompactionStats: vi.fn(async (): Promise<CompactionStatsDto> => STATS),
     ...overrides,
   };
 }
 
 describe('loadSettingsPageSide —— D-73 设置页旁路数据失败隔离', () => {
-  it('三者全成功：三块都有值，两个 failed 标记均为 false', async () => {
+  it('四者全成功：四块都有值，四个 failed 标记均为 false', async () => {
     const side = await loadSettingsPageSide(makeDeps(), FALLBACK);
 
     expect(side.fileInfo).toEqual(FILE_INFO);
@@ -38,6 +54,49 @@ describe('loadSettingsPageSide —— D-73 设置页旁路数据失败隔离', (
     expect(side.autoLockMinutes).toBe(15);
     expect(side.autoLockFailed).toBe(false);
     expect(side.version).toBe('1.2.6');
+    expect(side.compactionStats).toEqual(STATS);
+    expect(side.compactionStatsFailed).toBe(false);
+  });
+
+  it('体积构成 reject：只有这一块失败，**大小 / 档位 / 版本号仍有值**（D-76 核心回归锚点）', async () => {
+    const side = await loadSettingsPageSide(
+      makeDeps({
+        loadCompactionStats: vi.fn(async (): Promise<CompactionStatsDto> => {
+          throw { code: 'ERR_IO', message_key: 'err.io' };
+        }),
+      }),
+      FALLBACK,
+    );
+
+    expect(side.compactionStats).toBeNull();
+    expect(side.compactionStatsFailed).toBe(true);
+    // ↓ D-73 的缺陷形状：一块炸了把其余全带塌。这四条就是「不许复发」的证据。
+    expect(side.fileInfo).toEqual(FILE_INFO);
+    expect(side.fileInfoFailed).toBe(false);
+    expect(side.autoLockMinutes).toBe(15);
+    expect(side.autoLockFailed).toBe(false);
+    expect(side.version).toBe('1.2.6');
+  });
+
+  it('体积构成关键字段非有限 / 负数：按失败处理（别把「不知道」渲染成「没有可回收的空间」）', async () => {
+    // `reclaimable_bytes = NaN` 时 `> 0` 为 false → 界面会写「没有可回收的空间」，
+    // 而事实是「我们不知道可回收多少」：失败被伪装成结论（D-27 / D-73 同族）。
+    for (const broken of [
+      { ...STATS, reclaimable_bytes: Number.NaN },
+      { ...STATS, reclaimable_bytes: -1 },
+      { ...STATS, attachment_dead_bytes: Number.POSITIVE_INFINITY },
+      { ...STATS, after_bytes: Number.NaN },
+    ]) {
+      const side = await loadSettingsPageSide(
+        makeDeps({ loadCompactionStats: vi.fn(async (): Promise<CompactionStatsDto> => broken) }),
+        FALLBACK,
+      );
+      expect(side.compactionStats, `${JSON.stringify(broken)} 不该被当成可用`).toBeNull();
+      expect(side.compactionStatsFailed).toBe(true);
+      // 其余三块照旧不受影响。
+      expect(side.fileInfo).toEqual(FILE_INFO);
+      expect(side.version).toBe('1.2.6');
+    }
   });
 
   it('库文件信息 reject：该项失败标记为 true，**版本与档位仍有值**（核心回归锚点）', async () => {

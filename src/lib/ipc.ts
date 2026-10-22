@@ -6,6 +6,8 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  CompactionResultDto,
+  CompactionStatsDto,
   ConflictChoice,
   ConflictDto,
   DeviceDto,
@@ -41,6 +43,13 @@ export const system = {
   clearSecretIfOwn: (): Promise<boolean> => invoke<boolean>('clear_secret_if_own'),
   openUrl: (url: string): Promise<void> => invoke<void>('open_url', { url }),
   vaultFileInfo: (): Promise<VaultFileInfoDto> => invoke<VaultFileInfoDto>('vault_file_info'),
+  // D-76：保险库体积构成（只读：不解密 blob、不写任何字节）+ 压缩（重写容器，只留活跃帧）。
+  // 两条命令都不带参数 —— 后端签名是 `vault_compaction_stats(state)` / `compact_vault(app)`；
+  // 若将来加参数，键名必须 snake_case（§14 不变量）。
+  vaultCompactionStats: (): Promise<CompactionStatsDto> =>
+    invoke<CompactionStatsDto>('vault_compaction_stats'),
+  compactVault: (): Promise<CompactionResultDto> =>
+    invoke<CompactionResultDto>('compact_vault'),
 };
 
 /** 保险库类。 */

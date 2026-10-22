@@ -16,6 +16,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::constants::FRAME_HEADER_LEN;
 use crate::constants::{CONTAINER_PREFIX_LEN, FORMAT_VERSION, HEADER_RESERVED_BYTES, VAULT_MAGIC};
@@ -190,6 +191,105 @@ impl Container {
         file.flush()?;
         Ok(())
     }
+
+    /// 以**给定的帧序列**整体重写容器文件（D-76 压缩专用）。
+    ///
+    /// 与 [`Container::create`] 的差别只有两处：目标文件**已存在**（覆盖写），以及
+    /// 头部沿用调用方给的 `header`（压缩要求逐字段保留 `kdf_salt` /
+    /// `wrapped_vault_key` / `verify_mac`，否则用户主密码会失效）。
+    ///
+    /// # 崩溃安全序列（顺序不可调换）
+    ///
+    /// 1. 写同目录临时文件 `*.vault.compact.tmp`（同卷才能原子 rename）；
+    /// 2. **`sync_all()`**（不是 `flush()` —— 对 `std::fs::File` 的 `flush` 是 no-op，
+    ///    数据仍在 OS page cache 里。本仓其它写路径历史上只 `flush`，但压缩"替换整库"
+    ///    的语义下，rename 落盘而内容没落盘会得到一个残缺的新库，所以这里必须真刷盘）；
+    /// 3. **rename 之前**完成全部校验：重新 [`Container::open`] 临时文件（magic /
+    ///    version / header_len / 头部 JSON）+ 逐帧解码 + 尺寸与帧数比对；
+    /// 4. `fs::rename` 原子替换（Windows 上映射 `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`，
+    ///    可直接覆盖已存在目标；杀软/索引器瞬时占用会失败，故带退避重试）。
+    ///
+    /// # 失败时的磁盘状态
+    ///
+    /// 1～3 步失败：**旧文件一字未动**，临时文件**刻意保留**（它就是完整的候选新库，
+    /// 可用作事后诊断或手工恢复；清理掉等于把唯一产物也毁了）。
+    /// 第 4 步失败：同上，旧文件仍在。
+    ///
+    /// 因此本方法要么留下"新库 + 已消费的 tmp"，要么留下"旧库 + 待诊断的 tmp"，
+    /// **不存在"两个都残缺"的中间态**。
+    pub fn rewrite_with_frames(&mut self, header: Vault, frames: &[Frame]) -> CoreResult<()> {
+        if self.header_capacity > u16::MAX as usize {
+            // header_len 是 u16；超过就写不进去（防御：正常路径下容量最多翻倍到 32768）。
+            return Err(CoreError::Internal("header_capacity overflow".to_string()));
+        }
+        let tmp = self.path.with_extension("vault.compact.tmp");
+        // 头部必须先按**既有容量**填充满空格，否则 record_start 会与写入的字节数错位。
+        let header_bytes = serialize_header_padded(&header, self.header_capacity)?;
+
+        let mut written = CONTAINER_PREFIX_LEN as u64 + self.header_capacity as u64;
+        {
+            let mut file = File::create(&tmp)?;
+            file.write_all(VAULT_MAGIC)?;
+            file.write_all(&FORMAT_VERSION.to_le_bytes())?;
+            file.write_all(&(self.header_capacity as u16).to_le_bytes())?;
+            file.write_all(&0u32.to_le_bytes())?;
+            file.write_all(&header_bytes)?;
+            for frame in frames {
+                let encoded = frame.encode()?;
+                file.write_all(&encoded)?;
+                written += encoded.len() as u64;
+            }
+            // 关键：必须是 sync_all，见方法文档第 2 条。
+            file.sync_all()?;
+        }
+
+        // ── rename 之前把能校验的全校验掉 ──
+        let check = Self::open(&tmp)?;
+        let actual = check.file_size()?;
+        if actual != written {
+            return Err(CoreError::Internal(format!(
+                "compacted size mismatch: wrote {written}, on disk {actual}"
+            )));
+        }
+        let scanned = check.read_frames()?;
+        if scanned.len() != frames.len() {
+            return Err(CoreError::Internal(format!(
+                "compacted frame count mismatch: expected {}, decoded {}",
+                frames.len(),
+                scanned.len()
+            )));
+        }
+        drop(check);
+
+        rename_replace(&tmp, &self.path)?;
+        self.header = header;
+        Ok(())
+    }
+}
+
+/// `fs::rename` + 退避重试（D-76）。
+///
+/// Windows 上 `fs::rename` 映射 `MoveFileExW(MOVEFILE_REPLACE_EXISTING)`，**可以**覆盖
+/// 已存在目标——所以绝不要先 `remove_file` 再改名（那会打开一个"目标不存在"的崩溃窗口）。
+/// 唯一常见的失败原因是目标被外部进程持有不共享的句柄（杀毒实时扫描、Windows Search
+/// 索引器、用户正在复制该文件）；本仓自身不长期持有 `File`（每次操作 open→写→drop），
+/// 故 3 次退避足够覆盖瞬时占用。仍失败时**保留 tmp 不删**，由调用方记录路径。
+fn rename_replace(from: &Path, to: &Path) -> CoreResult<()> {
+    const BACKOFF_MS: [u64; 4] = [0, 50, 100, 200];
+    let mut last: Option<std::io::Error> = None;
+    for &delay in &BACKOFF_MS {
+        if delay > 0 {
+            std::thread::sleep(Duration::from_millis(delay));
+        }
+        match fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(match last {
+        Some(err) => CoreError::from(err),
+        None => CoreError::Internal("rename attempts exhausted".to_string()),
+    })
 }
 
 /// 将头部序列化并尾部填充空格至 `capacity`，超限则报错。

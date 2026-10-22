@@ -3,7 +3,7 @@
 > 本文件是**界面样式的唯一权威**。组件实现与本文冲突时以本文为准。
 > 客户已拍板：**范围 = 全 app 一次到位**；**视觉 = 双主题精修，暗色主打科技感**。
 >
-> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`） · **v2.11 文件落盘与「取消不是错误」（D-71 / D-72）**：Android 上保存对话框返回的是 `content://` SAF URI（不是内核路径），`std::fs::write` 必失败 → 附件导出报「文件读写出错」（D-71，改走 provider fd 的 `"wt"` 写入）；同时**收口「取消 → 弹红」的三处散乱实现**（`vault-export` 未捕获 rejection / `AttachmentView` 取消弹红 / `ImportWizard` 空 catch 吞真错）为唯一口径 `runSaveToDestination`（D-72）；导入面板补格式说明 + **可下载 CSV 模板**（`save_import_template`），模板与解析器表头一致性由 `tests/import_template.rs` 锁死 · **v2.12 设置页旁路数据失败隔离 + 保险库文件说明（D-73）**：`Settings.svelte` 的 `$effect` 首行曾用 `structuredClone` 深拷 `$state` 代理（结构化克隆算法遇 Proxy 必抛 `DataCloneError`），于是其后的「库文件信息 / 自动锁定档位 / 版本号」三块**从不执行**——四处症状（库文件卡片空白 / 版本显示「—」/ 自动锁定档位恒为默认档 / 连带整卡不刷新），其中「自动锁定档位读不到」客户尚未发现 → 深拷改 `$state.snapshot()`，三块改由 `src/lib/settings-page.ts::loadSettingsPageSide` **逐块独立失败隔离**并显式建模失败态；「保险库文件」补说明行、读不到显示 `settings.vault_file_failed` 而非空白卡片；档位读失败显示 `settings.auto_lock_failed`（否则「5 分钟」会被误读成真实设置）；导入按钮文案消歧（`import.choose_file`）+ 「预览」不再无解释置灰（改可点 + `import.choose_first` 提示）；**手机「关于」组按行类型显式区分**（`.is-info` / `.is-actions`，见 §6.10）——根因不是「规则写错了」而是「**规则的适用范围没写**」：窄屏 `.set-row { flex-direction: column }` 只对**控件行**成立（`.set-ctl` 的 160px 固定宽在 390px 会溢出），一刀切下去把纯信息行与按钮行一起扫了 → 信息行 `.is-info`（左右两端对齐）/ 按钮行 `.is-actions`（横排换行）在**同一个 `@media` 块内 `.set-row` 之后**覆盖回来，**不许用 `:has()`**（WebView 版本差异，别赌）；桌面 ≥768px 不需要任何新规则、逐像素不变
+> 修订：v1.1 强度条空态（D-24）· v1.2 按钮悬停层叠（D-27/28/29）· v1.3 原生 UI 干涉与面板状态机（D-30/31/32）· v1.4 移动端响应式布局（D-35，客户方案 A：单栏推进 + 底部导航）· v1.5 底栏选中态改「胶囊 + 柔光」，取消整格铺色 · v1.6 自绘标题栏（decorations:false，D-36）+ 品牌 LOGO 定稿（A · 盾与钥匙孔）· v1.7 桌面顶栏收缩档（D-37，切英文后顶栏撑爆）· v1.8 顶栏信息架构重排（D-38）：常用外显、低频进设置 · v1.9 配对可用性修复（D-44）：多候选 IP 二维码 + 网络错误文案细分 + 会话死亡感知 · **v2.0 生成器符号自选（D-50）：34 个常用符号芯片可选，默认只选安全集 + - _ . , :** · **v2.1 导出保险库补主密码输入框（D-51）+ 生成器参数（含符号自选）跨会话持久化（D-52）** · **v2.2 导出文案修正（D-54：明文 → 加密副本）+ 备份恢复闭环（D-55：锁屏页「从备份恢复」）** · **v2.3 Toast 时长自适应（D-58a：error 按文案长度 6–12s）+ 同步页初始标签按配对状态（D-58b）** · **v2.4 条目列表「添加附件」入口（D-59：新建菜单三入口，选文件即导入，不进编辑器）** · **v2.5 附件依附父条目（D-60 §3.14）：列表第三按钮撤销（回退 v2.4 入口），登录/笔记详情页新增附件区（区头添加 + 附件行导出/移除），AttachmentView 改造为附件区组件** · **v2.6 自动锁定真持久化（D-61 A 案）：Settings 档位读写走 IPC，全局闲置计时 + Android 回前台补判上线** · **v2.7 法律条款可点开 + 「关于」分组（D-63）：勾选行拆出「免责声明 / 用户协议」两个内联链接（点链接不切换勾选），新增 `LegalDialog` 双语长文弹窗与 Settings「关于」（版本运行时读取 / 作者 / MIT / 项目主页）** · **v2.8 勾选行折行修复（D-64）**：`.pms-link` 字号改 `font: inherit`（不再写死 0.86rem，否则链接比同行文字大、把行撑折），勾选行在 ≤767px 收敛为单行放得下（文案「我已阅读并同意」+ 字号 0.8rem / gap 0.2rem / padding 0.6rem 0.7rem / checkbox 16px，`flex-wrap` 保留作极端窄屏兜底） · **v2.9 设备可辨识与同步状态隔离（D-66）**：设备行名称可重命名（行内编辑）+ 显示配对时间；**+ 设备指纹改用真公钥指纹（D-67）**；「立即同步」忙碌态按设备隔离，未点的那台只置灰不转圈 · **+ 配对两屏显示真指纹（D-68）：电脑显示本机指纹、手机显示从 join 结果拿到的对端指纹，中间人核对从「无处可做」变为「一眼可比」** · **v2.10 配对核对改「会话码」口径（D-69 修正 D-68）**：首版电脑屏显示**长期身份指纹**、手机屏显示**临时 X25519 公钥指纹**，两把不同密钥 → 两屏必然不等（属负收益，会把每台设备都报成中间人）；D-69 改为两屏都显示**同一次会话的会话码**（`sha256(host_eph 公钥)` 前 8 字节 hex），并**严格区分**「会话码（每次变）/ 设备指纹（稳定）/ device_id（只做 title）」三个量；设备指纹为空时该行**整行不渲染**（不再回退 `device_id`） · **v2.11 文件落盘与「取消不是错误」（D-71 / D-72）**：Android 上保存对话框返回的是 `content://` SAF URI（不是内核路径），`std::fs::write` 必失败 → 附件导出报「文件读写出错」（D-71，改走 provider fd 的 `"wt"` 写入）；同时**收口「取消 → 弹红」的三处散乱实现**（`vault-export` 未捕获 rejection / `AttachmentView` 取消弹红 / `ImportWizard` 空 catch 吞真错）为唯一口径 `runSaveToDestination`（D-72）；导入面板补格式说明 + **可下载 CSV 模板**（`save_import_template`），模板与解析器表头一致性由 `tests/import_template.rs` 锁死 · **v2.12 设置页旁路数据失败隔离 + 保险库文件说明（D-73）**：`Settings.svelte` 的 `$effect` 首行曾用 `structuredClone` 深拷 `$state` 代理（结构化克隆算法遇 Proxy 必抛 `DataCloneError`），于是其后的「库文件信息 / 自动锁定档位 / 版本号」三块**从不执行**——四处症状（库文件卡片空白 / 版本显示「—」/ 自动锁定档位恒为默认档 / 连带整卡不刷新），其中「自动锁定档位读不到」客户尚未发现 → 深拷改 `$state.snapshot()`，三块改由 `src/lib/settings-page.ts::loadSettingsPageSide` **逐块独立失败隔离**并显式建模失败态；「保险库文件」补说明行、读不到显示 `settings.vault_file_failed` 而非空白卡片；档位读失败显示 `settings.auto_lock_failed`（否则「5 分钟」会被误读成真实设置）；导入按钮文案消歧（`import.choose_file`）+ 「预览」不再无解释置灰（改可点 + `import.choose_first` 提示）；**手机「关于」组按行类型显式区分**（`.is-info` / `.is-actions`，见 §6.10）——根因不是「规则写错了」而是「**规则的适用范围没写**」：窄屏 `.set-row { flex-direction: column }` 只对**控件行**成立（`.set-ctl` 的 160px 固定宽在 390px 会溢出），一刀切下去把纯信息行与按钮行一起扫了 → 信息行 `.is-info`（左右两端对齐）/ 按钮行 `.is-actions`（横排换行）在**同一个 `@media` 块内 `.set-row` 之后**覆盖回来，**不许用 `:has()`**（WebView 版本差异，别赌）；桌面 ≥768px 不需要任何新规则、逐像素不变 · **v2.13 配对成功态保留会话码（D-75）**：`pairing://ended` 在**成功与失败两种结局都发**，前端旧实现无条件 `sync.pairing = null`，而会话码正挂在这个对象上 —— 手机端「请核对会话码」的提示**恰好在事件之后才出现**，电脑屏的码已被清掉，D-69 的两屏核对**上线即不可用**；修法：载荷经纯函数 `nextPairingState()` 分流，`completed` **保留** `pairing` 并转「配对成功（待核对）」态（无二维码、大字会话码 + 核对提示 + 「完成」按钮），`aborted`/未知 清屏提示重新生成。详见 §5.7.5 · **v2.14 保险库压缩入口（D-76）**：容器只打墓碑标志、**从不回收空间**，且此前无任何压缩路径（导出备份都是原样 `fs::copy`）—— 实测主人库 24.34 MiB 里仅 **0.30 MiB 是活数据（1.28%）**，24.03 MiB 全是墓碑，其中 6 个已删附件占 24.0 MiB；设置页「保险库文件」卡片新增「已删附件占 / 可回收」两行 + 「压缩保险库」按钮（`reclaimable_bytes > 0` 才渲染，同步中禁用），二次确认**必须**给出四个数字与三条提示（不改数据/不要主密码、回收站附件不回收、临时 2 倍磁盘请勿关程序），成功后**必须重新拉取**大小与统计。详见 §6.11
 
 ---
 
@@ -665,6 +665,45 @@ hasSessionCode(value: string | null | undefined): boolean
 | 生命周期 | `join()` 进门先清 `lastPairSessionCode = null` / `lastPairDeviceName = ''`（防止把「上一台电脑」的码显示成「这一台」的）；`reset()`（锁定）同样清空，不跨解锁残留 |
 | 配对完成后 | 配对页的块只服务于**配对当下**的核对；事后再想认设备看「同步 → 设备」页的**设备指纹**（§5.6.3），两者不是同一个量 |
 
+#### 5.7.5 配对面板状态机与「成功态」（D-75，v2.13）
+
+> 缺陷来源（主人真机实测）：手机上扫完电脑的配对二维码 → 手机端弹出「请核对电脑上的会话码」，
+> **而电脑屏的配对面板在这一瞬间已经关闭了**，会话码随之消失；重新生成二维码 → 又是新会话、新码。
+> ⇒ §5.7 那套核对**从未真正可用**（功能写着，用不上）。
+
+**根因不是显示 bug，是时序互斥**（写成一句话以便不再犯）：
+
+> 「会话结束」事件把「核对会话码」这个动作的**前提**一起删掉了 —— 会话码挂在 `pairing` 对象上，
+> 而事件一到就无条件清空它；偏偏手机端的核对提示**正好在事件之后才出现**。
+
+后端在两种结局都发同一个事件（`sync_cmd.rs`）：`completed`（成功）/ `aborted`（失败/超时）。
+前端旧实现只按「结束」处理、不分辨结局，于是成功也被当成「结束」清屏。
+
+**状态机（四个态，`completed` 与 `aborted` 分叉）**
+
+| 态 | 判据 | 面板显示 |
+|---|---|---|
+| 生成中 | `busy === true` | 「生成配对二维码」按钮转圈、禁用 |
+| 已生成 | `pairing !== null && !pairCompleted` | 二维码 + 配对文本 + 有效期 + **会话码** + 取消按钮 |
+| **配对成功（待核对）** | `pairCompleted && pairing !== null` | **无二维码**；一行「配对成功」+ 一行核对提示 + **会话码大字** + 主按钮「完成」 |
+| 失败/超时 | `pairing === null && pairEnded` | `sync.pair_ended` 提示 + 「生成配对二维码」按钮 |
+
+**硬约束**：
+
+1. `pairing://ended` 的载荷**必须**经纯函数 `nextPairingState(payload)`（`src/lib/pairing-state.ts`）翻译成
+   `{ clearPairing, completed, ended }` **三件套**，不许在 `listen` 回调里直接写 `if (payload === 'completed')`：
+   - `completed` → `clearPairing: false`（**保留** `pairing`，会话码还在里面）、`completed: true`、`ended: false`；
+   - 其余（`aborted` / 空串 / `null` / 未知）→ `clearPairing: true`、`completed: false`、`ended: true`。
+2. **未知载荷按失败处理**（宁可让用户重新生成一次二维码，也不留一个「看起来成功了、其实没核对」的假成功态）。
+3. 成功态**优先判定**（模板里排在二维码分支之前），且成功态**不渲染二维码** —— 码已经扫过了，留着会让人以为还能再扫一次。
+4. 退出成功态只有两条路：用户点「完成」（`sync.endPairing()`，只清内存、**不打 IPC** —— 后端发 `completed` 之前
+   已 `*state.pairing = None` 并 `break` 了 worker）／重新生成 / 取消 / 锁定，后三者都把 `pairCompleted` 复位为 `false`。
+5. 会话码仍走 `hasSessionCode()` 判空后渲染（§5.7.3），成功态不得例外。
+
+**机器守卫**：`src/lib/pairing-state.test.ts`（16 例）三层：
+① 纯函数语义（成功不清屏 / 未知保守 / 三字段互斥）；② store 的 handler **必须先算状态再决定清屏**（`nextPairingState(` 的下标早于任何 `sync.pairing = null`），且不得退回字面量比较；③ `PairShow.svelte` 成功态分支存在、位于二维码分支之前、块内无 `qr_svg` / `sync-qr`（含「块长度 > 200」的前置断言，防止整块被删后负向断言恒绿）。
+
+
 ---
 
 ### 5.8 文件落盘：Android SAF 与「取消不是错误」（D-71 / D-72，v2.11）
@@ -922,10 +961,168 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
 4. 主题 / 语言 / 自动锁定 / 剪贴板 / 体检阈值 / 改密码 那些行**都是控件行，窄屏堆叠是对的**，继续走原规则，不许加 `is-*`。
 5. 设备组用的是 `.set-list-row`（§6.8 契约），走另一条链路，**不受本规则影响，不要去动它**。
 6. **机器守卫**：`src/lib/settings-row-type-guard.test.ts`（8 例）扫 `Settings.svelte` 原文，锁死
-   ① 恰好 3 条 `is-info` + 1 条 `is-actions`，且**全文件只有这 4 条**带 `is-*`（控件行不许被误标）；
+   ① 恰好 **5** 条 `is-info` + 1 条 `is-actions`，且**全文件只有这 6 条**带 `is-*`（控件行不许被误标）
+      —— 计数由 D-76 从「3 + 1」升到「5 + 1」：新增的两条是「保险库文件」卡片里的体积构成行
+      （`已删附件占 24.0 MB` / `可回收 24.0 MB`），它们同样是**纯信息行**，必须带 `is-info`
+      否则窄屏会被堆叠规则拆成两行、读成两条无关信息（与 D-73 症状⑤ 同型）。
+      **改这个数字等于改「哪些行是信息行」的定义，必须同时改本节与 §6.11**；
    ② 覆盖规则在**同一个** `@media (max-width: 767px)` 块内、位于一刀切 `.set-row` 之后；
-   ③ 媒体块**外**没有任何 `.set-row.is-info` / `.set-row.is-actions` ⇒ 桌面逐像素不变；
-   ④ 全文件无 `:has(`（负向断言先剥注释再扫，否则注释里写「不许用 `:has()`」会把自己判红）。
+   ③ 媒体块**外**没有任何 `.set-row.is-info` / `.set-row.is-actions` ⇒ 桌面逐像素不变
+      （判定前先剥注释：markup 说明里会写出选择器本身，直接扫全文会把注释当规则）；
+   ④ 全文件无 `:has(`（同上，负向断言先剥注释再扫，否则注释里写「不许用 `:has()`」会把自己判红）。
+
+### 6.11 保险库压缩入口（D-76，v2.14）
+
+> 起因：主人实测「把 2.4M 的附件删除后，设置里的保险库文件还是 24M，重启也没变化。保险库有那么大吗？」
+> **实测结论：24.34 MiB 里只有 0.30 MiB 是活数据（1.28%），24.03 MiB 全是墓碑帧**（其中 6 个已删附件占 24.0 MiB）。
+> 容器是原地改写 + 只打墓碑标志，**从不回收空间**，且全系统此前**没有任何 compression 路径**（连导出备份都是 `fs::copy` 原样复制）。
+
+**本节解决两件事**：① 让用户**看见**体积构成（回答"为什么这么大"）；② 提供一个**可控的回收动作**。
+
+#### 6.11.1 位置与结构（设置在「保险库文件」卡片内，不新增卡片）
+
+在现有卡片（`Settings.svelte:333` `settings.vault_file`）内，`size_bytes` 那行**之后**追加，顺序固定：
+
+```
+保险库文件                          ← 卡片标题（既有）
+这条说明……                          ← settings.vault_file_hint（既有，D-73）
+<路径，等宽可折行>                  ← fileInfo.path（既有）
+大小: 24.3 MB                       ← settings.size（既有）
+已删附件占 24.0 MB                  ← 新增，仅 attachment_dead_bytes > 0 时显示
+可回收 24.0 MB                      ← 新增，仅 reclaimable_bytes > 0 时显示
+[压缩保险库]                        ← 新增按钮，仅 reclaimable_bytes > 0 时显示
+没有可回收的空间                    ← 新增，reclaimable_bytes == 0 时显示这句（不显示按钮）
+```
+
+**为什么单独显示「已删附件占」**：主人问的就是这一句。只给「可回收」不解释来源，用户会以为体积统计坏了。
+两个数字都走 `formatBytes()`，与既有大小同一格式函数，不许自己拼单位。
+
+#### 6.11.2 按钮与禁用条件（三条，缺一不可）
+
+| 条件 | 处理 | 理由 |
+|---|---|---|
+| `reclaimable_bytes === 0` | **不渲染按钮**，显示 `settings.compact_none` | 一个点了没有效果的按钮 = 假功能 |
+| `sync.syncingDeviceId !== null`（同步进行中） | **禁用** + 提示 `settings.compact_wait_sync` | 后端 `compact_vault` 在 `state.session` 锁内执行，与同步**结构互斥**；不禁用的话用户会以为卡死 |
+| 压缩自身进行中 | 禁用 + `Spinner`，文案换 `settings.compacting` | 重写 200MB 级容器可能几秒 |
+
+按钮样式：`.pms-btn.is-ghost`（**不是** `is-primary` / `is-danger`）。压缩不改数据、不破坏内容，**不许用危险色**误导用户以为会删东西。
+
+#### 6.11.3 二次确认（必须列出四个数字 + 三条提示）
+
+用现有 `ui.confirm()` 机制不可行（它只支持标题 + 一句正文），**必须用自定义确认块**（同 `LegalDialog` 的形态），内容：
+
+```
+压缩保险库？
+
+  当前大小      24.3 MB
+  压缩后约      317 KB
+  可回收        24.0 MB
+  已删附件占    24.0 MB
+
+  · 压缩不改任何数据，也不需要输入主密码。
+  · 回收站里的附件不会被回收，需先清空回收站。
+  · 压缩期间会临时占用约 2 倍磁盘空间，请勿关闭程序。
+
+                        [取消]  [开始压缩]
+```
+
+**三条提示缺一不可**，理由：
+1. 「不改数据、不要主密码」——否则用户以为要重新验密码，直接放弃；
+2. 「回收站附件不回收」——**这是最容易被误解成"功能没生效"的地方**：`attachment_blob_refs` 把回收站快照里的附件算作"有引用"（为了还原），所以删进回收站的附件压缩不掉。**同理，冲突快照（`local_snapshot` / `remote_snapshot`）引用的附件也压缩不掉**（D-79）——这是正确的：用户还没仲裁，任何一侧的附件都不能替他扔掉。文案只说"回收站"是因为对客户而言那是他能操作的那一个；冲突引用是系统内部的保活，不需要他理解。
+3. 「2 倍磁盘 + 别关程序」——压缩先写 tmp 再原子替换，峰值是 2×；中途杀进程虽然安全（旧库还在）但会让用户白等。
+
+#### 6.11.4 完成与失败反馈
+
+- 成功：`ui.toast('success', 'settings.compact_done', { size })`，**并且必须刷新** `fileInfo` 与 `compactionStats`（否则卡片上还是旧大小，用户以为没生效）。
+- 失败：`ui.toast('error', toAppError(err).messageKey)`，**不改动任何显示数字**（宁可显示旧值，不许显示"已压缩"）。
+- 失败后**不要**自动重试。
+
+#### 6.11.5 数据来源与加载时机
+
+`vault_compaction_stats` 是**只读、廉价**（只读元数据 + 解密少量墓碑帧），可以随 `loadSettingsPageSide` 一起加载，作为它的**第四块**，同样遵守 D-73 的**逐块失败隔离**（stats 失败只影响「已删附件占 / 可回收」两行与按钮，不影响大小、档位、版本号）。
+
+⚠️ **不许**为了拿 stats 去调 `compact_vault`，也**不许**在 stats 失败时把按钮当"可点"渲染。
+
+#### 6.11.6 i18n 键（zh-CN / en-US 都要，键名固定）
+
+| 键 | zh | en |
+|---|---|---|
+| `settings.compact` | 压缩保险库 | Compact vault |
+| `settings.compact_dead_attachments` | 已删附件占 {size} | Deleted attachments use {size} |
+| `settings.compact_reclaimable` | 可回收 {size} | {size} reclaimable |
+| `settings.compact_none` | 没有可回收的空间 | Nothing to reclaim |
+| `settings.compact_stats_failed` | 读取失败：未能取得体积构成（条目本身不受影响）。 | Could not read the size breakdown. Your items are unaffected. |
+| `settings.compacting` | 正在压缩… | Compacting… |
+| `settings.compact_wait_sync` | 同步进行中，请稍候 | Syncing, please wait |
+| `settings.compact_confirm_title` | 压缩保险库？ | Compact the vault? |
+| `settings.compact_label_before` | 当前大小 | Current size |
+| `settings.compact_label_after` | 压缩后约 | After compaction |
+| `settings.compact_label_reclaim` | 可回收 | Reclaimable |
+| `settings.compact_label_dead` | 已删附件占 | Deleted attachments |
+| `settings.compact_hint_no_password` | 压缩不改任何数据，也不需要输入主密码。 | Compaction changes no data and does not require your master password. |
+| `settings.compact_hint_trash` | 回收站里的附件不会被回收，需先清空回收站。 | Attachments in the trash are not reclaimed; empty the trash first. |
+| `settings.compact_hint_disk` | 压缩期间会临时占用约 2 倍磁盘空间，请勿关闭程序。 | Compaction temporarily needs about twice the disk space. Do not close the app. |
+| `settings.compact_start` | 开始压缩 | Start |
+| `settings.compact_done` | 已回收 {size} | Reclaimed {size} |
+| `settings.compact_failed` | 压缩未完成，保险库原样保留，数据没有变化。 | Compaction did not finish. Your vault is unchanged. |
+
+#### 6.11.7 验收判据（可测，不许只靠肉眼）
+
+1. `reclaimable_bytes === 0` 时**按钮不存在**于 DOM（不是 disabled）。
+2. 同步进行中按钮 `disabled`，且出现 `settings.compact_wait_sync`。
+3. 确认块内**四个数字与三条提示全部存在**（可对 markup 做结构断言）。
+4. 压缩成功后 `fileInfo.size_bytes` 与 `compactionStats` **都被重新拉取**（断言代码里有一次 reload，不是只 toast）。
+5. 压缩失败时界面数字**保持压缩前值**。
+6. 窄屏 390px 下：新增的两行信息走 `.is-info`，确认块可滚动、按钮不溢出一屏（见 §6.10）。
+7. 压缩进行中 `reloadSideData()` **短路返回**（不得重拉 stats：后端持 session 锁时会挂住）；
+   成功路径那次 reload 用 `reloadSideData(true)`（`force`）绕过守卫 —— **不要**改成
+   「先复位 `compacting` 再 reload」：那样 reload 与 effect 触发的 reload 会并发，
+   且按钮在 reload 窗口内已可点。
+8. 压缩失败时，通用内部错误显示 `settings.compact_failed`（说明库原样保留），不是 `err.internal`；
+   体积构成读取失败显示 `settings.compact_stats_failed`，且**不渲染压缩按钮**。
+
+**实现补记（v2.14 落地时补的五点，均已写进代码与守卫）**：
+
+- **键表补了一个 `settings.compact_label_dead`。** 原表只有整句 `compact_dead_attachments`（「已删附件占 {size}」），
+  而确认块是「左标签 / 右数值」四行，整句塞不进标签格。故补这一个**标签形态**键；
+  整句那个仍用于卡片正文（对客户「是不是附件都还在库里」的回答用整句更自然）。
+- **键表补了一个 `settings.compact_stats_failed`（规格缺口）。** 原表没有「体积构成读取失败」的文案，
+  最省事的写法是复用 `settings.vault_file_failed`，但那条的主语是**保险库文件路径/大小**，
+  安到体积构成上是**归因错位**；而留空、或退化成 `compact_none`（「没有可回收的空间」）更糟——
+  后者是一个**结论**，可我们此刻根本不知道（失败伪装成结论 = D-27 / D-73 同族）。
+  故单起一句，只陈述「没读到」并立刻安抚「条目本身不受影响」。失败分支也**不渲染压缩按钮**。
+- **卡片那两行的实际形态是「整句 + `is-info`」**：文案键本身就带 `{size}`，所以每行只有一个
+  `<span>`，`.is-info` 在这里的作用是**让该行不被窄屏 `.set-row` 堆叠规则误伤**，
+  而不是真的把一句话劈成左右两段。若将来要真正的「左标签 / 右数值」两端对齐，
+  换成 `compact_label_dead` + `compact_label_reclaim` 两个标签键即可（键已在表里）。
+- **新增判据 7（竞态）：压缩期间 `reloadSideData()` 必须短路。** 后端 `compact_vault` 在
+  `state.session` 锁内执行，此时再调 `vault_compaction_stats` **不失败、也不超时，会一直挂住**——
+  前六条判据与 D-73 的「逐块失败隔离」都救不了「挂住」（那不是失败）。触发路径真实存在：
+  压缩中离开设置页再回来 → `$effect` 重跑 → 第四次 IPC 挂住，表现为「已删附件占 / 可回收」两行空着。
+  修法：`reloadSideData(force = false)`，守卫写成 `if (!force && compacting) return;`；
+  成功路径那次显式刷新传 `true`（那一刻 `compact_vault` 已返回、session 锁已释放，读到的是真值）。
+  **反例（务必不要这么写）**：`if (compacting) return;` + 在 `try` 里先 `compacting = false` 再
+  `await reloadSideData()`。表面上 reload 能绕过守卫，但它让「压缩期间」与「压缩之后」两个意图
+  靠**副作用时序**区分，且 `compacting` 是 `$effect` 的依赖（`reloadSideData` 在首个 `await` 之前
+  同步读它），复位会再触发一次 effect reload → 两组四块读取并发、按钮在 reload 窗口内已可点。
+  用参数区分意图，语义清楚且显式那次**一定真的执行**。
+- **新增键 `settings.compact_failed`。** 压缩失败时只弹 `toAppError(err).messageKey`，而通用兜底是
+  `err.internal`（「内部错误」）——压缩是大动作，这句话会让用户以为库被写坏。故**通用内部错误**
+  换成本键（「保险库原样保留，数据没有变化」）；后端给了**具体原因**时仍照原样透出，
+  因为那句更可操作，且同样不改变「数据没变」这个事实（判据 5）。
+
+> 判据 1/2/3/4/5 + 竞态（7）+ 失败文案的守门文件是 `src/lib/vault-compact-ui.test.ts`（**19 例**），
+> 判据 6 见 §6.10 与 `src/lib/settings-row-type-guard.test.ts`。
+> **已知且接受的代价**：`finally` 里复位 `compacting` 会让 `$effect` 再跑一次 `reloadSideData()`
+> （force=false、compacting=false → 放行），所以成功路径一共**两组**四块读取。第二组在压缩结束、
+> 锁已释放之后，读到的是同一份真值，不会阻塞也不会写错；为省它引 `untrack` 属过度设计。
+> ⚠️ 「两组」这个**条数是按依赖关系推的，不是测出来的，且已决定不测**（成本 > 收益，不是测不出）：
+> `environment: 'node'` 下 `$effect` 在 `.svelte.ts` 里不 flush（试过 `$effect.root` + `flushSync` /
+> `tick` / `settled` 三种刷法，effect body 一次都没执行）；唯一可测路径是单出一份开 devtools 的
+> release 构建、数 `vault_compaction_stats` 出现次数，而它**不改变任何用户可见结果**，不值得多跑一轮
+> 构建。**所以不要把它当成已测量的事实引用。** 真正需要保证的是「显式 `reloadSideData(true)` 确实
+> 执行了」，它已由 `vault-compact-ui.test.ts` 的 `force` 用例钉住，并有现场判据：压缩点完**停在
+> 设置页不动**，大小与两行构成应在 1–2 秒内自动更新；若必须切走再回来才变，即为缺陷。
 
 ## 7. 本次必须修的缺陷
 
@@ -960,6 +1157,7 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
 | **D-54** | P1 文案 | **导出确认文案误称「明文」**：`settings.export_confirm_body` 写「导出后文件将以明文形式保存到磁盘」，而实际导出是 `unlock_check` 通过后 `fs::copy` 的**字节级加密副本**（实测导出文件与本机库 sha256 相同、magic 同为 `PMSVAULT`）——事实错误且吓退用户，还漏了「mtime = 库数据最后写入时间」这一可感知行为 | 改为「导出的是整库的加密副本（非明文），用于备份或迁移；可在锁屏页用『从备份恢复』导入。文件的修改时间为库数据的最后写入时间。」（zh/en 同步，v2.2） |
 | **D-55** | **P0 功能闭环缺失** | **导出的备份全 app 无导入通道**：用户把库导出后换机/误删，没有任何界面能从备份恢复——备份只能靠手工替换 `%APPDATA%\com.passwordms.app\passwordms.vault` | 锁屏页新增「从备份恢复」入口（D-55）：core 层 `restore_backup_from(src, dest)`（magic 校验 + **恢复前整库帧流完整性校验**——尾部截断/遗留尾料一律拒绝 `corrupt_vault_backup`，杜绝「restore 成功但记录静默丢失」+ `fs::copy` 保留 mtime）+ 3 例回归测试（原密码解锁且条目数一致 / 非 vault 文件拒绝 / 错主密码 UnlockFailed）；src-tauri `restore_backup` 命令（须锁定态、覆盖前留 `.bak-<unix_ms>`、不自动解锁）；前端 dialog 选 .vault → 警告确认 → 用密码框的值走既有 unlock 流程（v2.2） |
 | **D-59** | **P0 功能不可达** | **附件功能前端零入口**（#530 真机走查发现）：后端 `import_attachment` 命令、core 层校验（≤20 MB）、D-53 blob 同步、`AttachmentView` 详情渲染全就绪，但列表「新建」区只有登录/笔记两个按钮，`api.keydocs.importAttachment` **全项目零调用**——F-13 密钥文档（附件）从上线起不可达 | 列表头新增第三个「添加附件」按钮（`paperclip` 图标，zh `添加附件` / en `Add attachment`）：点击 → 系统文件对话框（单选）→ `import_attachment` 导入成功即建条目 + `vault.load()` 刷新 + 选中新条目（**不进编辑器**；标题默认取文件名含扩展名，与 core 层空 title 回退语义一致）；对话框取消 → 无动作无 toast；IPC 失败（含超限 `ERR_ATTACHMENT_TOO_LARGE`）→ 统一错误 toast。流程逻辑抽 `src/lib/attachment-import.ts` 纯逻辑层（守卫/取消/成功/失败 4 分支有单测守门）+ ipc-contract 补 `import_attachment` 双侧在册断言（v2.4）**——v2.5 起该入口按 D-60 回退：附件改依附父条目，入口移入详情页附件区（见 §5.4 AttachmentView 行）** |
+| **D-75** | **P0 功能形同虚设** | **配对成功后会话码立刻消失，两屏核对从未可用**（主人真机）：手机扫码成功 → 手机端弹「请核对电脑上的会话码」，而**电脑屏的配对面板在数据库发出 `completed` 的同一瞬间已收起**，会话码无处可看；重新生成二维码 → 新会话、新码，永远差一步。D-69 的两屏核对（防中间人）**上线即不可用** | 按载荷分流（`nextPairingState`，纯函数有单测）：`completed` **保留** `pairing` 并置 `pairCompleted`，面板转为**成功态**（无二维码、大字会话码、核对提示、「完成」按钮）；`aborted`/未知 清屏并提示重新生成。详见 §5.7.5（v2.13） |
 
 ---
 
@@ -1060,4 +1258,10 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
   - **症状⑤ 手机「关于」组排版不散乱**（客户 1.2.6 真机截图追加）：390px 下「作者」与 `hengletime` 必须**同一行两端对齐**（标签左、值右），**不得**被拆成上下两行左对齐；「许可证 / MIT License」同理；三个按钮（项目主页 / 免责声明 / 用户协议）必须**横向排布**（必要时换行），**不得**被拉成三条满宽竖排。1100px 桌面下**逐像素不变**。结构判据由 `src/lib/settings-row-type-guard.test.ts`（8 例）锁死：恰好 3 条 `.is-info` + 1 条 `.is-actions`、全文件仅此 4 条 `is-*`、覆盖规则在同一 `@media` 块内且位于 `.set-row` 之后、媒体块外无 `is-*` 规则（⇒ 桌面不变）、无 `:has(`。
   - **症状① 在手机上也成立**：390px 下「关于」第一行显示**真实版本号**（如 `1.2.7`）而不是 `—` —— 与症状① 同源同判据，窄屏不额外退化。
   - **档位失败有出口**：`autoLockFailed = true` 时下拉旁必须出现 `settings.auto_lock_failed` 一行字（否则「5 分钟」会被误读成真实设置）。
+- [ ] **D-75**（v2.13 已实现）：**配对成功后会话码留在电脑屏上，两屏核对第一次真正可做**
+  - **核心判据（时序）**：手机扫码成功后，**电脑屏不得收起面板** —— 面板须转为「配对成功（待核对）」态，里面仍是**本次会话**的会话码；此时手机屏的核对块也正好出现，两者逐字相同。
+  - **结构判据（可单测）**：`pairing://ended` 的载荷必须经 `nextPairingState()` 翻译；`completed → { clearPairing: false, completed: true, ended: false }`；`aborted`/未知 → `{ clearPairing: true, completed: false, ended: true }`。`src/lib/pairing-state.test.ts` 16 例守门（纯函数语义 / handler 先算后清 / 组件分支存在且优先于二维码分支）。
+  - **成功态约束**：`pairCompleted && pairing !== null` 时**不渲染二维码**（已扫过，留着会让人以为还能再扫），显示「配对成功」+ `sync.pair_completed_hint` + 会话码（`hasSessionCode()` 判空后）+ 主按钮「完成」（`sync.endPairing()`）。按钮文案 `sync.pair_done`。
+  - **退出路径**：点「完成」/ 重新生成二维码 / 取消配对 / 锁定，四条路都必须让 `pairCompleted` 回到 `false`（否则下一轮二维码旁边会挂着上一轮的成功提示）。
+  - **失败态不回归**：`aborted` 仍清屏 + 提示 `sync.pair_ended`「请重新生成二维码」。
 

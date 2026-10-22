@@ -2,13 +2,14 @@
 
 use passwordms_core::session::Session;
 use passwordms_core::url_safety;
+use tauri::Manager;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_opener::OpenerExt;
 use zeroize::Zeroizing;
 
-use crate::dto::{StatusDto, VaultFileInfoDto};
+use crate::dto::{CompactionResultDto, CompactionStatsDto, StatusDto, VaultFileInfoDto};
 use crate::error::{lock_err, IpcError, IpcResult};
-use crate::state::{vault_path, AppState};
+use crate::state::{append_log, vault_path, AppState};
 
 /// 启动判定：是否存在保险库、当前是否锁定。
 #[tauri::command(rename_all = "snake_case")]
@@ -116,4 +117,47 @@ pub fn vault_file_info(
         path: path.to_string_lossy().to_string(),
         size_bytes,
     })
+}
+
+/// 保险库体积构成统计（D-76，**只读**：不解密 blob、不写任何字节）。
+///
+/// 回答的是「设置里显示的 24 MB 里，有多少是已删附件留下的死数据」——它不需要压缩
+/// 就能给结论，因此先于压缩上线。与 `vault_file_info` 一样是廉价调用（只读文件元数据
+/// + 解密少量墓碑帧取 rev），不必 `spawn_blocking`。
+#[tauri::command(rename_all = "snake_case")]
+pub fn vault_compaction_stats(
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<CompactionStatsDto> {
+    let session = state.session.lock().map_err(lock_err)?;
+    let repo = session.repo()?;
+    let stats = repo.compaction_stats().map_err(IpcError::from)?;
+    Ok(CompactionStatsDto::from(stats))
+}
+
+/// 压缩保险库（D-76）：重写容器，只保留活跃帧 + 必要的删除墓碑，然后原子替换。
+///
+/// - 语义：**不改任何业务数据、不需要主密码**（头部逐字段沿用，只重算两个计数）；
+/// - 崩溃安全：同目录 tmp → `sync_all` → 校验 → 原子 rename（见
+///   `Container::rewrite_with_frames` 文档）；失败自动从 `.precompact-<ms>` 回滚；
+/// - 并发：整个操作在 `state.session` 锁内完成，与同步/其它写操作**结构上互斥**；
+///   代价是若有一轮同步正在进行，压缩会排队等它结束（反之亦然）。
+///
+/// 用 `spawn_blocking` 与 `sync_now` 保持一致：重写 200 MB 级容器时不应该占住 IPC 线程。
+#[tauri::command(rename_all = "snake_case")]
+pub async fn compact_vault(app: tauri::AppHandle) -> IpcResult<CompactionResultDto> {
+    let app_log = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let mut session = state.session.lock().map_err(lock_err)?;
+        let repo = session.repo_mut()?;
+        let outcome = repo.compact().map_err(IpcError::from)?;
+        Ok(CompactionResultDto::from(outcome))
+    })
+    .await
+    .map_err(|e| IpcError::internal(&format!("spawn_blocking compact_vault: {e}")))?;
+    if let Err(err) = &result {
+        // 失败必须留痕：压缩是唯一会整体替换库文件的操作，静默失败不可接受。
+        append_log(&app_log, &format!("[compact] failed: {err:?}"));
+    }
+    result
 }

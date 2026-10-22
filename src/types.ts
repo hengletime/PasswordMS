@@ -249,6 +249,58 @@ export interface VaultFileInfoDto {
   size_bytes: number;
 }
 
+/**
+ * 保险库体积构成（D-76，**只读**统计；镜像 Rust `dto.rs::CompactionStatsDto`）。
+ *
+ * 回答「设置里显示的 24 MB 里，有多少是已删附件留下的死数据」——不需要真的压缩就能给结论。
+ * 字段名与 serde 输出**逐字一致**（Rust 结构体本身就是 snake_case，未额外加 `rename_all`）。
+ *
+ * ⚠️ **精度说明（不是疏忽）**：Rust 侧字节数字段是 `u64`，这里一律映射成 `number` ——
+ * 这是本仓既有惯例（`VaultFileInfoDto.size_bytes` 同样写法）。理论上 > 2^53 会丢精度，
+ * 但容器大小被 `MAX_VAULT_BYTES = 200 MB` 兜住（≈2×10⁸，远低于 9×10¹⁵），实际不可达。
+ * 若哪天放开体积上限，**必须**回头改这里（改用 string 传字节数），否则大库的体积数字会静默失真。
+ */
+export interface CompactionStatsDto {
+  /** 容器文件当前字节数。 */
+  file_bytes: number;
+  /** 头部区字节数（压缩后不变）。 */
+  header_bytes: number;
+  /** 实际有效数据字节数（压缩后保留的部分）。 */
+  live_bytes: number;
+  /** 墓碑帧总字节数（死数据总量，含必须保留的少量墓碑）。 */
+  tombstone_bytes: number;
+  /** 其中必须保留的墓碑字节数。 */
+  kept_tombstone_bytes: number;
+  /** 压缩可回收字节数。 */
+  reclaimable_bytes: number;
+  /** 压缩后预计文件字节数。 */
+  after_bytes: number;
+  /** 已删 / 无引用附件密文字节数（回答「删掉的附件还在不在」）。 */
+  attachment_dead_bytes: number;
+  /** 活跃附件密文字节数。 */
+  attachment_live_bytes: number;
+  /** 保留帧数。 */
+  live_frames: number;
+  /** 将被丢弃的帧数。 */
+  dead_frames: number;
+}
+
+/**
+ * 压缩结果（D-76；镜像 Rust `dto.rs::CompactionResultDto`）。
+ *
+ * `u64` → `number` 的精度取舍同 `CompactionStatsDto` 的注释（被 `MAX_VAULT_BYTES` 兜住）。
+ */
+export interface CompactionResultDto {
+  /** 压缩前文件字节数。 */
+  before_bytes: number;
+  /** 压缩后文件字节数。 */
+  after_bytes: number;
+  /** 实际回收字节数（`before_bytes - after_bytes`，恒 ≥ 0）。 */
+  reclaimed_bytes: number;
+  /** 丢弃的帧数。 */
+  dropped_frames: number;
+}
+
 /** IPC 错误 JSON（Rust `IpcError`）。 */
 export interface IpcErrorShape {
   code: string;

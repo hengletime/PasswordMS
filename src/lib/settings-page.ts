@@ -1,4 +1,4 @@
-// 设置页三块「旁路数据」的加载与失败隔离（D-73）。
+// 设置页四块「旁路数据」的加载与失败隔离（D-73 / D-76）。
 //
 // 缺陷回顾（主人 1.2.6 真机反馈，一处根因、四处症状）：
 // `Settings.svelte` 的 `$effect` 第一行曾用 `structuredClone` 深拷 `settings.value`，
@@ -19,15 +19,15 @@
 // 于是「读失败」与「本来就没有」在界面上长得一模一样（D-27 同源）。
 //
 // 所以本模块做两件事：
-//   1. 三个 load **各自** try/catch —— 任一失败不影响其余两项；
-//   2. 失败**显式建模**（`fileInfoFailed` / `autoLockFailed`），让 UI 能画出
+//   1. 四个 load **各自** try/catch —— 任一失败不影响其余三项；
+//   2. 失败**显式建模**（`fileInfoFailed` / `autoLockFailed` / `compactionStatsFailed`），让 UI 能画出
 //      「读取失败」而不是留白。
 //
 // 纯逻辑、依赖注入、无 Tauri / window 访问，Node 测试环境可直接跑。
 
-import type { VaultFileInfoDto } from '../types';
+import type { CompactionStatsDto, VaultFileInfoDto } from '../types';
 
-/** 三个旁路数据源（由组件注入真实 IPC，测试注入替身）。 */
+/** 四块旁路数据源（由组件注入真实 IPC，测试注入替身）。 */
 export interface SettingsPageSideDeps {
   /** 库文件路径与大小（`api.system.vaultFileInfo`）。 */
   loadVaultFileInfo: () => Promise<VaultFileInfoDto>;
@@ -35,9 +35,16 @@ export interface SettingsPageSideDeps {
   loadAutoLock: () => Promise<number>;
   /** 应用版本号（`getVersion`，D-63；禁硬编码）。 */
   loadVersion: () => Promise<string>;
+  /**
+   * 保险库体积构成（`api.system.vaultCompactionStats`，D-76；**只读、廉价**）。
+   *
+   * 作为第四块并入，同样逐块隔离失败 —— 它失败只影响「已删附件占 / 可回收 / 压缩按钮」，
+   * 不影响大小、档位、版本号。
+   */
+  loadCompactionStats: () => Promise<CompactionStatsDto>;
 }
 
-/** 三块旁路数据的加载结果。 */
+/** 四块旁路数据的加载结果。 */
 export interface SettingsPageSideState {
   /** 库文件信息；`null` = 未取到（此时看 `fileInfoFailed` 区分「失败」与「尚未返回」）。 */
   fileInfo: VaultFileInfoDto | null;
@@ -49,32 +56,65 @@ export interface SettingsPageSideState {
   autoLockFailed: boolean;
   /** 版本号；`null` = 读取失败（UI 显示 `—`）。 */
   version: string | null;
+  /** 体积构成；`null` = 未取到（看 `compactionStatsFailed` 区分失败与未返回）。 */
+  compactionStats: CompactionStatsDto | null;
+  /** `true` = 体积构成读取失败（或数值不可用）⇒ **不许**据此渲染压缩按钮。 */
+  compactionStatsFailed: boolean;
 }
 
 /**
- * 加载设置页的三块旁路数据，逐块隔离失败。
+ * 判断体积构成里的数值是否**可用于决策**。
  *
- * 语义（与 D-73 的验收口径逐条对应）：
- * 1. **各自** try/catch：任一 reject 不影响另外两项 —— 这是本缺陷的核心回归点；
+ * 为什么要单独判：`reclaimable_bytes` 若为 `NaN` / 负数，那么
+ * `reclaimable_bytes > 0` 为 false → UI 会渲染成「没有可回收的空间」，
+ * 而事实是「我们根本不知道可回收多少」—— 失败被伪装成结论（D-27 / D-73 同族）。
+ *
+ * 只校验**参与判断与展示**的四个字段：`file_bytes`（当前大小已另有来源，这里只做兜底）、
+ * `attachment_dead_bytes`、`reclaimable_bytes`、`after_bytes`（确认块要显示「压缩后约」）。
+ *
+ * @param stats 后端返回的体积构成
+ * @returns 四个关键字段都是**有限的非负数**时为 `true`
+ */
+function isUsableCompactionStats(stats: CompactionStatsDto): boolean {
+  const keys: Array<keyof CompactionStatsDto> = [
+    'file_bytes',
+    'attachment_dead_bytes',
+    'reclaimable_bytes',
+    'after_bytes',
+  ];
+  return keys.every((key) => {
+    const value = stats[key];
+    return Number.isFinite(value) && value >= 0;
+  });
+}
+
+/**
+ * 加载设置页的四块旁路数据，逐块隔离失败。
+ *
+ * 语义（与 D-73 / D-76 的验收口径逐条对应）：
+ * 1. **各自** try/catch：任一 reject 不影响另外三项 —— 这是本缺陷的核心回归点；
  * 2. `loadVaultFileInfo` 失败 → `fileInfo: null` + `fileInfoFailed: true`；
  * 3. `loadAutoLock` 失败（或返回非有限数）→ `autoLockMinutes: fallbackAutoLock`
  *    + `autoLockFailed: true`；
  * 4. `loadVersion` 失败 → `version: null`；
- * 5. 成功路径上 `fileInfoFailed` / `autoLockFailed` 必须是 `false`。
+ * 5. `loadCompactionStats` 失败（或关键字段非有限/负数）→ `compactionStats: null`
+ *    + `compactionStatsFailed: true`；
+ * 6. 成功路径上四个失败标记必须是 `false`。
  *
  * 为什么写成**串行**而不是 `Promise.all`：`Promise.all` 的语义是「一个 reject 全丢」，
  * 正是本缺陷要消灭的形状。改成并行需要先把每个 promise 归一成「永不 reject」再 all
  * （即 `allSettled` 的手工版），多一层包装反而更难审；本页只在进入设置时跑一次，
- * 三次往返的延迟换可读性是划算的。若将来这里变热，再换 `allSettled` 并保留同样的
+ * 四次往返的延迟换可读性是划算的。若将来这里变热，再换 `allSettled` 并保留同样的
  * 「逐块建模失败」语义——**换成并行不是问题，丢掉失败建模才是**。
  *
  * ⚠️ `loadAutoLock` 额外挡了「非有限数」：后端若回 `NaN` / `Infinity`，
  * `<select>` 里没有任何 option 与之相等，会渲染成一个**没选中项的下拉**——
  * 那又是「看起来正常、其实不对」的一种。宁可判成失败走兜底 + 显式标记。
+ * `loadCompactionStats` 同理（见 `isUsableCompactionStats` 的注释）。
  *
- * @param deps 三个数据源。
+ * @param deps 四个数据源。
  * @param fallbackAutoLock 档位读取失败时使用的兜底值（调用点传 `AUTO_LOCK_OPTIONS[1]`）。
- * @returns 三块数据的值 + 失败标记。
+ * @returns 四块数据的值 + 失败标记。
  */
 export async function loadSettingsPageSide(
   deps: SettingsPageSideDeps,
@@ -114,5 +154,29 @@ export async function loadSettingsPageSide(
     version = null;
   }
 
-  return { fileInfo, fileInfoFailed, autoLockMinutes, autoLockFailed, version };
+  // ④ 体积构成（D-76）
+  let compactionStats: CompactionStatsDto | null = null;
+  let compactionStatsFailed = false;
+  try {
+    const stats = await deps.loadCompactionStats();
+    if (isUsableCompactionStats(stats)) {
+      compactionStats = stats;
+    } else {
+      compactionStats = null;
+      compactionStatsFailed = true;
+    }
+  } catch {
+    compactionStats = null;
+    compactionStatsFailed = true;
+  }
+
+  return {
+    fileInfo,
+    fileInfoFailed,
+    autoLockMinutes,
+    autoLockFailed,
+    version,
+    compactionStats,
+    compactionStatsFailed,
+  };
 }
