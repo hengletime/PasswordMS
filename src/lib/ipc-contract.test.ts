@@ -147,6 +147,23 @@ describe('ipc command contract', () => {
     expect(invoked).toContain('compact_vault');
     expect(registered).toContain('compact_vault');
   });
+
+  it('keeps the six #531 ordering commands wired on both sides', () => {
+    // #531：排序模型 = 钉住块（pin_order）→ 未钉按频度。六条全链新命令，前端先落、
+    // 后端（kodouma）并行注册 —— 后端落地前 `registered` 少这六条是**约定的红**
+    // （报告里如实标注，等后端落地后复跑须全绿）。任一侧漏一条 = 运行期 `command not found`。
+    for (const name of [
+      'record_item_usage',
+      'set_item_pin',
+      'reorder_pinned_items',
+      'set_folder_pin',
+      'reorder_pinned_folders',
+      'move_item_to_folder',
+    ]) {
+      expect(invoked, `前端 invoke 缺 ${name}`).toContain(name);
+      expect(registered, `后端 generate_handler! 缺 ${name}`).toContain(name);
+    }
+  });
 });
 
 // D-67 / D-69：指纹与会话码字段的**镜像契约**。
@@ -251,7 +268,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（53/53）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（#531 起为 59/59）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
@@ -259,7 +276,10 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // commands/ 子目录一个都扫不到，total 会是 0，而 0 === 0 会静默通过。
     expect(total).toBeGreaterThan(40);
     // 死数字是有意的：新增命令时必须来改这两个数，等于强制作者看一眼这条不变量。
-    expect(total).toBe(53);
-    expect(withAttr).toBe(53);
+    // #531：53 → 59（record_item_usage / set_item_pin / reorder_pinned_items /
+    // set_folder_pin / reorder_pinned_folders / move_item_to_folder）。
+    // 后端未落地前这里会红（total 仍是 53）—— 约定的红，kodouma 落地后复跑须绿。
+    expect(total).toBe(59);
+    expect(withAttr).toBe(59);
   });
 });

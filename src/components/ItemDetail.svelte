@@ -88,6 +88,11 @@
       await api.system.copySecret(text, 0);
       ui.toast('success', 'common.copied');
     }
+    // #531：使用埋点（密码 / 用户名 / TOTP 的复制都走这里）。后端 60s 节流；
+    // 复制已成功才埋 —— 失败不算「使用」。
+    if (item !== null) {
+      void vault.recordItemUsage(item.item_id);
+    }
   }
 
   async function openUrl(): Promise<void> {

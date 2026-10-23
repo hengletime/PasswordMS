@@ -1,4 +1,4 @@
-//! 分组命令：CRUD / 排序（架构文档 §5.2、F-03）。
+//! 分组命令：CRUD / 排序（架构文档 §5.2、F-03；#531 起排序消费 pin/频度字段）。
 
 use passwordms_core::store::repository::FolderDeleteStrategy;
 
@@ -6,15 +6,19 @@ use crate::dto::FolderDto;
 use crate::error::{lock_err, IpcError, IpcResult};
 use crate::state::AppState;
 
-/// 列出分组。
+/// 列出分组（#531：`use_count`/`last_used_at` 为组内聚合值，与排序键同源）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_folders(state: tauri::State<'_, AppState>) -> IpcResult<Vec<FolderDto>> {
     let session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo()?;
+    let usage = repo.folder_usage();
     Ok(repo
         .list_folders()
         .into_iter()
-        .map(FolderDto::from)
+        .map(|f| {
+            let u = usage.get(&f.folder_id).copied().unwrap_or_default();
+            FolderDto::from_folder(f, u)
+        })
         .collect())
 }
 
@@ -28,7 +32,14 @@ pub fn create_folder(
 ) -> IpcResult<FolderDto> {
     let mut session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo_mut()?;
-    Ok(FolderDto::from(repo.create_folder(name, icon, color)?))
+    let folder = repo.create_folder(name, icon, color)?;
+    // 新分组还没有条目，聚合值必然是默认值；仍走 folder_usage 保证口径统一。
+    let usage = repo
+        .folder_usage()
+        .get(&folder.folder_id)
+        .copied()
+        .unwrap_or_default();
+    Ok(FolderDto::from_folder(folder, usage))
 }
 
 /// 更新分组。
@@ -42,9 +53,13 @@ pub fn update_folder(
 ) -> IpcResult<FolderDto> {
     let mut session = state.session.lock().map_err(lock_err)?;
     let repo = session.repo_mut()?;
-    Ok(FolderDto::from(
-        repo.update_folder(&folder_id, name, icon, color)?,
-    ))
+    let folder = repo.update_folder(&folder_id, name, icon, color)?;
+    let usage = repo
+        .folder_usage()
+        .get(&folder.folder_id)
+        .copied()
+        .unwrap_or_default();
+    Ok(FolderDto::from_folder(folder, usage))
 }
 
 /// 删除分组（`strategy` 为 `to_ungrouped` / `to_trash`；二次确认由前端负责）。

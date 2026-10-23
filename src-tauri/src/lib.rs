@@ -44,6 +44,13 @@ pub fn run() {
             commands::item_cmd::update_item,
             commands::item_cmd::delete_item,
             commands::item_cmd::toggle_favorite,
+            // ordering（#531：钉住 / 频度 / 归组）
+            commands::ordering_cmd::record_item_usage,
+            commands::ordering_cmd::set_item_pin,
+            commands::ordering_cmd::reorder_pinned_items,
+            commands::ordering_cmd::set_folder_pin,
+            commands::ordering_cmd::reorder_pinned_folders,
+            commands::ordering_cmd::move_item_to_folder,
             // folder
             commands::folder_cmd::list_folders,
             commands::folder_cmd::create_folder,

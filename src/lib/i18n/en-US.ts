@@ -125,6 +125,18 @@ export const enUS: Messages = {
     type_note: 'Note',
     type_attachment: 'Attachment',
   },
+  // #531: context menu (desktop right-click / mobile long-press).
+  menu: {
+    pin: 'Pin to top',
+    unpin: 'Unpin',
+    move_to_folder: 'Move to folder…',
+    move_title: 'Move to folder',
+  },
+  // #531: drag-handle assist text (visually hidden aria supplement for rows).
+  dnd: {
+    handle_item: 'Press and drag to pin or reorder',
+    handle_folder: 'Press and drag to pin or reorder folders',
+  },
   editor: {
     title_new: 'New item',
     title_edit: 'Edit item',

@@ -284,6 +284,8 @@ fn import_preview_wipe_plaintext_clears_items_and_folders() {
         sort_order: 0,
         rev: 1,
         updated_at: 0,
+        pinned: false,
+        pin_order: 0,
     };
     let item = Item {
         item_id: "22222222-2222-4222-8222-222222222222".to_string(),
@@ -307,6 +309,10 @@ fn import_preview_wipe_plaintext_clears_items_and_folders() {
         rev: 1,
         modified_by: "qa_test".to_string(),
         attachments: Vec::new(),
+        pinned: false,
+        pin_order: 0,
+        use_count: 0,
+        last_used_at: None,
     };
     let mut preview = ImportPreview {
         folders: vec![folder],

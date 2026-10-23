@@ -154,6 +154,19 @@ pub struct Item {
     /// `#[serde(default)]` 兼容旧帧（无此字段反序列化为空数组）。
     #[serde(default)]
     pub attachments: Vec<AttachmentMeta>,
+    /// 是否钉住（#531：列表排序的第一段 = 钉住块；拖拽置顶即钉住）。
+    #[serde(default)]
+    pub pinned: bool,
+    /// 钉住块内的顺序（小在前）。未钉住条目恒为 0，不参与排序。
+    #[serde(default)]
+    pub pin_order: i64,
+    /// 使用频度（#531：仅「复制」动作计数，同条目 60s 节流，见
+    /// [`crate::constants::USAGE_THROTTLE_MS`]）。未钉住段的主排序键（DESC）。
+    #[serde(default)]
+    pub use_count: u64,
+    /// 最近一次计频时间（节流判定与频度段的次级排序键；`None` 视为 0）。
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
 }
 
 impl Item {

@@ -189,6 +189,71 @@ class VaultStore {
     }
   }
 
+  // ===== #531：排序与频度（命令后端并行注册中；错误统一 toast，沿用现有模式） =====
+
+  /**
+   * 复制成功后的使用埋点（后端 60s 节流）。成功后 reload：
+   * 未钉住区按频度排，埋点会让刚用过的条目浮到前面 —— 这正是「频度置顶」的可见行为。
+   */
+  async recordItemUsage(itemId: string): Promise<void> {
+    try {
+      await api.items.recordUsage(itemId);
+      await this.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /** 钉住 / 取消钉住条目（拖拽松手与菜单共用）。 */
+  async setItemPin(itemId: string, pinned: boolean): Promise<void> {
+    try {
+      await api.items.setPin(itemId, pinned);
+      await this.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /** 已钉住条目的新顺序（仅钉住集合内的相对顺序）。 */
+  async reorderPinnedItems(orderedIds: string[]): Promise<void> {
+    try {
+      await api.items.reorderPinned(orderedIds);
+      await this.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /** 钉住 / 取消钉住分组。 */
+  async setFolderPin(folderId: string, pinned: boolean): Promise<void> {
+    try {
+      await api.folders.setPin(folderId, pinned);
+      await this.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /** 已钉住分组的新顺序。 */
+  async reorderPinnedFolders(orderedIds: string[]): Promise<void> {
+    try {
+      await api.folders.reorderPinned(orderedIds);
+      await this.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /** 条目跨分组移动；folderId 传 null = 移到未分组。 */
+  async moveItemToFolder(itemId: string, folderId: string | null): Promise<void> {
+    try {
+      await api.items.moveToFolder(itemId, folderId);
+      await this.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
   /** 删除分组。 */
   async deleteFolder(folderId: string, strategy: 'to_ungrouped' | 'to_trash'): Promise<void> {
     try {

@@ -26,6 +26,10 @@ fn login(id: &str, title: &str, rev: u64) -> Item {
         rev,
         modified_by: "qa_test".to_string(),
         attachments: Vec::new(),
+        pinned: false,
+        pin_order: 0,
+        use_count: 0,
+        last_used_at: None,
     }
 }
 

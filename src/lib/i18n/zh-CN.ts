@@ -123,6 +123,18 @@ export const zhCN = {
     type_note: '笔记',
     type_attachment: '附件',
   },
+  // #531：上下文菜单（桌面右键 / 移动端长按）。
+  menu: {
+    pin: '钉住',
+    unpin: '取消钉住',
+    move_to_folder: '移动到分组…',
+    move_title: '移动到分组',
+  },
+  // #531：拖拽手柄的辅助文本（行的 aria 补充，视觉隐藏）。
+  dnd: {
+    handle_item: '按住拖动可钉住或调整顺序',
+    handle_folder: '按住拖动可钉住或调整分组顺序',
+  },
   editor: {
     title_new: '新建条目',
     title_edit: '编辑条目',

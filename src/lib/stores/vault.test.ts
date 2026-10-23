@@ -9,8 +9,25 @@ import type { ItemDto } from '../../types';
 
 vi.mock('../ipc', () => ({
   api: {
-    items: { list: vi.fn(), create: vi.fn(), update: vi.fn(), remove: vi.fn() },
-    folders: { list: vi.fn() },
+    items: {
+      list: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      setPin: vi.fn(),
+      reorderPinned: vi.fn(),
+      moveToFolder: vi.fn(),
+      recordUsage: vi.fn(),
+    },
+    folders: {
+      list: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      remove: vi.fn(),
+      reorder: vi.fn(),
+      setPin: vi.fn(),
+      reorderPinned: vi.fn(),
+    },
   },
 }));
 
@@ -21,6 +38,12 @@ const listMock = vi.mocked(api.items.list);
 const createMock = vi.mocked(api.items.create);
 const updateMock = vi.mocked(api.items.update);
 const foldersListMock = vi.mocked(api.folders.list);
+const itemsSetPinMock = vi.mocked(api.items.setPin);
+const itemsReorderPinnedMock = vi.mocked(api.items.reorderPinned);
+const itemsMoveMock = vi.mocked(api.items.moveToFolder);
+const itemsRecordUsageMock = vi.mocked(api.items.recordUsage);
+const foldersSetPinMock = vi.mocked(api.folders.setPin);
+const foldersReorderPinnedMock = vi.mocked(api.folders.reorderPinned);
 
 /** 构造条目。 */
 function item(overrides: Partial<ItemDto> & { item_id: string }): ItemDto {
@@ -33,6 +56,11 @@ function item(overrides: Partial<ItemDto> & { item_id: string }): ItemDto {
     updated_at: 1,
     rev: 1,
     modified_by: 'local',
+    // #531：DTO 新增字段，夹具补默认值。
+    pinned: false,
+    pin_order: 0,
+    use_count: 0,
+    last_used_at: null,
     ...overrides,
   };
 }
@@ -174,5 +202,71 @@ describe('D-81 queryEpoch：外部重置的信号', () => {
     });
 
     expect(vault.queryEpoch).toBe(before);
+  });
+});
+
+// #531：六个新命令的透传守卫 —— 参数键、命令名由 ipc.ts 钉死（ipc-contract 锚点），
+// 这里守「调用真的发生 + 成功后 reload + 失败走 toast 不抛」。
+describe('#531 排序与频度命令透传', () => {
+  it('setItemPin：调 set_item_pin（对象参数键 item_id/pinned）并 reload', async () => {
+    itemsSetPinMock.mockResolvedValue(undefined);
+    listMock.mockResolvedValue([]);
+
+    await vault.setItemPin('i1', true);
+
+    expect(itemsSetPinMock).toHaveBeenCalledWith('i1', true);
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('reorderPinnedItems：调 reorder_pinned_items（ordered_ids）并 reload', async () => {
+    itemsReorderPinnedMock.mockResolvedValue(undefined);
+    listMock.mockResolvedValue([]);
+
+    await vault.reorderPinnedItems(['b', 'a']);
+
+    expect(itemsReorderPinnedMock).toHaveBeenCalledWith(['b', 'a']);
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('moveItemToFolder：folder_id=null 原样传 null（= 未分组），不转 undefined', async () => {
+    itemsMoveMock.mockResolvedValue(undefined);
+    listMock.mockResolvedValue([]);
+
+    await vault.moveItemToFolder('i1', null);
+    expect(itemsMoveMock).toHaveBeenCalledWith('i1', null);
+
+    await vault.moveItemToFolder('i1', 'folder-b');
+    expect(itemsMoveMock).toHaveBeenLastCalledWith('i1', 'folder-b');
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('setFolderPin / reorderPinnedFolders：分组侧同构', async () => {
+    foldersSetPinMock.mockResolvedValue(undefined);
+    foldersReorderPinnedMock.mockResolvedValue(undefined);
+    listMock.mockResolvedValue([]);
+
+    await vault.setFolderPin('f1', true);
+    expect(foldersSetPinMock).toHaveBeenCalledWith('f1', true);
+
+    await vault.reorderPinnedFolders(['f2', 'f1']);
+    expect(foldersReorderPinnedMock).toHaveBeenCalledWith(['f2', 'f1']);
+    expect(listMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('recordItemUsage：埋点成功后 reload（未钉区按频度排，用过的条目要浮上来）', async () => {
+    itemsRecordUsageMock.mockResolvedValue(undefined);
+    listMock.mockResolvedValue([]);
+
+    await vault.recordItemUsage('i1');
+
+    expect(itemsRecordUsageMock).toHaveBeenCalledWith('i1');
+    expect(listMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('失败路径：toast error、不抛、不 reload（复制流不被埋点失败打断界面）', async () => {
+    itemsRecordUsageMock.mockRejectedValue(new Error('boom'));
+
+    await expect(vault.recordItemUsage('i1')).resolves.toBeUndefined();
+    expect(listMock).not.toHaveBeenCalled();
   });
 });

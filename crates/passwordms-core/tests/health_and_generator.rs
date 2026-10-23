@@ -26,6 +26,10 @@ fn login(id: &str, password: &str, updated_at: i64, rev: u64) -> Item {
         rev,
         modified_by: "qa_test".to_string(),
         attachments: Vec::new(),
+        pinned: false,
+        pin_order: 0,
+        use_count: 0,
+        last_used_at: None,
     }
 }
 
@@ -145,6 +149,10 @@ fn health_ignores_non_login_items() {
         rev: 1,
         modified_by: "qa_test".to_string(),
         attachments: Vec::new(),
+        pinned: false,
+        pin_order: 0,
+        use_count: 0,
+        last_used_at: None,
     };
     let report = health::check(&[note], &cfg, 1_000_000);
     assert_eq!(report.login_count, 0);

@@ -13,7 +13,7 @@ use crate::constants::{
     ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENT_FILENAME_BYTES, MAX_NOTE_BYTES, MAX_VAULT_BYTES, MS_PER_DAY,
     RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM,
-    RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS,
+    RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS, USAGE_THROTTLE_MS,
 };
 use crate::crypto::keys::{self, VaultKey};
 use crate::crypto::{aead, rng};
@@ -100,6 +100,15 @@ pub struct CompactionOutcome {
     pub reclaimed_bytes: u64,
     /// 丢弃的帧数。
     pub dropped_frames: u32,
+}
+
+/// 组内条目的频度聚合值（#531：分组排序与 `FolderDto` 聚合字段共用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FolderUsage {
+    /// 组内条目 `use_count` 之和。
+    pub use_count: i64,
+    /// 组内条目 `last_used_at` 的最大值（组内无条目或全部为 `None` 时为 `None`）。
+    pub last_used_at: Option<i64>,
 }
 
 /// 压缩规划：保留哪些 slot、能省多少（[`Repository::plan_compaction`] 的产物）。
@@ -478,10 +487,56 @@ impl Repository {
 
     // ===== 分组 =====
 
-    /// 列出全部分组（按 sort_order 升序）。
+    /// 全部分组的频度聚合（`folder_id` → [`FolderUsage`]）。
+    ///
+    /// `list_folders` 的排序与 `FolderDto` 的聚合字段共用本函数，保证「排序看到的
+    /// 数字」与「UI 显示的数字」必然一致。
+    pub fn folder_usage(&self) -> HashMap<String, FolderUsage> {
+        let mut out: HashMap<String, FolderUsage> = HashMap::new();
+        for item in self.items.values() {
+            if let Some(fid) = &item.folder_id {
+                let agg = out.entry(fid.clone()).or_default();
+                agg.use_count += item.use_count as i64;
+                agg.last_used_at = match (agg.last_used_at, item.last_used_at) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+        }
+        out
+    }
+
+    /// 列出全部分组（#531 新模型：钉住块 `pin_order` ASC → 未钉住按组内频度
+    /// `use_count` DESC / `last_used_at` DESC / `updated_at` DESC / `folder_id` ASC）。
+    ///
+    /// **`sort_order` 不再参与排序**（字段与 `reorder_folders` 保留仅为兼容）；
+    /// 「收藏不再置顶」对分组同样成立——`Folder` 没有 favorite 字段，此处在历史
+    /// 上也从未按 favorite 排过，列出仅为语义完整。聚合在调用时现算（items 在内存）。
     pub fn list_folders(&self) -> Vec<Folder> {
+        let usage = self.folder_usage();
         let mut out: Vec<Folder> = self.folders.values().cloned().collect();
-        out.sort_by_key(|f| (f.sort_order, f.folder_id.clone()));
+        out.sort_by(|a, b| {
+            let ua = usage.get(&a.folder_id).copied().unwrap_or_default();
+            let ub = usage.get(&b.folder_id).copied().unwrap_or_default();
+            match (a.pinned, b.pinned) {
+                (true, true) => a
+                    .pin_order
+                    .cmp(&b.pin_order)
+                    .then_with(|| a.folder_id.cmp(&b.folder_id)),
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                (false, false) => ub
+                    .use_count
+                    .cmp(&ua.use_count)
+                    .then_with(|| {
+                        ub.last_used_at
+                            .unwrap_or(0)
+                            .cmp(&ua.last_used_at.unwrap_or(0))
+                    })
+                    .then_with(|| b.updated_at.cmp(&a.updated_at))
+                    .then_with(|| a.folder_id.cmp(&b.folder_id)),
+            }
+        });
         out
     }
 
@@ -509,6 +564,8 @@ impl Repository {
             sort_order,
             rev: 1,
             updated_at: now_ms(),
+            pinned: false,
+            pin_order: 0,
         };
         self.write_record(
             RECORD_TYPE_FOLDER,
@@ -683,12 +740,26 @@ impl Repository {
             })
             .cloned()
             .collect();
-        // 收藏置顶，其次按更新时间倒序。
-        out.sort_by(|a, b| {
-            b.favorite
-                .cmp(&a.favorite)
-                .then(b.updated_at.cmp(&a.updated_at))
-                .then(a.item_id.cmp(&b.item_id))
+        // #531 新排序模型（**favorite 不再置顶**，favorite 保留为纯标记）：
+        // 钉住块（pin_order ASC）→ 未钉住（use_count DESC → last_used_at DESC（None=0）
+        // → updated_at DESC → item_id ASC 兜底）。
+        out.sort_by(|a, b| match (a.pinned, b.pinned) {
+            (true, true) => a
+                .pin_order
+                .cmp(&b.pin_order)
+                .then_with(|| a.item_id.cmp(&b.item_id)),
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            (false, false) => b
+                .use_count
+                .cmp(&a.use_count)
+                .then_with(|| {
+                    b.last_used_at
+                        .unwrap_or(0)
+                        .cmp(&a.last_used_at.unwrap_or(0))
+                })
+                .then_with(|| b.updated_at.cmp(&a.updated_at))
+                .then_with(|| a.item_id.cmp(&b.item_id)),
         });
         out
     }
@@ -715,6 +786,10 @@ impl Repository {
             rev: 1,
             modified_by: self.device_id.clone(),
             attachments: Vec::new(),
+            pinned: false,
+            pin_order: 0,
+            use_count: 0,
+            last_used_at: None,
         };
         self.write_record(
             RECORD_TYPE_ITEM,
@@ -749,6 +824,189 @@ impl Repository {
         item.rev += 1;
         item.updated_at = now_ms();
         item.modified_by = self.device_id.clone();
+        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.items.insert(item_id.to_string(), item.clone());
+        Ok(item)
+    }
+
+    // ===== 钉住 / 频度 / 归组（#531：拖拽排序与频度置顶的后端半边）=====
+
+    /// 记录一次「使用」（#531）。
+    ///
+    /// 「使用」= **仅复制动作**（前端在复制成功后调用本命令埋点；`copy_secret`
+    /// 本身不知道 item_id，埋点由前端负责）。同条目
+    /// [`USAGE_THROTTLE_MS`](crate::constants::USAGE_THROTTLE_MS)（60s）节流：
+    /// 窗口内重复调用直接 `Ok(())` 返回，**零状态变更**（不写帧、不推 rev）。
+    pub fn record_item_usage(&mut self, item_id: &str) -> CoreResult<()> {
+        self.record_item_usage_at(item_id, now_ms())
+    }
+
+    /// [`Self::record_item_usage`] 的可测变体：时钟由调用方注入。
+    ///
+    /// 集成测试用固定时钟验证 60s 节流窗口（前一次在窗口内 → 不计；达到窗口 → 计），
+    /// 不必真等 60 秒。语义：`last_used_at` 为 `None` 或 `now - last_used_at >= 60s`
+    /// 才计频（`use_count += 1; last_used_at = Some(now); rev += 1`）。
+    ///
+    /// 计频是元数据变更：**`updated_at` 不变**——不把「复制过」伪装成「修改过」，
+    /// 用户可见的「最近更新时间」不因使用而跳变；`rev` 照常推进使变更走正常 LWW
+    /// 同步（节流已把流量限制在每条目每分钟 ≤1 次）。
+    pub fn record_item_usage_at(&mut self, item_id: &str, now: i64) -> CoreResult<()> {
+        let mut item = self.get_item(item_id)?;
+        let throttled = item
+            .last_used_at
+            .is_some_and(|last| now - last < USAGE_THROTTLE_MS);
+        if throttled {
+            return Ok(());
+        }
+        item.use_count += 1;
+        item.last_used_at = Some(now);
+        item.rev += 1;
+        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.items.insert(item_id.to_string(), item);
+        Ok(())
+    }
+
+    /// 钉住 / 取消钉住条目（#531：拖拽到顶部 = 钉住）。
+    ///
+    /// 钉住时 `pin_order = 当前最大 pin_order + 1`（追加到钉住块末尾）；取消时
+    /// `pin_order` 归零（未钉住条目不携带顺序）。排序语义见 [`Self::list_items`]。
+    pub fn set_item_pin(&mut self, item_id: &str, pinned: bool) -> CoreResult<Item> {
+        let mut item = self.get_item(item_id)?;
+        if pinned {
+            let max_order = self
+                .items
+                .values()
+                .filter(|i| i.pinned)
+                .map(|i| i.pin_order)
+                .max()
+                .unwrap_or(0);
+            item.pin_order = max_order + 1;
+        } else {
+            item.pin_order = 0;
+        }
+        item.pinned = pinned;
+        item.rev += 1;
+        item.updated_at = now_ms();
+        item.modified_by = self.device_id.clone();
+        self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&item)?)?;
+        self.items.insert(item_id.to_string(), item.clone());
+        Ok(item)
+    }
+
+    /// 按给定 ID 顺序重排**已钉住**条目的 `pin_order`（#531：钉住块内拖拽）。
+    ///
+    /// 语义仿 [`Self::reorder_folders`]：先**整体校验**（每个 id 必须存在——
+    /// 否则 [`CoreError::ItemNotFound`]；且必须已钉住——否则
+    /// [`CoreError::Validation`]），校验全过才落笔，不存在写一半的状态。
+    /// `pin_order = index`，**变更者**才推 rev 写帧（幂等：同序重复调用零写入）。
+    pub fn reorder_pinned_items(&mut self, ordered_ids: &[String]) -> CoreResult<()> {
+        for id in ordered_ids {
+            match self.items.get(id) {
+                Some(item) if item.pinned => {}
+                Some(_) => return Err(CoreError::Validation(format!("item {id} is not pinned"))),
+                None => return Err(CoreError::ItemNotFound),
+            }
+        }
+        for (pos, id) in ordered_ids.iter().enumerate() {
+            let pos = pos as i64;
+            let mut item = match self.items.get(id) {
+                Some(i) => i.clone(),
+                None => unreachable!("整体校验已保证存在"), // 校验后必然存在
+            };
+            if item.pin_order == pos {
+                continue;
+            }
+            item.pin_order = pos;
+            item.rev += 1;
+            item.updated_at = now_ms();
+            item.modified_by = self.device_id.clone();
+            self.write_record(RECORD_TYPE_ITEM, id, 0, &serde_json::to_vec(&item)?)?;
+            self.items.insert(id.clone(), item);
+        }
+        Ok(())
+    }
+
+    /// 钉住 / 取消钉住分组（#531）。语义与 [`Self::set_item_pin`] 一致（`Folder`
+    /// 无 `modified_by` 字段，其余同）。
+    pub fn set_folder_pin(&mut self, folder_id: &str, pinned: bool) -> CoreResult<Folder> {
+        let mut folder = self
+            .folders
+            .get(folder_id)
+            .cloned()
+            .ok_or(CoreError::FolderNotFound)?;
+        if pinned {
+            let max_order = self
+                .folders
+                .values()
+                .filter(|f| f.pinned)
+                .map(|f| f.pin_order)
+                .max()
+                .unwrap_or(0);
+            folder.pin_order = max_order + 1;
+        } else {
+            folder.pin_order = 0;
+        }
+        folder.pinned = pinned;
+        folder.rev += 1;
+        folder.updated_at = now_ms();
+        self.write_record(
+            RECORD_TYPE_FOLDER,
+            folder_id,
+            0,
+            &serde_json::to_vec(&folder)?,
+        )?;
+        self.folders.insert(folder_id.to_string(), folder.clone());
+        Ok(folder)
+    }
+
+    /// 按给定 ID 顺序重排**已钉住**分组的 `pin_order`（#531）。
+    /// 校验/幂等语义与 [`Self::reorder_pinned_items`] 一致。
+    pub fn reorder_pinned_folders(&mut self, ordered_ids: &[String]) -> CoreResult<()> {
+        for id in ordered_ids {
+            match self.folders.get(id) {
+                Some(folder) if folder.pinned => {}
+                Some(_) => return Err(CoreError::Validation(format!("folder {id} is not pinned"))),
+                None => return Err(CoreError::FolderNotFound),
+            }
+        }
+        for (pos, id) in ordered_ids.iter().enumerate() {
+            let pos = pos as i64;
+            let mut folder = match self.folders.get(id) {
+                Some(f) => f.clone(),
+                None => unreachable!("整体校验已保证存在"),
+            };
+            if folder.pin_order == pos {
+                continue;
+            }
+            folder.pin_order = pos;
+            folder.rev += 1;
+            folder.updated_at = now_ms();
+            self.write_record(RECORD_TYPE_FOLDER, id, 0, &serde_json::to_vec(&folder)?)?;
+            self.folders.insert(id.clone(), folder);
+        }
+        Ok(())
+    }
+
+    /// 移动条目到分组（#531；`None` = 移出为未分组）。
+    ///
+    /// `folder_id` 为 `Some` 时分组必须存在（否则 [`CoreError::Validation`]）。
+    /// `updated_at` 不变：移动分组不改内容（与 [`Self::record_item_usage`] 同一裁定，
+    /// 不把「挪了个位置」伪装成「修改过」）；`rev` 照常推进走正常 LWW。
+    pub fn move_item_to_folder(
+        &mut self,
+        item_id: &str,
+        folder_id: Option<String>,
+    ) -> CoreResult<Item> {
+        if let Some(fid) = &folder_id {
+            if !self.folders.contains_key(fid) {
+                return Err(CoreError::Validation(format!(
+                    "folder {fid} does not exist"
+                )));
+            }
+        }
+        let mut item = self.get_item(item_id)?;
+        item.folder_id = folder_id;
+        item.rev += 1;
         self.write_record(RECORD_TYPE_ITEM, item_id, 0, &serde_json::to_vec(&item)?)?;
         self.items.insert(item_id.to_string(), item.clone());
         Ok(item)
@@ -1131,6 +1389,11 @@ impl Repository {
                     size_bytes: attachment_data.size_bytes,
                     blob_size_bytes: attachment_data.blob_size_bytes,
                 }],
+                // 迁移产物是全新 item_id 的新条目，排序/频度字段从零开始。
+                pinned: false,
+                pin_order: 0,
+                use_count: 0,
+                last_used_at: None,
             };
             // 旧 ITEM 帧置墓碑（blob 帧是独立槽位，不受影响）。
             self.tombstone(RECORD_TYPE_ITEM, &old_id)?;

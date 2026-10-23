@@ -39,6 +39,11 @@ function fakeParent(parentId: string): ItemDto {
     updated_at: 0,
     rev: 2,
     modified_by: 'qa-device',
+    // #531：DTO 新增字段，夹具补默认值。
+    pinned: false,
+    pin_order: 0,
+    use_count: 0,
+    last_used_at: null,
   };
 }
 

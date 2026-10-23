@@ -94,6 +94,20 @@ export const items = {
     invoke<void>('delete_item', { item_id: itemId, permanent }),
   toggleFavorite: (itemId: string, favorite: boolean): Promise<ItemDto> =>
     invoke<ItemDto>('toggle_favorite', { item_id: itemId, favorite }),
+  // #531：排序模型 = 钉住块（pin_order）→ 未钉按频度。以下命令后端并行注册中（53→59），
+  // 命令名与参数键已按契约钉死，逐字一致。
+  // 复制成功后埋点（后端 60s 节流，前端每处复制成功调一次即可）。
+  recordUsage: (itemId: string): Promise<void> =>
+    invoke<void>('record_item_usage', { item_id: itemId }),
+  // 拖拽松手 = 把该条钉住（目标位由 reorder_pinned_items 表达）。
+  setPin: (itemId: string, pinned: boolean): Promise<void> =>
+    invoke<void>('set_item_pin', { item_id: itemId, pinned }),
+  // 已钉住集合的新顺序（仅钉住集合内的相对顺序）。
+  reorderPinned: (orderedIds: string[]): Promise<void> =>
+    invoke<void>('reorder_pinned_items', { ordered_ids: orderedIds }),
+  // 跨分组移动；folderId 传 null = 移到未分组。
+  moveToFolder: (itemId: string, folderId: string | null): Promise<void> =>
+    invoke<void>('move_item_to_folder', { item_id: itemId, folder_id: folderId ?? null }),
 };
 
 /** 分组类。 */
@@ -117,6 +131,11 @@ export const folders = {
     invoke<void>('delete_folder', { folder_id: folderId, strategy }),
   reorder: (orderedIds: string[]): Promise<void> =>
     invoke<void>('reorder_folders', { ordered_ids: orderedIds }),
+  // #531：分组钉住与钉住排序（旧 `reorder_folders` 的排序语义作废，命令仍在册）。
+  setPin: (folderId: string, pinned: boolean): Promise<void> =>
+    invoke<void>('set_folder_pin', { folder_id: folderId, pinned }),
+  reorderPinned: (orderedIds: string[]): Promise<void> =>
+    invoke<void>('reorder_pinned_folders', { ordered_ids: orderedIds }),
 };
 
 /** 密钥文档（附件）类。D-60：附件为父条目内嵌 `attachments`，按 (item_id, attachment_id) 定位。 */

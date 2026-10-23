@@ -377,6 +377,8 @@ sequenceDiagram
 
 > **零知识保证**：`ciphertext` 由 IK 加密，IK 由 VK 包裹。双端 VK 相同（配对时由 Host 的 VK 通过 `sk` 加密下发 `VK` 给 Joiner，实现「同一保险库密钥」），故任一端都可解密，而链路嗅探者只有密文。**VK 下发**：配对成功后 Host 发送 `sync_key` 加密的 `VK`（`AEAD(sk, VK)`）给 Joiner，Joiner 用自己的 KEK 重新包裹存入自库。
 
+> **#531 增量字段过线说明**：`Item.pinned/pin_order/use_count/last_used_at` 与 `Folder.pinned/pin_order` 全部 `#[serde(default)]` 内嵌于记录明文 payload，随密文原样过线——**协议零改动、报文零新增**；旧客户端 serde 忽略未知字段可读（语义不识别，双端同发惯例不变）。`use_count`/钉住变更推 `rev` 走**正常 LWW**（计频节流 60s 已把流量限制在每条目每分钟 ≤1 次；`record_item_usage`/`move_item_to_folder` 不动 `updated_at`，避免元数据变更污染用户可见的「最近更新」）。`FORMAT_VERSION` 不动。实测回归见 `tests/ordering_usage.rs`（8 例：排序四段/节流/钉住递增/重排校验/归组/旧库兼容/分组聚合/收藏不置顶）。
+
 ### 3.7 防重放（S4 / A-08）
 
 | 机制 | 设计 |
@@ -1461,9 +1463,18 @@ pub struct VaultSettings {
 | `name` | `String` | 🔒 非空、库内唯一 |
 | `icon` | `Option<String>` | 🔒 内联 SVG 标识 |
 | `color` | `Option<String>` | 🔒 `#RRGGBB` |
-| `sort_order` | `i32` | 🔒 升序 |
+| `sort_order` | `i32` | 🔒 **遗留**：#531 起排序不再消费（字段与 `reorder_folders` 保留仅为兼容） |
 | `rev` | `u64` | 同步修订号 |
 | `updated_at` | `i64` | UTC 毫秒 |
+| `pinned` | `bool` | #531，`#[serde(default)]`：钉住标记（拖拽置顶即钉住） |
+| `pin_order` | `i64` | #531，`#[serde(default)]`：钉住块内顺序（小在前；未钉住恒 0） |
+
+> **#531 排序模型（拖拽排序与频度置顶，客户已拍板）**：
+> - **列表排序 = 钉住块在顶（`pin_order` ASC）→ 未钉住按使用频度**（`use_count` DESC → `last_used_at` DESC（`None`=0）→ `updated_at` DESC → `item_id` ASC 兜底）。两个排序段是互斥块：钉住条目完全不参与频度比较。
+> - **`favorite` 不再置顶**——保留为纯标记，排序完全不参与（`toggle_favorite` 命令与字段原样保留）。
+> - **「使用」= 仅复制动作**：前端在复制成功后调 `record_item_usage` 埋点（`copy_secret` 不感知 item_id）；同条目 **60 秒节流**（`USAGE_THROTTLE_MS`，`record_item_usage_at` 注入时钟可测）——窗口内调用零状态变更（不写帧、不推 rev）。计频 `use_count += 1; last_used_at = Some(now); rev += 1`，**`updated_at` 不变**（不把「复制过」伪装成「修改过」）。
+> - **分组频度 = 组内条目 `use_count` 之和**（`last_used_at` 取组内最大），`list_folders` 调用时现算（`Repository::folder_usage`，与 `FolderDto` 的聚合字段同源——UI 显示数字与排序依据必然一致）。
+> - 钉住/重排/归组的写入语义：`rev += 1` 走正常 LWW；`set_item_pin`/`set_folder_pin` 同步推进 `updated_at`（用户主动操作，同 `toggle_favorite` 先例）；`reorder_pinned_items`/`reorder_pinned_folders` 先**整体校验**（id 必须存在且已钉住，未钉住报 `ERR_VALIDATION`）再落笔、变更者才推 rev（同序重放零写入）；`move_item_to_folder` 目标分组必须存在（否则 `ERR_VALIDATION`）、`updated_at` 不变。
 
 #### `Item` / `ItemKind`（🔒 全字段加密）
 
@@ -1475,6 +1486,12 @@ pub struct Item {
   pub favorite: bool,
   pub created_at: i64, pub updated_at: i64,
   pub rev: u64, pub modified_by: String,
+  // ↓ ↓ 以下为增量字段（全部 #[serde(default)]，旧库缺字段读回默认值）
+  pub attachments: Vec<AttachmentMeta>,  // D-60
+  pub pinned: bool,                      // #531 钉住标记
+  pub pin_order: i64,                    // #531 钉住块内顺序（未钉住恒 0）
+  pub use_count: u64,                    // #531 使用频度（仅复制动作计数，60s 节流）
+  pub last_used_at: Option<i64>,         // #531 最近计频时间（节流判定 + 次级排序键）
 }
 
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1561,7 +1578,13 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `create_item` | `{draft}` | `ItemDto` | F-04 |
 | `update_item` | `{item_id,draft}` | `ItemDto` | F-04 |
 | `delete_item` | `{item_id,permanent}` | `()` | 走回收站（F-15） |
-| `toggle_favorite` | `{item_id,favorite}` | `ItemDto` | F-08 |
+| `toggle_favorite` | `{item_id,favorite}` | `ItemDto` | F-08（#531 起仅标记，不再置顶） |
+| `record_item_usage` | `{item_id}` | `()` | #531 复制埋点（60s 节流，窗口内 no-op） |
+| `set_item_pin` | `{item_id,pinned}` | `()` | #531 钉住/取消（拖拽置顶） |
+| `reorder_pinned_items` | `{ordered_ids}` | `()` | #531 钉住块内重排（id 须已钉住） |
+| `set_folder_pin` | `{folder_id,pinned}` | `()` | #531 分组钉住/取消 |
+| `reorder_pinned_folders` | `{ordered_ids}` | `()` | #531 分组钉住块重排 |
+| `move_item_to_folder` | `{item_id,folder_id?}` | `()` | #531 归组/移出未分组（目标须存在） |
 | `import_attachment` | `{source_path,title}` | `ItemDto` | F-12（超限报错） |
 | `export_attachment` | `{item_id,dest_path}` | `()` | F-12（明文风险由前端提示） |
 | `export_vault` | `{dest_path,master_password}` | `()` | O-03 备份 |

@@ -2,6 +2,7 @@
   // 安全笔记只读视图（PRD F-13）。
   import Icon from './common/Icon.svelte';
   import { copySecretWithAutoClear } from '../lib/clipboard';
+  import { vault } from '../lib/stores/vault.svelte';
   import { ui } from '../lib/stores/ui.svelte';
   import type { ItemDto } from '../types';
 
@@ -18,6 +19,8 @@
     }
     await copySecretWithAutoClear(body);
     ui.toast('success', 'common.copied');
+    // #531 裁定：正文复制也算「使用」，与 ItemDetail 三出口同款——成功才埋点。
+    void vault.recordItemUsage(item.item_id);
   }
 </script>
 

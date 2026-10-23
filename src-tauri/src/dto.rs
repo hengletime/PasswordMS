@@ -36,19 +36,37 @@ pub struct ItemDraftDto {
 }
 
 /// 分组 DTO。
+///
+/// #531：`use_count` / `last_used_at` 是**组内条目的聚合值**（Σ`use_count` /
+/// max`last_used_at`），由 [`passwordms_core::store::repository::Repository::folder_usage`]
+/// 现算 —— 与 `list_folders` 的排序键同一来源，UI 显示的数字与排序看到的必然一致。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FolderDto {
     pub folder_id: String,
     pub name: String,
     pub icon: Option<String>,
     pub color: Option<String>,
+    /// 遗留字段：#531 起排序不再消费（字段保留仅为兼容，恒为落库值）。
     pub sort_order: i32,
     pub rev: u64,
     pub updated_at: i64,
+    /// 是否钉住（#531）。
+    pub pinned: bool,
+    /// 钉住块内顺序（#531）。
+    pub pin_order: i64,
+    /// 组内条目 `use_count` 之和（#531 聚合值）。
+    pub use_count: i64,
+    /// 组内条目 `last_used_at` 最大值（#531 聚合值）。
+    pub last_used_at: Option<i64>,
 }
 
-impl From<Folder> for FolderDto {
-    fn from(f: Folder) -> Self {
+impl FolderDto {
+    /// 由 `Folder` 与其组内频度聚合构造。
+    ///
+    /// **不用 `From<Folder>`**：聚合值依赖 `items`（`Folder` 自身不含），任何
+    /// "默认 0/None" 的隐式路径都会让 DTO 与排序依据脱节，故构造点必须显式传入
+    /// [`FolderUsage`](passwordms_core::store::repository::FolderUsage)。
+    pub fn from_folder(f: Folder, usage: passwordms_core::store::repository::FolderUsage) -> Self {
         Self {
             folder_id: f.folder_id,
             name: f.name,
@@ -57,6 +75,10 @@ impl From<Folder> for FolderDto {
             sort_order: f.sort_order,
             rev: f.rev,
             updated_at: f.updated_at,
+            pinned: f.pinned,
+            pin_order: f.pin_order,
+            use_count: usage.use_count,
+            last_used_at: usage.last_used_at,
         }
     }
 }

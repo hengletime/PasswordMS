@@ -871,6 +871,10 @@ fn case11_legacy_attachment_migration_idempotent() {
             rev: 1,
             modified_by: String::new(),
             attachments: Vec::new(),
+            pinned: false,
+            pin_order: 0,
+            use_count: 0,
+            last_used_at: None,
         };
         repo.put_item_direct(legacy).unwrap();
         // 清掉造帧用的临时父条目（软删 → purge；purge 的 GC 不会误杀 X——

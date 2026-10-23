@@ -260,6 +260,10 @@ fn item_json_roundtrip() {
         rev: 1,
         modified_by: "qa_test".to_string(),
         attachments: Vec::new(),
+        pinned: false,
+        pin_order: 0,
+        use_count: 0,
+        last_used_at: None,
     };
     let json = serde_json::to_string(&item).expect("ser");
     let back: Item = serde_json::from_str(&json).expect("de");

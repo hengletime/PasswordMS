@@ -154,6 +154,10 @@ pub fn parse(content: &str) -> CoreResult<ImportPreview> {
             rev: 1,
             modified_by: "import".to_string(),
             attachments: Vec::new(),
+            pinned: false,
+            pin_order: 0,
+            use_count: 0,
+            last_used_at: None,
         });
     }
 
@@ -178,6 +182,8 @@ fn ensure_folder(
         sort_order: *sort_order,
         rev: 1,
         updated_at: now_ms(),
+        pinned: false,
+        pin_order: 0,
     };
     *sort_order += 1;
     folder_map.insert(name.to_string(), folder.folder_id.clone());

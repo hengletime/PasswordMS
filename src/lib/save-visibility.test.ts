@@ -20,6 +20,11 @@ function item(overrides: Partial<ItemDto> & { item_id: string }): ItemDto {
     updated_at: 1,
     rev: 1,
     modified_by: 'local',
+    // #531：DTO 新增字段，夹具补默认值。
+    pinned: false,
+    pin_order: 0,
+    use_count: 0,
+    last_used_at: null,
     ...overrides,
   };
 }

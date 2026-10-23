@@ -73,6 +73,13 @@ export interface ItemDto {
   updated_at: number;
   rev: number;
   modified_by: string;
+  // #531：排序模型 = 钉住块（pin_order）→ 未钉按频度（use_count → last_used_at → updated_at）。
+  // 后端在途（#531 并行注册中）：落地前 wire 上没有这些键 → 运行时为 undefined，
+  // 组件层一律用 `pinned === true` 这类守卫读，不得直接当真值用。
+  pinned: boolean;
+  pin_order: number;
+  use_count: number;
+  last_used_at: number | null;
 }
 
 /** 条目草稿。 */
@@ -91,6 +98,11 @@ export interface FolderDto {
   sort_order: number;
   rev: number;
   updated_at: number;
+  // #531：与 ItemDto 同族（钉住块 + 频度；组频度 = 组内条目使用之和）。后端在途，见 ItemDto 注。
+  pinned: boolean;
+  pin_order: number;
+  use_count: number;
+  last_used_at: number | null;
 }
 
 /** 回收站条目。 */
