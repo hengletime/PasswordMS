@@ -79,6 +79,8 @@ class DragStore {
     this.state.kind = fresh.kind;
     this.state.draggedId = fresh.draggedId;
     this.state.label = fresh.label;
+    this.state.x = fresh.x;
+    this.state.y = fresh.y;
     this.state.overKind = fresh.overKind;
     this.state.overId = fresh.overId;
     this.state.overBefore = fresh.overBefore;
@@ -86,6 +88,19 @@ class DragStore {
 }
 
 export const drag = new DragStore();
+
+/**
+ * 松手结算：**先**把投放目标交给 `onDrop`，**再**清共享状态。
+ * 顺序不可交换——D-83 教训：`onDrop` 在同步段读 `drag.state` 取投放目标
+ * （`handleItemDrop` / `handleFolderDrop` 首行即 `drag.state`），若先 `end()`
+ * 读到的永远是 null，一切投放静默 no-op（「有边缘动画但松手没反应」）。
+ * `onDrop` 同步段只读 state + 发起异步 IPC，无重入风险；`end()` 随后清视觉状态。
+ * 抽成独立函数以便对「结算时序」做防回归断言（dnd-settle.test.ts）。
+ */
+export function finishDrag(draggedId: string, onDrop: (id: string) => void): void {
+  onDrop(draggedId);
+  drag.end();
+}
 
 /** 拖拽期间压住触屏滚动（non-passive touchmove + preventDefault）。返回解除函数。 */
 export function blockTouchScroll(): () => void {
@@ -280,8 +295,8 @@ export function beginRowDrag(
     const draggedId = pending.id;
     cleanup();
     if (wasDragging) {
-      drag.end();
-      callbacks.onDrop(draggedId);
+      // D-83：先 onDrop（同步段仍可读 drag.state 的投放目标），end() 最后清视觉状态。
+      finishDrag(draggedId, callbacks.onDrop);
       return;
     }
     if (wasArmed && pending.touch) {
