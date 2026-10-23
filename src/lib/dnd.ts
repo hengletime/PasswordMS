@@ -127,10 +127,13 @@ export function autoScrollDelta(
 /**
  * 拖拽松手后钉住集合的新顺序。
  *
- * 语义（客户拍板「拖拽 = 钉住到该位置」）：
- * - 拖**已钉住**条目：调整钉住顺序（插入到目标位置；落到未钉区 = 挪到钉住块末尾）；
- * - 拖**未钉住**条目：只有落在**钉住块内**（目标是钉住条目）才钉住并插到该位置；
- *   落在未钉区 = 无动作（未钉区按频度排，频度不可手调）。
+ * 语义（客户拍板，D-84 修订为「未钉区也可手动排序」）：
+ * - 拖 A 到 B 上：**B 与 A 一并收编进钉住块**（若 B 尚未钉住），A 按插入方向排在 B 前/后
+ *   （before → [...钉住块, A, B]；after → [...钉住块, B, A]）——视觉与拖放位置一致，顺序持久。
+ *   覆盖四种组合：都未钉 / A 已钉 B 未钉（B 收编）/ A 未钉 B 已钉（既有行为）/ 都已钉（纯重排）。
+ * - 拖到空白处/非行目标（targetId = null）：已钉 A = 挪到钉住块末尾；未钉 A = 无动作。
+ * - 从未被拖过的条目继续按频度自动排（钉住块之后），不变。
+ * - 目标已在钉住集合时不重复收编；draggedId === targetId（拖回自己）= null。
  *
  * @param currentPinnedIds 当前钉住集合（按 pin_order，即后端返回序）
  * @param draggedId 被拖条目
@@ -148,25 +151,24 @@ export function pinnedOrderAfterDrop(
     return null;
   }
   const draggedPinned = currentPinnedIds.includes(draggedId);
-  // 未钉条目必须落在钉住块内（目标存在且已钉住）才钉；目标 null（拖出块外）= 不钉。
-  if (!draggedPinned && (targetId === null || !currentPinnedIds.includes(targetId))) {
+  // 未钉条目拖到空白（目标 null）= 无动作；已钉条目拖到空白 = 挪到钉住块末尾。
+  if (targetId === null && !draggedPinned) {
     return null;
   }
-  // 新顺序 = 先摘掉被拖者，再插到目标位置。
+  // 新顺序 = 先摘掉被拖者，再把未钉的目标收编进钉住块（D-84：未钉区也可手排）。
   const without = currentPinnedIds.filter((id) => id !== draggedId);
+  if (targetId !== null && !without.includes(targetId)) {
+    without.push(targetId);
+  }
   let index: number;
   if (targetId === null) {
     index = without.length;
   } else {
     const at = without.indexOf(targetId);
-    if (at < 0) {
-      // 目标不在钉住集合（只可能：目标未钉）——按无动作处理。
-      return null;
-    }
     index = before ? at : at + 1;
   }
   const next = [...without.slice(0, index), draggedId, ...without.slice(index)];
-  // 顺序没变（拖回原位）→ 不调 IPC。
+  // 顺序没变（拖回原位）→ 不调 IPC。收编场景 next 必然变长，不会误判 unchanged。
   const unchanged =
     next.length === currentPinnedIds.length && next.every((id, i) => id === currentPinnedIds[i]);
   return unchanged ? null : next;

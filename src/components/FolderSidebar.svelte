@@ -122,28 +122,35 @@
     // 后端在途时 wire 上没有 pinned（undefined）→ 一律按「未钉」处理，不误发命令。
     const draggedPinned = dragged.pinned === true;
     const targetPinned = target.pinned === true;
-    if (!draggedPinned && !targetPinned) {
-      return;
-    }
+    // D-84：未钉区也可手动排序 —— 目标 id 直接传给纯函数（含未钉目标 = 收编）。
     const pinnedIds = vault.folders.filter((f) => f.pinned === true).map((f) => f.folder_id);
     const order = pinnedOrderAfterDrop(
       pinnedIds,
       draggedId,
-      targetPinned ? target.folder_id : null,
+      target.folder_id,
       over.overBefore,
     );
     if (order === null) {
       return;
     }
-    void applyFolderPinDrop(draggedId, draggedPinned, order);
+    void applyFolderPinDrop(draggedId, draggedPinned, target.folder_id, targetPinned, order);
   }
 
+  /**
+   * 松手结算（D-84）：新收编的目标先钉，被拖者按需钉，最后按新序调一次 reorder
+   * —— 全部 await 串行，保证 reorder 时后端 pinned 集合已含两者。
+   */
   async function applyFolderPinDrop(
     draggedId: string,
-    alreadyPinned: boolean,
+    draggedPinned: boolean,
+    targetId: string,
+    targetPinned: boolean,
     order: string[],
   ): Promise<void> {
-    if (!alreadyPinned) {
+    if (!targetPinned) {
+      await vault.setFolderPin(targetId, true);
+    }
+    if (!draggedPinned) {
       await vault.setFolderPin(draggedId, true);
     }
     await vault.reorderPinnedFolders(order);

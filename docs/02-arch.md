@@ -1470,7 +1470,7 @@ pub struct VaultSettings {
 | `pin_order` | `i64` | #531，`#[serde(default)]`：钉住块内顺序（小在前；未钉住恒 0） |
 
 > **#531 排序模型（拖拽排序与频度置顶，客户已拍板）**：
-> - **列表排序 = 钉住块在顶（`pin_order` ASC）→ 未钉住按使用频度**（`use_count` DESC → `last_used_at` DESC（`None`=0）→ `updated_at` DESC → `item_id` ASC 兜底）。两个排序段是互斥块：钉住条目完全不参与频度比较。
+> - **列表排序 = 钉住块在顶（`pin_order` ASC）→ 未钉住按使用频度**（`use_count` DESC → `last_used_at` DESC（`None`=0）→ `updated_at` DESC → `item_id` ASC 兜底）。两个排序段是互斥块：钉住条目完全不参与频度比较。**D-84 交互语义（v2.17）**：未钉区也可手动排序——前端拖 A 到 B 上把 B 一并收编进钉住块（`set_*_pin(true)` ×2 按需 + `reorder_pinned_*`，await 串行，先钉后排满足「id 必须已钉住」的整体校验）；本节后端排序模型与 IPC 契约零改动，变化只在前端何时发 `set_item_pin`/`set_folder_pin`。
 > - **`favorite` 不再置顶**——保留为纯标记，排序完全不参与（`toggle_favorite` 命令与字段原样保留）。
 > - **「使用」= 仅复制动作**：前端在复制成功后调 `record_item_usage` 埋点（`copy_secret` 不感知 item_id）；同条目 **60 秒节流**（`USAGE_THROTTLE_MS`，`record_item_usage_at` 注入时钟可测）——窗口内调用零状态变更（不写帧、不推 rev）。计频 `use_count += 1; last_used_at = Some(now); rev += 1`，**`updated_at` 不变**（不把「复制过」伪装成「修改过」）。
 > - **分组频度 = 组内条目 `use_count` 之和**（`last_used_at` 取组内最大），`list_folders` 调用时现算（`Repository::folder_usage`，与 `FolderDto` 的聚合字段同源——UI 显示数字与排序依据必然一致）。

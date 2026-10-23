@@ -149,26 +149,37 @@
     // 后端在途时 wire 上没有 pinned（undefined），一律按「未钉」处理 —— 不误发钉住命令。
     const draggedPinned = dragged.pinned === true;
     const targetPinned = target.pinned === true;
-    // 未钉区按频度排，频度不可手调：未钉条目落在未钉区 = 无动作。
-    if (!draggedPinned && !targetPinned) {
-      return;
-    }
+    // D-84：未钉区也可手动排序 —— 拖 A 到 B 上把 B 一并收编进钉住块（视觉与拖放位置一致）。
+    // 目标 id 直接传给纯函数（含未钉目标 = 收编），不再按 targetPinned 折叠成 null。
     const pinnedIds = vault.items.filter((i) => i.pinned === true).map((i) => i.item_id);
     const order = pinnedOrderAfterDrop(
       pinnedIds,
       draggedId,
-      targetPinned ? target.item_id : null,
+      target.item_id,
       over.overBefore,
     );
     if (order === null) {
       return;
     }
-    void applyPinDrop(draggedId, draggedPinned, order);
+    void applyPinDrop(draggedId, draggedPinned, target.item_id, targetPinned, order);
   }
 
-  /** 松手结算：未钉 → 先钉（set_item_pin），再按新顺序调一次 reorder（不连环刷）。 */
-  async function applyPinDrop(draggedId: string, alreadyPinned: boolean, order: string[]): Promise<void> {
-    if (!alreadyPinned) {
+  /**
+   * 松手结算（D-84）：新收编的目标先钉，被拖者按需钉，最后按新序调一次 reorder
+   * —— 全部 await 串行，保证 reorder 时后端 pinned 集合已含两者（否则整体校验 ERR_VALIDATION）。
+   * order 数组原样下发（已含新收编目标），无需预过滤。
+   */
+  async function applyPinDrop(
+    draggedId: string,
+    draggedPinned: boolean,
+    targetId: string,
+    targetPinned: boolean,
+    order: string[],
+  ): Promise<void> {
+    if (!targetPinned) {
+      await vault.setItemPin(targetId, true);
+    }
+    if (!draggedPinned) {
       await vault.setItemPin(draggedId, true);
     }
     await vault.reorderPinnedItems(order);

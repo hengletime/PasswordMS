@@ -78,8 +78,9 @@ describe('#531 钉住顺序 pinnedOrderAfterDrop', () => {
     expect(pinnedOrderAfterDrop(['a', 'b'], 'x', 'b', false)).toEqual(['a', 'b', 'x']);
   });
 
-  it('未钉拖到未钉区（目标不在钉住集合 / 目标 null）→ null（频度序不可手调，零 IPC）', () => {
+  it('未钉拖到空白处（目标 null）→ null（频度序原样，零 IPC；D-84 语义保留）', () => {
     expect(pinnedOrderAfterDrop(['a'], 'x', null, true)).toBeNull();
+    expect(pinnedOrderAfterDrop([], 'x', null, false)).toBeNull();
   });
 
   it('拖回原位 → null（不调 IPC）：a 本来就在 b 前，插回 b 之前等于没动', () => {
@@ -91,9 +92,43 @@ describe('#531 钉住顺序 pinnedOrderAfterDrop', () => {
   it('拖到自己上 → null', () => {
     expect(pinnedOrderAfterDrop(['a', 'b'], 'a', 'a', true)).toBeNull();
   });
+});
 
-  it('目标不在钉住集合（防御）→ null', () => {
-    expect(pinnedOrderAfterDrop(['a'], 'a', 'ghost', true)).toBeNull();
+describe('D-84 未钉区手动排序（收编语义）', () => {
+  it('A、B 都未钉 → 一并收编进钉住块：before → [A, B]，after → [B, A]', () => {
+    // 空钉住块：A、B 相邻置于块首。
+    expect(pinnedOrderAfterDrop([], 'x', 'y', true)).toEqual(['x', 'y']);
+    expect(pinnedOrderAfterDrop([], 'x', 'y', false)).toEqual(['y', 'x']);
+    // 已有钉住块 p：两者相邻缀在块后 —— [...钉住块, A, B] / [...钉住块, B, A]。
+    expect(pinnedOrderAfterDrop(['p'], 'x', 'y', true)).toEqual(['p', 'x', 'y']);
+    expect(pinnedOrderAfterDrop(['p'], 'x', 'y', false)).toEqual(['p', 'y', 'x']);
+  });
+
+  it('A 已钉、B 未钉 → B 收编，A 插在 B 前/后（原「防御 null」路径改为收编）', () => {
+    expect(pinnedOrderAfterDrop(['a', 'b'], 'b', 'y', true)).toEqual(['a', 'b', 'y']);
+    expect(pinnedOrderAfterDrop(['a', 'b'], 'b', 'y', false)).toEqual(['a', 'y', 'b']);
+    expect(pinnedOrderAfterDrop(['a'], 'a', 'ghost', true)).toEqual(['a', 'ghost']);
+  });
+
+  it('A 未钉、B 已钉 → 既有行为不变（A 收编插 B 前/后）', () => {
+    expect(pinnedOrderAfterDrop(['a', 'b'], 'x', 'a', true)).toEqual(['x', 'a', 'b']);
+    expect(pinnedOrderAfterDrop(['a', 'b'], 'x', 'b', false)).toEqual(['a', 'b', 'x']);
+  });
+
+  it('目标已在钉住集合 → 不重复收编（结果长度不膨胀）', () => {
+    expect(pinnedOrderAfterDrop(['a', 'b'], 'x', 'a', true)).toEqual(['x', 'a', 'b']);
+    expect(pinnedOrderAfterDrop(['a', 'b'], 'a', 'b', true)).toBeNull(); // 拖回原位仍零 IPC
+  });
+
+  it('dragged === target → 仍 null；未钉拖到 null → 仍 null（不变量复钉）', () => {
+    expect(pinnedOrderAfterDrop([], 'x', 'x', true)).toBeNull();
+    expect(pinnedOrderAfterDrop([], 'x', null, true)).toBeNull();
+  });
+
+  it('收编场景永不误判「拖回原位」：next 必然变长，恒发 IPC', () => {
+    // x、y 都未钉：即使视觉上「x 本来就在 y 前」，收编也是状态变更。
+    const order = pinnedOrderAfterDrop([], 'x', 'y', true);
+    expect(order).toEqual(['x', 'y']);
   });
 });
 
