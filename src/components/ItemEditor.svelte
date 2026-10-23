@@ -30,8 +30,12 @@
   let notes = $state(login?.notes ?? '');
   let totp = $state(login?.totp_secret ?? '');
   let body = $state(note?.body ?? '');
+  // D-81：新建时**预填当前选中分组**。原来恒为 null，条目会存进根目录；
+  // 若此刻正选中某分组（列表按它过滤），保存后条目立刻「消失」——编辑器关闭、
+  // 列表没有、详情区没有，用户以为丢了（实际在根目录）。编辑已有条目路径不变。
+  // 分组下拉的 options 恒为全部分组，预填值必合法。
   // svelte-ignore state_referenced_locally
-  let folderId = $state<string | null>(item?.folder_id ?? null);
+  let folderId = $state<string | null>(item?.folder_id ?? vault.selectedFolderId);
   // svelte-ignore state_referenced_locally
   let favorite = $state(item?.favorite ?? false);
   let fields = $state<CustomField[]>(

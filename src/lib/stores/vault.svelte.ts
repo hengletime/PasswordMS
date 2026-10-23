@@ -3,6 +3,7 @@
 import type { FolderDto, ItemDraftDto, ItemDto } from '../../types';
 import { toAppError } from '../errors';
 import { api } from '../ipc';
+import { revealFilterAfterSave, type ItemFilter } from '../save-visibility';
 import { ui } from './ui.svelte';
 
 /** 保险库 store。 */
@@ -17,6 +18,13 @@ class VaultStore {
   favoriteOnly = $state(false);
   /** 搜索关键词。 */
   query = $state('');
+  /**
+   * query 被程序化改写的代数（D-81）。
+   * 只在**外部重置**（保存回落「全部条目」、锁定 `reset()`）时 +1；
+   * 用户打字走 `setQuery`，不改它。`ItemList` 靠它区分「自己的防抖延迟」与「外部重置」，
+   * 前者不能动输入框（会清掉正在打的字），后者必须同步（搜索框显示 = 实际过滤）。
+   */
+  queryEpoch = $state(0);
   /** 当前选中条目。 */
   selectedItemId = $state<string | null>(null);
   /** 是否加载中。 */
@@ -74,11 +82,48 @@ class VaultStore {
     this.selectedItemId = itemId;
   }
 
+  /** 当前过滤器快照（传给 save-visibility 的纯函数；不持有引用，避免误改）。 */
+  private filterSnapshot(): ItemFilter {
+    return {
+      selectedFolderId: this.selectedFolderId,
+      favoriteOnly: this.favoriteOnly,
+      query: this.query,
+    };
+  }
+
+  /**
+   * D-81：保存成功的条目**必须立刻可见且选中**。
+   *
+   * 在保存前的过滤器下重新 `load()` 过一次之后调用：若条目仍不在列表里
+   * （分组 / query / favoriteOnly 任一藏了它），按纯函数 `revealFilterAfterSave`
+   * 给出的回落过滤器重置并再拉一次，否则用户视角就是「保存就消失」
+   * （编辑器关了、列表里没有、详情区也没有 —— 条目其实存进了别的视图看不见的地方）。
+   *
+   * @param saved 刚保存的条目（create / update 的返回值）
+   */
+  private async revealSavedItem(saved: ItemDto): Promise<void> {
+    const before = this.filterSnapshot();
+    const next = revealFilterAfterSave(before, saved, this.items);
+    if (
+      next.selectedFolderId === before.selectedFolderId &&
+      next.favoriteOnly === before.favoriteOnly &&
+      next.query === before.query
+    ) {
+      return;
+    }
+    this.selectedFolderId = next.selectedFolderId;
+    this.favoriteOnly = next.favoriteOnly;
+    this.query = next.query;
+    this.queryEpoch += 1;
+    await this.load();
+  }
+
   /** 新建条目。 */
   async createItem(draft: ItemDraftDto): Promise<ItemDto | null> {
     try {
       const created = await api.items.create(draft);
       await this.load();
+      await this.revealSavedItem(created);
       this.selectedItemId = created.item_id;
       return created;
     } catch (err) {
@@ -92,6 +137,8 @@ class VaultStore {
     try {
       const updated = await api.items.update(itemId, draft);
       await this.load();
+      await this.revealSavedItem(updated);
+      this.selectedItemId = itemId;
       return updated;
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
@@ -162,6 +209,7 @@ class VaultStore {
     this.selectedFolderId = null;
     this.favoriteOnly = false;
     this.query = '';
+    this.queryEpoch += 1;
     this.selectedItemId = null;
   }
 }

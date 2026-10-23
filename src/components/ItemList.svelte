@@ -16,6 +16,24 @@
   let query = $state('');
   let timer: ReturnType<typeof setTimeout> | null = null;
 
+  // D-81：store 的 query 被外部重置（保存成功后回落「全部条目」、锁定 reset）时，
+  // 搜索框显示值必须跟着变 —— 「搜索框显示 = 实际过滤」是验收项。
+  // 用 `queryEpoch` 区分两种「store 与本地不一致」：
+  //   · epoch 变了 = 外部重置 → 取消挂着的防抖、把显示同步成 store 值；
+  //   · epoch 没变 = 自己打字中（store 落后于本地是 220ms 防抖的正常延迟）→ 不动输入框，
+  //     否则每个按键都会被清掉。
+  let seenQueryEpoch = vault.queryEpoch;
+  $effect(() => {
+    if (vault.queryEpoch !== seenQueryEpoch) {
+      seenQueryEpoch = vault.queryEpoch;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      query = vault.query;
+    }
+  });
+
   function onSearchInput(event: Event): void {
     const value = (event.target as HTMLInputElement).value;
     query = value;
@@ -23,7 +41,12 @@
       clearTimeout(timer);
     }
     timer = setTimeout((): void => {
-      void vault.setQuery(value);
+      timer = null;
+      // 防御性兜底：防抖期间本地被外部重置清空过的话，旧词不再生效
+      // （正常路径 epoch effect 已把 timer 取消，这条护栏兜的是未来新增的重置路径）。
+      if (query === value) {
+        void vault.setQuery(value);
+      }
     }, 220);
   }
 
