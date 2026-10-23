@@ -1229,7 +1229,7 @@ impl Repository {
     /// 列出回收站。
     pub fn list_trash(&self) -> Vec<TrashEntry> {
         let mut out: Vec<TrashEntry> = self.trash.values().cloned().collect();
-        out.sort_by(|a, b| b.deleted_at.cmp(&a.deleted_at));
+        out.sort_by_key(|t| std::cmp::Reverse(t.deleted_at));
         out
     }
 
@@ -1303,7 +1303,7 @@ impl Repository {
             .filter(|c| !c.resolved)
             .cloned()
             .collect();
-        out.sort_by(|a, b| b.detected_at.cmp(&a.detected_at));
+        out.sort_by_key(|c| std::cmp::Reverse(c.detected_at));
         out
     }
 
@@ -2115,7 +2115,7 @@ impl Repository {
                 Err(_) => None,
             };
             if let Some(rev) = parsed_rev {
-                if best.map_or(true, |b| rev > b) {
+                if best.is_none_or(|b| rev > b) {
                     best = Some(rev);
                 }
             }

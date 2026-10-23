@@ -16,7 +16,8 @@
 #                   （timing_sidechannel 单例 106~151s 属正常耗时（KDF 烧时序），
 #                     全量约 4–6 分钟，取决于是否需重新编译）
 #   4. Rust 静态    cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm
-#                   （0 error 阻塞；warning 数如实汇报不阻塞，当前基线 ≤7）
+#                   （0 error 阻塞；warning 数如实汇报不阻塞，基线 0——#530 清零后
+#                     任何 warning 都视为新引入，见 docs/07-quality-gate.md §1.4）
 #   5. 体积门       bash scripts/check-size.sh desktop --allow-missing
 #                   （日常门语义：本机未出包时跳过不判负；出包门在 build-android.sh
 #                    与显式构建流程内，见 docs/07-quality-gate.md §2）
@@ -120,7 +121,7 @@ rust_test_gate() {
     cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm
 }
 
-# ===== 4. clippy（0 error 阻塞；warning 如实汇报不阻塞，基线 ≤7）=====
+# ===== 4. clippy（0 error 阻塞；warning 如实汇报不阻塞，基线 0）=====
 clippy_gate() {
   local t0 t1 rc warn_count
   info "▶ Rust 静态检查(cargo clippy --workspace --all-targets)"
@@ -140,10 +141,10 @@ clippy_gate() {
     record "clippy" FAIL "$((t1 - t0))" "rc=${rc}"
     return 1
   fi
-  pass "clippy 0 error（warning ${warn_count} 条，非阻塞；基线 ≤7）"
+  pass "clippy 0 error（warning ${warn_count} 条，非阻塞；基线 0）"
   record "clippy" PASS "$((t1 - t0))" "warnings=${warn_count}"
-  if [ "${warn_count:-0}" -gt 7 ]; then
-    info "⚠ warning 数超过已知基线 7，请核对是否新引入（不阻塞，如实登记）"
+  if [ "${warn_count:-0}" -gt 0 ]; then
+    info "⚠ warning 数超过已知基线 0，请核对是否新引入（不阻塞，如实登记）"
   fi
   return 0
 }

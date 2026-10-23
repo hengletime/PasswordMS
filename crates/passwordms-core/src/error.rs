@@ -261,6 +261,28 @@ pub fn stage_io(err: CoreError, stage: &'static str) -> CoreError {
     }
 }
 
+impl From<std::io::Error> for CoreError {
+    fn from(err: std::io::Error) -> Self {
+        // 仅保留 io 错误的 kind，不携带路径等可能含隐私的信息。
+        CoreError::Io(format!("io:{}", err.kind()))
+    }
+}
+
+impl From<serde_json::Error> for CoreError {
+    fn from(_err: serde_json::Error) -> Self {
+        CoreError::Internal("json".to_string())
+    }
+}
+
+impl From<uuid::Error> for CoreError {
+    fn from(_err: uuid::Error) -> Self {
+        CoreError::Validation("uuid".to_string())
+    }
+}
+
+/// 便捷别名。
+pub type CoreResult<T> = Result<T, CoreError>;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,25 +392,3 @@ mod tests {
         );
     }
 }
-
-impl From<std::io::Error> for CoreError {
-    fn from(err: std::io::Error) -> Self {
-        // 仅保留 io 错误的 kind，不携带路径等可能含隐私的信息。
-        CoreError::Io(format!("io:{}", err.kind()))
-    }
-}
-
-impl From<serde_json::Error> for CoreError {
-    fn from(_err: serde_json::Error) -> Self {
-        CoreError::Internal("json".to_string())
-    }
-}
-
-impl From<uuid::Error> for CoreError {
-    fn from(_err: uuid::Error) -> Self {
-        CoreError::Validation("uuid".to_string())
-    }
-}
-
-/// 便捷别名。
-pub type CoreResult<T> = Result<T, CoreError>;

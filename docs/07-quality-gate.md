@@ -1,7 +1,7 @@
 # 07 · 质量门与出包门禁（权威）
 
 > **本文档的性质**：PasswordMS 交付前的**唯一门禁权威**。§1 日常门 = 一条命令跑完的自动化总门；§2 出包门 = 产出安装包/APK 的**唯一正道**与出包后的人工验收；§3 安全验收点 A-01~A-10 与测试证据的映射；§4 已知边界（**未验证 ≠ 通过**）。
-> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-22 16:19（v1.2.11 + Q-2，**8 门**）实跑刷新**（总判定 **PASS**，8 门全过 / 0 失败 / 0 跳过；Rust **148 例通过 + 1 例 `#[ignore]`**、前端 **26 文件 204 例**；各门耗时 12s / 11s / 4s / 2s / 325s / 12s / 30s / 15s；门禁期间 `find … -newermt 16:19:14` **空输出** = 零改动）；2026-10-22 14:10（v1.2.11，**7 门**——Q-2 尚未纳入，148 例 / 204 例，12s / 11s / 4s / 341s / 12s / 28s / 13s）；2026-10-22 12:51（v1.2.10，145 例 / 204 例）、2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
+> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-22 22:35（v1.2.11 + Q-2 + #530-clippy清零，**8 门**）实跑刷新**（总判定 **PASS**，8 门全过 / 0 失败 / 0 跳过；Rust **148 例通过 + 1 例 `#[ignore]`**、前端 **26 文件 204 例**；各门耗时 13s / 14s / 4s / 2s / 400s / 4s / 30s / 15s；门禁期间 `find … -newermt 22:35:39` **空输出** = 零改动）；2026-10-22 16:19（v1.2.11 + Q-2，clippy 尚为 7 条，148 例 / 204 例，12s / 11s / 4s / 2s / 325s / 12s / 30s / 15s）；2026-10-22 14:10（v1.2.11，**7 门**——Q-2 尚未纳入，148 例 / 204 例，12s / 11s / 4s / 341s / 12s / 28s / 13s）；2026-10-22 12:51（v1.2.10，145 例 / 204 例）、2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
 > **记录人**：工程师（寇豆码）　**最近一次执行**：2026-10-22
 
 ---
@@ -32,16 +32,16 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 | # | 门 | 命令 | 本次实测（2026-10-22 16:19 · v1.2.11 + Q-2） | 判定 |
 |---|----|------|---------|------|
-| 1 | 前端单测 | `npm run test`（vitest） | **26 文件 204/204 通过**（与 v1.2.10 同数——D-80 全是后端，`src/` 零改动） | ✅ 12s |
-| 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 11s |
+| 1 | 前端单测 | `npm run test`（vitest） | **26 文件 204/204 通过**（与 v1.2.10 同数——D-80 全是后端，`src/` 零改动） | ✅ 13s |
+| 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 14s |
 | 3 | CSS 层叠契约 | `npm run check:css` | **0 FAIL / 6 WARN**（6 WARN 为既有浅色主/危险按钮对比度 3.74~4.38:1，过控件底线 3.0 未达 AA 4.5，已知项） | ✅ 4s |
 | 4 | **Rust 格式基线**（**Q-2 新增**） | `cargo fmt --all -- --check` | **0 处差异**（拉平前基线为红：**12 处 / 3 文件**，见 §1.6） | ✅ 2s |
-| 5 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **148 通过 / 0 失败 / 1 忽略**（**24 条** `test result` 行；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过——它要读真实库，不进日常门。较 v1.2.10 的 145 新增 **3 例**：D-80 已仲裁冲突停止保活，GC 出口 / 压缩出口 / `KeepBoth` 防过修各 1 例） | ✅ 325s |
-| 6 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 7 条 lint**（基线 ≤7，lint 种类与 v1.2.10 完全一致，**无新增**；`repository.rs` 行号因 D-80 文档块下移，明细见 §1.4） | ✅ 12s |
+| 5 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **148 通过 / 0 失败 / 1 忽略**（**24 条** `test result` 行；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过——它要读真实库，不进日常门。较 v1.2.10 的 145 新增 **3 例**：D-80 已仲裁冲突停止保活，GC 出口 / 压缩出口 / `KeepBoth` 防过修各 1 例） | ✅ 400s |
+| 6 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 0 条 lint**（#530 已清零，基线 0——**此后任何 warning 都是新引入**，门禁 `-gt 0` 会打 `⚠` 行如实登记；逐条修法见 §1.4） | ✅ 4s |
 | 7 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.42 MB**（2,539,520 B）+ NSIS **1.60 MB**（1,679,584 B），均 ≤ 10 MB；绿色版 zip **1.95 MB**（2,044,590 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 逐字节相同，sha256 `e79fec35…`**） | ✅ 30s |
 | 8 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.66 MB ≤ 12 MB**（`PasswordMS-1.2.11-arm64.apk`，6,983,315 B / sha256 `8f8c6f94…`；字节数与 v1.2.10 **恰好相同**——D-80 只多一个 `if` 分支且真身 .so 按页对齐，**hash 与 mtime（14:26）不同，非旧包**；V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书；`target/` 下**共 13 个** APK 逐个核验全达标） | ✅ 15s |
 
-> **§1.2 的读数口径（重要）**：第 1~6 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-22 16:19:14 前端起跑，**8 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
+> **§1.2 的读数口径（重要）**：第 1~6 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-22 22:35:39 前端起跑，**8 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
 > 第 7~8 行的字节数来自**同一棵树**的 v1.2.11 正式出包产物（`--allow-missing` 口径不变）。
 > ⚠️ **门禁输出必须落日志再 grep**：`bash scripts/gate-all.sh | tail -N` 会把前端例数等关键读数截掉，且日志含 ANSI 色码 —— 用 `grep -a` 才读得到。
 > **「门禁起跑后零改动」是这个读数成立的唯一凭据**（2026-10-21 当天因并行写入报废过两轮读数，见 §1.5）。固定收尾断言（**必须排除构建缓存**，否则 `.gradle` 里的 lock/bin 会把断言变成噪音）：
@@ -105,25 +105,23 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 | doc-tests | 1 | `attachment_name.rs` 的 ``` 示例（**必须靠 `.cargo/config.toml` 的 `rustdocflags` 才能链接**，见 §1.1） |
 | **合计** | **149** | 148 passed / 0 failed / 1 ignored；**23 个编译目标（lib + 22 集成测试）+ 1 个 doc-test 目标 = 24 条 `test result` 行**（与 `gate-all.sh` 日志逐行累加吻合） |
 
-### 1.4 clippy 基线（2026-10-18 实跑 11 条 → Q-1 修订后 7 条 → 2026-10-21 复核仍 7 条）
+### 1.4 clippy 基线（2026-10-18 实跑 11 条 → Q-1 清 4 条剩 7 条 → **2026-10-22 #530 清零至 0**）
 
-`--all-targets` 会把**测试代码**一并纳入 lint，故总数高于历史「lib-only ≤3」口径。2026-10-18 实测 **0 error / 11 条 lint**；其中**测试代码 4 条属低价值噪音，已在 Q-1 工单顺手清零**（`sync_deletion.rs` doc 懒续行 ×2 + `manual_contains` ×1、`pairing_loopback.rs` doc 懒续行 ×1，清零后复跑 clippy 确认消失，受影响测试目标 `sync_deletion` 8/8、`pairing_loopback` 3/3 无回退）。现存 **7 条**（均涉及结构性改动，不在 Q-1 范围）：
+`--all-targets` 会把**测试代码**一并纳入 lint，故总数高于历史「lib-only ≤3」口径。2026-10-18 实测 **0 error / 11 条 lint**；其中**测试代码 4 条属低价值噪音，已在 Q-1 工单顺手清零**（`sync_deletion.rs` doc 懒续行 ×2 + `manual_contains` ×1、`pairing_loopback.rs` doc 懒续行 ×1）。剩余 **7 条已于 2026-10-22 随 #530 质量门专项清零**——全部为 lint 修整，**零行为变更、零公开签名变更**（2026-10-22 复跑 `cargo clippy --workspace --all-targets` = **0 error / 0 warning**）：
 
-| lint | 位置（2026-10-21 复核行号） | 状态 |
-|------|------|------|
-| consider using `sort_by_key` ×2 | `src/store/repository.rs:1097,1171` | 登记不动 |
-| items after a test module | `src/error.rs:265`（tests 模块后置 impl） | 登记不动 |
-| large size difference between variants | `src/session.rs:23` | 登记不动 |
-| borrowed expression implements traits | `src/sync/protocol.rs:372` | 登记不动 |
-| map_or can be simplified | `src/store/repository.rs:1680` | 登记不动 |
-| owned instance just for comparison | `src-tauri/src/commands/sync_cmd.rs:131` | 登记不动（D-62 存量） |
+| lint | 原位置（D-80 后行号） | 修法（一句话） | 涉签名/行为？ |
+|------|------|------|------|
+| consider using `sort_by_key` ×2 | `src/store/repository.rs:1232,1306` | `sort_by(\|a, b\| b.x.cmp(&a.x))` → `sort_by_key(\|e\| std::cmp::Reverse(e.x))`（同为稳定排序，结果序列逐位不变） | 否 |
+| items after a test module | `src/error.rs`（tests 模块后置 3 个 `impl From` + `CoreResult` 别名） | 把文件尾的 3 个 `impl From<io/serde_json/uuid>` 与 `pub type CoreResult` 整体**挪到 `mod tests` 之前**（Rust 项声明与顺序无关，纯挪位） | 否 |
+| large size difference between variants | `src/session.rs:23` | `#[allow(clippy::large_enum_variant)]` + 注释说明：Box 化需改公开类型 `Unlocked`，按「不改公开签名」红线改用 allow；锁定态本就不持敏感数据，A-04 清零语义不变 | 否（allow，**未 Box**；若裁定必须真 Box 需改公开签名，另行立项） |
+| borrowed expression implements traits | `src/sync/protocol.rs:372`（测试内） | `to_value(&sample(...))` 去掉 `&`（`sample` 返回值直接按值传入即可） | 否 |
+| map_or can be simplified | `src/store/repository.rs:2118` | `best.map_or(true, \|b\| rev > b)` → `best.is_none_or(\|b\| rev > b)`（语义等价改写） | 否 |
+| owned instance just for comparison | `src-tauri/src/commands/sync_cmd.rs:137` | `joiner.host_id().to_string()` → `joiner.host_id()`（`host_id()` 返回 `&str`，`String == &str` 本就成立，少一次分配） | 否 |
 
-> **2026-10-21 复核**：仍是这 **7 条**，一条没多、一条没少；**仅行号因 D-60/D-61/D-66 的插入整体下移**（旧值 786/846/258/361/1226/125 → 新值见上表，`session.rs:23` 未动）。复核时两种计数口径互相印证：脚本现有口径（`grep '^warning: '` 剔除 cargo 汇总行与 windres 兜底）= **7**，按唯一源码位置去重（`--> file:line:col` 去重）= **7**，两者一致，说明脚本的计数没有虚高。
+> 历史口径（已作废，留档）：2026-10-21 复核为 7 条「登记不动」，行号旧值 786/846/258/361/1226/125 → 1097/1171/265/361/1680/131 → D-80 后 1232/1306/265/23/2118/137。当时不切 `-D warnings` 的理由（存量含 `error.rs` impl 挪位、`session.rs` Box 化等结构性改动）随 #530 清零而消失——**此后任何 warning 都应视为新引入**，`gate-all.sh` 的基线判定已同步从 `-gt 7` 改为 `-gt 0`（见下）。
 >
-> 门禁口径**维持**「0 error 阻塞 + warning 非阻塞、如实登记」，不切 `-D warnings`：存量 7 条里有 `error.rs` 的 impl 挪位、`session.rs` 的大枚举变体（需 `Box`）等**结构性改动**，不该混进功能修复的交付。**清零 7 条列入 backlog**（随 #530 质量门专项一起做）。
+> `gate-all.sh` 同步改四处（原「基线 ≤7」→「基线 0」）：头注释、clippy 段注释、pass 文案、`-gt` 判定。**注意 `-gt 0` 的语义变化**：≤7 时代码含义是"warning 超基线才提示（不阻塞）"，0 时代码含义是"**任何 warning 都该提示**"——pass 文案同步改为 `warning 0 条（基线 0）`，一旦出现 warning 行即打印 `⚠ warning 数超过已知基线 0`，仍不阻塞但如实登记。（门禁脚本改动的完整实跑读数由主理人复核后刷新 §1.2，此处不预填。）
 >
-> 顺带订正一处历史口径：`gate-all.sh` 的注释与提示文案长期写着「基线 ≤3」，那是**lib-only 时代**的数字；`--all-targets` 落地后真实基线是 7，导致门禁每轮都打印「超过基线 3」的误报（狼来了，真引入时反而没人看）。现已统一为 **≤7**（`:14` 头注释、`:91` 段注释、`:111` pass 文案、`:113` `-gt` 判定**四处同改**），改后完整重跑 7 门全 PASS，`[ OK ] clippy 0 error（warning 7 条，非阻塞；基线 ≤7）`，**不再出现任何 `⚠ warning 数超过已知基线` 误报行**。
-
 > 脚本对 warning 只**如实计数不阻塞**（0 error 是唯一硬约束）；计数已剔除 cargo 汇总行与 build-script（windres 兜底）提示，避免重复统计。
 
 ### 1.5 门禁读数报废事故（2026-10-21，同日两次）

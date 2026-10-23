@@ -20,6 +20,12 @@ use crate::store::container::Container;
 use crate::store::repository::Repository;
 
 /// 会话状态。
+///
+/// `Locked` 无数据、`Unlocked` 携带整个 `Repository`（BTreeMap/HashMap 多个），clippy
+/// 认为两者尺寸悬殊。**不采纳 Box 化建议**：`Unlocked` 是公开类型，`Box<Unlocked>` /
+/// `Box<Repository>` 都会改公开签名与既有 `match` 解构；锁定态本就不持敏感数据，
+/// enum 尺寸差只是锁定会话多占一点栈，无正确性或内存安全问题（A-04 清零语义不变）。
+#[allow(clippy::large_enum_variant)]
 pub enum SessionState {
     /// 已锁定（无任何敏感数据在内存）。
     Locked,

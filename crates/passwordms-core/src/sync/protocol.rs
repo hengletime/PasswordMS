@@ -369,7 +369,7 @@ mod qr_ips_tests {
     #[test]
     fn legacy_payload_without_ips_decodes() {
         // 旧版二维码文本没有 ips 字段 → 解码为空列表，Joiner 回退到 ip（D-44 向后兼容）。
-        let mut v = serde_json::to_value(&sample(vec!["192.168.1.10".to_string()])).unwrap();
+        let mut v = serde_json::to_value(sample(vec!["192.168.1.10".to_string()])).unwrap();
         v.as_object_mut().unwrap().remove("ips");
         let text = format!(
             "{}{}",

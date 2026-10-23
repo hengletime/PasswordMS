@@ -134,7 +134,7 @@ fn sync_join_impl(
         let repo = session.repo()?;
         repo.list_paired_devices()
             .iter()
-            .any(|d| d.device_id == joiner.host_id().to_string())
+            .any(|d| d.device_id == joiner.host_id())
             || repo.vault_key()[..] == joiner.host_vault_key()[..]
     };
     if !already_paired {
