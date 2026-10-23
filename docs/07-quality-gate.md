@@ -38,7 +38,7 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 | 4 | **Rust 格式基线**（**Q-2 新增**） | `cargo fmt --all -- --check` | **0 处差异**（拉平前基线为红：**12 处 / 3 文件**，见 §1.6） | ✅ 3s |
 | 5 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **148 通过 / 0 失败 / 1 忽略**（本轮 `crates/` 零改动，与 22:35 读数同数；忽略项为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过） | ✅ 334s |
 | 6 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 0 条 lint**（基线 0——**此后任何 warning 都是新引入**，门禁 `-gt 0` 会打 `⚠` 行如实登记；逐条修法见 §1.4） | ✅ 17s |
-| 7 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.42 MB**（2,539,520 B）+ NSIS **1.60 MB**（1,679,997 B），均 ≤ 10 MB；绿色版 zip **1.95 MB**（2,044,579 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 逐字节相同，sha256 `95bbb12c…`**） | ✅ 32s |
+| 7 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.42 MB**（2,539,520 B）+ NSIS **1.67 MB**（1,746,668 B，**D-82 修复后重打**，含 WebView2Loader.dll），均 ≤ 10 MB；绿色版 zip **1.95 MB**（2,044,579 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 逐字节相同，sha256 `95bbb12c…`**） | ✅ 32s |
 | 8 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.66 MB ≤ 12 MB**（`PasswordMS-1.2.12-arm64.apk`，6,983,315 B / sha256 `be40fbef…`；字节数与 v1.2.10/1.2.11 **恰好相同**——.so 按页对齐，**hash 与 mtime（10-23 10:24）不同、包内 .so 四断言 4/4（sha `08498305…`），非旧包**；V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书；`target/` 下**共 14 个** APK 逐个核验全达标） | ✅ 16s |
 
 > **§1.2 的读数口径（重要）**：第 1~6 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-23 10:07:02 前端起跑，**8 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
@@ -195,6 +195,14 @@ bash scripts/make-portable.sh               # 如需便携版；前置 tauri bui
 ```
 
 产物落点：`target/x86_64-pc-windows-gnullvm/release/bundle/{msi,nsis}/`。
+
+#### 2.1.1 D-82：NSIS 安装版缺 WebView2Loader.dll（2026-10-23，主人实测发现，已修复）
+
+- **症状**：NSIS 安装版装完只有 `passwordms.exe` + `uninstall.exe`，启动报「由于找不到 WebView2Loader.dll，无法继续执行代码」。MSI / 绿色版 / APK 不受影响（主人长期用 MSI 故未暴露；绿色版 D-62 起由 `make-portable.sh` 手工补 DLL）。
+- **根因（上游）**：`tauri-bundler` 的 `nsis/mod.rs::generate_resource_data()` 仅当 **`target.ends_with("-gnu")`** 才把 out_dir 下的 `WebView2Loader.dll` 注入 NSIS；本项目 target 为 `x86_64-pc-windows-gnullvm`——以 `-gnullvm` 结尾，判定为 false → NSIS 包无 DLL。而 WiX/MSI 侧（`msi/mod.rs`）是 out_dir `*.dll` **无条件全量 glob**，所以 MSI 一直正常。属上游对 gnullvm 目标的疏漏。
+- **修法（本项目侧，不动上游）**：Tauri 官方 NSIS 钩子机制——新增 `src-tauri/windows/installer-hooks.nsh`（`NSIS_HOOK_POSTINSTALL` 注入 DLL + `NSIS_HOOK_PREUNINSTALL` 删除，保证卸载后 `$INSTDIR` 可移除；文件内注释**纯 ASCII**，理由同 .ps1 教训），`tauri.conf.json > bundle > windows > nsis > installerHooks` 挂载。`.nsi` 里的 DLL 源路径 `..\..\WebView2Loader.dll` 相对生成的 `installer.nsi`（`{out}/nsis/{arch}/`）解析；若上游改布局，makensis **当场报错**（fail-closed，不会静默出坏包）。
+- **验证（端到端）**：重打后 setup.exe 1,679,997 → **1,746,668 B**（sha256 `c09f1ee0…`）；静默安装到临时目录 → `WebView2Loader.dll`（160,880 B）就位；`passwordms.exe` 启动 4 秒存活（原「系统错误」弹窗消失）；`uninstall.exe /S` 卸载 exit 0，目录与 HKCU 卸载键**零残留**。
+- **教训**：①**每个交付渠道都要端到端启动过一次**——NSIS 渠道自 v1.0 起从未被真机启动过，坏包静默存活了 12 个版本；②「包体增大 110KB」是钩子生效的旁证，但**不能只靠旁证**，必须看到文件真落盘。
 
 ### 2.2 Android：唯一正道 = `scripts/build-android.sh`
 
