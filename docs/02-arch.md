@@ -959,6 +959,17 @@ Android 的保存对话框（`ACTION_CREATE_DOCUMENT`）回传的是 `content://
 - **IPC 形状**：新增命令 `save_import_template(app, dest_path)`，`rename_all = "snake_case"`，
   wire 键 `dest_path`（见 `docs/03-impl.md` §14 不变量：全仓 50 → **51** 处 `tauri::command`，51 处带该属性，0 例外）。
   **既有命令形状一律未变**（`export_attachment` 仍是 `item_id` / `attachment_id` / `dest_path`）。
+
+#### 3.14.11.1 v1.2.16 增量（D-94：Android「从备份恢复」读 `content://`——读方向补齐）
+
+- **症状**（主人真机实测 2026-10-24）：手机上锁屏页「从备份恢复」选电脑导出的 `.vault`（33 KB，magic `PMSVAULT` 正常，导出侧无问题）→ toast「文件读写错误」。
+- **根因**：D-55 写该功能时只考虑了桌面——桌面 `open()` 返回真实内核路径；Android 的 SAF `open()` 返回 `content://…`，`restore_backup` 直接 `Path::new(&source_path)` 交给 core `restore_backup_from`（`fs::metadata` / `File::open`）必失败 → `ERR_IO`。**全仓 4 个选文件入口最后一个漏网点**：`import_cmd`（D-87）、`keydoc_cmd`（D-66/D-71）都已接 `content://` 分支，唯独它没有。
+- **修法（A 案，主人拍板）**：
+  - `content_uri` 新增 `copy_to_file(app, uri, dest)`：经 provider fd **`io::copy` 流式**拷到本地路径——**不用 `read_to_bytes`**，因为库文件没有 20 MB 附件上限可依（实测存在 24 MB 未压缩库，会被 `ERR_ATTACHMENT_TOO_LARGE` 误拒），且整库进内存是无谓尖峰；流式拷贝内存占用与文件大小无关、无大小上限。
+  - `restore_backup` 检测 `source_path.starts_with("content://")`：拷到 vault 同目录 `passwordms.restore-<unix_ms>.tmp` → 走既有 `restore_backup_from` 的**尺寸 / magic / 整库帧流**全套校验落位（校验逻辑零重复）→ **成败都删临时文件**；桌面该分支恒假，行为零变化。
+  - 覆盖保护（`.bak-<unix_ms>`）与锁态校验在分支之前，语义不变。
+- **错误码 / IPC 形状**：零新增——`ERR_IO` / `ERR_VALIDATION` 语义不变，`restore_backup(source_path)` 契约不变（全仓仍 51 处 `tauri::command`）。
+- **验证口径**：`cargo check --workspace --all-targets` 0 错 0 警；真机装新 APK 重复主人原操作（选备份 → 确认 → 解锁）为最终判据——**「每个交付渠道都要端到端走过」**（D-82 教训在读方向上的再次适用）。
 - **模板一致性靠测试锁，不靠人眼**：`passwordms_core::import::template::CSV_TEMPLATE` 的表头
   必须与 `import::bitwarden_csv::KNOWN_COLUMNS` **逐字同序**，且模板自身导入 0 跳过、示例行不溢出到 `custom_fields`
   ——`crates/passwordms-core/tests/import_template.rs` 逐条断言。**改模板必须同步改测试**，

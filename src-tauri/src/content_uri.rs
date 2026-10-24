@@ -110,3 +110,35 @@ pub(crate) fn write_bytes(app: &AppHandle, uri: &str, data: &[u8]) -> Result<(),
     // （SAF 于 close 时提交内容）；`write_all` 不经用户态缓冲，无需额外 flush。
     Ok(())
 }
+
+/// 把 `content://` URI 指向的文件**流式拷贝**到本地路径（D-94：Android「从备份恢复」）。
+///
+/// 需求来自真机反馈：锁屏页「从备份恢复」是全仓最后一个没接 `content://` 分支的
+/// 选文件入口——SAF `open()` 返回 `content://…` 被当路径交给 `std::fs` 必失败
+/// → `ERR_IO` →「文件读写错误」。
+///
+/// 为什么不用 [`read_to_bytes`]：库文件没有 20 MB 附件上限可依——超限库会被
+/// `ERR_ATTACHMENT_TOO_LARGE` 误拒（实测存在 24 MB 的未压缩库），且整库进内存是
+/// 一次无谓的尖峰；`io::copy` 走 fd 流式，内存占用与文件大小无关、没有大小上限。
+/// 备份的合法性（尺寸 / magic / 整库帧流校验）仍由调用方在本地临时文件上跑
+/// [`passwordms_core::store::container::restore_backup_from`]，本函数只负责搬运字节。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn copy_to_file(
+    app: &AppHandle,
+    uri: &str,
+    dest: &std::path::Path,
+) -> Result<(), IpcError> {
+    let url = tauri::Url::parse(uri).map_err(|_| IpcError::io("invalid_content_uri"))?;
+    let mut opts = OpenOptions::new();
+    opts.read(true);
+    let mut src = app
+        .fs()
+        .open(FilePath::Url(url), opts)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    let mut out = std::fs::File::create(dest)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    std::io::copy(&mut src, &mut out)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    // `out` 返回时 Drop 落盘关闭；`src` 的 fd 随 Drop 关闭（SAF close 即提交）。
+    Ok(())
+}

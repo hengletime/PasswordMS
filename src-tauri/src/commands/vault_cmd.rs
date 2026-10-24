@@ -8,7 +8,7 @@ use passwordms_core::session::Session;
 use passwordms_core::store::container::restore_backup_from;
 
 use crate::dto::StatusDto;
-use crate::error::{lock_err, IpcResult};
+use crate::error::{lock_err, IpcError, IpcResult};
 use crate::state::{ensure_resync_listener, stop_resync_listener, vault_path, AppState};
 
 /// F-01 创建保险库。
@@ -113,6 +113,8 @@ pub fn export_vault(
 ///   `passwordms.vault.bak-<unix_ms>`，恢复失败或反悔时还有后路。
 /// - magic 校验与复制在核心层 [`restore_backup_from`]（`fs::copy` **保留 mtime**，
 ///   与导出语义一致）；不合法的备份文件返回 `ERR_VALIDATION`，不触碰目标文件。
+/// - **D-94**：Android 上 `source_path` 可能是 `content://…`（SAF 选择器），经
+///   [`crate::content_uri::copy_to_file`] 流式落临时文件再走同一套校验落位。
 /// - 恢复后**不自动解锁**：`unlock_check` 校验的是备份创建时的主密码，解锁与失败
 ///   提示由前端用既有 `unlock` 流程完成。
 #[tauri::command(rename_all = "snake_case")]
@@ -130,6 +132,19 @@ pub fn restore_backup(
     if dest.exists() {
         let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));
         std::fs::copy(&dest, &bak)?;
+    }
+    // D-94：Android 上 SAF 选择器返回 `content://…`（ContentProvider URI 没有内核
+    // 路径），直接 `Path::new` 交给 std::fs 必失败 →「文件读写错误」。经 provider fd
+    // 流式拷到 vault 同目录临时文件（无内存尖峰、无大小上限），再走既有
+    // restore_backup_from 的尺寸/magic/整库帧流全套校验落位，成败都删临时文件。
+    // 桌面该分支恒假（open() 返回真实路径），行为零变化。
+    if source_path.starts_with("content://") {
+        let tmp = dest.with_file_name(format!("passwordms.restore-{}.tmp", now_ms()));
+        let outcome = crate::content_uri::copy_to_file(&app, &source_path, &tmp)
+            .and_then(|()| restore_backup_from(&tmp, &dest).map_err(IpcError::from));
+        let _ = std::fs::remove_file(&tmp);
+        outcome?;
+        return Ok(());
     }
     restore_backup_from(Path::new(&source_path), &dest)?;
     Ok(())
