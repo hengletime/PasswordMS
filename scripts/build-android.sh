@@ -75,10 +75,26 @@ for c in cargo npm npx; do
 done
 
 if [ -z "${JAVA_HOME:-}" ]; then
-  die "未设置 JAVA_HOME（Android/Gradle 需要 JDK 17）。示例：export JAVA_HOME=\"D:\\\\AndroidDev\\\\jdk17\""
+  # 前置条件自愈（2026-10-24，同 D-33 windres 兜底精神）：构建的前置必须写进脚本，
+  # 不能靠操作者记得 export。按常见位置探测 JDK 17，探测不到才报错。
+  for cand in "D:/AndroidDev/jdk17" "$HOME/.workbuddy/tools/jdk17" "C:/Program Files/Java/jdk-17" "C:/Program Files/Microsoft/jdk-17"; do
+    if [ -d "$cand" ]; then
+      export JAVA_HOME="$cand"
+      log "JAVA_HOME 未设置，已自动探测：$JAVA_HOME"
+      break
+    fi
+  done
+  [ -n "${JAVA_HOME:-}" ] || die "未设置 JAVA_HOME（Android/Gradle 需要 JDK 17）。示例：export JAVA_HOME=\"D:\\\\AndroidDev\\\\jdk17\""
 fi
 if [ -z "${ANDROID_HOME:-}" ] && [ -z "${NDK_HOME:-}" ]; then
-  die "未设置 ANDROID_HOME 或 NDK_HOME（Android SDK/NDK 路径）。示例：export ANDROID_HOME=\"D:\\\\AndroidDev\\\\sdk\""
+  for cand in "D:/AndroidDev/sdk" "$HOME/AppData/Local/Android/Sdk"; do
+    if [ -d "$cand" ]; then
+      export ANDROID_HOME="$cand"
+      log "ANDROID_HOME 未设置，已自动探测：$ANDROID_HOME"
+      break
+    fi
+  done
+  [ -n "${ANDROID_HOME:-}" ] || die "未设置 ANDROID_HOME 或 NDK_HOME（Android SDK/NDK 路径）。示例：export ANDROID_HOME=\"D:\\\\AndroidDev\\\\sdk\""
 fi
 if [ -z "${ANDROID_HOME:-}" ]; then warn "仅设置了 NDK_HOME，未设置 ANDROID_HOME；若 Gradle 找不到 SDK 请补上。"; fi
 if [ -z "${NDK_HOME:-}" ];    then warn "未设置 NDK_HOME；若 Rust 交叉编译找不到链接器请补上。"; fi
