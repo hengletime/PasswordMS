@@ -2,9 +2,6 @@
 
 use passwordms_core::import::{self, ImportFormat};
 
-#[cfg(target_os = "android")]
-use passwordms_core::CoreError;
-
 use crate::dto::{ImportPreviewDto, ImportResultDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
@@ -13,9 +10,9 @@ use crate::state::AppState;
 ///
 /// D-72：Android 上 `source_path` 可能是 `content://…`（文件选择器返回的 SAF URI），
 /// 此时不能用 `std::fs::read_to_string`（内核无此路径 → `ERR_IO`），改走
-/// [`crate::content_uri::read_to_bytes`] 读字节再按 UTF-8 解析；
-/// 非 UTF-8 复用 `CoreError::ImportParse`（**不新增错误码**）。
-/// 其余情况（桌面任意路径、Android 普通路径）走原 `preview_from_file`，行为不变。
+/// [`crate::content_uri::read_to_bytes`] 读字节再解码；
+/// D-87：桌面路径与 Android 字节路径统一走 [`passwordms_core::import::decode_source`]
+/// 编码容错（UTF-8 / UTF-16 BOM / GBK），解码失败归 `ERR_IMPORT_PARSE`。
 #[tauri::command(rename_all = "snake_case")]
 pub fn import_preview(
     app: tauri::AppHandle,
@@ -32,10 +29,7 @@ pub fn import_preview(
     #[cfg(target_os = "android")]
     let preview = if source_path.starts_with("content://") {
         let bytes = crate::content_uri::read_to_bytes(&app, &source_path)?;
-        // 导入源必须是 UTF-8 文本（JSON / CSV 皆然）；解码失败归「无法解析」，
-        // 与既有 `ERR_IMPORT_PARSE` 同码，前端文案不变。
-        let content =
-            String::from_utf8(bytes).map_err(|_| CoreError::ImportParse("utf8".to_string()))?;
+        let content = passwordms_core::import::decode_source(&bytes)?;
         import::preview_from_str(&content, fmt)?
     } else {
         import::preview_from_file(std::path::Path::new(&source_path), fmt)?

@@ -240,6 +240,9 @@ export const enUS: Messages = {
       "Only unencrypted Bitwarden exports (JSON / CSV) are supported. Encrypted exports and other password managers' formats must be converted first.",
     template_hint:
       'The CSV reader recognises these 10 columns: folder / favorite / type / name / notes / login_uri / login_username / login_password / login_totp / fields; any other column is kept as a custom field. Only type values login or 1 (login) and secure note / note / 2 (secure note) are imported; other types are skipped.',
+    // D-87: encoding fallback is live; saving as UTF-8 stays the safest route.
+    encoding_hint:
+      'After editing a CSV in Excel / WPS, save it as "CSV UTF-8" when possible; GBK (ANSI) and UTF-16 files are detected and converted automatically.',
     download_template: 'Download CSV template',
     template_saved: 'Template saved',
   },
@@ -438,7 +441,8 @@ export const enUS: Messages = {
     attachment_limit: 'Attachment limit reached (16).',
     vault_capacity: 'Vault capacity is full.',
     unsafe_url: 'This URL is unsafe and was blocked.',
-    import_parse: 'Failed to parse the import file.',
+    import_parse:
+      'Failed to parse the import file. Check that it is an unencrypted Bitwarden export (JSON / CSV) and the content is intact.',
     import_encrypted: 'Encrypted export files are not supported.',
     pair_token_invalid: 'Invalid pairing information.',
     pair_token_expired: 'The pairing QR has expired; please regenerate it.',

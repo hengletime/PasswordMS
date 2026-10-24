@@ -64,3 +64,29 @@ describe('D-86 需求 2：选完文件自动预览', () => {
     expect(buttonCalls, '手动预览按钮必须保留').toBe(1);
   });
 });
+
+describe('D-87：编码容错提示（后端 GBK/UTF-16 自动转换 + 用户引导）', () => {
+  const src = pickSource('ImportWizard.svelte');
+
+  it('编码提示常驻渲染（pms-meta，与支持范围说明同级）', () => {
+    const hintAt = src.indexOf("{ui.t('import.encoding_hint')}");
+    expect(hintAt, 'ImportWizard 必须渲染 encoding_hint').toBeGreaterThan(-1);
+    // 提示行必须是 pms-meta（中性说明），且在下载模板按钮之前（先说明再操作）。
+    const lineStart = src.lastIndexOf('<p', hintAt);
+    expect(src.slice(lineStart, hintAt)).toContain('pms-meta');
+    const btnAt = src.indexOf('import.download_template');
+    expect(btnAt, '下载模板按钮必须存在').toBeGreaterThan(-1);
+    expect(hintAt, '编码提示应出现在下载模板按钮之前').toBeLessThan(btnAt);
+  });
+
+  it('两份字典都有 encoding_hint 且错误文案不再只说「解析失败」', async () => {
+    const { dictionaries } = await import('./i18n');
+    for (const dict of Object.values(dictionaries)) {
+      const imp = (dict as Record<string, unknown>).import as Record<string, string>;
+      expect(imp.encoding_hint, 'encoding_hint 必须双语齐全').toBeTruthy();
+      expect(imp.encoding_hint).toMatch(/UTF-8/);
+    }
+    const zh = (await import('./i18n/zh-CN')).zhCN;
+    expect((zh.err as Record<string, string>).import_parse).toContain('Bitwarden');
+  });
+});

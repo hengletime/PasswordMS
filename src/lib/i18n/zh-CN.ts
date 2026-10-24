@@ -235,6 +235,9 @@ export const zhCN = {
     // `type` 取值那句必须留在界面上：用户最常问的就是「我这条为什么被跳过」。
     supported_hint: '仅支持 Bitwarden 未加密导出（JSON / CSV）。加密导出与其它密码管理器的格式需先转换。',
     template_hint: 'CSV 识别这 10 列：folder / favorite / type / name / notes / login_uri / login_username / login_password / login_totp / fields；其它列会保留为自定义字段。type 只有 login 或 1（登录）、secure note / note / 2（安全笔记）会导入，其余类型跳过。',
+    // D-87：编码容错上线的说明。GBK / UTF-16 已能自动转换，但「另存为 UTF-8」仍是最稳做法
+    // （避免个别生僻字在 GBK 与 Unicode 映射差异下出错）。
+    encoding_hint: '用 Excel / WPS 编辑 CSV 后，建议另存为「CSV UTF-8」编码；GBK（ANSI）与 UTF-16 文件会自动识别转换。',
     download_template: '下载 CSV 模板',
     template_saved: '模板已保存',
   },
@@ -432,7 +435,7 @@ export const zhCN = {
     attachment_limit: '附件数量已达上限（16）。',
     vault_capacity: '保险库容量已满。',
     unsafe_url: '该网址不安全，已阻止打开。',
-    import_parse: '导入文件解析失败。',
+    import_parse: '导入文件解析失败：请确认是未加密的 Bitwarden 导出（JSON / CSV）且内容完整。',
     import_encrypted: '不支持加密导出文件。',
     pair_token_invalid: '配对信息无效。',
     pair_token_expired: '配对二维码已过期，请重新生成。',

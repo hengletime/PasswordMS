@@ -197,6 +197,9 @@
            `.pms-meta` = 中性说明（支持范围），`.pms-hint` = 细则（列清单与 type 取值）。 -->
       <p class="pms-meta">{ui.t('import.supported_hint')}</p>
       <p class="pms-hint">{ui.t('import.template_hint')}</p>
+      <!-- D-87：编码提示。后端已容错 GBK / UTF-16（自动转换），这里说明「另存 UTF-8 最稳」，
+           防止用户在编辑器里另存成 ANSI 后误以为应用坏了。 -->
+      <p class="pms-meta">{ui.t('import.encoding_hint')}</p>
       <div class="imp-row">
         <button class="pms-btn is-ghost" type="button" onclick={() => void downloadTemplate()}>
           <Icon name="download" size={15} />{ui.t('import.download_template')}

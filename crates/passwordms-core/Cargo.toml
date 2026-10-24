@@ -26,3 +26,4 @@ base64.workspace = true
 qrcode.workspace = true
 url.workspace = true
 if-addrs.workspace = true
+encoding_rs.workspace = true

@@ -70,8 +70,57 @@ pub struct ImportResult {
 
 /// 从文件解析并生成预览。
 pub fn preview_from_file(path: &Path, format: ImportFormat) -> CoreResult<ImportPreview> {
-    let content = std::fs::read_to_string(path)?;
+    let bytes = std::fs::read(path)?;
+    let content = decode_source(&bytes)?;
     preview_from_str(&content, format)
+}
+
+/// 导入源字节 → UTF-8 文本（D-87 编码容错）。
+///
+/// 背景：中文 Windows 上用 Excel / WPS 编辑 CSV 再保存，默认写成 ANSI（GBK）；
+/// 旧实现 `std::fs::read_to_string` 严格要求 UTF-8，GBK 字节抛 `InvalidData`
+/// → 被笼统映射为 `ERR_IO`「文件读写出错」，与真实原因（编码）不符。
+///
+/// 探测顺序（Excel / WPS / 记事本三种真实产源全覆盖）：
+/// 1. UTF-8 BOM（`EF BB BF`）→ 按 UTF-8 解码并**剥掉 BOM**（BOM 留在串首会污染
+///    首列表名 `folder`，导致映射失败）；
+/// 2. UTF-16 LE / BE BOM → 按对应端序解码（Excel「Unicode 文本」产源）；
+/// 3. 无 BOM：先按 UTF-8 严格解码（纯 ASCII / 真正的 UTF-8 走快路径，行为与旧版一致）；
+/// 4. UTF-8 失败 → 按 GBK 解码；仍有无法映射的字节（二进制垃圾）→
+///    `ImportParse("encoding")`（`err.import_parse`，不再误报 IO）。
+pub fn decode_source(bytes: &[u8]) -> CoreResult<String> {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        let text = std::str::from_utf8(&bytes[3..]).map_err(|_| {
+            CoreError::ImportParse("encoding".to_string())
+        })?;
+        return Ok(text.to_string());
+    }
+    // encoding_rs 的 `decode` 只在 UTF-8 时做 BOM 嗅探；显式指定 UTF-16 端序时
+    // BOM 会原样留在输出首（U+FEFF 污染 CSV 首列名）——先手动剥掉再解。
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let (text, _, had_errors) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
+        if had_errors {
+            return Err(CoreError::ImportParse("encoding".to_string()));
+        }
+        return Ok(text.into_owned());
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let (text, _, had_errors) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
+        if had_errors {
+            return Err(CoreError::ImportParse("encoding".to_string()));
+        }
+        return Ok(text.into_owned());
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Ok(text.to_string()),
+        Err(_) => {
+            let (text, _, had_errors) = encoding_rs::GBK.decode(bytes);
+            if had_errors {
+                return Err(CoreError::ImportParse("encoding".to_string()));
+            }
+            Ok(text.into_owned())
+        }
+    }
 }
 
 /// 从字符串解析并生成预览。

@@ -1183,7 +1183,7 @@ B 删附件 → B 发起重同步 → A 侧 `attachments.len()==1`、剩的是�
 2. **报文里不放 `device_id` / 设备名 / 指纹。** 线上只有 32B 随机数 `q` 与 32B **不可区分
    tag**（`HMAC-SHA256(sync_key_i, ...)`）。陌生设备算不出 tag ⇒ **不会应答**，既不能确认
    本机装了 PasswordMS，也不能把应答当放大器。**发现不是匿名的，但对未配对者不可见。**
-3. **不用 mDNS。** 需新增 crate（违反 §8.1 的 23 个硬限），Android 还要 NSD/`MulticastLock`
+3. **不用 mDNS。** 需新增 crate（违反 §8.1 的依赖白名单硬限），Android 还要 NSD/`MulticastLock`
    与权限；而 `if-addrs`（已是直接依赖）的 `Ifv4Addr.broadcast` 现成可用。
 
 #### 3.17.3 常量（`constants.rs`）
@@ -1852,6 +1852,8 @@ graph TD
 | `base64` | `0.22` | 二进制↔文本 | 轻 |
 | `qrcode` | `0.14`（`default-features=false`，仅 SVG） | 二维码生成 | 轻（**不启用 image/png 特性**） |
 | `url` | `2` | URL 协议校验（F-05） | 轻 |
+| `if-addrs` | `0.13` | 多网卡枚举候选局域网 IPv4（D-44，入表补录） | 轻 |
+| `encoding_rs` | `0.8` | 导入源编码容错：UTF-16 BOM / GBK → UTF-8（D-87；Firefox 同款实现，非自研） | 轻（纯数据表，无系统依赖） |
 
 > **TOTP 说明**：不引入独立 `totp-rs`，改用 `hmac`+`sha1`+`base32` 组合实现 RFC 6238（HMAC-SHA1 为 RustCrypto 审计实现，非自研密码学），进一步压体积。
 
