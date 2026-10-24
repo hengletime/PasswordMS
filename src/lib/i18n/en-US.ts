@@ -126,6 +126,13 @@ export const enUS: Messages = {
     type_login: 'Login',
     type_note: 'Note',
     type_attachment: 'Attachment',
+    // D-88: one-click login → secure note (A1 mapping: every field is folded into the body).
+    convert_note: 'Convert to secure note',
+    convert_note_title: 'Convert to secure note?',
+    convert_note_body:
+      'Notes become the note body; URL, username, password, TOTP and custom fields are appended to the body verbatim (nothing is lost). This cannot be undone automatically.',
+    convert_fields_header: '—— Fields from the original login item ——',
+    convert_done: 'Converted to secure note',
   },
   // #531: context menu (desktop right-click / mobile long-press).
   menu: {
@@ -243,6 +250,9 @@ export const enUS: Messages = {
     // D-87: encoding fallback is live; saving as UTF-8 stays the safest route.
     encoding_hint:
       'After editing a CSV in Excel / WPS, save it as "CSV UTF-8" when possible; GBK (ANSI) and UTF-16 files are detected and converted automatically.',
+    // D-90: merge / dedupe outcome is reported verbatim (only shown when > 0).
+    duplicates: '{n} duplicates skipped',
+    merged_folders: '{n} folders merged',
     download_template: 'Download CSV template',
     template_saved: 'Template saved',
   },

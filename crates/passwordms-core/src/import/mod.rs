@@ -66,6 +66,10 @@ pub struct ImportResult {
     pub imported_items: usize,
     pub imported_folders: usize,
     pub skipped: usize,
+    /// D-90：同名同型条目被跳过的数量（绝不覆盖现有数据）。
+    pub duplicate_skipped: usize,
+    /// D-90：与现有库同名而合并（未新建）的分组数。
+    pub merged_folders: usize,
 }
 
 /// 从文件解析并生成预览。
@@ -131,18 +135,61 @@ pub fn preview_from_str(content: &str, format: ImportFormat) -> CoreResult<Impor
     }
 }
 
-/// 将预览落库（直接写入。
+/// 将预览落库（D-90：先与现有库做同名合并/查重，再直接写入）。
+///
+/// - **同名文件夹合并**：按 `name` 在现有库找同名分组，命中则**复用其 folder_id**
+///   （条目归入既有分组，不建新的）；预览内条目的 `folder_id` 全部经映射表重定向。
+///   单次导入内部的同名已由解析器折叠（`folder_map`），这里管的是**跨导入**的合并
+///   ——此前每导一次就多一套同名分组（主人实测「Commander 办公」×2）。
+/// - **同名同型条目跳过**：`title` 与 `type` 都相同即视为重复，跳过并计数，
+///   **绝不覆盖现有数据**；同名不同型正常导入。回收站条目不在 `items` 中，
+///   不阻碍重导入（用户删掉的就是想要重导的）。
 pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<ImportResult> {
+    let mut folder_map: HashMap<String, String> = HashMap::new();
+    let mut merged_folders = 0usize;
     for folder in &preview.folders {
-        repo.put_folder_direct(folder.clone())?;
+        let existing = repo
+            .list_folders()
+            .into_iter()
+            .find(|f| f.name == folder.name);
+        match existing {
+            Some(hit) => {
+                folder_map.insert(folder.folder_id.clone(), hit.folder_id.clone());
+                merged_folders += 1;
+            }
+            None => {
+                folder_map.insert(folder.folder_id.clone(), folder.folder_id.clone());
+                repo.put_folder_direct(folder.clone())?;
+            }
+        }
     }
-    for item in &preview.items {
-        repo.put_item_direct(item.clone())?;
+
+    let existing_keys: std::collections::HashSet<(String, &'static str)> = repo
+        .list_items(None, false, None)
+        .into_iter()
+        .map(|it| (it.kind.title().to_string(), it.kind.type_name()))
+        .collect();
+
+    let mut imported_items = 0usize;
+    let mut duplicate_skipped = 0usize;
+    for mut item in preview.items.clone() {
+        if existing_keys.contains(&(item.kind.title().to_string(), item.kind.type_name())) {
+            duplicate_skipped += 1;
+            continue;
+        }
+        // 预览内的 folder_id 指向预览自建分组；合并命中的重定向到现有分组。
+        if let Some(fid) = item.folder_id.take() {
+            item.folder_id = Some(folder_map.get(&fid).cloned().unwrap_or(fid));
+        }
+        repo.put_item_direct(item)?;
+        imported_items += 1;
     }
     repo.persist_counts()?;
     Ok(ImportResult {
-        imported_items: preview.items.len(),
-        imported_folders: preview.folders.len(),
+        imported_items,
+        imported_folders: preview.folders.len() - merged_folders,
         skipped: preview.skipped,
+        duplicate_skipped,
+        merged_folders,
     })
 }

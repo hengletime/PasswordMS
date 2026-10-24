@@ -111,7 +111,15 @@
     busy = true;
     try {
       const result = await api.importer.apply(sourcePath, format, preview.preview_token);
-      resultText = `${ui.t('import.done')}: ${ui.t('common.items_count', { n: result.imported_items })}`;
+      // D-90：合并/查重结果如实上报（「导入 5 条」里不含被跳过的重复项，必须让用户看见）。
+      const parts = [ui.t('common.items_count', { n: result.imported_items })];
+      if (result.duplicate_skipped > 0) {
+        parts.push(ui.t('import.duplicates', { n: result.duplicate_skipped }));
+      }
+      if (result.merged_folders > 0) {
+        parts.push(ui.t('import.merged_folders', { n: result.merged_folders }));
+      }
+      resultText = `${ui.t('import.done')}: ${parts.join(' · ')}`;
       ui.toast('success', 'import.done');
       await vault.load();
       // D-86：footer 随弹窗一起关闭（resultText 的赋值保留——重开前的瞬间仍可读，语义不变）。

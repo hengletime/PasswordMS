@@ -1594,8 +1594,8 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `copy_secret` | `{text,ttl_secs}` | `()` | F-06（含 30s 清空调度） |
 | `open_url` | `{url}` | `()` | F-05（协议白名单） |
 | `totp_now` | `{secret}` | `{code,period,remaining}` | F-11 |
-| `import_preview` | `{source_path,format}` | `ImportPreviewDto` | F-14 预览 |
-| `import_apply` | `{source_path,format,preview_token}` | `ImportResultDto` | F-14 执行 |
+| `import_preview` | `{source_path,format}` | `ImportPreviewDto` | F-14 预览（D-87：源编码容错 UTF-8 BOM/UTF-16/GBK） |
+| `import_apply` | `{source_path,format,preview_token}` | `ImportResultDto` | F-14 执行（D-90：同名文件夹合并 + 同名同型条目跳过，绝不覆盖现有数据；`duplicate_skipped`/`merged_folders` 计数） |
 | `list_trash` | — | `Vec<TrashDto>` | F-15 |
 | `restore_item` | `{trash_id}` | `ItemDto` | F-15 |
 | `purge_item` | `{trash_id}` | `()` | F-15 |

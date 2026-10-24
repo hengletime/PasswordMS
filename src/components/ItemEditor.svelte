@@ -168,6 +168,13 @@
       <input id="ed-totp" class="pms-input" bind:value={totp} autocomplete="off" placeholder="BASE32" />
     </div>
 
+    <!-- D-89：备注编辑框。notes 状态与保存逻辑一直都在（导入的备注详情页可见），
+         但表单从未有输入控件——数据「看得见改不了」。置于 TOTP 之后、自定义字段之前。 -->
+    <div class="pms-field">
+      <label class="pms-label" for="ed-notes">{ui.t('editor.field_notes')}</label>
+      <textarea id="ed-notes" class="pms-input" rows="4" bind:value={notes}></textarea>
+    </div>
+
     <div class="pms-field">
       <span class="pms-label">{ui.t('editor.custom_fields')}</span>
       <div class="pms-card editor-custom">

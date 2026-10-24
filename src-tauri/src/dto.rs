@@ -207,6 +207,10 @@ pub struct ImportResultDto {
     pub imported_items: usize,
     pub imported_folders: usize,
     pub skipped: usize,
+    /// D-90：同名同型条目跳过数。
+    pub duplicate_skipped: usize,
+    /// D-90：与现有库同名而合并（未新建）的分组数。
+    pub merged_folders: usize,
 }
 
 impl From<ImportResult> for ImportResultDto {
@@ -215,6 +219,8 @@ impl From<ImportResult> for ImportResultDto {
             imported_items: r.imported_items,
             imported_folders: r.imported_folders,
             skipped: r.skipped,
+            duplicate_skipped: r.duplicate_skipped,
+            merged_folders: r.merged_folders,
         }
     }
 }

@@ -202,6 +202,10 @@ export interface ImportResultDto {
   imported_items: number;
   imported_folders: number;
   skipped: number;
+  /** D-90：同名同型条目跳过数。 */
+  duplicate_skipped: number;
+  /** D-90：与现有库同名而合并（未新建）的分组数。 */
+  merged_folders: number;
 }
 
 /** Host 配对信息。 */

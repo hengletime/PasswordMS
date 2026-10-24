@@ -124,6 +124,13 @@ export const zhCN = {
     type_login: '登录',
     type_note: '笔记',
     type_attachment: '附件',
+    // D-88：登录项一键转安全笔记（A1 映射：原字段全部并入正文，一样不丢）。
+    convert_note: '转为安全笔记',
+    convert_note_title: '转换为安全笔记？',
+    convert_note_body:
+      '备注会成为笔记正文；网址、用户名、密码、TOTP 与自定义字段会原样并入正文尾部（不丢失）。此操作不能自动撤销。',
+    convert_fields_header: '——以下为原登录项字段——',
+    convert_done: '已转换为安全笔记',
   },
   // #531：上下文菜单（桌面右键 / 移动端长按）。
   menu: {
@@ -238,6 +245,9 @@ export const zhCN = {
     // D-87：编码容错上线的说明。GBK / UTF-16 已能自动转换，但「另存为 UTF-8」仍是最稳做法
     // （避免个别生僻字在 GBK 与 Unicode 映射差异下出错）。
     encoding_hint: '用 Excel / WPS 编辑 CSV 后，建议另存为「CSV UTF-8」编码；GBK（ANSI）与 UTF-16 文件会自动识别转换。',
+    // D-90：合并/查重结果如实上报（结果行追加显示，0 时不出现）。
+    duplicates: '重复跳过 {n} 条',
+    merged_folders: '合并同名分组 {n} 个',
     download_template: '下载 CSV 模板',
     template_saved: '模板已保存',
   },

@@ -138,6 +138,54 @@
       await vault.deleteItem(item.item_id, false);
     }
   }
+
+  // D-88：登录项转安全笔记（主人拍板 A1 映射）。
+  // 后端 update_item 允许整只替换 kind（repo: item.kind = draft.kind）且 item_id 不变，
+  // 同步历史 / 附件 / 收藏 / 分组全部天然延续；一次 IPC，无新建+删除的中间态。
+  // 映射：notes → 正文；其余字段全部拼进正文尾部（A1：一样不丢），不留在任何密文外。
+  async function convertToNote(): Promise<void> {
+    if (item === null || item.kind.type !== 'login') {
+      return;
+    }
+    const ok = await ui.confirm('item.convert_note_title', 'item.convert_note_body');
+    if (!ok) {
+      return;
+    }
+    const login = item.kind;
+    const extra: string[] = [];
+    if (login.url) {
+      extra.push(`${ui.t('editor.field_url')}: ${login.url}`);
+    }
+    if (login.username) {
+      extra.push(`${ui.t('editor.field_username')}: ${login.username}`);
+    }
+    if (login.password) {
+      extra.push(`${ui.t('editor.field_password')}: ${login.password}`);
+    }
+    if (login.totp_secret) {
+      extra.push(`${ui.t('editor.field_totp')}: ${login.totp_secret}`);
+    }
+    for (const field of login.custom_fields) {
+      if (field.key.trim().length > 0) {
+        extra.push(`${field.key}: ${field.value}`);
+      }
+    }
+    let body = login.notes ?? '';
+    if (extra.length > 0) {
+      if (body.length > 0) {
+        body += '\n\n';
+      }
+      body += `${ui.t('item.convert_fields_header')}\n${extra.join('\n')}`;
+    }
+    const result = await vault.updateItem(item.item_id, {
+      kind: { type: 'secure_note', title: login.title, body },
+      folder_id: item.folder_id,
+      favorite: item.favorite,
+    });
+    if (result !== null) {
+      ui.toast('success', 'item.convert_done');
+    }
+  }
 </script>
 
 <section class="detail">
@@ -172,6 +220,18 @@
         <button class="pms-icon-btn" type="button" aria-label={ui.t('common.edit')} onclick={onedit}>
           <Icon name="settings" size={17} />
         </button>
+        <!-- D-88：登录 → 安全笔记（一次性转换，A1 映射不丢数据）。仅登录项显示。 -->
+        {#if item.kind.type === 'login'}
+          <button
+            class="pms-icon-btn"
+            type="button"
+            title={ui.t('item.convert_note')}
+            aria-label={ui.t('item.convert_note')}
+            onclick={() => void convertToNote()}
+          >
+            <Icon name="file" size={17} />
+          </button>
+        {/if}
         <button class="pms-icon-btn" type="button" aria-label={ui.t('item.delete')} onclick={() => void remove()}>
           <Icon name="trash" size={17} />
         </button>
