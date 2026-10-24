@@ -518,9 +518,9 @@
   </div>
 </section>
 
-<Modal open={importOpen} titleKey="import.title" onclose={() => (importOpen = false)}>
-  <ImportWizard ondone={() => (importOpen = false)} />
-</Modal>
+<!-- D-86：Modal 移进 ImportWizard（「确认导入」常驻 footer，不随内容滚动）——
+     这里只传弹窗开关与关闭回调，footer 由 ImportWizard 内部按 preview 状态渲染。 -->
+<ImportWizard open={importOpen} onclose={() => (importOpen = false)} />
 
 <!-- D-76：压缩二次确认。用 `ui.confirm()` 不可行 —— 它只支持「标题 + 一句正文」，
      装不下 §6.11.3 要求的四个数字 + 三条提示（三条提示缺一不可，各有一个误解要挡）。
