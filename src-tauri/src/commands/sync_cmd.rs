@@ -113,14 +113,21 @@ fn sync_join_impl(
     // 确保持久重同步监听器在线，并把本机端口随 HELLO 通告给 Host（D-11）。
     let sync_port = ensure_resync_listener(app)?;
 
-    let mut session = state.session.lock().map_err(lock_err)?;
-    let device_id = session.repo()?.device_id().to_string();
-    let device_name = host_display_name(&device_id);
+    // ── 锁内段①（O2，毫秒级）：本端设备身份。
+    let (device_id, device_name) = {
+        let session = state.session.lock().map_err(lock_err)?;
+        let id = session.repo()?.device_id().to_string();
+        let name = host_display_name(&id);
+        (id, name)
+    };
 
-    // 1) 握手（不接触本地数据）。
+    // 网络段（O2，不持锁）：1) 握手（不接触本地数据）。
+    // 行为变更说明：握手期间若自动锁定触发，后续锁内段②将失败并整体放弃本次配对
+    // （旧实现持锁横跨全程无此窗口；换来的是配对全程 UI 可响应）。
     let mut joiner = client::pair(&qr, &device_id, &device_name, sync_port, now)?;
 
-    // 2) 采用 Host 的 VK（U1/U2 裁定：本地库非空则拒绝，由前端处理提示）。
+    // ── 锁内段②（O2，毫秒级）：2) 采用 Host 的 VK + 3) 持久化配对关系（含对端地址）。
+    //    U1/U2 裁定：本地库非空则拒绝，由前端处理提示。
     //    D-47：**同组重配对豁免**——本机已与该 Host 配对 = 本地 VK 已在首次配对时采纳
     //    （与对端一致）。此时重复扫码（重装、重复操作、想手动触发反向同步）不应再被
     //    「非空即拒」拦下，直接复用既有密钥完成本次交换；真正的异组保险库仍被拒绝。
@@ -130,21 +137,27 @@ fn sync_join_impl(
     //    库的加密密钥**就是**握手下发的 Host VK，采纳是零风险幂等（同值重包裹）。
     //    故补「本机当前 VK == 对端 VK」豁免：相等 = 同一逻辑库（安全跳过）；
     //    不等 = 真正的异组保险库（仍拒绝，U1/U2 红线不破）。
-    let already_paired = {
-        let repo = session.repo()?;
-        repo.list_paired_devices()
-            .iter()
-            .any(|d| d.device_id == joiner.host_id())
-            || repo.vault_key()[..] == joiner.host_vault_key()[..]
-    };
-    if !already_paired {
-        session.adopt_vault_key(joiner.host_vault_key())?;
+    {
+        let mut session = state.session.lock().map_err(lock_err)?;
+        let already_paired = {
+            let repo = session.repo()?;
+            repo.list_paired_devices()
+                .iter()
+                .any(|d| d.device_id == joiner.host_id())
+                || repo.vault_key()[..] == joiner.host_vault_key()[..]
+        };
+        if !already_paired {
+            session.adopt_vault_key(joiner.host_vault_key())?;
+        }
+        joiner.persist_host_device(session.repo_mut()?)?;
     }
 
-    // 3) 持久化配对关系（含对端地址）并执行双向同步交换。
-    let repo = session.repo_mut()?;
-    joiner.persist_host_device(repo)?;
-    let result = joiner.push_and_sync(repo, now)?;
+    // 网络段 + 锁内段（O2 三段式）：4) 双向同步交换——`push_and_sync_access` 内部
+    // 按「导出/合并/持久化」三个锁内段进出锁，传输全程不持会话锁。
+    let mut access = crate::state::SessionAccess {
+        session: &state.session,
+    };
+    let result = joiner.push_and_sync_access(&mut access, now)?;
 
     Ok(PairResultDto {
         device_id: joiner.host_id().to_string(),
@@ -232,9 +245,18 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
             });
         }
         let run = || -> IpcResult<SyncResultDto> {
-            let mut session = state.session.lock().map_err(lock_err)?;
-            let repo = session.repo_mut()?;
-            let outcome = resync::resync_with_peer(repo, &device_id, now_ms(), sync_port)?;
+            // O2：三段式——锁内段仅在「读写库的瞬间」短暂持有 session 锁，
+            // 连接/握手/传输全程锁外，同步期间 UI 的一切 IPC 不再排队等待。
+            let mut access = crate::state::SessionAccess {
+                session: &state.session,
+            };
+            let outcome = resync::resync_with_peer_access(
+                &mut access,
+                &device_id,
+                now_ms(),
+                sync_port,
+                &resync::DiscoveryMode::Broadcast,
+            )?;
             Ok(SyncResultDto {
                 applied: outcome.applied,
                 conflicts: outcome.conflicts,
@@ -351,95 +373,120 @@ fn random_port() -> u16 {
 }
 
 /// 后台轮询线程：非阻塞等待 Joiner 连接，处理一次配对 + 同步后退出。
+///
+/// **O2 三段式**：`poll_accept` 不持 session 锁；连接建立后由 `SessionAccess` 在
+/// 「读写库的瞬间」短暂取锁（`handle_connection` 内部），握手与传输全程锁外——
+/// 配对等待期间 UI 的一切 IPC（列表/复制/自动锁定）不再排队等待。
+/// 会话中途被自动锁定 ⇒ `handle_connection` 锁内段失败 ⇒ 配对会话作废（对端报错），
+/// 不再出现旧实现的「二维码还挂着但 worker 已退出」悬死态。
 fn spawn_pairing_worker(app: tauri::AppHandle) {
-    std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(200));
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
 
-            let state = app.state::<AppState>();
-            let has_server = match state.pairing.lock() {
-                Ok(guard) => guard.is_some(),
-                Err(_) => false,
+        let state = app.state::<AppState>();
+
+        // O2：accept 不持 session 锁（pairing 锁内只做存续检查 + 非阻塞接受，毫秒级）。
+        let accepted = {
+            let mut guard = match state.pairing.lock() {
+                Ok(g) => g,
+                // D-91（审查 C5）：配对会话锁中毒留痕（与 resync worker 同口径）。
+                Err(_) => {
+                    crate::state::append_log(
+                        &app,
+                        "[pairing] worker exiting: pairing lock poisoned",
+                    );
+                    break;
+                }
             };
-            if !has_server {
-                break;
-            }
-
-            let outcome = {
-                let mut guard = match state.pairing.lock() {
-                    Ok(g) => g,
-                    // D-91（审查 C5）：配对会话锁中毒留痕（与 resync worker 同口径）。
-                    Err(_) => {
+            match guard.as_mut() {
+                Some(server) => match server.poll_accept() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        drop(guard);
                         crate::state::append_log(
                             &app,
-                            "[pairing] worker exiting: pairing lock poisoned",
+                            &format!("[pairing] accept failed: {e:?}"),
                         );
-                        break;
+                        continue;
                     }
-                };
-                match guard.as_mut() {
-                    Some(server) => {
-                        let mut session = match state.session.lock() {
-                            Ok(s) => s,
-                            // D-91（审查 C5）：会话锁中毒留痕。
-                            Err(_) => {
-                                crate::state::append_log(
-                                    &app,
-                                    "[pairing] worker exiting: session lock poisoned",
-                                );
-                                break;
-                            }
-                        };
-                        match session.repo_mut() {
-                            Ok(repo) => server.poll_accept_and_sync(repo, now_ms()),
-                            // 会话已锁定 → 终止等待。落盘留痕：这类静默退出曾让"二维码还挂着但会话已死"无从排查。
-                            Err(_) => {
-                                crate::state::append_log(
-                                    &app,
-                                    "[pairing] worker exiting: session lock busy",
-                                );
-                                break;
-                            }
-                        }
-                    }
-                    None => break,
+                },
+                None => break,
+            }
+        };
+        let Some((stream, peer_ip)) = accepted else {
+            continue;
+        };
+
+        // O2：同一时刻仅一场同步（与被动 worker / 主动 sync_now 互斥，防 seq/base 竞态）。
+        if state
+            .sync_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            crate::state::append_log(&app, "[pairing] skipped: another sync is in flight");
+            continue;
+        }
+
+        let outcome = {
+            let mut guard = match state.pairing.lock() {
+                Ok(g) => g,
+                Err(_) => {
+                    state.sync_busy.store(false, Ordering::SeqCst);
+                    crate::state::append_log(
+                        &app,
+                        "[pairing] worker exiting: pairing lock poisoned",
+                    );
+                    break;
                 }
             };
+            match guard.as_mut() {
+                Some(server) => {
+                    let mut access = crate::state::SessionAccess {
+                        session: &state.session,
+                    };
+                    server.handle_connection(stream, &peer_ip, now_ms(), &mut access)
+                }
+                None => {
+                    state.sync_busy.store(false, Ordering::SeqCst);
+                    break;
+                }
+            }
+        };
+        state.sync_busy.store(false, Ordering::SeqCst);
 
-            match outcome {
-                Ok(None) => continue,
-                Ok(Some(result)) => {
-                    eprintln!(
+        match outcome {
+            Ok(result) => {
+                eprintln!(
+                    "[pairing] host session completed: applied={}",
+                    result.applied
+                );
+                crate::state::append_log(
+                    &app,
+                    &format!(
                         "[pairing] host session completed: applied={}",
                         result.applied
-                    );
-                    crate::state::append_log(
-                        &app,
-                        &format!(
-                            "[pairing] host session completed: applied={}",
-                            result.applied
-                        ),
-                    );
-                    if let Ok(mut g) = state.pairing.lock() {
-                        *g = None;
-                    }
-                    // D-44：通知前端会话已结束，收回二维码（否则"二维码还挂着但会话已死"）。
-                    let _ = tauri::Emitter::emit(&app, "pairing://ended", "completed");
-                    break;
+                    ),
+                );
+                if let Ok(mut g) = state.pairing.lock() {
+                    *g = None;
                 }
-                Err(e) => {
-                    // 诊断留痕：CoreError 的 Debug 只有错误码（Io 额外带 stage|kind），无隐私载荷。落盘到数据目录 passwordms.log。
-                    eprintln!("[pairing] host session aborted: {e:?}");
-                    crate::state::append_log(
-                        &app,
-                        &format!("[pairing] host session aborted: {e:?}"),
-                    );
-                    if let Ok(mut g) = state.pairing.lock() {
-                        *g = None;
-                    }
-                    let _ = tauri::Emitter::emit(&app, "pairing://ended", "aborted");
-                    break;
+                // D-44：通知前端会话已结束，收回二维码（否则"二维码还挂着但会话已死"）。
+                let _ = tauri::Emitter::emit(&app, "pairing://ended", "completed");
+                break;
+            }
+            Err(e) => {
+                // 诊断留痕：CoreError 的 Debug 只有错误码（Io 额外带 stage|kind），无隐私载荷。落盘到数据目录 passwordms.log。
+                eprintln!("[pairing] host session aborted: {e:?}");
+                crate::state::append_log(
+                    &app,
+                    &format!("[pairing] host session aborted: {e:?}"),
+                );
+                if let Ok(mut g) = state.pairing.lock() {
+                    *g = None;
                 }
+                let _ = tauri::Emitter::emit(&app, "pairing://ended", "aborted");
+                break;
             }
         }
     });

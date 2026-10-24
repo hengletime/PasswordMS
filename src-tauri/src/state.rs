@@ -320,9 +320,10 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
     });
 }
 
-/// O2：被动同步三段式的会话访问器——只在锁内段短暂持有 session 锁。
-struct SessionAccess<'a> {
-    session: &'a Mutex<Session>,
+/// O2：三段式同步的会话访问器（被动 worker / 主动 `sync_now` / 配对交换共用）——
+/// 只在锁内段短暂持有 session 锁，网络 I/O 全程锁外。
+pub struct SessionAccess<'a> {
+    pub session: &'a Mutex<Session>,
 }
 
 impl passwordms_core::sync::access::RepoAccess for SessionAccess<'_> {

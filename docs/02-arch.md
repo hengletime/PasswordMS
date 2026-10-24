@@ -1315,7 +1315,8 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
 
 #### 3.18.4 已备案待办（下轮）
 
-- ~~O1~~ / ~~O2~~：已于 §3.19 实施（O1 全量；O2 第一步 = 被动 resync 三段式）。
+- ~~O1~~ / ~~O2~~：已于 §3.19 / §3.19.3 全量实施（O1 全量；O2 两步——被动 resync
+  与主动 sync_now/配对链路均已三段式）。
 
 ---
 
@@ -1364,6 +1365,33 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
   的三段化（当前仍整场持 session 锁；`resync_with_peer` 客户端侧未拆段）。
 - **已知取舍**：pull_missing 容量预检用锁内段①的文件大小快照（偏差=段②合并增量，
   以字节计）；断连遗留的待 finalize spool 由下轮 `cleanup_orphan_spools` 清理或续传。
+
+#### 3.19.3 O2 第二步：主动 sync_now 与配对链路三段式（2026-10-24）
+
+- **`resync_with_peer_access`**（`sync/resync.rs`）：客户端侧三段式——锁内段①（配对信息+
+  解 sync_key+状态初值+导出待发页，产出 `PreparedResync`：密文页+密钥+对端地址元信息，
+  均可安全带出锁外）→ 网络段（连接/按需发现/握手/发 Push 页/收对端 Push 页）→
+  锁内段②（device_id 比对 → 合并，**沿用段①载入的状态**——发送侧水位推进随状态带入，
+  合并不重载，否则每轮全量重发）→ 网络段（Done/blob）→ 锁内段③（持久化游标+地址自愈）。
+  `resync_with_peer` / `resync_with_peer_opts` 保留为兼容包装（DirectAccess）。
+- **`JoinerSession::push_and_sync_access`**（`sync/client.rs`）：配对交换客户端三段式，
+  结构同上；`push_and_sync` 保留兼容包装。
+- **`SyncServer::handle_connection`**（`sync/server.rs`）：Host 配对侧三段式——锁内段①
+  （取本端 VK，ACCEPT 信封需要）→ 网络段（HELLO/令牌/ECDH/ACCEPT/双向确认）→
+  锁内段②（令牌用后即焚+persist_device+状态初值 D-62 重置）→ 网络段收 Push 页 →
+  锁内段③（合并+导出回包页）→ 网络段（回 Push/收 Done/blob）→ 锁内段④（持久化游标）。
+  `accept_and_sync` / `poll_accept_and_sync` 保留兼容包装；新增 `poll_accept`（不持锁）；
+  原 `run_exchange` 内联删除。
+- **`sync_join_impl` 三段化**：锁内段①取本端设备身份 → 网络段 `client::pair`（握手全程
+  锁外）→ 锁内段②（VK 采纳 U1/U2/D-47/D-62 + persist_host_device）→ 三段式交换。
+  **行为变更**：握手期间自动锁定触发 ⇒ 配对整体放弃（旧实现持锁横跨全程无此窗口；
+  换来配对全程 UI 可响应）。
+- **`spawn_pairing_worker` 三段化**：`poll_accept` 不持 session 锁；连接后经 `SessionAccess`
+  处理（`sync_busy` 互斥覆盖配对交换）；会话中途被锁 ⇒ 配对作废并广播
+  `pairing://ended`，消除旧「二维码还挂着但 worker 已退出」悬死态。
+- **并发安全论证**：三段式后同一对端的 `DeviceSyncState` 仅由本场交换读写
+  （`sync_busy` 互斥被动/主动/配对三路）；库文件写入全部经 session 锁内段序列化；
+  段间窗口内的用户编辑不进本场导出（下轮补发，最终一致）。
 
 ---
 

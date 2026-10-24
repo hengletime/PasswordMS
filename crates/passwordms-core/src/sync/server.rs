@@ -17,7 +17,7 @@ use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
-use crate::sync::access::DirectAccess;
+use crate::sync::access::{DirectAccess, RepoAccess};
 use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, EphemeralKeypair, HostIdentity, SessionKeys};
 use crate::sync::merge;
@@ -155,7 +155,7 @@ impl SyncServer {
         })
     }
 
-    /// 接受一次连接：完成握手 + 双向同步交换（阻塞式）。
+    /// 兼容入口（既有测试 / 直连调用方）：repo 已由调用方持锁，阻塞接受一次连接。
     pub fn accept_and_sync(
         &mut self,
         repo: &mut Repository,
@@ -163,10 +163,11 @@ impl SyncServer {
     ) -> CoreResult<HostSyncResult> {
         let (stream, peer) = self.listener.accept().map_err(|_| CoreError::SyncAborted)?;
         let peer_ip = peer.ip().to_string();
-        self.handle_stream(stream, &peer_ip, repo, now)
+        let mut access = DirectAccess(repo);
+        self.handle_connection(stream, &peer_ip, now, &mut access)
     }
 
-    /// 非阻塞轮询一次连接；无连接返回 `Ok(None)`。
+    /// 兼容入口：repo 已由调用方持锁，非阻塞轮询一次连接；无连接返回 `Ok(None)`。
     ///
     /// 供 UI 线程/工作线程以轮询方式等待连接，并可被 [`SyncServer::cancel`] 中断。
     pub fn poll_accept_and_sync(
@@ -174,6 +175,16 @@ impl SyncServer {
         repo: &mut Repository,
         now: i64,
     ) -> CoreResult<Option<HostSyncResult>> {
+        let Some((stream, peer_ip)) = self.poll_accept()? else {
+            return Ok(None);
+        };
+        let mut access = DirectAccess(repo);
+        self.handle_connection(stream, &peer_ip, now, &mut access)
+            .map(Some)
+    }
+
+    /// 非阻塞轮询一次连接（**不持任何会话锁**，O2）；无连接返回 `Ok(None)`。
+    pub fn poll_accept(&mut self) -> CoreResult<Option<(std::net::TcpStream, String)>> {
         self.listener
             .set_nonblocking(true)
             .map_err(|_| CoreError::SyncAborted)?;
@@ -181,7 +192,6 @@ impl SyncServer {
         let _ = self.listener.set_nonblocking(false);
         match accepted {
             Ok((stream, peer)) => {
-                let peer_ip = peer.ip().to_string();
                 // D-46（关键平台差异）：**Windows 上 accept 出来的 socket 会继承监听
                 // socket 的非阻塞模式**（Unix 不会）。本方法刚把 listener 短暂设为
                 // 非阻塞做轮询，若不显式改回阻塞，后续 recv 在对端数据尚未到达时
@@ -191,25 +201,36 @@ impl SyncServer {
                 stream
                     .set_nonblocking(false)
                     .map_err(|_| CoreError::SyncAborted)?;
-                Ok(Some(self.handle_stream(stream, &peer_ip, repo, now)?))
+                Ok(Some((stream, peer.ip().to_string())))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(_) => Err(CoreError::SyncAborted),
         }
     }
 
-    /// 处理一个已建立的连接：令牌校验 → ECDH → 密钥确认 → 下发 VK → 同步交换。
-    fn handle_stream(
+    /// 处理一个已建立的连接（**O2 三段式**：令牌校验 → ECDH → 密钥确认 → 下发 VK → 同步交换）。
+    ///
+    /// - 锁内段①（毫秒级）：取本端 VK（ACCEPT 的 VK 信封需要）；
+    /// - 网络段：HELLO 校验、ECDH、ACCEPT、双向密钥确认（不接触 repo）；
+    /// - 锁内段②（毫秒级）：令牌用后即焚 + 持久化配对设备 + 同步状态初值；
+    /// - 网络段：收 Joiner Push 页（密文载荷）；
+    /// - 锁内段③（毫秒级）：vault 身份校验 → 合并 → 导出回包页（含水位推进）；
+    /// - 网络段：回送 Push 页、收 Done、blob 阶段（按批进出锁）；
+    /// - 锁内段④（毫秒级）：持久化游标。
+    ///
+    /// 中途会话被锁（自动锁定竞态）⇒ `access` 返回 `Err(NotUnlocked)` ⇒ 配对会话作废，
+    /// 对端收到连接中断（宁多勿丢；密文暂存随连接丢弃，无明文残留）。
+    pub fn handle_connection(
         &mut self,
         mut stream: std::net::TcpStream,
         peer_ip: &str,
-        repo: &mut Repository,
         now: i64,
+        access: &mut dyn RepoAccess,
     ) -> CoreResult<HostSyncResult> {
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
             .map_err(|_| CoreError::SyncAborted)?;
-        // 1) HELLO + 令牌校验。
+        // 网络段：1) HELLO + 令牌校验（自持状态，不接触 repo）。
         let hello_bytes =
             transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "hello_recv"))?;
         let hello = match serde_json::from_slice::<HandshakeMessage>(&hello_bytes)? {
@@ -230,14 +251,22 @@ impl SyncServer {
             return Err(CoreError::PairTokenInvalid);
         }
 
-        // 2) ECDH + 派生会话密钥（用 `start()` 生成的那把临时密钥，见 `host_eph` 字段注释）。
+        // 网络段：2) ECDH + 派生会话密钥（用 `start()` 生成的那把临时密钥，见 `host_eph` 字段注释）。
         let joiner_pub = to_arr32(&hello.joiner_pub)?;
         let shared = self.host_eph.shared_secret(&joiner_pub)?;
         let keys = handshake::derive_session_keys(&shared, &self.session_salt)?;
 
-        // 3) ACCEPT（含 sync_key 包裹的 VK 信封）。
+        // ── 锁内段①（O2，毫秒级）：取本端 VK（ACCEPT 的 VK 信封需要）。
+        let mut vk_out: Option<crate::crypto::keys::VaultKey> = None;
+        access.with_repo(Box::new(|repo| {
+            vk_out = Some(repo.vault_key().clone());
+            Ok(())
+        }))?;
+        let vk = vk_out.ok_or(CoreError::SyncAborted)?;
+
+        // 网络段：3) ACCEPT（含 sync_key 包裹的 VK 信封）。
         let (vk_nonce, vk_ct) =
-            handshake::seal_vault_key(&keys.sync_key[..], &repo.vault_key()[..], &self.session_id)?;
+            handshake::seal_vault_key(&keys.sync_key[..], &vk[..], &self.session_id)?;
         let accept = Accept {
             v: QR_PROTOCOL_VERSION,
             host_id: self.host_id.clone(),
@@ -252,7 +281,7 @@ impl SyncServer {
         transport::send_frame(&mut stream, &accept_frame)
             .map_err(|e| stage_io(e, "accept_send"))?;
 
-        // 4) 双向密钥确认。
+        // 网络段：4) 双向密钥确认。
         let transcript = handshake::transcript_hash(&[&hello_bytes[..], &accept_frame[..]]);
         let mac_h = handshake::confirm_mac(&keys.confirm_key, handshake::ROLE_SERVER, &transcript)?;
         transport::send_frame(
@@ -273,56 +302,157 @@ impl SyncServer {
             return Err(CoreError::FingerprintMismatch);
         }
 
-        // 5) 令牌用后即焚；持久化配对设备与同步状态。
-        self.used = true;
+        // ── 锁内段②（O2，毫秒级）：令牌用后即焚；持久化配对设备与同步状态。
         // D-69：**不写指纹**。HELLO 只带 Joiner 的临时公钥（`joiner_pub`），拿它算出的
         // 指纹每次重配对都变，写进 `PairedDevice.fingerprint` 就是又一个「冒充设备指纹」
         // （D-67 同类错误）。电脑端要拿到手机的**长期**身份公钥，需扩展 HELLO 携带
         // `joiner_identity_pub`（加法式、向后兼容）——已登记 backlog **D-70**，本轮不做。
         // 空串的语义 = 「本端不掌握对端长期身份」，UI 侧据此**不渲染**指纹行，回退到设备名。
+        self.used = true;
         let fingerprint = String::new();
         let peer_port = if hello.sync_port == 0 {
             None
         } else {
             Some(hello.sync_port)
         };
-        persist_device(
-            repo,
-            &keys,
-            &hello.joiner_id,
-            &hello.joiner_name,
-            &fingerprint,
-            Some(peer_ip.to_string()),
-            peer_port,
-        )?;
-
-        // 6) 双向同步交换。
-        let mut state = repo.sync_state(&hello.joiner_id);
-        // D-62：pair 通道 = **全新配对会话**（QR 一次性令牌 + 完整握手才走到这里），
-        // 对端 seq 允许从 1 重新开始——解绑重配对场景（remove_paired_device 清了对端
-        // 侧 sync_state）对端游标必然归零，若沿用旧 last_recv_seq 作基线，合法重配对
-        // 会被误判重放（实测 ERR_REPLAY_DETECTED）。故在此重置接收基线；
-        // 重放防护的实质由「pair token 一次性 + merge 幂等判重（base.hash）」承担：
-        // 即使旧信封被重放通过验收，merge 也只做幂等合并，数据不会回滚。
-        // 增量重同步通道（ResyncServer）的重放红线**不受影响**，维持严格单调。
-        state.last_recv_seq = 0;
+        let joiner_id = hello.joiner_id.clone();
+        let joiner_name = hello.joiner_name.clone();
+        let mut st_out: Option<CoreResult<DeviceSyncState>> = None;
+        access.with_repo(Box::new(|repo| {
+            match persist_device(
+                repo,
+                &keys,
+                &joiner_id,
+                &joiner_name,
+                &fingerprint,
+                Some(peer_ip.to_string()),
+                peer_port,
+            ) {
+                Ok(()) => {
+                    let mut st = repo.sync_state(&joiner_id);
+                    // D-62：pair 通道 = **全新配对会话**（QR 一次性令牌 + 完整握手才走到这里），
+                    // 对端 seq 允许从 1 重新开始——解绑重配对场景（remove_paired_device 清了对端
+                    // 侧 sync_state）对端游标必然归零，若沿用旧 last_recv_seq 作基线，合法重配对
+                    // 会被误判重放（实测 ERR_REPLAY_DETECTED）。故在此重置接收基线；
+                    // 重放防护的实质由「pair token 一次性 + merge 幂等判重（base.hash）」承担：
+                    // 即使旧信封被重放通过验收，merge 也只做幂等合并，数据不会回滚。
+                    // 增量重同步通道（ResyncServer）的重放红线**不受影响**，维持严格单调。
+                    st.last_recv_seq = 0;
+                    st_out = Some(Ok(st));
+                    Ok(())
+                }
+                Err(e) => {
+                    st_out = Some(Err(e));
+                    Ok(())
+                }
+            }
+        }))?;
+        let state = st_out.take().ok_or(CoreError::SyncAborted)??;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
-        let (applied, conflicts, blobs) = run_exchange(
+
+        // 网络段：5) 收 Joiner 的 Push（O1：多页聚合，密文载荷）。
+        let (push_changes, push_blob_support) = paging::recv_push_pages(
             &mut stream,
-            &keys,
+            &keys.sync_key[..],
             &self.session_id,
             &mut replay,
-            &mut state,
-            repo,
             now,
-        )?;
+        )
+        .map_err(|e| stage_io(e, "push_recv"))?;
+
+        // ── 锁内段③（O2，毫秒级）：vault 身份校验 → 合并 → 导出回包页。
+        // 水位/墓碑推进在此一并做：发送失败路径 `save_sync_state` 不执行、随会话丢弃，
+        // 失败安全语义不变（宁多勿丢）。
+        let host_id = self.host_id.clone();
+        let mut sec: Option<
+            CoreResult<(DeviceSyncState, Vec<Vec<crate::sync::protocol::ChangeRecord>>, usize, Vec<String>)>,
+        > = None;
+        access.with_repo(Box::new(|repo| {
+            if repo.device_id().as_bytes() != host_id.as_bytes() {
+                // 锁定后换库重开（device_id 变化）→ 本场配对作废，密文暂存丢弃。
+                return Err(CoreError::SyncAborted);
+            }
+            let mut st = repo.sync_state(&joiner_id);
+            let rep = merge::apply_changes(repo, &mut st, &push_changes)?;
+            // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位推进。
+            merge::note_received_changes(&mut st, &push_changes);
+            let changes = repo.export_changes(&st);
+            let pgs = paging::paginate(changes)?;
+            for page in &pgs {
+                merge::note_sent_tombstones(&mut st, page);
+                merge::note_sent_changes(&mut st, page);
+            }
+            sec = Some(Ok((st, pgs, rep.applied, rep.conflicts.clone())));
+            Ok(())
+        }))?;
+        let (mut state, pages, applied, conflicts) = sec.take().ok_or(CoreError::SyncAborted)??;
+
+        // 网络段：6) 回送本端变更页（序号在持久化基准上递增，避免与上一轮重放；D-53：
+        // 随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送
+        // 水位过滤、超预算自动分页）。
+        let mut seq = state.last_sent_seq + 1;
+        paging::send_push_pages(
+            &mut stream,
+            &keys.sync_key[..],
+            &self.session_id,
+            &mut seq,
+            now,
+            &host_id,
+            &pages,
+            conflicts.clone(),
+        )
+        .map_err(|e| stage_io(e, "reply_send"))?;
+
+        // 网络段：收 Done。
+        let _done = paging::recv_done(&mut stream, &keys.sync_key[..], &self.session_id, &mut replay, now)
+            .map_err(|e| stage_io(e, "done_recv"))?;
+
+        // 网络段：D-53 blob 阶段——双方都支持才进入；seq 从最后一个 reply 页之后单调延续
+        // （过 ReplayGuard）。Host 次序：先供 Joiner 拉的（收 Pull、发 Meta/Data/End），再拉
+        // Joiner 有的（发 Pull、收 Meta/Data/End）——与 Joiner 侧「先拉后供」严格镜像，
+        // 避免半双工交织。注意 send_blob 是「先用后增」：最后一个 reply 页已占用 seq-1，
+        // Done 由对端发出不占本端序号，故 blob 报文须从 seq 起。
+        // blob 内部按「落盘/读帧」粒度进出锁（access），网络等待全程锁外。
+        let mut sent = seq - 1;
+        let mut blobs = 0;
+        if blob_transfer::blob_phase_enabled(true, push_blob_support) {
+            sent = seq;
+            blob_transfer::serve_pull(
+                &mut stream,
+                &keys.sync_key[..],
+                &self.session_id,
+                &mut replay,
+                access,
+                &mut sent,
+                now,
+            )?;
+            let phase = blob_transfer::pull_missing(
+                &mut stream,
+                &keys.sync_key[..],
+                &self.session_id,
+                &mut replay,
+                access,
+                &mut sent,
+                now,
+            )?;
+            blobs = phase.appended;
+        }
+
+        // ── 锁内段④（O2，毫秒级）：持久化游标。
         state.last_recv_seq = replay.last_recv_seq();
-        repo.save_sync_state(state)?;
-        repo.touch_device_sync(&hello.joiner_id, now)?;
+        state.last_sent_seq = sent;
+        access.with_repo(Box::new(|repo| {
+            if repo.device_id().as_bytes() != host_id.as_bytes() {
+                return Err(CoreError::SyncAborted);
+            }
+            repo.save_sync_state(state)?;
+            repo.touch_device_sync(&joiner_id, now)?;
+            Ok(())
+        }))?;
 
         Ok(HostSyncResult {
-            device_id: hello.joiner_id,
-            device_name: hello.joiner_name,
+            device_id: joiner_id,
+            device_name: joiner_name,
             fingerprint,
             applied,
             conflicts,
@@ -364,93 +494,7 @@ fn persist_device(
     repo.upsert_paired_device(device)
 }
 
-/// Host 侧一次同步交换：收 Push → 合并 → 回 Push → 收 Done →（blob 阶段）。
-///
-/// 序号单调递增（从持久化的 `last_sent_seq` 起），以支持重复同步（D-11）。
-/// 返回 `(applied, conflicts, blobs_appended)`。
-fn run_exchange(
-    stream: &mut std::net::TcpStream,
-    keys: &SessionKeys,
-    session_id: &[u8],
-    replay: &mut ReplayGuard,
-    state: &mut DeviceSyncState,
-    repo: &mut Repository,
-    now: i64,
-) -> CoreResult<(usize, Vec<String>, usize)> {
-    // 收 Joiner 的 Push（O1：多页聚合后一次合并——页面间记录互不重叠，等价单帧）。
-    let (push_changes, push_blob_support) = paging::recv_push_pages(
-        stream,
-        &keys.sync_key[..],
-        session_id,
-        replay,
-        now,
-    )
-    .map_err(|e| stage_io(e, "push_recv"))?;
-    let report = merge::apply_changes(repo, state, &push_changes)?;
-    // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
-    merge::note_received_changes(state, &push_changes);
-
-    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放；D-53：随报文通告本端
-    // blob 能力；D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送水位过滤、超预算
-    // 自动分页）。
-    let changes = repo.export_changes(state);
-    let pages = paging::paginate(changes).map_err(|e| stage_io(e, "reply_send"))?;
-    let mut seq = state.last_sent_seq + 1;
-    paging::send_push_pages(
-        stream,
-        &keys.sync_key[..],
-        session_id,
-        &mut seq,
-        now,
-        repo.device_id(),
-        &pages,
-        report.conflicts.clone(),
-    )
-    .map_err(|e| stage_io(e, "reply_send"))?;
-    // D-56/O1：发送成功后推进已导出墓碑的 base 与 live 水位（下一轮免重发）。
-    for page in &pages {
-        merge::note_sent_tombstones(state, page);
-        merge::note_sent_changes(state, page);
-    }
-
-    // 收 Done。
-    let _done = paging::recv_done(stream, &keys.sync_key[..], session_id, replay, now)
-        .map_err(|e| stage_io(e, "done_recv"))?;
-
-    // D-53 blob 阶段：双方都支持才进入；seq 从最后一个 reply 页之后单调延续（过
-    // ReplayGuard）。Host 次序：先供 Joiner 拉的（收 Pull、发 Meta/Data/End），再拉
-    // Joiner 有的（发 Pull、收 Meta/Data/End）——与 Joiner 侧「先拉后供」严格镜像，
-    // 避免半双工交织。
-    // 注意 send_blob 是「先用后增」：最后一个 reply 页已占用 seq-1，Done 由对端发出
-    // 不占本端序号，故 blob 报文须从 seq 起。
-    let mut sent = seq - 1;
-    let mut blobs = 0;
-    if blob_transfer::blob_phase_enabled(true, push_blob_support) {
-        sent = seq;
-        blob_transfer::serve_pull(
-            stream,
-            &keys.sync_key[..],
-            session_id,
-            replay,
-                &mut DirectAccess(&mut *repo),
-                &mut sent,
-            now,
-        )?;
-        let phase = blob_transfer::pull_missing(
-            stream,
-            &keys.sync_key[..],
-            session_id,
-            replay,
-                &mut DirectAccess(&mut *repo),
-                &mut sent,
-            now,
-        )?;
-        blobs = phase.appended;
-    }
-
-    state.last_sent_seq = sent;
-    Ok((report.applied, report.conflicts, blobs))
-}
+/// Host 侧一次同步交换的内联实现已并入 [`SyncServer::handle_connection`]（O2 三段式）。
 
 /// 设备密钥包裹 AAD。
 pub fn device_key_aad(device_id: &str) -> Vec<u8> {

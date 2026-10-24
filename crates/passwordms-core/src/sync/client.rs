@@ -15,7 +15,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
-use crate::sync::access::DirectAccess;
+use crate::sync::access::{DirectAccess, RepoAccess};
 use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, EphemeralKeypair, SessionKeys};
 use crate::sync::merge;
@@ -111,18 +111,54 @@ impl JoinerSession {
     /// 执行一次双向同步交换：发 Push（O1：可多页）→ 收 Host 变更并合并 → 发 Done。
     ///
     /// 序号在持久化的 `last_sent_seq` 基础上单调递增，以支持「配对后再同步」（D-11）。
+    ///
+    /// 兼容入口（既有测试 / 直连调用方）：repo 已由调用方持锁。
     pub fn push_and_sync(
         &mut self,
         repo: &mut Repository,
         now: i64,
     ) -> CoreResult<JoinerSyncResult> {
-        let mut state: DeviceSyncState = repo.sync_state(&self.host_id);
+        let mut access = DirectAccess(repo);
+        self.push_and_sync_access(&mut access, now)
+    }
+
+    /// [`Self::push_and_sync`] 的三段式版本（**O2**：网络等待全程不持会话锁）。
+    ///
+    /// - 锁内段①（毫秒级）：状态初值 + 导出待发页（密文，可安全带出锁外）；
+    /// - 网络段：发 Push 页、收 Host Push 页（密文载荷）；
+    /// - 锁内段②（毫秒级）：vault 身份校验 → 合并收到的变更（含回声水位推进）；
+    /// - 网络段：发 Done、blob 阶段（按批进出锁）；
+    /// - 锁内段③（毫秒级）：持久化游标。
+    ///
+    /// 中途会话被锁（自动锁定竞态）⇒ `access` 返回 `Err(NotUnlocked)` ⇒ 交换整体放弃，
+    /// 游标不落盘、下一轮自动重发（宁多勿丢；密文暂存随连接丢弃，无明文残留）。
+    pub fn push_and_sync_access(
+        &mut self,
+        access: &mut dyn RepoAccess,
+        now: i64,
+    ) -> CoreResult<JoinerSyncResult> {
+        // ── 锁内段①（O2，毫秒级）：状态初值 + 导出待发页。
+        let mut prepared: Option<
+            CoreResult<(DeviceSyncState, Vec<Vec<crate::sync::protocol::ChangeRecord>>, String)>,
+        > = None;
+        access.with_repo(Box::new(|repo| {
+            let st = repo.sync_state(&self.host_id);
+            let changes = repo.export_changes(&st);
+            match paging::paginate(changes) {
+                Ok(pgs) => {
+                    let my_id = repo.device_id().to_string();
+                    prepared = Some(Ok((st, pgs, my_id)));
+                }
+                Err(e) => prepared = Some(Err(e)),
+            }
+            Ok(())
+        }))?;
+        let (mut state, pages, my_device_id) =
+            prepared.take().ok_or(CoreError::SyncAborted)??;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
-        // seq=c1..：推送本端变更（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，
-        // 按对端 base 过滤；O1：live 按发送水位过滤、超预算自动分页）。
-        let changes = repo.export_changes(&state);
-        let pages = paging::paginate(changes)?;
+        // 网络段（O2，不持锁）：seq=c1.. 推送本端变更（D-53：随报文通告本端 blob 能力；
+        // D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送水位过滤、超预算自动分页）。
         let mut seq = state.last_sent_seq + 1;
         paging::send_push_pages(
             &mut self.stream,
@@ -130,7 +166,7 @@ impl JoinerSession {
             &self.session_id,
             &mut seq,
             now,
-            repo.device_id(),
+            &my_device_id,
             &pages,
             Vec::new(),
         )?;
@@ -141,7 +177,7 @@ impl JoinerSession {
             merge::note_sent_changes(&mut state, page);
         }
 
-        // 接收 Host 的 Push（O1：多页聚合）并合并。
+        // 网络段（O2）：接收 Host 的 Push（O1：多页聚合，密文载荷）。
         let (reply_changes, reply_blob_support) = paging::recv_push_pages(
             &mut self.stream,
             &self.keys.sync_key[..],
@@ -149,25 +185,41 @@ impl JoinerSession {
             &mut replay,
             now,
         )?;
-        let report = merge::apply_changes(repo, &mut state, &reply_changes)?;
-        // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
-        merge::note_received_changes(&mut state, &reply_changes);
 
-        // Done（seq 延续分页序号）。
+        // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并。
+        let mut merged: Option<CoreResult<(DeviceSyncState, usize, Vec<String>)>> = None;
+        let host_id = self.host_id.clone();
+        access.with_repo(Box::new(|repo| {
+            if repo.device_id().as_bytes() != my_device_id.as_bytes() {
+                // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
+                return Err(CoreError::SyncAborted);
+            }
+            let mut st = repo.sync_state(&host_id);
+            let rep = merge::apply_changes(repo, &mut st, &reply_changes)?;
+            // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
+            merge::note_received_changes(&mut st, &reply_changes);
+            merged = Some(Ok((st, rep.applied, rep.conflicts.clone())));
+            Ok(())
+        }))?;
+        let (mut state, applied, conflicts) =
+            merged.take().ok_or(CoreError::SyncAborted)??;
+
+        // 网络段（O2）：Done（seq 延续分页序号）。
         let done = SyncPayload {
             kind: SyncKind::Done,
-            device_id: repo.device_id().to_string(),
+            device_id: my_device_id.clone(),
             cursor: 0,
             changes: Vec::new(),
-            conflicts: report.conflicts.clone(),
+            conflicts: conflicts.clone(),
             blob_support: true,
         };
         let done_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, seq, now, &done)?;
         transport::send_frame(&mut self.stream, &serde_json::to_vec(&done_env)?)?;
 
-        // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
-        // 先我拉对端缺的，再我供对端拉的（串行，与 Host 侧次序镜像）。
+        // 网络段（O2）：D-53 blob 阶段——双方都支持才进入；seq 从 Done 之后单调延续
+        // （过 ReplayGuard）。先我拉对端缺的，再我供对端拉的（串行，与 Host 侧次序镜像）。
         // 注意 send_blob 是「先用后增」：Done 已占用 seq，故 blob 报文须从 seq+1 起。
+        // blob 内部按「落盘/读帧」粒度进出锁（access），网络等待全程锁外。
         let mut sent = seq;
         let mut blobs = 0;
         if blob_transfer::blob_phase_enabled(true, reply_blob_support) {
@@ -177,7 +229,7 @@ impl JoinerSession {
                 &self.keys.sync_key[..],
                 &self.session_id,
                 &mut replay,
-                &mut DirectAccess(&mut *repo),
+                access,
                 &mut sent,
                 now,
             )?;
@@ -187,20 +239,29 @@ impl JoinerSession {
                 &self.keys.sync_key[..],
                 &self.session_id,
                 &mut replay,
-                &mut DirectAccess(&mut *repo),
+                access,
                 &mut sent,
                 now,
             )?;
         }
 
+        // ── 锁内段③（O2，毫秒级）：持久化游标。
         state.last_recv_seq = replay.last_recv_seq();
         state.last_sent_seq = sent;
-        repo.save_sync_state(state)?;
-        repo.touch_device_sync(&self.host_id, now)?;
+        let final_state = state.clone();
+        let host_id = self.host_id.clone();
+        access.with_repo(Box::new(|repo| {
+            if repo.device_id().as_bytes() != my_device_id.as_bytes() {
+                return Err(CoreError::SyncAborted);
+            }
+            repo.save_sync_state(final_state)?;
+            repo.touch_device_sync(&host_id, now)?;
+            Ok(())
+        }))?;
 
         Ok(JoinerSyncResult {
-            applied: report.applied,
-            conflicts: report.conflicts,
+            applied,
+            conflicts,
             blobs,
         })
     }

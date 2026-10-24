@@ -194,7 +194,7 @@ pub fn resync_with_peer(
     )
 }
 
-/// [`resync_with_peer`] 的可注入发现目标版本（生产入口的薄包装）。
+/// [`resync_with_peer`] 的可注入发现目标版本（兼容入口：repo 已由调用方持锁 / 既有测试）。
 pub fn resync_with_peer_opts(
     repo: &mut Repository,
     peer_device_id: &str,
@@ -202,18 +202,75 @@ pub fn resync_with_peer_opts(
     local_port: u16,
     discovery_mode: &DiscoveryMode,
 ) -> CoreResult<ResyncOutcome> {
-    // 1) 读取已配对设备。
-    let peer = repo
-        .get_paired_device(peer_device_id)
-        .ok_or(CoreError::NotPaired)?;
+    let mut access = DirectAccess(repo);
+    resync_with_peer_access(&mut access, peer_device_id, now, local_port, discovery_mode)
+}
 
-    // 2) 解出共享同步密钥（仅解锁态可解；AAD 绑定设备身份）。
-    //    D-74：提前到连接之前——发现报文的 tag 也要用它算，且**只解这一次**。
-    let sync_key = keys::unwrap_item_key(
-        repo.vault_key(),
-        &peer.sync_key_wrapped,
-        &device_key_aad(peer_device_id),
-    )?;
+/// 锁内段①的产出（全部可安全带出锁外：密文载荷 + 密钥封装 + 对端地址元信息）。
+struct PreparedResync {
+    peer_ip: Option<String>,
+    peer_port: Option<u16>,
+    sync_key: ItemKey,
+    client_id: String,
+    state: DeviceSyncState,
+    pages: Vec<Vec<ChangeRecord>>,
+}
+
+/// [`resync_with_peer`] 的三段式版本（**O2**：网络等待全程不持会话锁）。
+///
+/// - 锁内段①（毫秒级）：配对信息 + 解 `sync_key` + 状态初值 + 导出待发页（密文）；
+/// - 网络段：连接（含按需发现）、握手、发 Push 页、收对端 Push 页；
+/// - 锁内段②（毫秒级）：vault 身份校验 → 合并收到的变更（含回声水位推进）；
+/// - 网络段：发 Done、blob 阶段（按批进出锁）；
+/// - 锁内段③（毫秒级）：持久化游标 + 地址自愈。
+///
+/// 中途会话被锁（自动锁定竞态）⇒ `access` 返回 `Err(NotUnlocked)` ⇒ 交换整体放弃，
+/// 游标不落盘、下一轮自动重发（宁多勿丢；密文暂存随连接丢弃，无明文残留）。
+pub fn resync_with_peer_access(
+    access: &mut dyn crate::sync::access::RepoAccess,
+    peer_device_id: &str,
+    now: i64,
+    local_port: u16,
+    discovery_mode: &DiscoveryMode,
+) -> CoreResult<ResyncOutcome> {
+    // ── 锁内段①（O2，毫秒级）：配对信息 + 解密钥 + 状态初值 + 导出待发页。
+    // 锁定态到达这里 → with_repo 返回 Err → 交换整体放弃。
+    let mut prepared: Option<CoreResult<PreparedResync>> = None;
+    access.with_repo(Box::new(|repo| {
+        // 1) 读取已配对设备。
+        let Some(peer) = repo.get_paired_device(peer_device_id) else {
+            prepared = Some(Err(CoreError::NotPaired));
+            return Ok(());
+        };
+        // 2) 解出共享同步密钥（仅解锁态可解；AAD 绑定设备身份）。
+        //    D-74：提前到连接之前——发现报文的 tag 也要用它算，且**只解这一次**。
+        match keys::unwrap_item_key(
+            repo.vault_key(),
+            &peer.sync_key_wrapped,
+            &device_key_aad(peer_device_id),
+        ) {
+            Ok(sk) => {
+                let st = repo.sync_state(peer_device_id);
+                match paging::paginate(repo.export_changes(&st)) {
+                    Ok(pages) => {
+                        prepared = Some(Ok(PreparedResync {
+                            peer_ip: peer.peer_ip.clone(),
+                            peer_port: peer.peer_port,
+                            sync_key: sk,
+                            client_id: repo.device_id().to_string(),
+                            state: st,
+                            pages,
+                        }));
+                    }
+                    Err(e) => prepared = Some(Err(e)),
+                }
+            }
+            Err(_) => prepared = Some(Err(CoreError::FingerprintMismatch)),
+        }
+        Ok(())
+    }))?;
+    let prep = prepared.take().ok_or(CoreError::SyncAborted)??;
+    let mut state = prep.state;
 
     // 3) 连接对端持久监听端口。
     // D-57：改用与配对一致的短超时（裸 connect 对不可路由地址挂 ~21s+，用户干等），
@@ -228,7 +285,7 @@ pub fn resync_with_peer_opts(
     // "仍失败请重新配对"）。多一个变体只会重复造文案，还要动 `code()`/`message_key()`
     // 两个穷举 match 与前端 i18n。
     let connect_timeout = Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS);
-    let static_addr = match (&peer.peer_ip, peer.peer_port) {
+    let static_addr = match (&prep.peer_ip, prep.peer_port) {
         (Some(ip), Some(port)) => Some((ip.clone(), port)),
         _ => None,
     };
@@ -242,7 +299,7 @@ pub fn resync_with_peer_opts(
             Err(first_err) => {
                 // 记下**静态那次**的错误（已按 connect 阶段标注），发现无果时原样返回。
                 let first_err = stage_io(first_err, "connect");
-                match discover_addr(&sync_key, discovery_mode, local_port)? {
+                match discover_addr(&prep.sync_key, discovery_mode, local_port)? {
                     Some((ip, port)) => {
                         let s = transport::connect_with_timeout(&ip, port, connect_timeout)
                             .map_err(|e| stage_io(e, "connect"))?;
@@ -255,7 +312,7 @@ pub fn resync_with_peer_opts(
         },
         // 地址缺失（配对记录不完整，历史上不该发生）：走同一个语义出口——合成一条
         // "没有地址"的 IO 错误并按 connect 阶段标注，落到现成的 `err.network_unreachable`。
-        None => match discover_addr(&sync_key, discovery_mode, local_port)? {
+        None => match discover_addr(&prep.sync_key, discovery_mode, local_port)? {
             Some((ip, port)) => {
                 let s = transport::connect_with_timeout(&ip, port, connect_timeout)
                     .map_err(|e| stage_io(e, "connect"))?;
@@ -275,8 +332,8 @@ pub fn resync_with_peer_opts(
         .set_read_timeout(Some(Duration::from_secs(30)))
         .map_err(|_| CoreError::SyncAborted)?;
 
-    // 4) HELLO。
-    let client_id = repo.device_id().to_string();
+    // 4) HELLO（网络段，不持锁）。
+    let client_id = prep.client_id.clone();
     let nonce_c = rng::random_bytes(32)?;
     let hello = ResyncMessage::Hello(ResyncHello {
         v: QR_PROTOCOL_VERSION,
@@ -307,7 +364,7 @@ pub fn resync_with_peer_opts(
         &nonce_c,
         &challenge.nonce_s,
     );
-    let sk = handshake::derive_session_sk(&sync_key, &nonce_c, &challenge.nonce_s)?;
+    let sk = handshake::derive_session_sk(&prep.sync_key, &nonce_c, &challenge.nonce_s)?;
     let expected_s = handshake::confirm_mac(&sk, ROLE_SERVER, &transcript)?;
     if !handshake::verify_mac(&expected_s, &challenge.mac) {
         return Err(CoreError::FingerprintMismatch);
@@ -320,13 +377,12 @@ pub fn resync_with_peer_opts(
         .map_err(|e| stage_io(e, "confirm_send"))?;
 
     let session_id = session_id_of(&transcript);
-    let mut state: DeviceSyncState = repo.sync_state(peer_device_id);
+    // 状态沿用锁内段①载入的副本（含本次发送侧水位推进的落点）；sync_busy 保证本场
+    // 交换期间没有并发同步改写同一份 DeviceSyncState。
     let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
-    // 8) 发本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤；
-    // O1：live 按发送水位过滤、超预算自动分页）。
-    let changes = repo.export_changes(&state);
-    let pages = paging::paginate(changes).map_err(|e| stage_io(e, "push_send"))?;
+    // 8) 发本端 Push（网络段，不持锁；页已在锁内段①导出。D-53：随报文通告本端 blob 能力；
+    // D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送水位过滤、超预算自动分页）。
     let mut seq = state.last_sent_seq + 1;
     paging::send_push_pages(
         &mut stream,
@@ -335,18 +391,18 @@ pub fn resync_with_peer_opts(
         &mut seq,
         now,
         &client_id,
-        &pages,
+        &prep.pages,
         Vec::new(),
     )
     .map_err(|e| stage_io(e, "push_send"))?;
     // D-56/O1：发送成功后推进已导出墓碑的 base 与 live 水位（下一轮免重发；失败路径
     // 不落盘自动重发）。
-    for page in &pages {
+    for page in &prep.pages {
         merge::note_sent_tombstones(&mut state, page);
         merge::note_sent_changes(&mut state, page);
     }
 
-    // 9) 收对端 Push（O1：多页聚合）并合并。
+    // 9) 收对端 Push（网络段，不持锁；O1：多页聚合，密文载荷）。
     let (reply_changes, reply_blob_support) = paging::recv_push_pages(
         &mut stream,
         &sk[..],
@@ -355,25 +411,37 @@ pub fn resync_with_peer_opts(
         now,
     )
     .map_err(|e| stage_io(e, "reply_recv"))?;
-    let report = merge::apply_changes(repo, &mut state, &reply_changes)?;
-    // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
-    merge::note_received_changes(&mut state, &reply_changes);
 
-    // 10) 发 Done（seq 延续分页序号）。
+    // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并收到的变更。
+    let mut merged: Option<CoreResult<(usize, Vec<String>)>> = None;
+    access.with_repo(Box::new(|repo| {
+        if repo.device_id().as_bytes() != client_id.as_bytes() {
+            // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
+            return Err(CoreError::SyncAborted);
+        }
+        let rep = merge::apply_changes(repo, &mut state, &reply_changes)?;
+        // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
+        merge::note_received_changes(&mut state, &reply_changes);
+        merged = Some(Ok((rep.applied, rep.conflicts.clone())));
+        Ok(())
+    }))?;
+    let (applied, conflicts) = merged.take().ok_or(CoreError::SyncAborted)??;
+
+    // 10) 发 Done（网络段，不持锁；seq 延续分页序号）。
     let done = SyncPayload {
         kind: SyncKind::Done,
         device_id: client_id.clone(),
         cursor: 0,
         changes: Vec::new(),
-        conflicts: report.conflicts.clone(),
+        conflicts: conflicts.clone(),
         blob_support: true,
     };
     let done_env = seal_envelope(&sk[..], &session_id, seq, now, &done)?;
     transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?)
         .map_err(|e| stage_io(e, "done_send"))?;
 
-    // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
-    // 发起方次序：先拉后供（与响应方镜像）。
+    // D-53 blob 阶段（网络段 + 锁内段按批进出）：双方都支持才进入；seq 从 Done 之后
+    // 单调延续（过 ReplayGuard）。发起方次序：先拉后供（与响应方镜像）。
     // 注意 send_blob 是「先用后增」：Done 已占用 seq，故 blob 报文须从 seq+1 起。
     let mut sent = seq;
     let mut blobs = 0;
@@ -384,7 +452,7 @@ pub fn resync_with_peer_opts(
             &sk[..],
             &session_id,
             &mut replay,
-            &mut DirectAccess(&mut *repo),
+            access,
             &mut sent,
             now,
         )?;
@@ -394,30 +462,36 @@ pub fn resync_with_peer_opts(
             &sk[..],
             &session_id,
             &mut replay,
-            &mut DirectAccess(&mut *repo),
+            access,
             &mut sent,
             now,
         )?;
     }
 
-    // 11) 持久化游标。
+    // ── 锁内段③（O2，毫秒级）：持久化游标 + D-74 地址自愈。
     state.last_recv_seq = replay.last_recv_seq();
     state.last_sent_seq = sent;
-    repo.save_sync_state(state)?;
-    repo.touch_device_sync(peer_device_id, now)?;
-
     // D-74：靠发现连上后**必须把新地址写回**，否则下次同步还得再发现一次。
-    // 与入站自愈（`ResyncServer::handle` 末尾）同一规则——只在**校验通过且同步成功后**写，
-    // 任何失败路径都不得篡改配对记录（防投毒）。
-    let addr_changed = peer.peer_ip.as_deref() != Some(used_addr.0.as_str())
-        || peer.peer_port != Some(used_addr.1);
-    if addr_changed {
-        repo.update_paired_addr(peer_device_id, &used_addr.0, used_addr.1)?;
-    }
+    // 与入站自愈（`ResyncServer::handle_connection` 末尾）同一规则——只在**校验通过且
+    // 同步成功后**写，任何失败路径都不得篡改配对记录（防投毒）。
+    let addr_changed = prep.peer_ip.as_deref() != Some(used_addr.0.as_str())
+        || prep.peer_port != Some(used_addr.1);
+    let final_state = state;
+    access.with_repo(Box::new(|repo| {
+        if repo.device_id().as_bytes() != client_id.as_bytes() {
+            return Err(CoreError::SyncAborted);
+        }
+        repo.save_sync_state(final_state)?;
+        repo.touch_device_sync(peer_device_id, now)?;
+        if addr_changed {
+            repo.update_paired_addr(peer_device_id, &used_addr.0, used_addr.1)?;
+        }
+        Ok(())
+    }))?;
 
     Ok(ResyncOutcome {
-        applied: report.applied,
-        conflicts: report.conflicts,
+        applied,
+        conflicts,
         blobs,
     })
 }
