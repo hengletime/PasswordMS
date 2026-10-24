@@ -1315,11 +1315,55 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
 
 #### 3.18.4 已备案待办（下轮）
 
-- **O1**：`export_changes` 无 peer-base 过滤、无分页（cursor 恒 0），单帧 ≈1.06 MB 上限
-  → 大库同步必然 `frame_too_large` 且**永久失败**（base 无法推进）。方案：按对端 base
-  过滤 live 变更 + cursor 分页 + 帧预算切批。
-- **O2**：同步网络 I/O 全程持全局 session Mutex 且同步命令在主线程 → 同步期间 UI 冻结。
-  方案：「锁内取快照 → 锁外传输 → 锁内合并」三段式 + 命令移出主线程。
+- ~~O1~~ / ~~O2~~：已于 §3.19 实施（O1 全量；O2 第一步 = 被动 resync 三段式）。
+
+---
+
+### 3.19 O1 同步分页 + 发送水位；O2 第一步被动 resync 三段式（2026-10-24）
+
+#### 3.19.1 O1：发送水位 + cursor 分页 + 帧预算（修复 🟠-1「大库同步永久失败」）
+
+- **发送水位**：`DeviceSyncState.sent_watermark: HashMap<record_id, rev>`（serde default
+  兼容老状态帧）。`export_changes` 只导出 `rev > 水位` 的 live 记录（墓碑走 base 过滤
+  不变）；发送成功后由 `merge::note_sent_changes` 推进——与 `note_sent_tombstones`
+  同一失败安全语义（中途失败 `save_sync_state` 不执行，随会话丢弃，下轮重发，宁多勿丢；
+  接收方 merge 幂等跳过）。首次配对（水位为空）= 全量首推，行为不变。
+- **cursor 分页**（发送方驱动，接收方零新语义）：`sync/paging.rs` 把确定性排序
+  （`(record_type, record_id)`）的变更清单按帧预算切块；每页一个 Push 信封（seq 单调
+  递增），`cursor` = 本页之后剩余条数（0 = 最后一页）；接收方 `recv_push_pages` 循环读
+  到 cursor==0，聚合后**一次** merge（页面间记录互不重叠，等价单帧）。老端单页 Push
+  cursor 恒 0 → 一帧即出，天然兼容；大库在新旧混布下与旧版同样失败（`frame_too_large`），
+  无回归。4 处交换点（client / resync 发起方 / server / resync 响应方）统一走
+  `send_push_pages` / `recv_push_pages` / `recv_done`；Done 的 cursor 语义归零（旧值
+  `last_recv_seq` 从未被消费）。
+- **帧预算预检**：`PAGE_BUDGET_BYTES = SYNC_MAX_FRAME_BYTES − 96 KiB`；记录上线估算
+  `ciphertext×2 + 512`（双重 b64 膨胀 16/9 按 2 倍保守计）。单条超预算 →
+  `Validation("change_too_large:<id>")` 指名报错（正常 256 KiB 笔记估算 ~516 KiB，
+  到不了这一步）。
+- **守门**：`tests/sync_pagination.rs` 5 例（1500 条分页全到位且配对后导出为空 /
+  增量 50 条只发增量 + 连接失败水位不推进 + 修复后收敛 / 老格式无 cursor 字段互通
+  且恰好停在 cursor=0 / 分页收发循环停在最后一帧 / paging 单测 4 例）。
+
+#### 3.19.2 O2 第一步：被动 resync 三段式（修复 🟠-2「同步期间 UI 冻结」）
+
+- **`sync/access.rs`**：`RepoAccess::with_repo(RepoJob)` —— 锁内段入口（毫秒级），
+  `DirectAccess` 供主动路径/测试（repo 已持锁）直连。
+- **`ResyncServer` 拆分**：`poll_accept`（不持任何会话锁）+ `handle_connection`（三段式）：
+  锁内段①配对校验+解 sync_key+状态初值 → 网络段握手/收 Push → 锁内段②vault 未变校验
+  （device_id 比对，锁定后换库即弃）+ 合并 + 导出回包页 → 网络段回 Push/收 Done/blob →
+  锁内段③持久化游标+地址自愈。`poll_once` 保留为兼容包装（DirectAccess）。
+- **blob 阶段去持锁化**：`pull_missing` 锁内段①取缺失清单+容量快照 → 网络收片落
+  spool（不需要 repo）→ 锁内段②批量 finalize；`serve_pull` 按 `SERVE_BATCH_BYTES=32MB`
+  分批「锁内读帧出锁 → 锁外发送」。
+- **自动锁定竞态裁定**：段中会话被锁 ⇒ `with_repo` 返回 `Err(NotUnlocked)` ⇒ 整段丢弃、
+  对端下轮重发（宁多勿丢）；密文暂存随连接丢弃，**无明文残留**（解密只发生在锁内段②）。
+- **同步互斥**：`AppState.sync_busy: AtomicBool`——被动 worker 与主动 `sync_now` 互斥
+  （三段式后两者可真并发，各自推进同一份 DeviceSyncState 会产生 seq/base 竞态）；
+  抢不到的一侧快速失败 `ERR_SYNC_BUSY`（`err.sync_busy` 双语文案）。
+- **O2 第二步（待办）**：主动路径 `sync_now` 与 pairing worker / `sync_join_impl`
+  的三段化（当前仍整场持 session 锁；`resync_with_peer` 客户端侧未拆段）。
+- **已知取舍**：pull_missing 容量预检用锁内段①的文件大小快照（偏差=段②合并增量，
+  以字节计）；断连遗留的待 finalize spool 由下轮 `cleanup_orphan_spools` 清理或续传。
 
 ---
 

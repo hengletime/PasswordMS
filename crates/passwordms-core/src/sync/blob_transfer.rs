@@ -32,6 +32,7 @@ use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::vault::WrappedKey;
 use crate::store::frame::{bytes_to_record_id, record_id_to_bytes, Frame};
 use crate::store::repository::{BlobWriteOutcome, Repository};
+use crate::sync::access::RepoAccess;
 use crate::sync::protocol::{envelope_aad, BlobMessage, SyncEnvelope};
 use crate::sync::replay::ReplayGuard;
 use crate::sync::transport;
@@ -496,25 +497,35 @@ enum FinalizeResult {
 /// 调用时机：`Done` 之后、blob 协商通过（[`blob_phase_enabled`]）。无论 want 是否
 /// 为空都必须发 Pull（对端按收到的 Pull 决定是否供片，空清单 = 立即 End），
 /// 保证两侧阶段次序确定；返回 [`BlobPhaseReport`]。
+///
+/// **O2 三段式**：锁内段①取缺失清单/容量快照，网络段收片落 spool（不需要 repo），
+/// 锁内段②批量 finalize。容量预检用锁内段①的文件大小**快照**——交换中途本端库
+/// 只会被本次交换自己改变（同一时刻仅一场同步），偏差以字节计、可忽略。
 pub fn pull_missing(
     stream: &mut std::net::TcpStream,
     sync_key: &[u8],
     session_id: &[u8],
     replay: &mut ReplayGuard,
-    repo: &mut Repository,
+    access: &mut dyn RepoAccess,
     next_seq: &mut u64,
     now: i64,
 ) -> CoreResult<BlobPhaseReport> {
-    // 孤儿 spool 清理（条目中途被删的场景；§3.12.6）。
-    cleanup_orphan_spools(repo)?;
-
-    // 缺失清单：attachment 条目的 blob_ref 中本地没有的（排序保证确定性）。
-    let mut want: Vec<String> = repo
-        .attachment_blob_refs()
-        .into_iter()
-        .filter(|r| !repo.has_blob(r))
-        .collect();
-    want.sort();
+    // 锁内段①：孤儿 spool 清理（条目中途被删的场景；§3.12.6）+ 缺失清单 + 容量快照。
+    let mut prep: Option<(Vec<String>, PathBuf, u64)> = None;
+    access.with_repo(Box::new(|repo| {
+        cleanup_orphan_spools(repo)?;
+        let mut want: Vec<String> = repo
+            .attachment_blob_refs()
+            .into_iter()
+            .filter(|r| !repo.has_blob(r))
+            .collect();
+        // 排序保证确定性。
+        want.sort();
+        let size = repo.file_size()?;
+        prep = Some((want, Spool::root(&repo.path()), size));
+        Ok(())
+    }))?;
+    let (want, spool_root, vault_size) = prep.ok_or(CoreError::SyncAborted)?;
     send_blob(
         stream,
         sync_key,
@@ -527,6 +538,8 @@ pub fn pull_missing(
     let mut report = BlobPhaseReport::default();
     let peer_missing: Vec<String>;
     // 当前在接收的 blob（分片按 ref 串行到达：Meta ref₁ → Data ref₁ ×n → Meta ref₂ → …）。
+    // O2：收齐的 blob 暂存到 `finished`（spool 在盘上，不占内存），End 后批量 finalize。
+    let mut finished: Vec<(BlobMeta, Spool)> = Vec::new();
     let mut current: Option<(BlobMeta, Spool)> = None;
     // 容量拒绝时剩余需消费丢弃的 Data 信封数（保持流同步，不落盘）。
     let mut skip_remaining: u32 = 0;
@@ -534,26 +547,18 @@ pub fn pull_missing(
     loop {
         let msg = recv_blob(stream, sync_key, session_id, replay, now)?;
         if matches!(msg, BlobMessage::Meta { .. }) {
-            // 收到新 Meta：先结算上一轮（其分片必然已收齐）。
-            if let Some((meta, spool)) = current.take() {
-                let blob_ref = meta.blob_ref.clone();
-                match finalize_blob(repo, meta, spool)? {
-                    FinalizeResult::Appended => {
-                        report.completed.push(blob_ref);
-                        report.appended += 1;
-                    }
-                    FinalizeResult::AlreadyPresent => report.completed.push(blob_ref),
-                    FinalizeResult::KeptLocal => report.missing.push(blob_ref),
-                }
+            // 收到新 Meta：上一轮必然已收齐，先入队等待批量 finalize。
+            if let Some(pair) = current.take() {
+                finished.push(pair);
             }
             // 解析并校验本次 Meta；容量预检不过 → 拒绝（不落半个分片，§3.12.6）。
             let meta = BlobMeta::from_message(msg)?;
-            if !capacity_ok(repo.file_size()?, meta.plaintext_len) {
+            if !capacity_ok(vault_size, meta.plaintext_len) {
                 skip_remaining = meta.chunk_total;
                 report.missing.push(meta.blob_ref.clone());
                 current = None;
             } else {
-                let spool = Spool::open_or_create(&Spool::root(&repo.path()), &meta)?;
+                let spool = Spool::open_or_create(&spool_root, &meta)?;
                 current = Some((meta, spool));
             }
             continue;
@@ -587,19 +592,26 @@ pub fn pull_missing(
             }
         }
     }
-
     // 结算最后一轮。
-    if let Some((meta, spool)) = current.take() {
-        let blob_ref = meta.blob_ref.clone();
-        match finalize_blob(repo, meta, spool)? {
-            FinalizeResult::Appended => {
-                report.completed.push(blob_ref);
-                report.appended += 1;
-            }
-            FinalizeResult::AlreadyPresent => report.completed.push(blob_ref),
-            FinalizeResult::KeptLocal => report.missing.push(blob_ref),
-        }
+    if let Some(pair) = current.take() {
+        finished.push(pair);
     }
+
+    // 锁内段②：批量 finalize（组帧 → tag 验证 → 入库，幂等不覆盖本地）。
+    access.with_repo(Box::new(|repo| {
+        for (meta, spool) in finished.drain(..) {
+            let blob_ref = meta.blob_ref.clone();
+            match finalize_blob(repo, meta, spool)? {
+                FinalizeResult::Appended => {
+                    report.completed.push(blob_ref);
+                    report.appended += 1;
+                }
+                FinalizeResult::AlreadyPresent => report.completed.push(blob_ref),
+                FinalizeResult::KeptLocal => report.missing.push(blob_ref),
+            }
+        }
+        Ok(())
+    }))?;
     // 对端无法提供的 ref（本地必然缺失）。
     for r in peer_missing {
         if !report.completed.contains(&r) && !report.missing.contains(&r) {
@@ -609,16 +621,22 @@ pub fn pull_missing(
     Ok(report)
 }
 
+/// 供片方单批发送的字节预算（O2：批量克隆帧出锁后发送，限制内存峰值）。
+const SERVE_BATCH_BYTES: usize = 32 * 1024 * 1024;
+
 /// 供片方：收对端 Pull，逐 ref 发 Meta + Data×n，收尾 End（能供/不能供分列）。
 ///
 /// 返回实际供出的 blob 数（日志用）。对端容量不足 / 组帧失败由对端自担——
 /// 供片方只保证「能供的必发全」。
+///
+/// **O2 三段式**：锁内段只做「读一批 blob 帧出锁」（按 [`SERVE_BATCH_BYTES`]
+/// 分批，限制内存峰值），网络发送全程不持锁。
 pub fn serve_pull(
     stream: &mut std::net::TcpStream,
     sync_key: &[u8],
     session_id: &[u8],
     replay: &mut ReplayGuard,
-    repo: &mut Repository,
+    access: &mut dyn RepoAccess,
     next_seq: &mut u64,
     now: i64,
 ) -> CoreResult<usize> {
@@ -629,35 +647,53 @@ pub fn serve_pull(
     };
     let mut served: Vec<String> = Vec::new();
     let mut missing: Vec<String> = Vec::new();
-    for r in want {
-        match repo.blob_frame(&r) {
-            Some(frame) => {
+    let mut queue: std::collections::VecDeque<String> = want.into();
+    while !queue.is_empty() {
+        // 锁内段：读下一批帧出锁（首条即便超预算也带走，避免死循环）。
+        let mut batch: Vec<(String, Frame)> = Vec::new();
+        let mut batch_bytes = 0usize;
+        access.with_repo(Box::new(|repo| {
+            while let Some(r) = queue.front().cloned() {
+                match repo.blob_frame(&r) {
+                    Some(frame) => {
+                        if batch_bytes > 0 && batch_bytes + frame.ct.len() > SERVE_BATCH_BYTES {
+                            break;
+                        }
+                        batch_bytes += frame.ct.len();
+                        batch.push((r.clone(), frame));
+                    }
+                    None => missing.push(r.clone()),
+                }
+                queue.pop_front();
+            }
+            Ok(())
+        }))?;
+        // 网络段：发送本批（不持锁）。
+        for (r, frame) in &batch {
+            send_blob(
+                stream,
+                sync_key,
+                session_id,
+                next_seq,
+                now,
+                &meta_of(r, frame),
+            )?;
+            for (i, slice) in frame.ct.chunks(SYNC_BLOB_CHUNK_BYTES).enumerate() {
                 send_blob(
                     stream,
                     sync_key,
                     session_id,
                     next_seq,
                     now,
-                    &meta_of(&r, &frame),
+                    &BlobMessage::Data {
+                        blob_ref: r.clone(),
+                        index: i as u32,
+                        ct_slice: slice.to_vec(),
+                    },
                 )?;
-                for (i, slice) in frame.ct.chunks(SYNC_BLOB_CHUNK_BYTES).enumerate() {
-                    send_blob(
-                        stream,
-                        sync_key,
-                        session_id,
-                        next_seq,
-                        now,
-                        &BlobMessage::Data {
-                            blob_ref: r.clone(),
-                            index: i as u32,
-                            ct_slice: slice.to_vec(),
-                        },
-                    )?;
-                }
-                served.push(r);
             }
-            None => missing.push(r),
         }
+        served.extend(batch.into_iter().map(|(r, _)| r));
     }
     let served_count = served.len();
     send_blob(

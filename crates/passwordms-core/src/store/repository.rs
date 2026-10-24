@@ -1804,6 +1804,7 @@ impl Repository {
                 base: std::collections::HashMap::new(),
                 last_recv_seq: 0,
                 last_sent_seq: 0,
+                sent_watermark: std::collections::HashMap::new(),
             })
     }
 
@@ -2263,7 +2264,11 @@ impl Repository {
     /// - **live 白名单**：仅 `ITEM` / `FOLDER`（TRASH/CONFLICT/DEVICE/SYNC_STATE 不过线，
     ///   修复「内部记录全量出网」缺陷）；
     /// - **墓碑**：本端 `ITEM`/`FOLDER` 墓碑帧（blob 墓碑不独立导出——item 墓碑已完整
-    ///   表达删除意图），经 peer base 过滤（`base.rev >= 墓碑 rev` 不导出）。
+    ///   表达删除意图），经 peer base 过滤（`base.rev >= 墓碑 rev` 不导出）；
+    /// - **O1 发送水位**：live 记录仅导出 `rev > sent_watermark[id]`（每对端一份，
+    ///   发送成功后由 `merge::note_sent_changes` 推进）——修复「每轮全量重发、大库
+    ///   单帧必超限且永不收敛」的结构性缺口。水位为空（首次配对/老状态帧）= 全量
+    ///   首推，行为不变。
     pub fn export_changes(&self, peer_base: &DeviceSyncState) -> Vec<ChangeRecord> {
         let mut out = Vec::new();
         for (key, idx) in &self.live {
@@ -2285,6 +2290,12 @@ impl Repository {
                     .unwrap_or((0, 0, String::new())),
                 _ => (0, 0, String::new()),
             };
+            // O1 发送水位：该对端已持有同 rev 或更新版本 → 免重发。
+            if let Some(&sent_rev) = peer_base.sent_watermark.get(&key.1) {
+                if rev <= sent_rev {
+                    continue;
+                }
+            }
             out.push(ChangeRecord {
                 record_type: frame.record_type,
                 record_id: key.1.clone(),

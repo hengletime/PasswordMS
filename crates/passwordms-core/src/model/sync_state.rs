@@ -48,4 +48,13 @@ pub struct DeviceSyncState {
     pub last_recv_seq: u64,
     #[serde(default)]
     pub last_sent_seq: u64,
+    /// O1 发送水位：已成功推送给该对端的最高 rev（`record_id → rev`）。
+    ///
+    /// `export_changes` 只导出 `rev > 水位` 的 live 记录（墓碑走 base 过滤不变），
+    /// 砍掉「每轮全量重发」。失败安全与 [`note_sent_tombstones`](crate::sync::merge)
+    /// 同款语义：发送成功后才推进；同步中途失败则 `save_sync_state` 不执行，
+    /// 水位随会话丢弃，下一轮自动重发（宁多勿丢，对端 merge 幂等）。
+    /// `serde(default)` 兼容既有状态帧（无字段 = 从未发过 = 全量导出）。
+    #[serde(default)]
+    pub sent_watermark: HashMap<String, u64>,
 }

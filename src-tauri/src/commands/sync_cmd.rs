@@ -210,6 +210,7 @@ pub fn rename_paired_device(
 /// D-48：async + spawn_blocking，同 `sync_join`——网络 I/O 不进主线程。
 #[tauri::command(rename_all = "snake_case")]
 pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<SyncResultDto> {
+    use std::sync::atomic::Ordering;
     let app_log = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
@@ -218,14 +219,31 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
         // **必须在取 session 锁之前**：`ensure_resync_listener` 要拿 resync 锁，
         // 而全局锁顺序恒为 resync → session；反过来写就是死锁。
         let sync_port = ensure_resync_listener(&app)?;
-        let mut session = state.session.lock().map_err(lock_err)?;
-        let repo = session.repo_mut()?;
-        let outcome = resync::resync_with_peer(repo, &device_id, now_ms(), sync_port)?;
-        Ok(SyncResultDto {
-            applied: outcome.applied,
-            conflicts: outcome.conflicts,
-            blobs: outcome.blobs,
-        })
+        // O2：同一时刻仅一场同步（与被动 worker 互斥，防双场交换的 seq/base 竞态）。
+        if state
+            .sync_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(IpcError {
+                code: "ERR_SYNC_BUSY".to_string(),
+                message_key: "err.sync_busy".to_string(),
+                record_count: None,
+            });
+        }
+        let run = || -> IpcResult<SyncResultDto> {
+            let mut session = state.session.lock().map_err(lock_err)?;
+            let repo = session.repo_mut()?;
+            let outcome = resync::resync_with_peer(repo, &device_id, now_ms(), sync_port)?;
+            Ok(SyncResultDto {
+                applied: outcome.applied,
+                conflicts: outcome.conflicts,
+                blobs: outcome.blobs,
+            })
+        };
+        let result = run();
+        state.sync_busy.store(false, Ordering::SeqCst);
+        result
     })
     .await
     .map_err(|e| IpcError::internal(&format!("spawn_blocking sync_now: {e}")))?;

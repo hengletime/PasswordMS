@@ -17,13 +17,12 @@ use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
+use crate::sync::access::DirectAccess;
 use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, EphemeralKeypair, HostIdentity, SessionKeys};
 use crate::sync::merge;
-use crate::sync::protocol::{
-    open_envelope, seal_envelope, Accept, Confirm, HandshakeMessage, QRPayload, Reject,
-    SyncEnvelope, SyncKind, SyncPayload,
-};
+use crate::sync::paging;
+use crate::sync::protocol::{Accept, Confirm, HandshakeMessage, QRPayload, Reject};
 use crate::sync::replay::ReplayGuard;
 use crate::sync::transport;
 
@@ -378,51 +377,63 @@ fn run_exchange(
     repo: &mut Repository,
     now: i64,
 ) -> CoreResult<(usize, Vec<String>, usize)> {
-    // 收 Joiner 的 Push。
-    let push_bytes = transport::recv_frame(stream).map_err(|e| stage_io(e, "push_recv"))?;
-    let push_env: SyncEnvelope = serde_json::from_slice(&push_bytes)?;
-    replay.accept(push_env.seq, push_env.ts, now)?;
-    let push_payload = open_envelope(&keys.sync_key[..], session_id, &push_env)?;
-    let report = merge::apply_changes(repo, state, &push_payload.changes)?;
+    // 收 Joiner 的 Push（O1：多页聚合后一次合并——页面间记录互不重叠，等价单帧）。
+    let (push_changes, push_blob_support) = paging::recv_push_pages(
+        stream,
+        &keys.sync_key[..],
+        session_id,
+        replay,
+        now,
+    )
+    .map_err(|e| stage_io(e, "push_recv"))?;
+    let report = merge::apply_changes(repo, state, &push_changes)?;
+    // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
+    merge::note_received_changes(state, &push_changes);
 
-    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放；D-53：随报文通告本端 blob 能力；
-    // D-56：载荷含墓碑，按对端 base 过滤）。
-    let out_seq = state.last_sent_seq + 1;
-    let reply = SyncPayload {
-        kind: SyncKind::Push,
-        device_id: repo.device_id().to_string(),
-        cursor: 0,
-        changes: repo.export_changes(state),
-        conflicts: report.conflicts.clone(),
-        blob_support: true,
-    };
-    let reply_env = seal_envelope(&keys.sync_key[..], session_id, out_seq, now, &reply)?;
-    transport::send_frame(stream, &serde_json::to_vec(&reply_env)?)
-        .map_err(|e| stage_io(e, "reply_send"))?;
-    // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发）。
-    merge::note_sent_tombstones(state, &reply.changes);
+    // 回送本端变更（序号在持久化基准上递增，避免与上一轮重放；D-53：随报文通告本端
+    // blob 能力；D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送水位过滤、超预算
+    // 自动分页）。
+    let changes = repo.export_changes(state);
+    let pages = paging::paginate(changes).map_err(|e| stage_io(e, "reply_send"))?;
+    let mut seq = state.last_sent_seq + 1;
+    paging::send_push_pages(
+        stream,
+        &keys.sync_key[..],
+        session_id,
+        &mut seq,
+        now,
+        repo.device_id(),
+        &pages,
+        report.conflicts.clone(),
+    )
+    .map_err(|e| stage_io(e, "reply_send"))?;
+    // D-56/O1：发送成功后推进已导出墓碑的 base 与 live 水位（下一轮免重发）。
+    for page in &pages {
+        merge::note_sent_tombstones(state, page);
+        merge::note_sent_changes(state, page);
+    }
 
     // 收 Done。
-    let done_bytes = transport::recv_frame(stream).map_err(|e| stage_io(e, "done_recv"))?;
-    let done_env: SyncEnvelope = serde_json::from_slice(&done_bytes)?;
-    replay.accept(done_env.seq, done_env.ts, now)?;
-    let _ = open_envelope(&keys.sync_key[..], session_id, &done_env)?;
+    let _done = paging::recv_done(stream, &keys.sync_key[..], session_id, replay, now)
+        .map_err(|e| stage_io(e, "done_recv"))?;
 
-    // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
-    // Host 次序：先供 Joiner 拉的（收 Pull、发 Meta/Data/End），再拉 Joiner 有的（发 Pull、收 Meta/Data/End）——
-    // 与 Joiner 侧「先拉后供」严格镜像，避免半双工交织。
-    // 注意 send_blob 是「先用后增」：reply Push 已占用 out_seq，故 blob 报文须从 out_seq+1 起。
-    let mut sent = out_seq;
+    // D-53 blob 阶段：双方都支持才进入；seq 从最后一个 reply 页之后单调延续（过
+    // ReplayGuard）。Host 次序：先供 Joiner 拉的（收 Pull、发 Meta/Data/End），再拉
+    // Joiner 有的（发 Pull、收 Meta/Data/End）——与 Joiner 侧「先拉后供」严格镜像，
+    // 避免半双工交织。
+    // 注意 send_blob 是「先用后增」：最后一个 reply 页已占用 seq-1，Done 由对端发出
+    // 不占本端序号，故 blob 报文须从 seq 起。
+    let mut sent = seq - 1;
     let mut blobs = 0;
-    if blob_transfer::blob_phase_enabled(true, push_payload.blob_support) {
-        sent = out_seq + 1;
+    if blob_transfer::blob_phase_enabled(true, push_blob_support) {
+        sent = seq;
         blob_transfer::serve_pull(
             stream,
             &keys.sync_key[..],
             session_id,
             replay,
-            repo,
-            &mut sent,
+                &mut DirectAccess(&mut *repo),
+                &mut sent,
             now,
         )?;
         let phase = blob_transfer::pull_missing(
@@ -430,8 +441,8 @@ fn run_exchange(
             &keys.sync_key[..],
             session_id,
             replay,
-            repo,
-            &mut sent,
+                &mut DirectAccess(&mut *repo),
+                &mut sent,
             now,
         )?;
         blobs = phase.appended;

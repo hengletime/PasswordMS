@@ -42,6 +42,12 @@ pub struct AppState {
     ///
     /// 以 `Zeroizing` 托管，替换 / 清空时自动覆写旧值；锁定时一并清空。
     pub clipboard: Mutex<Option<Zeroizing<String>>>,
+    /// O2：同一时刻仅允许一场同步（被动 worker 与主动 `sync_now` 互斥）。
+    ///
+    /// 三段式去持锁化后，被动与主动交换可并发——两者会各自加载/推进同一份
+    /// `DeviceSyncState`（seq/base/水位），产生序号竞争与重复导出。用本标志
+    /// 串行化：compare_exchange 抢不到的一侧快速失败（`ERR_SYNC_BUSY`）。
+    pub sync_busy: AtomicBool,
 }
 
 impl AppState {
@@ -54,6 +60,7 @@ impl AppState {
             pending_imports: Mutex::new(HashMap::new()),
             host_identity: Mutex::new(None),
             clipboard: Mutex::new(None),
+            sync_busy: AtomicBool::new(false),
         }
     }
 }
@@ -195,6 +202,10 @@ pub fn stop_resync_listener(app: &tauri::AppHandle) {
 }
 
 /// 后台轮询线程：非阻塞接受入站重同步连接，直到收到停止信号。
+///
+/// **O2 三段式**：`poll_accept` 与 UDP 发现应答**不持 session 锁**；连接建立后
+/// 由 [`SessionAccess`] 在「读写库的瞬间」短暂取锁，网络 I/O 全程锁外——
+/// 同步期间 UI 的一切 IPC（列表/复制/自动锁定）不再排队等待。
 fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -204,11 +215,7 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
         let state = app.state::<AppState>();
 
         // 锁顺序恒为 resync → session，避免与命令层形成环。
-        //
-        // v1.2.4（根因 A）：轮询调用**与结果处理分处两个作用域** —— 出作用域后再 emit。
-        // 前端收到 `sync://applied` 会立刻回打 `items_list`，那条 IPC 要拿 session 锁；
-        // 若在持锁状态下 emit，它会白等一个轮询周期（最坏 200ms + 本次传输耗时）。
-        let polled = {
+        let accepted = {
             let mut guard = match state.resync.lock() {
                 Ok(g) => g,
                 // D-91（审查 C5）：锁中毒不再静默退出——此前本机会从此不接受
@@ -222,29 +229,65 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
                 Some(h) => h,
                 None => break,
             };
-            let mut session = match state.session.lock() {
-                Ok(s) => s,
-                // D-91（审查 C5）：同上，中毒留痕。
+            let accepted = match handle.server.poll_accept() {
+                Ok(a) => a,
+                Err(e) => {
+                    append_log(&app, &format!("[resync] accept failed: {e:?}"));
+                    continue;
+                }
+            };
+            // D-74：UDP 发现应答与入站重同步共用同一 200ms 节奏（只读、毫秒级锁内段）。
+            // **返回值不参与任何 match**：发现只是增强路径，它出错绝不能让
+            // 重同步轮询循环 `break`（那会让整台设备再也不接受同步）。
+            if accepted.is_none() {
+                if let Ok(session) = state.session.lock() {
+                    if let Ok(repo) = session.repo() {
+                        let _ = handle.server.poll_discovery_once(repo);
+                    }
+                }
+            }
+            accepted
+        };
+        let Some((stream, peer_ip)) = accepted else {
+            continue;
+        };
+
+        // O2：同一时刻仅一场同步（与主动 sync_now 互斥，防 seq/base 竞态）。
+        if state
+            .sync_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            append_log(&app, "[resync] skipped: another sync is in flight");
+            continue;
+        }
+        let polled = {
+            let mut guard = match state.resync.lock() {
+                Ok(g) => g,
                 Err(_) => {
-                    append_log(&app, "[resync] session lock poisoned, worker exiting");
+                    state.sync_busy.store(false, Ordering::SeqCst);
+                    append_log(&app, "[resync] resync lock poisoned, worker exiting");
                     break;
                 }
             };
-            // 会话若已锁定则本轮跳过（等待解锁或停止信号）。
-            match session.repo_mut() {
-                Ok(repo) => {
-                    // D-74：UDP 发现应答与入站重同步共用同一 200ms 节奏。
-                    // **返回值不参与下面的 match**：发现只是增强路径，它出错绝不能让
-                    // 重同步轮询循环 `break`（那会让整台设备再也不接受同步）。
-                    let _ = handle.server.poll_discovery_once(repo);
-                    handle.server.poll_once(repo, now_ms())
+            let handle = match guard.as_mut() {
+                Some(h) => h,
+                None => {
+                    state.sync_busy.store(false, Ordering::SeqCst);
+                    break;
                 }
-                Err(_) => continue,
-            }
+            };
+            let mut access = SessionAccess {
+                session: &state.session,
+            };
+            handle
+                .server
+                .handle_connection(stream, &peer_ip, now_ms(), &mut access)
         };
+        state.sync_busy.store(false, Ordering::SeqCst);
 
         match polled {
-            Ok(Some(outcome)) => {
+            Ok(outcome) => {
                 // D-48：错误必须留痕——此前 `let _ =` 把断连原因全部吞掉，
                 // 对端只看到笼统的「文件读写错误」，PC 侧却无线索可查。
                 append_log(
@@ -270,10 +313,31 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
                     }),
                 );
             }
-            Ok(None) => {}
             Err(e) => {
                 append_log(&app, &format!("[resync] aborted: {e:?}"));
             }
         }
     });
+}
+
+/// O2：被动同步三段式的会话访问器——只在锁内段短暂持有 session 锁。
+struct SessionAccess<'a> {
+    session: &'a Mutex<Session>,
+}
+
+impl passwordms_core::sync::access::RepoAccess for SessionAccess<'_> {
+    fn with_repo(
+        &mut self,
+        job: passwordms_core::sync::access::RepoJob<'_>,
+    ) -> passwordms_core::error::CoreResult<()> {
+        let mut session = self
+            .session
+            .lock()
+            // 锁中毒：放弃本场交换（宁多勿丢；对端下轮重发）。
+            .map_err(|_| passwordms_core::error::CoreError::SyncAborted)?;
+        // 会话已锁定（如自动锁定在传输中途触发）→ 放弃本轮：密文暂存随连接丢弃，
+        // 对端下轮重发（宁多勿丢）。
+        let repo = session.repo_mut()?;
+        job(repo)
+    }
 }

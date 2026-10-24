@@ -28,12 +28,14 @@ use crate::crypto::rng;
 use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::sync_state::DeviceSyncState;
 use crate::store::repository::Repository;
+use crate::sync::access::DirectAccess;
 use crate::sync::blob_transfer;
 use crate::sync::discovery::{self, DiscoveryResponder};
 use crate::sync::handshake::{self, ROLE_CLIENT, ROLE_SERVER};
 use crate::sync::merge;
+use crate::sync::paging;
 use crate::sync::protocol::{
-    open_envelope, seal_envelope, Reject, SyncEnvelope, SyncKind, SyncPayload,
+    seal_envelope, ChangeRecord, Reject, SyncKind, SyncPayload,
 };
 use crate::sync::replay::ReplayGuard;
 use crate::sync::server::device_key_aad;
@@ -320,57 +322,69 @@ pub fn resync_with_peer_opts(
     let session_id = session_id_of(&transcript);
     let mut state: DeviceSyncState = repo.sync_state(peer_device_id);
     let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
-    let c1 = state.last_sent_seq + 1;
-    let c2 = c1 + 1;
 
-    // 8) 发本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤）。
-    let push = SyncPayload {
-        kind: SyncKind::Push,
-        device_id: client_id.clone(),
-        cursor: 0,
-        changes: repo.export_changes(&state),
-        conflicts: Vec::new(),
-        blob_support: true,
-    };
-    let push_env = seal_envelope(&sk[..], &session_id, c1, now, &push)?;
-    transport::send_frame(&mut stream, &serde_json::to_vec(&push_env)?)
-        .map_err(|e| stage_io(e, "push_send"))?;
-    // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发；失败路径不落盘自动重发）。
-    merge::note_sent_tombstones(&mut state, &push.changes);
+    // 8) 发本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤；
+    // O1：live 按发送水位过滤、超预算自动分页）。
+    let changes = repo.export_changes(&state);
+    let pages = paging::paginate(changes).map_err(|e| stage_io(e, "push_send"))?;
+    let mut seq = state.last_sent_seq + 1;
+    paging::send_push_pages(
+        &mut stream,
+        &sk[..],
+        &session_id,
+        &mut seq,
+        now,
+        &client_id,
+        &pages,
+        Vec::new(),
+    )
+    .map_err(|e| stage_io(e, "push_send"))?;
+    // D-56/O1：发送成功后推进已导出墓碑的 base 与 live 水位（下一轮免重发；失败路径
+    // 不落盘自动重发）。
+    for page in &pages {
+        merge::note_sent_tombstones(&mut state, page);
+        merge::note_sent_changes(&mut state, page);
+    }
 
-    // 9) 收对端 Push 并合并。
-    let reply_bytes = transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "reply_recv"))?;
-    let reply_env: SyncEnvelope = serde_json::from_slice(&reply_bytes)?;
-    replay.accept(reply_env.seq, reply_env.ts, now)?;
-    let reply = open_envelope(&sk[..], &session_id, &reply_env)?;
-    let report = merge::apply_changes(repo, &mut state, &reply.changes)?;
+    // 9) 收对端 Push（O1：多页聚合）并合并。
+    let (reply_changes, reply_blob_support) = paging::recv_push_pages(
+        &mut stream,
+        &sk[..],
+        &session_id,
+        &mut replay,
+        now,
+    )
+    .map_err(|e| stage_io(e, "reply_recv"))?;
+    let report = merge::apply_changes(repo, &mut state, &reply_changes)?;
+    // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
+    merge::note_received_changes(&mut state, &reply_changes);
 
-    // 10) 发 Done。
+    // 10) 发 Done（seq 延续分页序号）。
     let done = SyncPayload {
         kind: SyncKind::Done,
         device_id: client_id.clone(),
-        cursor: state.last_recv_seq,
+        cursor: 0,
         changes: Vec::new(),
         conflicts: report.conflicts.clone(),
         blob_support: true,
     };
-    let done_env = seal_envelope(&sk[..], &session_id, c2, now, &done)?;
+    let done_env = seal_envelope(&sk[..], &session_id, seq, now, &done)?;
     transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?)
         .map_err(|e| stage_io(e, "done_send"))?;
 
     // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
     // 发起方次序：先拉后供（与响应方镜像）。
-    // 注意 send_blob 是「先用后增」：Done 已占用 c2，故 blob 报文须从 c2+1 起。
-    let mut sent = c2;
+    // 注意 send_blob 是「先用后增」：Done 已占用 seq，故 blob 报文须从 seq+1 起。
+    let mut sent = seq;
     let mut blobs = 0;
-    if blob_transfer::blob_phase_enabled(true, reply.blob_support) {
-        sent = c2 + 1;
+    if blob_transfer::blob_phase_enabled(true, reply_blob_support) {
+        sent = seq + 1;
         let phase = blob_transfer::pull_missing(
             &mut stream,
             &sk[..],
             &session_id,
             &mut replay,
-            repo,
+            &mut DirectAccess(&mut *repo),
             &mut sent,
             now,
         )?;
@@ -380,7 +394,7 @@ pub fn resync_with_peer_opts(
             &sk[..],
             &session_id,
             &mut replay,
-            repo,
+            &mut DirectAccess(&mut *repo),
             &mut sent,
             now,
         )?;
@@ -488,12 +502,8 @@ impl ResyncServer {
         }
     }
 
-    /// 非阻塞轮询一次入站连接；无连接返回 `Ok(None)`。
-    pub fn poll_once(
-        &mut self,
-        repo: &mut Repository,
-        now: i64,
-    ) -> CoreResult<Option<ResyncOutcome>> {
+    /// 非阻塞轮询一次入站连接（**不持任何会话锁**，O2）；无连接返回 `Ok(None)`。
+    pub fn poll_accept(&mut self) -> CoreResult<Option<(TcpStream, String)>> {
         self.listener
             .set_nonblocking(true)
             .map_err(|_| CoreError::SyncAborted)?;
@@ -508,21 +518,43 @@ impl ResyncServer {
                     .map_err(|_| CoreError::SyncAborted)?;
                 // v1.2.4（根因 B）：对端 IP 取自 accept 出的 socket——这是**本次连接的真实来源**，
                 // 比配对时记录的陈旧地址可靠。以前这里丢弃了 `_peer`，导致地址永不自愈。
-                let peer_ip = peer.ip().to_string();
-                Ok(Some(self.handle(stream, &peer_ip, repo, now)?))
+                Ok(Some((stream, peer.ip().to_string())))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
             Err(_) => Err(CoreError::SyncAborted),
         }
     }
 
-    /// 处理一个入站重同步连接。
-    fn handle(
+    /// 兼容入口（主动路径 / 既有测试）：repo 已由调用方持锁，直连处理一次入站连接。
+    pub fn poll_once(
+        &mut self,
+        repo: &mut Repository,
+        now: i64,
+    ) -> CoreResult<Option<ResyncOutcome>> {
+        let Some((stream, peer_ip)) = self.poll_accept()? else {
+            return Ok(None);
+        };
+        let mut access = crate::sync::access::DirectAccess(repo);
+        self.handle_connection(stream, &peer_ip, now, &mut access)
+            .map(Some)
+    }
+
+    /// 处理一个入站重同步连接（**O2 三段式**：网络等待全程不持会话锁）。
+    ///
+    /// - 锁内段①（毫秒级）：配对校验 + 解 `sync_key` + 载入对端同步状态初值；
+    /// - 网络段：HELLO/CHALLENGE/CONFIRM 握手、收发起方 Push（多页聚合）；
+    /// - 锁内段②（毫秒级）：校验 vault 未变 → 合并收到的变更 → 导出回包页（含水位推进）；
+    /// - 网络段：回送 Push 页、收 Done、blob 阶段（按批进出锁）；
+    /// - 锁内段③（毫秒级）：持久化游标 + 地址自愈。
+    ///
+    /// 中途会话被锁（自动锁定竞态）⇒ `access` 返回 `Err(NotUnlocked)` ⇒ 整段丢弃，
+    /// 对端下轮重发（宁多勿丢；密文暂存随连接丢弃，无明文残留）。
+    pub fn handle_connection(
         &mut self,
         mut stream: TcpStream,
         peer_ip: &str,
-        repo: &mut Repository,
         now: i64,
+        access: &mut dyn crate::sync::access::RepoAccess,
     ) -> CoreResult<ResyncOutcome> {
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))
@@ -536,25 +568,46 @@ impl ResyncServer {
             _ => return Err(CoreError::FingerprintMismatch),
         };
 
-        // 2) 必须为已配对设备。
-        let peer = match repo.get_paired_device(&hello.client_id) {
-            Some(p) => p,
-            None => {
-                send_reject(&mut stream, crate::error::codes::ERR_NOT_PAIRED)?;
-                return Err(CoreError::NotPaired);
-            }
-        };
         if hello.nonce_c.len() != 32 {
             return Err(CoreError::FingerprintMismatch);
         }
 
-        // 3) 解出共享同步密钥 + 派生会话密钥。
-        let sync_key = keys::unwrap_item_key(
-            repo.vault_key(),
-            &peer.sync_key_wrapped,
-            &device_key_aad(&hello.client_id),
-        )?;
-        let server_id = repo.device_id().to_string();
+        // ── 锁内段①（O2，毫秒级）：必须是已配对设备 + 解出共享同步密钥 + 状态初值。
+        // 锁定态到达这里（自动锁定竞态）→ with_repo 返回 Err → 交换整体放弃。
+        let mut reject: Option<(&'static str, CoreError)> = None;
+        let mut resolved: Option<(ItemKey, String, u64)> = None; // (sync_key, server_id, last_recv_seq)
+        access.with_repo(Box::new(|repo| {
+            let Some(peer) = repo.get_paired_device(&hello.client_id) else {
+                reject = Some((crate::error::codes::ERR_NOT_PAIRED, CoreError::NotPaired));
+                return Ok(());
+            };
+            match keys::unwrap_item_key(
+                repo.vault_key(),
+                &peer.sync_key_wrapped,
+                &device_key_aad(&hello.client_id),
+            ) {
+                Ok(sk) => {
+                    let st = repo.sync_state(&hello.client_id);
+                    resolved = Some((sk, repo.device_id().to_string(), st.last_recv_seq));
+                    Ok(())
+                }
+                Err(_) => {
+                    reject = Some((
+                        crate::error::codes::ERR_FINGERPRINT_MISMATCH,
+                        CoreError::FingerprintMismatch,
+                    ));
+                    Ok(())
+                }
+            }
+        }))?;
+        let (sync_key, server_id, last_recv_seq) = match resolved {
+            Some(v) => v,
+            None => {
+                let (code, err) = reject.take().ok_or(CoreError::SyncAborted)?;
+                send_reject(&mut stream, code)?;
+                return Err(err);
+            }
+        };
         let nonce_s = rng::random_bytes(32)?;
         let transcript = transcript_of(&hello.client_id, &server_id, &hello.nonce_c, &nonce_s);
         let sk = handshake::derive_session_sk(&sync_key, &hello.nonce_c, &nonce_s)?;
@@ -584,54 +637,80 @@ impl ResyncServer {
         }
 
         let session_id = session_id_of(&transcript);
-        let mut state: DeviceSyncState = repo.sync_state(&hello.client_id);
-        let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
+        let mut replay = ReplayGuard::with_state(last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
-        // 6) 收发起方 Push 并合并。
-        let push_bytes =
-            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "push_recv"))?;
-        let push_env: SyncEnvelope = serde_json::from_slice(&push_bytes)?;
-        replay.accept(push_env.seq, push_env.ts, now)?;
-        let push = open_envelope(&sk[..], &session_id, &push_env)?;
-        let report = merge::apply_changes(repo, &mut state, &push.changes)?;
+        // 6) 收发起方 Push（O1：多页聚合后一次合并——页面间记录互不重叠，等价单帧）。
+        let (push_changes, push_blob_support) = paging::recv_push_pages(
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &mut replay,
+            now,
+        )
+        .map_err(|e| stage_io(e, "push_recv"))?;
 
-        // 7) 回送本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base 过滤）。
-        let s1 = state.last_sent_seq + 1;
-        let reply = SyncPayload {
-            kind: SyncKind::Push,
-            device_id: server_id.clone(),
-            cursor: 0,
-            changes: repo.export_changes(&state),
-            conflicts: report.conflicts.clone(),
-            blob_support: true,
-        };
-        let reply_env = seal_envelope(&sk[..], &session_id, s1, now, &reply)?;
-        transport::send_frame(&mut stream, &serde_json::to_vec(&reply_env)?)
-            .map_err(|e| stage_io(e, "reply_send"))?;
-        // D-56：发送成功后推进已导出墓碑的 base（下一轮免重发）。
-        merge::note_sent_tombstones(&mut state, &reply.changes);
+        // ── 锁内段②（O2，毫秒级）：vault 未变校验 → 合并 → 导出回包页。
+        // 水位/墓碑推进在此一并做：发送失败路径 `save_sync_state` 不执行、随会话丢弃，
+        // 失败安全语义不变（宁多勿丢）。
+        let mut section: Option<
+            CoreResult<(DeviceSyncState, Vec<Vec<ChangeRecord>>, usize, Vec<String>)>,
+        > = None;
+        access.with_repo(Box::new(|repo| {
+            if repo.device_id() != server_id {
+                // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
+                return Err(CoreError::SyncAborted);
+            }
+            let mut st = repo.sync_state(&hello.client_id);
+            let rep = merge::apply_changes(repo, &mut st, &push_changes)?;
+            // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位推进。
+            merge::note_received_changes(&mut st, &push_changes);
+            let changes = repo.export_changes(&st);
+            let pgs = paging::paginate(changes)?;
+            for page in &pgs {
+                merge::note_sent_tombstones(&mut st, page);
+                merge::note_sent_changes(&mut st, page);
+            }
+            section = Some(Ok((st, pgs, rep.applied, rep.conflicts.clone())));
+            Ok(())
+        }))?;
+        let (mut state, pages, applied, conflicts) =
+            section.take().ok_or(CoreError::SyncAborted)??;
+        let mut seq = state.last_sent_seq + 1;
+
+        // 7) 回送本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base
+        // 过滤；O1：live 按发送水位过滤、超预算自动分页）。网络段不持锁。
+        paging::send_push_pages(
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &mut seq,
+            now,
+            &server_id,
+            &pages,
+            conflicts.clone(),
+        )
+        .map_err(|e| stage_io(e, "reply_send"))?;
 
         // 8) 收 Done。
-        let done_bytes =
-            transport::recv_frame(&mut stream).map_err(|e| stage_io(e, "done_recv"))?;
-        let done_env: SyncEnvelope = serde_json::from_slice(&done_bytes)?;
-        replay.accept(done_env.seq, done_env.ts, now)?;
-        let done_payload = open_envelope(&sk[..], &session_id, &done_env)?;
+        let done_payload = paging::recv_done(&mut stream, &sk[..], &session_id, &mut replay, now)
+            .map_err(|e| stage_io(e, "done_recv"))?;
 
         // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
         // 响应方次序：先供（收发起方 Pull、发 Meta/Data/End），再拉（发 Pull、收 Meta/Data/End）——
         // 与发起方「先拉后供」严格镜像。
-        // 注意 send_blob 是「先用后增」：reply Push 已占用 s1，故 blob 报文须从 s1+1 起。
-        let mut sent = s1;
+        // 注意 send_blob 是「先用后增」：最后一个 reply 页已占用 seq-1，Done 由对端发出
+        // 不占本端序号，故 blob 报文须从 seq 起。
+        let mut sent = seq - 1;
         let mut blobs = 0;
-        if blob_transfer::blob_phase_enabled(true, done_payload.blob_support) {
-            sent = s1 + 1;
+        if blob_transfer::blob_phase_enabled(true, push_blob_support.min(done_payload.blob_support))
+        {
+            sent = seq;
             blob_transfer::serve_pull(
                 &mut stream,
                 &sk[..],
                 &session_id,
                 &mut replay,
-                repo,
+                access,
                 &mut sent,
                 now,
             )?;
@@ -640,28 +719,31 @@ impl ResyncServer {
                 &sk[..],
                 &session_id,
                 &mut replay,
-                repo,
+                access,
                 &mut sent,
                 now,
             )?;
             blobs = phase.appended;
         }
 
-        // 9) 持久化游标。
-        state.last_recv_seq = replay.last_recv_seq();
-        state.last_sent_seq = sent;
-        repo.save_sync_state(state)?;
+        // ── 锁内段③（O2，毫秒级）：持久化游标 + 地址自愈。
         // v1.2.4（根因 B）：**同步成功后刷新对端地址**。
         // 以前只在配对那一刻记录一次 peer_ip/port，手机换 IP（DHCP）或监听端口 rebind
         // （resync.port 被占用后 fallback）之后，本机重同步永远连不上、只能重新配对。
         // 现在每次成功入站都把「这次真实来源 IP + 对端自报的监听端口」写回配对记录。
         // 只在**校验通过且同步成功**之后调用：失败/被拒的连接不得篡改地址（防投毒）。
-        repo.update_paired_addr(&hello.client_id, peer_ip, hello.sync_port)?;
-        repo.touch_device_sync(&hello.client_id, now)?;
+        access.with_repo(Box::new(move |repo| {
+            state.last_recv_seq = replay.last_recv_seq();
+            state.last_sent_seq = sent;
+            repo.save_sync_state(state)?;
+            repo.update_paired_addr(&hello.client_id, peer_ip, hello.sync_port)?;
+            repo.touch_device_sync(&hello.client_id, now)?;
+            Ok(())
+        }))?;
 
         Ok(ResyncOutcome {
-            applied: report.applied,
-            conflicts: report.conflicts,
+            applied,
+            conflicts,
             blobs,
         })
     }

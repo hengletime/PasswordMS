@@ -72,6 +72,7 @@ fn empty_peer_base() -> DeviceSyncState {
         base: Default::default(),
         last_recv_seq: 0,
         last_sent_seq: 0,
+        sent_watermark: Default::default(),
     }
 }
 

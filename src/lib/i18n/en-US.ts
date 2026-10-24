@@ -461,6 +461,7 @@ export const enUS: Messages = {
     replay: 'A replay attack was detected; sync aborted.',
     fingerprint: 'Fingerprint verification failed; sync aborted.',
     sync_aborted: 'Sync was aborted.',
+    sync_busy: 'A sync is already in progress; please try again shortly.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',
     restore_conflict: 'Cannot restore: a newer version of this item already exists (caused by multi-device sync). Handle it in the item list or the conflict box.',

@@ -454,6 +454,7 @@ export const zhCN = {
     replay: '检测到重放攻击，已中止同步。',
     fingerprint: '设备指纹校验失败，已中止同步。',
     sync_aborted: '同步已中止。',
+    sync_busy: '已有同步在进行中，请稍后再试。',
     conflict: '存在未处理的冲突。',
     vk_adopt_requires_empty: '本机保险库非空，无法直接采用对端密钥。',
     restore_conflict: '无法还原：该条目已存在新版本（多设备同步所致），请在条目列表或冲突箱中处理。',

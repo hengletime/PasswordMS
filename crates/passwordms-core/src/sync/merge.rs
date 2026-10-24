@@ -252,6 +252,36 @@ pub fn note_sent_tombstones(state: &mut DeviceSyncState, changes: &[ChangeRecord
     }
 }
 
+/// O1：发送侧 live 水位推进。
+///
+/// 与 [`note_sent_tombstones`] 同一失败安全语义：各交换点在 Push 页**发送成功后**
+/// 调用本函数推进 `sent_watermark`，下一轮 `export_changes` 的水位过滤即生效。
+/// 仅推进 `!deleted` 变更（墓碑走 base 过滤）。失败路径水位随会话丢弃，下一轮
+/// 自动重发（宁多勿丢；对端 merge 按 rev/判重规则幂等跳过）。
+pub fn note_sent_changes(state: &mut DeviceSyncState, changes: &[ChangeRecord]) {
+    for change in changes.iter().filter(|c| !c.deleted) {
+        let entry = state
+            .sent_watermark
+            .entry(change.record_id.clone())
+            .or_insert(0);
+        if change.rev > *entry {
+            *entry = change.rev;
+        }
+    }
+}
+
+/// O1：接收侧水位推进——**回声消除**。
+///
+/// 对端主动发来的 live 变更本身即证明「对端已持有该 rev」，本端对它的回发水位
+/// 可同步推进：否则「刚从对端收到的条目」每轮都会被原样回发（全量导出时代的
+/// 固有回声流量，库越大越浪费）。墓碑无需此处理——`apply_changes` 收到删除时
+/// 已把 base 推进为墓碑标记（hash=0），导出侧 base 过滤天然消除回声。
+///
+/// 失败安全与 [`note_sent_changes`] 相同：仅随本轮交换成功（`save_sync_state`）落盘。
+pub fn note_received_changes(state: &mut DeviceSyncState, changes: &[ChangeRecord]) {
+    note_sent_changes(state, changes);
+}
+
 /// 推进某条记录的同步基准。
 pub fn advance_state(state: &mut DeviceSyncState, record_id: &str, rev: u64, hash: [u8; 32]) {
     state
