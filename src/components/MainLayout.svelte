@@ -32,6 +32,7 @@
   import { ui, type MainSection } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import { PANE_DETAIL, paneReducer, type PaneEvent, type PaneMode } from '../lib/pane-mode';
+  import { swipeBackBegin, swipeBackUpdate, type SwipeBackState } from '../lib/swipe-back';
 
   type SyncTab = 'pair' | 'devices' | 'status' | 'conflicts';
 
@@ -138,6 +139,36 @@
     dispatch({ type: 'done' });
   }
 
+  // D-95 移动端「向左滑动返回」：仅详情查看态启用。编辑/新建态**刻意不启用**——
+  // 未保存的表单内容不能被一个手势丢掉（取消按钮语义保留）。判定逻辑在
+  // src/lib/swipe-back.ts（纯函数可单测）：单指触屏、水平向左 ≥72px 且水平主导
+  // （|dx| ≥ 2|dy|，不与垂直滚动打架）、一次手势只触发一次。桌面鼠标被
+  // pointerType 过滤天然免疫；触发即调既有 goBack()，不新增导航状态（D-31）。
+  // （启用条件的 $derived 在下方 inItems / editing 声明之后：swipeBackEnabled。）
+  let swipeState: SwipeBackState | null = null;
+
+  function onDetailPointerDown(event: PointerEvent): void {
+    swipeState = swipeBackBegin(
+      event.pointerType,
+      event.isPrimary,
+      swipeBackEnabled,
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+    );
+  }
+
+  function onDetailPointerMove(event: PointerEvent): void {
+    // swipeBackEnabled 二次判定：down 之后状态可能已变（如切进编辑态）。
+    if (swipeBackUpdate(swipeState, event.pointerId, event.clientX, event.clientY) && swipeBackEnabled) {
+      goBack();
+    }
+  }
+
+  function onDetailPointerEnd(): void {
+    swipeState = null;
+  }
+
   /** 切换分区（桌面顶栏 / 移动端底部导航共用；行为完全一致）。 */
   function pickSection(key: MainSection): void {
     ui.setSection(key);
@@ -206,6 +237,8 @@
   const sectionLabel = $derived(NAV.find((e): boolean => e.key === ui.section)?.label ?? 'nav.items');
   // 单栏切换判据：有选中条目或处于编辑态即「详情屏」。
   const showingDetail = $derived(vault.selectedItemId !== null || editing);
+  // D-95 滑动返回启用条件：详情**查看**态（编辑/新建态手势关闭，防丢未保存内容）。
+  const swipeBackEnabled = $derived(inItems && !editing && vault.selectedItemId !== null);
 
   let detailKind = $derived(
     pane.view === 'create'
@@ -331,7 +364,14 @@
       <div class="pane pane-list">
         <ItemList onnew={startCreate} onselect={() => dispatch({ type: 'select' })} />
       </div>
-      <div class="pane pane-detail">
+      <div
+        class="pane pane-detail"
+        role="presentation"
+        onpointerdown={onDetailPointerDown}
+        onpointermove={onDetailPointerMove}
+        onpointerup={onDetailPointerEnd}
+        onpointercancel={onDetailPointerEnd}
+      >
         {#if editing && (pane.view === 'create' || vault.selectedItem !== null)}
           <ItemEditor
             item={pane.view === 'edit' ? vault.selectedItem : null}
