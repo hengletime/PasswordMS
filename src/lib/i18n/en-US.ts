@@ -463,6 +463,7 @@ export const enUS: Messages = {
     sync_aborted: 'Sync was aborted.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',
+    restore_conflict: 'Cannot restore: a newer version of this item already exists (caused by multi-device sync). Handle it in the item list or the conflict box.',
     blob_missing: 'The attachment content has not been synced to this device yet; try again after syncing.',
     blob_incomplete: 'The attachment content transfer was incomplete; please sync again.',
     blob_capacity: 'The attachment exceeds the remaining vault capacity on this device.',

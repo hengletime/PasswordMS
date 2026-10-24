@@ -164,6 +164,10 @@ pub fn apply_changes(
                             report.skipped += 1;
                         } else {
                             repo.put_item_direct(remote.clone())?;
+                            // D-91（审查 R2 根因修除）：复活成功即清除同 item_id 的
+                            // 旧回收站快照——否则旧快照与 live 新版本并存，用户「还原」
+                            // 会用旧数据覆盖刚同步来的新版本并传播回对端（两端丢数据）。
+                            repo.drop_trash_snapshots(&change.record_id)?;
                             report.applied += 1;
                         }
                         state.base.insert(

@@ -222,6 +222,11 @@ impl Spool {
     /// blob，或上次异常中断留下脏档）时丢弃重建。
     pub fn open_or_create(root: &std::path::Path, meta: &BlobMeta) -> CoreResult<Self> {
         let dir = root.join(&meta.blob_ref);
+        // D-91（审查 R1）纵深防御：规范化 UUID 目录的父目录必为 root 本身。
+        // 即便上游校验被绕过（绝对路径整体替换 / `..` 穿越），在此一票拦截。
+        if dir.parent() != Some(root) {
+            return Err(CoreError::Validation("blob_ref_path".to_string()));
+        }
         let ct_len = meta.plaintext_len as usize + AEAD_TAG_LEN;
         let mut spool = Self {
             dir,
@@ -373,6 +378,13 @@ impl BlobMeta {
         else {
             return Err(CoreError::Validation("expected_meta".to_string()));
         };
+        // D-91（全仓审查 R1，安全审计 F-001 🔴）：blob_ref 必须是**规范 UUID**——
+        // 先经 UUID 解析校验（绝对路径 / `..` / 含路径分隔符的串一律拒绝），再回写
+        // 规范化形式（小写连字符）。此前 blob_ref 为自由 String 直接 `root.join()`，
+        // 恶意配对对端可借 Meta 报文把 spool 目录落到宿主机任意路径（路径穿越 →
+        // 任意位置写受控内容）。uuid 解析失败的串到不了这里之后的任何 join。
+        let rid = record_id_to_bytes(&blob_ref)?;
+        let blob_ref = bytes_to_record_id(&rid);
         if wrapped_key.len() != WRAPPED_KEY_CT_LEN
             || wrapped_key_nonce.len() != AEAD_NONCE_LEN
             || nonce.len() != AEAD_NONCE_LEN
@@ -660,4 +672,99 @@ pub fn serve_pull(
         },
     )?;
     Ok(served_count)
+}
+
+// ===== D-91（审查 R1）回归单测：blob_ref 路径穿越防护 =====
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 构造一个分片数学合法的最小 Meta 报文（其余字段校验与本测试无关）。
+    fn meta_msg(blob_ref: &str) -> BlobMessage {
+        BlobMessage::Meta {
+            blob_ref: blob_ref.to_string(),
+            item_id: blob_ref.to_string(),
+            wrapped_key: vec![0u8; WRAPPED_KEY_CT_LEN],
+            wrapped_key_nonce: vec![0u8; AEAD_NONCE_LEN],
+            nonce: vec![0u8; AEAD_NONCE_LEN],
+            plaintext_len: 0,
+            chunk_total: 1,
+            chunk_size: 64,
+        }
+    }
+
+    #[test]
+    fn meta_rejects_path_traversal_blob_refs() {
+        for evil in [
+            "C:\\Users\\victim\\AppData\\Roaming\\evil",
+            "..\\..\\..\\Windows\\Temp\\evil",
+            "../../../etc/passwd",
+            "/abs/path/evil",
+            "normal/../escaped",
+            "with\\backslash",
+            "with/slash",
+        ] {
+            let err = BlobMeta::from_message(meta_msg(evil)).unwrap_err();
+            assert!(
+                matches!(err, CoreError::Validation(ref d) if d == "uuid"),
+                "blob_ref {evil:?} 必须被 UUID 解析拒绝，实得 {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn meta_accepts_uuid_and_normalizes_form() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let meta = BlobMeta::from_message(meta_msg(&id)).unwrap();
+        assert_eq!(meta.blob_ref, id);
+        // 大写形式（uuid crate 可解析）回写为规范化小写连字符形式。
+        let upper = id.to_uppercase();
+        let meta = BlobMeta::from_message(meta_msg(&upper)).unwrap();
+        assert_eq!(meta.blob_ref, id, "非规范形式必须归一化，杜绝大小写旁路");
+    }
+
+    #[test]
+    fn spool_rejects_join_escape_even_if_upstream_bypassed() {
+        // 纵深防御：直接构造 BlobMeta（绕过 from_message 的 UUID 校验），
+        // open_or_create 的 parent 检查必须兜底拦截。
+        let root = std::env::temp_dir().join(format!("pms-d91-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let meta = BlobMeta {
+            blob_ref: "..\\evil".to_string(),
+            wrapped_key: vec![0u8; WRAPPED_KEY_CT_LEN],
+            wrapped_key_nonce: vec![0u8; AEAD_NONCE_LEN],
+            nonce: [0u8; AEAD_NONCE_LEN],
+            plaintext_len: 0,
+            chunk_total: 1,
+            chunk_size: 64,
+        };
+        let err = match Spool::open_or_create(&root, &meta) {
+            Err(e) => e,
+            Ok(_) => panic!("穿越型 blob_ref 必须被 spool 纵深校验拒绝"),
+        };
+        assert!(matches!(err, CoreError::Validation(ref d) if d == "blob_ref_path"));
+        // 根目录未被写穿（evil 目录不存在于 root 之外）。
+        assert!(!root.parent().unwrap().join("evil").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spool_accepts_canonical_uuid_dir() {
+        let root = std::env::temp_dir().join(format!("pms-d91-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let meta = BlobMeta {
+            blob_ref: uuid::Uuid::new_v4().to_string(),
+            wrapped_key: vec![0u8; WRAPPED_KEY_CT_LEN],
+            wrapped_key_nonce: vec![0u8; AEAD_NONCE_LEN],
+            nonce: [0u8; AEAD_NONCE_LEN],
+            plaintext_len: 0,
+            chunk_total: 1,
+            chunk_size: 64,
+        };
+        let spool = Spool::open_or_create(&root, &meta).unwrap();
+        assert_eq!(spool.dir.parent(), Some(root.as_path()));
+        spool.discard();
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

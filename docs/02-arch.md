@@ -1267,6 +1267,60 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
 - 无签名报文 ⇒ 同网段攻击者可**丢弃/篡改**应答（DoS），但不能伪造有效应答（无 key）；
   也不影响握手（认证仍在 §3.4/§3.8 的通道内完成）。
 
+### 3.18 D-91 全仓审查修复（2026-10-24，软件工坊四角色并行审查驱动）
+
+> 背景：主人委托全仓审查（安全审计 + 正确性排查 + 测试门禁 + 代码评审），报告见
+> `deliverables/gstack/full-audit-passwordms-2026-10-24.md`。本轮修 P0 + 小修包，
+> O1（同步分页 + peer-base 过滤）与 O2（同步锁粒度）两个大项**先出方案、下轮实施**。
+
+#### 3.18.1 🔴 R1：blob spool 路径穿越（安全审计 F-001）
+
+- **根因**：`BlobMeta::from_message` 对对端 Meta 报文的 `blob_ref`（自由 String）只校验
+  wrapped_key/nonce 形状与分片数学，`Spool::open_or_create` 直接 `root.join(&blob_ref)` ——
+  绝对路径整体替换 root、`..\..\` 穿越，恶意配对对端可在宿主机任意路径 create_dir_all +
+  落盘受控密文切片（≤768 KiB/片）。
+- **修法（两层）**：① `from_message` 强制 `blob_ref` 过 UUID 解析（`record_id_to_bytes`，
+  失败即 `Validation("uuid")`）并回写规范化小写连字符形式；② `Spool::open_or_create`
+  纵深校验 `dir.parent() == Some(root)`（`Validation("blob_ref_path")`），即便上游被绕过
+  也一票拦截。`cleanup_orphan_spools` 本就只按 root 下一级目录名清理，无穿越面。
+- **守门**：`blob_transfer.rs` 单测 4 例（七种穿越形态全拒 / UUID 规范化 / 纵深兜底 /
+  规范形式放行）。
+
+#### 3.18.2 🔴 R2：回收站还原可静默覆盖同步数据（丢数据）
+
+- **根因**：对端「删除后又编辑」（rev 超墓碑）→ 本端同步复活，但旧 `TrashEntry` 不清；
+  用户「还原」取旧快照 rev+1 + updated_at=now 直写 live 帧 → 顶掉同步来的新版本，
+  且 LWW 把覆盖传播回对端（两端丢）。
+- **修法（根因 + 兜底）**：① merge 复活路径（`put_item_direct` 后）调新增的
+  `Repository::drop_trash_snapshots(item_id)` 清陈旧快照（幂等，blob 引用集合随之收窄、
+  孤儿交既有 GC）；② `restore_item` 前置守卫：`items.contains_key(item_id)` 即拒，
+  返回新错误变体 `CoreError::RestoreConflict`（`ERR_RESTORE_CONFLICT` / `err.restore_conflict`）。
+  配套：`resolve_conflict`「采用远端（删除）」在 live 不在且回收站已有同 item_id 快照时
+  **跳过软删**（防重复回收站条目，审查 C2）。
+- **守门**：`tests/trash_restore_guard.rs` 4 例（守卫拒还原且 live 原样 / 清快照幂等 /
+  不产重复条目 / live 在场软删行为不变）。**blob 引用集合不变量不受影响**：新增的
+  drop_trash_snapshots 只**收窄**引用集合，收窄后孤儿由 gc_orphan_blobs 兜底，4 处
+  消费方口径不变。
+
+#### 3.18.3 小修包（O3 / C1 / C4 / C5）
+
+- **O3 谎报已锁**：`session.lock()` 返回布尔；`MainLayout.lockNow` 失败时**不** reset
+  store、**不**切锁屏（后端仍 Unlocked、明文在内存时，界面必须保持主界面而非假锁屏）。
+- **C1 记错对端 IP（D-44 回归）**：`client::pair` 记录**实际连通**的候选 IP 持久化
+  （此前恒记主选 `qr.ip`，多网卡 Host 在 fallback 候选握手成功时首次 sync_now 必败一次）。
+- **C4 解锁维护静默吞错**：`Session::unlock` 的 migrate/purge/gc 三项失败收集为
+  `maintenance_warnings`，由 `vault_cmd::unlock` 写文件日志（`[maintenance] …`，仅错误码）。
+- **C5 锁中毒静默退出**：resync worker 与 pairing worker 的锁中毒分支一律
+  `append_log` 留痕后再退出（此前本机会从此不接受被动同步且无线索可查）。
+
+#### 3.18.4 已备案待办（下轮）
+
+- **O1**：`export_changes` 无 peer-base 过滤、无分页（cursor 恒 0），单帧 ≈1.06 MB 上限
+  → 大库同步必然 `frame_too_large` 且**永久失败**（base 无法推进）。方案：按对端 base
+  过滤 live 变更 + cursor 分页 + 帧预算切批。
+- **O2**：同步网络 I/O 全程持全局 session Mutex 且同步命令在主线程 → 同步期间 UI 冻结。
+  方案：「锁内取快照 → 锁外传输 → 锁内合并」三段式 + 命令移出主线程。
+
 ---
 
 ## 4. 文件列表及相对路径
@@ -1917,6 +1971,7 @@ graph TD
 | `ERR_FINGERPRINT_MISMATCH` | 指纹/密钥确认失败 | `err.fingerprint` |
 | `ERR_SYNC_ABORTED` | 同步被中断 | `err.sync_aborted` |
 | `ERR_CONFLICT_EXISTS` | 存在未仲裁冲突 | `err.conflict` |
+| `ERR_RESTORE_CONFLICT` | 【D-91】回收站还原被拒（同 item_id 已有活跃条目） | `err.restore_conflict` |
 | `ERR_IO` | 文件 IO 错误 | `err.io` |
 | `ERR_CRYPTO` | 密码学操作失败 | `err.crypto` |
 | `ERR_INTERNAL` | 内部错误 | `err.internal` |

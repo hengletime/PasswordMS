@@ -42,6 +42,9 @@ pub mod codes {
     pub const ERR_ATTACHMENT_LIMIT: &str = "ERR_ATTACHMENT_LIMIT";
     /// 【主理人裁定 U1/U2 新增】Joiner 本地库非空时禁止静默采用 Host 的 VK。
     pub const ERR_VK_ADOPT_REQUIRES_EMPTY: &str = "ERR_VK_ADOPT_REQUIRES_EMPTY";
+    /// 【D-91 新增】回收站还原被拒：同 item_id 已有活跃条目（多设备同步复活了新版本），
+    /// 旧快照还原会顶掉同步来的新数据（两端丢数据）。
+    pub const ERR_RESTORE_CONFLICT: &str = "ERR_RESTORE_CONFLICT";
     pub const ERR_IO: &str = "ERR_IO";
     pub const ERR_CRYPTO: &str = "ERR_CRYPTO";
     pub const ERR_INTERNAL: &str = "ERR_INTERNAL";
@@ -112,6 +115,11 @@ pub enum CoreError {
     /// 【主理人裁定 U1/U2】Joiner 本地库非空，需前端确认后清空或拒绝。
     #[error("vault key adoption requires an empty local vault")]
     VkAdoptRequiresEmpty { record_count: usize },
+    /// 【D-91】回收站还原被拒：同 item_id 已有活跃条目（典型：对端删除后又编辑、
+    /// 同步复活了新版本）。旧快照 rev+1 + updated_at=now 会把同步来的新数据顶掉，
+    /// 并经 LWW 把覆盖传播回对端（两端丢数据）。
+    #[error("restore conflicts with an existing live item")]
+    RestoreConflict,
     #[error("io error")]
     Io(String),
     #[error("crypto operation failed")]
@@ -151,6 +159,7 @@ impl CoreError {
             CoreError::BlobIncomplete => codes::ERR_BLOB_INCOMPLETE,
             CoreError::BlobCapacity => codes::ERR_BLOB_CAPACITY,
             CoreError::VkAdoptRequiresEmpty { .. } => codes::ERR_VK_ADOPT_REQUIRES_EMPTY,
+            CoreError::RestoreConflict => codes::ERR_RESTORE_CONFLICT,
             CoreError::Io(_) => codes::ERR_IO,
             CoreError::Crypto(_) => codes::ERR_CRYPTO,
             CoreError::Internal(_) => codes::ERR_INTERNAL,
@@ -187,6 +196,7 @@ impl CoreError {
             CoreError::BlobIncomplete => "err.blob_incomplete",
             CoreError::BlobCapacity => "err.blob_capacity",
             CoreError::VkAdoptRequiresEmpty { .. } => "err.vk_adopt_requires_empty",
+            CoreError::RestoreConflict => "err.restore_conflict",
             // io::Error 有两类来源：本机文件读写、TCP 同步链路（transport 的 read/write 超时、
             // 对端拒绝/断开都走 From<std::io::Error>）。按 kind 细分文案——
             // 把「网络问题」从笼统的「文件读写错误」里拆出来，避免把用户排查方向带偏（D-40 跟进）。

@@ -156,7 +156,12 @@
   }
 
   async function lockNow(): Promise<void> {
-    await session.lock();
+    // D-91（审查 O3）：后端锁定失败（如锁中毒）时不得 reset store / 切锁屏——
+    // 否则界面显示锁屏但后端会话仍 Unlocked、明文仍在内存。保持主界面，错误已 toast。
+    const locked = await session.lock();
+    if (!locked) {
+      return;
+    }
     vault.reset();
     settings.reset();
     sync.reset();

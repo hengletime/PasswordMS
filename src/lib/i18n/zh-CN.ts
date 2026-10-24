@@ -456,6 +456,7 @@ export const zhCN = {
     sync_aborted: '同步已中止。',
     conflict: '存在未处理的冲突。',
     vk_adopt_requires_empty: '本机保险库非空，无法直接采用对端密钥。',
+    restore_conflict: '无法还原：该条目已存在新版本（多设备同步所致），请在条目列表或冲突箱中处理。',
     blob_missing: '附件内容尚未同步到本机，请在已同步后重试。',
     blob_incomplete: '附件内容传输不完整，请重新同步。',
     blob_capacity: '附件超出本机保险库剩余容量。',

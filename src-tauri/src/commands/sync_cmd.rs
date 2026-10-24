@@ -350,13 +350,27 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
             let outcome = {
                 let mut guard = match state.pairing.lock() {
                     Ok(g) => g,
-                    Err(_) => break,
+                    // D-91（审查 C5）：配对会话锁中毒留痕（与 resync worker 同口径）。
+                    Err(_) => {
+                        crate::state::append_log(
+                            &app,
+                            "[pairing] worker exiting: pairing lock poisoned",
+                        );
+                        break;
+                    }
                 };
                 match guard.as_mut() {
                     Some(server) => {
                         let mut session = match state.session.lock() {
                             Ok(s) => s,
-                            Err(_) => break,
+                            // D-91（审查 C5）：会话锁中毒留痕。
+                            Err(_) => {
+                                crate::state::append_log(
+                                    &app,
+                                    "[pairing] worker exiting: session lock poisoned",
+                                );
+                                break;
+                            }
                         };
                         match session.repo_mut() {
                             Ok(repo) => server.poll_accept_and_sync(repo, now_ms()),

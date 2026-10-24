@@ -1503,6 +1503,13 @@ impl Repository {
             .get(trash_id)
             .cloned()
             .ok_or(CoreError::ItemNotFound)?;
+        // D-91（全仓审查 R2 🔴）：同 item_id 已有**活跃条目**时拒绝还原——旧快照
+        // rev+1 + updated_at=now 会把（典型场景：对端删除后又编辑、同步复活）新版本
+        // 顶掉，并经 LWW 把覆盖传播回对端（两端丢数据）。复活路径已改为清除旧快照
+        // （`drop_trash_snapshots`），此守卫兜底一切残余的异常并存形态。
+        if self.items.contains_key(&entry.item_snapshot.item_id) {
+            return Err(CoreError::RestoreConflict);
+        }
         let mut item = entry.item_snapshot;
         item.rev += 1;
         item.updated_at = now_ms();
@@ -1538,6 +1545,26 @@ impl Repository {
             self.purge_item(&id)?;
         }
         Ok(())
+    }
+
+    /// 【D-91】清除某条目的全部回收站快照（同步复活成功后调用）。
+    ///
+    /// 对端「删除后又编辑」会把 live 新版本同步回来；旧「已删」快照若不清除，
+    /// 用户「还原」会用旧数据覆盖刚同步来的新版本（R2 根因）。幂等：无快照返回 0。
+    /// blob 引用集合随之收窄，孤儿 blob 交既有 `gc_orphan_blobs` 兜底。
+    pub fn drop_trash_snapshots(&mut self, item_id: &str) -> CoreResult<usize> {
+        let stale: Vec<String> = self
+            .trash
+            .values()
+            .filter(|t| t.item_snapshot.item_id == item_id)
+            .map(|t| t.trash_id.clone())
+            .collect();
+        let n = stale.len();
+        for trash_id in stale {
+            self.tombstone(RECORD_TYPE_TRASH, &trash_id)?;
+            self.trash.remove(&trash_id);
+        }
+        Ok(n)
     }
 
     /// 清理超过 30 天的回收站条目（解锁时触发）。返回清理数。
@@ -1590,10 +1617,21 @@ impl Repository {
                 if entry.remote_deleted {
                     // D-56：删除冲突「采用远端」= 接受对端的删除 → 本端**软删**
                     // （blob 保留、回收站可还原），而非复活死亡快照（§3.13.2 收敛裁定）。
-                    let local = self
-                        .get_item_opt(&entry.item_id)
-                        .unwrap_or_else(|| entry.local_snapshot.clone());
-                    self.trash_item_direct(&local)?;
+                    // D-91（审查 C2）：live 已不在且回收站已有同 item_id 快照时，
+                    // 再软删会造出**重复**回收站条目（还原其一即触发 R2 覆盖路径）。
+                    // 此时删除意图已生效（条目不在 live），只标记 resolved 即可。
+                    match self.get_item_opt(&entry.item_id) {
+                        Some(local) => self.trash_item_direct(&local)?,
+                        None => {
+                            let already = self
+                                .trash
+                                .values()
+                                .any(|t| t.item_snapshot.item_id == entry.item_id);
+                            if !already {
+                                self.trash_item_direct(&entry.local_snapshot.clone())?;
+                            }
+                        }
+                    }
                 } else {
                     let mut remote = entry.remote_snapshot.clone();
                     remote.rev = entry.local_snapshot.rev.max(remote.rev) + 1;

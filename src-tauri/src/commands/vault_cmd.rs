@@ -39,6 +39,11 @@ pub fn unlock(
 ) -> IpcResult<StatusDto> {
     let path = vault_path(&app)?;
     let session = Session::unlock(&path, &master_password)?;
+    // D-91（审查 C4）：解锁期维护失败不再静默——落文件日志（内容仅错误码，
+    // CoreError Debug 已脱敏，无任何密钥/明文）。
+    for warning in session.maintenance_warnings() {
+        crate::state::append_log(&app, &format!("[maintenance] {warning}"));
+    }
     *state.session.lock().map_err(lock_err)? = session;
     // 解锁即启动持久重同步监听（D-11）。
     let _ = ensure_resync_listener(&app)?;

@@ -37,6 +37,9 @@ pub enum SessionState {
 pub struct Unlocked {
     pub repo: Repository,
     pub kek: Kek,
+    /// 【D-91】解锁期维护（迁移/回收站清理/孤儿 GC）的失败警告——core 无法落日志，
+    /// 由命令层（vault_cmd::unlock）取走写入文件日志（内容仅错误码，Debug 已脱敏）。
+    pub maintenance_warnings: Vec<String>,
 }
 
 /// 会话。
@@ -109,7 +112,11 @@ impl Session {
         let repo = Repository::create(path, header, vault_key, device_id)?;
 
         Ok(Self {
-            state: SessionState::Unlocked(Unlocked { repo, kek }),
+            state: SessionState::Unlocked(Unlocked {
+                repo,
+                kek,
+                maintenance_warnings: Vec::new(),
+            }),
         })
     }
 
@@ -161,16 +168,30 @@ impl Session {
 
         let device_id = load_or_create_device_id(path)?;
         let mut repo = Repository::open(path, vault_key, device_id)?;
+        // D-91（审查 C4）：三项维护此前 `let _ =` 全静默——migrate 半途失败会让
+        // 附件引用与 blob 状态漂移且无人知晓。失败收集为警告，由命令层落文件日志。
+        // 均为幂等操作，本次失败下次解锁自动重试。
+        let mut maintenance_warnings: Vec<String> = Vec::new();
         // D-60 §3.14.3：存量独立附件条目 → SecureNote 挂附件（幂等；必须在同步 export
         // 之前、wipe_plaintext 之前执行，避免迁移产物与远端旧语义帧竞态）。
-        let _ = repo.migrate_legacy_attachments();
+        if let Err(e) = repo.migrate_legacy_attachments() {
+            maintenance_warnings.push(format!("migrate_legacy_attachments: {e:?}"));
+        }
         // 启动清理：到期回收站条目（F-15）。
-        let _ = repo.purge_expired_trash();
+        if let Err(e) = repo.purge_expired_trash() {
+            maintenance_warnings.push(format!("purge_expired_trash: {e:?}"));
+        }
         // D-60 §3.14.4：孤儿 blob 可达性 GC（幂等扫描）。
-        let _ = repo.gc_orphan_blobs();
+        if let Err(e) = repo.gc_orphan_blobs() {
+            maintenance_warnings.push(format!("gc_orphan_blobs: {e:?}"));
+        }
 
         Ok(Self {
-            state: SessionState::Unlocked(Unlocked { repo, kek }),
+            state: SessionState::Unlocked(Unlocked {
+                repo,
+                kek,
+                maintenance_warnings,
+            }),
         })
     }
 
@@ -275,6 +296,15 @@ impl Session {
     /// 当前保险库文件路径（已解锁时）。
     pub fn vault_path(&self) -> CoreResult<PathBuf> {
         Ok(self.repo()?.path())
+    }
+
+    /// 【D-91】解锁期维护警告（migrate/purge/gc 失败明细，仅错误码无敏感值）。
+    /// 由命令层取走落文件日志；core 自身无日志设施。
+    pub fn maintenance_warnings(&self) -> Vec<String> {
+        match &self.state {
+            SessionState::Unlocked(u) => u.maintenance_warnings.clone(),
+            SessionState::Locked => Vec::new(),
+        }
     }
 }
 

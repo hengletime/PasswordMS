@@ -30,6 +30,8 @@ export const ErrorCode = {
   ERR_SYNC_ABORTED: 'ERR_SYNC_ABORTED',
   ERR_CONFLICT_EXISTS: 'ERR_CONFLICT_EXISTS',
   ERR_VK_ADOPT_REQUIRES_EMPTY: 'ERR_VK_ADOPT_REQUIRES_EMPTY',
+  /** D-91：回收站还原被拒——同 item_id 已有活跃条目（多设备同步复活了新版本）。 */
+  ERR_RESTORE_CONFLICT: 'ERR_RESTORE_CONFLICT',
   ERR_BLOB_MISSING: 'ERR_BLOB_MISSING',
   ERR_BLOB_INCOMPLETE: 'ERR_BLOB_INCOMPLETE',
   ERR_BLOB_CAPACITY: 'ERR_BLOB_CAPACITY',
@@ -67,6 +69,7 @@ const FALLBACK_MESSAGE_KEY: Record<string, string> = {
   [ErrorCode.ERR_SYNC_ABORTED]: 'err.sync_aborted',
   [ErrorCode.ERR_CONFLICT_EXISTS]: 'err.conflict',
   [ErrorCode.ERR_VK_ADOPT_REQUIRES_EMPTY]: 'err.vk_adopt_requires_empty',
+  [ErrorCode.ERR_RESTORE_CONFLICT]: 'err.restore_conflict',
   [ErrorCode.ERR_BLOB_MISSING]: 'err.blob_missing',
   [ErrorCode.ERR_BLOB_INCOMPLETE]: 'err.blob_incomplete',
   [ErrorCode.ERR_BLOB_CAPACITY]: 'err.blob_capacity',

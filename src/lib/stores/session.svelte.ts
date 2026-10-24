@@ -64,16 +64,21 @@ class SessionStore {
     }
   }
 
-  /** 锁定。 */
-  async lock(): Promise<void> {
+  /**
+   * 锁定。返回是否**真正**锁定成功（D-91 审查 O3：失败时调用方不得 reset
+   * store / 切锁屏——否则界面谎报已锁、后端会话仍解锁、明文仍在内存）。
+   */
+  async lock(): Promise<boolean> {
     this.busy = true;
     try {
       await api.vault.lock();
       this.status = { has_vault: true, locked: true };
       this.unlockError = false;
+      return true;
     } catch (err) {
       const appErr = toAppError(err);
       ui.toast('error', appErr.messageKey);
+      return false;
     } finally {
       this.busy = false;
     }

@@ -211,7 +211,12 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
         let polled = {
             let mut guard = match state.resync.lock() {
                 Ok(g) => g,
-                Err(_) => break,
+                // D-91（审查 C5）：锁中毒不再静默退出——此前本机会从此不接受
+                // 被动同步直至重启且无线索可查。
+                Err(_) => {
+                    append_log(&app, "[resync] resync lock poisoned, worker exiting");
+                    break;
+                }
             };
             let handle = match guard.as_mut() {
                 Some(h) => h,
@@ -219,7 +224,11 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
             };
             let mut session = match state.session.lock() {
                 Ok(s) => s,
-                Err(_) => break,
+                // D-91（审查 C5）：同上，中毒留痕。
+                Err(_) => {
+                    append_log(&app, "[resync] session lock poisoned, worker exiting");
+                    break;
+                }
             };
             // 会话若已锁定则本轮跳过（等待解锁或停止信号）。
             match session.repo_mut() {

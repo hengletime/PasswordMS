@@ -221,7 +221,7 @@ pub fn pair(
             candidates.push(ip.clone());
         }
     }
-    let mut connected: Option<TcpStream> = None;
+    let mut connected: Option<(TcpStream, String)> = None;
     let mut last_err: Option<CoreError> = None;
     for ip in &candidates {
         match transport::connect_with_timeout(
@@ -230,14 +230,17 @@ pub fn pair(
             std::time::Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS),
         ) {
             Ok(stream) => {
-                connected = Some(stream);
+                // D-91（审查 C1，D-44 回归）：记录**实际连通**的候选 IP——
+                // 此前持久化的一直是主选 qr.ip，多网卡 Host 在 fallback 候选上
+                // 握手成功时，配对后首次 sync_now 必连错地址失败一次。
+                connected = Some((stream, ip.clone()));
                 break;
             }
             Err(e) => last_err = Some(e),
         }
     }
-    let mut stream = match connected {
-        Some(s) => s,
+    let (mut stream, host_ip) = match connected {
+        Some((s, ip)) => (s, ip),
         None => return Err(last_err.unwrap_or(CoreError::SyncAborted)),
     };
     stream
@@ -308,7 +311,9 @@ pub fn pair(
         host_name: accept.host_name,
         session_code: handshake::fingerprint_of(&host_pub),
         device_fingerprint: qr.fp.clone(),
-        host_ip: qr.ip.clone(),
+        // D-91（审查 C1）：持久化实际连通的 IP（而非主选 qr.ip），配对地址自愈（D-74）
+        // 之前的首连成功率由此保证。
+        host_ip,
         host_sync_port: qr.sync_port,
         host_vault_key,
     })
