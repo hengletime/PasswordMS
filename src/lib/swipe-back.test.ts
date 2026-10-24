@@ -112,3 +112,17 @@ describe('D-95 接线守门：MainLayout 必须仅在详情查看态启用手势
     expect(block).toContain('swipeState = null');
   });
 });
+
+describe('D-95 真机补丁：touch-action 必须放行水平手势（否则 WebView pointercancel 掐断手势）', () => {
+  const detail = pickSource('ItemDetail.svelte');
+
+  it('详情滚动容器 .detail 必须设 touch-action: pan-y（垂直滚动保留、水平归 JS）', () => {
+    const styleAt = detail.indexOf('<style>');
+    const blockAt = detail.indexOf('.detail {', styleAt);
+    expect(blockAt).toBeGreaterThan(-1);
+    const block = detail.slice(blockAt, detail.indexOf('}', blockAt));
+    expect(block, '缺 touch-action: pan-y 会导致真机滑动完全无反应（pointercancel 抢占）').toContain(
+      'touch-action: pan-y',
+    );
+  });
+});

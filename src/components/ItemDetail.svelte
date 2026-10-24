@@ -343,6 +343,11 @@
     flex-direction: column;
     padding: 1.1rem;
     overflow: auto;
+    /* D-95 滑动返回成立的前提：默认 touch-action:auto 时，Android WebView 对触摸
+       位移的滚动/手势判定会发 pointercancel——向左滑的 pointermove 序列在达到
+       72px 阈值之前就被掐断（真机实测「完全没反应」）。pan-y = 垂直滚动照常由
+       浏览器处理，水平方向归 JS 手势（swipe-back.ts）；桌面鼠标不受该属性影响。 */
+    touch-action: pan-y;
   }
   .detail-empty {
     flex: 1;

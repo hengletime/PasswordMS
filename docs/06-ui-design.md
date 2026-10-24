@@ -1227,8 +1227,14 @@ Android 上 dialog 插件**取消时 reject**，桌面**resolve `null`**。历�
 - **与系统手势的关系**：Android 全面屏的边缘返回手势由系统处理，页内**全页任意位置**向左滑不与其冲突；
   顶部 ← 键保留，两种返回方式并存。
 - **V1 不做跟手动画**（松手前无位移动画，达标即返回）；真机体验后若嫌生硬再加跟手位移 + 阈值弹回。
+- **⚠️ 真机坑（v1.2.18 补丁，主人实测「完全没反应」）**：`touch-action` 全仓未设时，Android WebView 对
+  触摸位移的滚动/手势判定会发 **`pointercancel`**——`.detail` 是默认 `auto`，向左滑的 pointermove 序列
+  在达到 72px 阈值前就被掐断，手势永不成立。修法 = `.detail { touch-action: pan-y; }`：垂直滚动照常由
+  浏览器处理（判定不成立的场景本就不该触发），水平方向归 JS 手势；桌面鼠标不受该属性影响。
+  **教训：WebView 里写 pointer 手势，`touch-action` 不是可选项，是手势成立的前提。** 守门：`swipe-back.test.ts`
+  第 14 例锁 `.detail` 必须带 `touch-action: pan-y`。
 - **验证口径**：触屏手势**桌面走查包验不了**（鼠标不启用），最终判据 = Android 真机；守门 `swipe-back.test.ts`
-  13 例（判定 10 例 + 接线源码断言 3 例）。
+  14 例（判定 10 例 + 接线源码断言 3 例 + touch-action 守门 1 例）。
 
 ## 7. 本次必须修的缺陷
 
