@@ -104,6 +104,13 @@
     void save();
   }}
 >
+  <!-- D-92/D-93：字段区独占滚动层，操作条固定贴底（不再 sticky）。
+       根因①：桌面端 .pane 为 display:contents，form.editor 直接成为 .body(flex row) 的 item，
+       旧版只有移动端媒体查询给了 flex:1 → 桌面宽度按内容收缩成窄列（笔记/登录同病）。
+       根因②：sticky bottom:0 的吸附范围被包含块限制，最低贴到 .editor 内容盒底，
+       其下 padding 空带露出、滚过的字段（分组下拉）从带里透出；内容不足一屏时
+       工具条停在内容末尾，与容器底之间也是空白。改为 flex 固定底栏后两者在几何上不可能复现。 -->
+  <div class="editor-scroll">
   <div class="pms-field">
     <label class="pms-label" for="ed-title">{ui.t('editor.field_title')}</label>
     <!-- svelte-ignore a11y_autofocus -->
@@ -238,6 +245,7 @@
     <input type="checkbox" bind:checked={favorite} />
     <span>{ui.t('editor.favorite')}</span>
   </label>
+  </div><!-- /.editor-scroll -->
 
   <div class="editor-actions">
     <button class="pms-btn is-ghost" type="button" onclick={oncancel}>{ui.t('editor.cancel')}</button>
@@ -246,11 +254,22 @@
 </form>
 
 <style>
+  /* D-92：flex:1 桌面/移动统一生效——.pane 桌面端 display:contents，form.editor
+     直接是 .body(flex row) 的 item，没有 flex:1 宽度就会按内容收缩成窄列。 */
   .editor {
-    padding: 1.1rem;
-    overflow: auto;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+  }
+  /* D-93：字段区独占滚动层；padding 归滚动层，操作条下方不再有空带。 */
+  .editor-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 1.1rem;
   }
   .editor-custom {
     padding: 0.75rem;
@@ -274,22 +293,14 @@
   .editor-add {
     align-self: flex-start;
   }
+  /* D-93：固定底栏（非 sticky）——flex 布局保证永远贴容器底，无缝隙、无内容透出。 */
   .editor-actions {
-    position: sticky;
-    bottom: 0;
+    flex-shrink: 0;
     display: flex;
     justify-content: flex-end;
     gap: 0.5rem;
-    margin-top: 0.5rem;
-    padding: 0.85rem 0 0.2rem;
+    padding: 0.85rem 1.1rem;
     border-top: 1px solid var(--pms-border);
     background: var(--pms-bg);
-  }
-  /* 移动端：编辑器独占整屏（`flex:1` 撑满单栏 pane），避免内容宽度按内容收缩。 */
-  @media (max-width: 767px) {
-    .editor {
-      flex: 1;
-      min-width: 0;
-    }
   }
 </style>
