@@ -99,6 +99,8 @@ export const enUS: Messages = {
     ungrouped: 'Ungrouped',
     new: 'New folder',
     name_placeholder: 'Folder name',
+    rename_title: 'Rename folder',
+    rename_confirm: 'Save',
     delete_title: 'Delete folder',
     delete_body: 'Items in this folder will be moved out or sent to trash. Choose an action.',
     delete_to_ungrouped: 'Move out',
@@ -129,6 +131,7 @@ export const enUS: Messages = {
   menu: {
     pin: 'Pin to top',
     unpin: 'Unpin',
+    rename: 'Rename',
     move_to_folder: 'Move to folder…',
     move_title: 'Move to folder',
   },

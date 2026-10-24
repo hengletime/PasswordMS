@@ -226,9 +226,10 @@
   {:else}
     <ul class="list-items" bind:this={listEl}>
       {#each vault.items as item (item.item_id)}
-        <li>
+        <li class:has-pin={item.pinned === true}>
           <button
             class="list-row"
+            class:has-pin={item.pinned === true}
             class:active={vault.selectedItemId === item.item_id}
             class:drop-above={drag.state.active &&
               drag.state.kind === 'item' &&
@@ -263,13 +264,24 @@
             </span>
             <!-- #531：拖拽手柄的辅助说明（视觉隐藏，进可访问名称）。 -->
             <span class="sr-only">{ui.t('dnd.handle_item')}</span>
-            {#if item.pinned === true}
-              <span class="list-pin" title={ui.t('menu.pin')}><Icon name="pin" size={13} /></span>
-            {/if}
             {#if item.favorite}
               <span class="list-fav"><Icon name="star" size={14} filled /></span>
             {/if}
           </button>
+          {#if item.pinned === true}
+            <!-- D-85：点钉 = 直接取消钉住（掉回频度区是 D-84 定案的自然结果）。
+                 必须是行按钮的**兄弟**节点（li 内绝对定位）：嵌套 button 是无效 HTML
+                 （SSR 解析会被浏览器挪位）；兄弟节点也不吃行点击 / 行拖拽 / 行双击。 -->
+            <button
+              class="list-pin"
+              type="button"
+              title={ui.t('menu.unpin')}
+              aria-label={ui.t('menu.unpin')}
+              onclick={(): void => void vault.setItemPin(item.item_id, false)}
+            >
+              <Icon name="pin" size={13} />
+            </button>
+          {/if}
         </li>
       {:else}
         <li class="list-center list-empty">{ui.t('item.no_results')}</li>
@@ -414,10 +426,31 @@
     white-space: nowrap;
     border: 0;
   }
-  /* #531：钉住标记（钉住块语义的可见线索）。 */
+  /* #531：钉住标记（钉住块语义的可见线索）；D-85 起可点 = 直接取消钉住。
+     钉住按钮是行按钮的**兄弟**节点（li 相对定位 + 绝对定位右缘）：不嵌套 button，
+     也天然不触发行点击/拖拽/长按。has-pin 给行留出右缘空间（收藏星不被盖住）。 */
+  .list-items li {
+    position: relative;
+  }
+  .list-row.has-pin {
+    padding-right: 2.3rem;
+  }
   .list-pin {
+    position: absolute;
+    right: 0.45rem;
+    top: 50%;
+    transform: translateY(-50%);
     color: var(--pms-muted);
     display: flex;
+    border: none;
+    background: transparent;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    transition: color var(--pms-dur) var(--pms-ease);
+  }
+  .list-pin:hover {
+    color: var(--pms-fg);
   }
   /* 拖拽插入位指示线（落在行上半 = 上缘线，下半 = 下缘线）。 */
   .list-row.drop-above {

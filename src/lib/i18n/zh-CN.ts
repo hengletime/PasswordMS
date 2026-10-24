@@ -97,6 +97,8 @@ export const zhCN = {
     ungrouped: '未分组',
     new: '新建分组',
     name_placeholder: '分组名称',
+    rename_title: '重命名分组',
+    rename_confirm: '保存',
     delete_title: '删除分组',
     delete_body: '该分组下的条目将被移出分组或一并移入回收站，请选择处理方式。',
     delete_to_ungrouped: '移出分组',
@@ -127,6 +129,7 @@ export const zhCN = {
   menu: {
     pin: '钉住',
     unpin: '取消钉住',
+    rename: '重命名',
     move_to_folder: '移动到分组…',
     move_title: '移动到分组',
   },

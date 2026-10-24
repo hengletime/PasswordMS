@@ -1,14 +1,17 @@
 <script lang="ts">
   // 左侧分组栏（PRD F-03）。设计规范 §5.3：240px、底色 --pms-bg-2、40px 行、选中左侧 2px 青绿竖条。
   // #531：「全部条目」固定第一、不可拖，但**是条目的投放目标**（拖上去 = 移到未分组）；
-  // 分组行可拖 = 钉住 / 钉住排序；右键（桌面）/ 长按（触屏）菜单：钉住 / 取消钉住。
-  // 双击重命名与 .side-del 原样保留（拖拽判位移阈值，不冲突）。
+  // 分组行可拖 = 钉住 / 钉住排序；右键（桌面）/ 长按（触屏）菜单：钉住 / 取消钉住 / 重命名（D-85）。
+  // 点钉 = 直接取消钉住（D-85）；双击重命名与 .side-del 原样保留（拖拽判位移阈值，不冲突）。
   import Icon from './common/Icon.svelte';
   import ContextMenu from './common/ContextMenu.svelte';
+  import Modal from './common/Modal.svelte';
   import { drag, beginRowDrag, DROP_ID_ALL_ITEMS } from '../lib/dnd.svelte';
   import { pinnedOrderAfterDrop } from '../lib/dnd';
   import { vault } from '../lib/stores/vault.svelte';
   import { ui } from '../lib/stores/ui.svelte';
+  import { api } from '../lib/ipc';
+  import { toAppError } from '../lib/errors';
 
   interface Props {
     /** 移动端抽屉：选中分组/收藏后回调，用于自动关闭抽屉（桌面端不传）。 */
@@ -25,6 +28,9 @@
   let clickSuppressed = false;
   /** 右键 / 长按菜单的目标分组与位置。 */
   let menuFor = $state<{ id: string; x: number; y: number } | null>(null);
+  /** D-85：菜单「重命名」弹层的目标分组与输入草稿。 */
+  let renameFor = $state<string | null>(null);
+  let renameName = $state('');
 
   const menuTarget = $derived(
     menuFor === null ? null : vault.folders.find((f) => f.folder_id === menuFor?.id) ?? null,
@@ -42,6 +48,15 @@
     }
     if (key === 'pin' || key === 'unpin') {
       void vault.setFolderPin(id, key === 'pin');
+      return;
+    }
+    if (key === 'rename') {
+      // D-85：菜单重命名 —— 预填当前组名，弹 Modal 提交（提交走 renameFolder）。
+      const folder = vault.folders.find((f) => f.folder_id === id);
+      if (folder !== undefined) {
+        renameFor = id;
+        renameName = folder.name;
+      }
     }
   }
 
@@ -68,7 +83,39 @@
     const name = editingName.trim();
     editingId = null;
     if (id !== null && name.length > 0) {
-      void vault.updateFolder(id, name);
+      void renameFolder(id, name);
+    }
+  }
+
+  /**
+   * D-85：分组改名（菜单弹窗与双击改名共用一条路径）。空名/纯空白前端先挡（不发 IPC）。
+   *
+   * 契约核对（D-85 修复令要求，已核 `crates/passwordms-core/src/store/repository.rs::update_folder`）：
+   * `update_folder(folder_id, name, icon, color)` 对 icon/color 是**整字段覆盖**
+   * （`folder.icon = icon; folder.color = color`），传 None = **清除**现有值 ——
+   * 所以必须把分组的 icon/color 原样回传。**不能用 `vault.updateFolder`**
+   * （store 层传 null/null，会把分组的图标/颜色抹掉）。
+   */
+  async function renameFolder(folderId: string, name: string): Promise<void> {
+    const target = vault.folders.find((f) => f.folder_id === folderId) ?? null;
+    if (target === null || name.length === 0) {
+      return;
+    }
+    try {
+      await api.folders.update(target.folder_id, name, target.icon ?? null, target.color ?? null);
+      await vault.load();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  async function submitRename(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const id = renameFor;
+    const name = renameName.trim();
+    renameFor = null;
+    if (id !== null && name.length > 0) {
+      await renameFolder(id, name);
     }
   }
 
@@ -251,10 +298,20 @@
             <span class="side-name">{folder.name}</span>
             <!-- #531：拖拽手柄的辅助说明（视觉隐藏，进可访问名称）。 -->
             <span class="sr-only">{ui.t('dnd.handle_folder')}</span>
-            {#if folder.pinned === true}
-              <span class="side-pin" title={ui.t('menu.pin')}><Icon name="pin" size={12} /></span>
-            {/if}
           </button>
+          {#if folder.pinned === true}
+            <!-- D-85：点钉 = 直接取消钉住。行按钮的**兄弟**节点（不嵌套 button——无效 HTML
+                 且 SSR 解析会被浏览器挪位；兄弟节点也不吃行点击/拖拽/双击改名）。 -->
+            <button
+              class="side-pin"
+              type="button"
+              title={ui.t('menu.unpin')}
+              aria-label={ui.t('menu.unpin')}
+              onclick={(): void => void vault.setFolderPin(folder.folder_id, false)}
+            >
+              <Icon name="pin" size={12} />
+            </button>
+          {/if}
           <button
             class="pms-icon-btn side-del"
             type="button"
@@ -279,11 +336,28 @@
           key: menuTarget.pinned === true ? 'unpin' : 'pin',
           label: menuTarget.pinned === true ? ui.t('menu.unpin') : ui.t('menu.pin'),
         },
+        // D-85：分组重命名（提交见 submitRename；双击改名入口保留）。
+        { key: 'rename', label: ui.t('menu.rename') },
       ]}
       onselect={onMenuSelect}
       onclose={() => (menuFor = null)}
     />
   {/if}
+
+  <!-- D-85：重命名分组弹层（复用 Modal + pms-input；Esc/遮罩/取消不改动）。 -->
+  <Modal open={renameFor !== null} titleKey="folder.rename_title" onclose={() => (renameFor = null)}>
+    <form class="rename-form" onsubmit={submitRename}>
+      <!-- svelte-ignore a11y_autofocus -->
+      <input
+        class="pms-input"
+        autofocus
+        aria-label={ui.t('folder.rename_title')}
+        placeholder={ui.t('folder.name_placeholder')}
+        bind:value={renameName}
+      />
+      <button class="pms-btn is-primary is-sm" type="submit">{ui.t('folder.rename_confirm')}</button>
+    </form>
+  </Modal>
 
   {#if drag.state.active && drag.state.kind === 'folder'}
     <div class="drag-chip" style:left="{drag.state.x + 12}px" style:top="{drag.state.y + 12}px">
@@ -393,11 +467,34 @@
     font-size: 0.8rem;
     padding: 0.4rem 0.55rem;
   }
-  /* #531：钉住标记 / 投放高亮 / 插入位指示线。 */
+  /* #531：钉住标记 / 投放高亮 / 插入位指示线。D-85 起钉子可点 = 直接取消钉住，
+     且是行按钮的**兄弟**节点（与 .side-del 同位型：26px flex 项），不嵌套 button。 */
   .side-pin {
-    margin-left: auto;
+    width: 26px;
+    height: 26px;
+    flex: 0 0 26px;
     color: var(--pms-muted);
     display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+    transition: color var(--pms-dur) var(--pms-ease);
+  }
+  .side-pin:hover {
+    color: var(--pms-fg);
+  }
+  /* D-85：重命名分组弹层表单（输入框 + 保存按钮同行）。 */
+  .rename-form {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .rename-form .pms-input {
+    flex: 1;
   }
   .sr-only {
     position: absolute;
