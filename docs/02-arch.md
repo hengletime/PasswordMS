@@ -1406,6 +1406,107 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
 
 ---
 
+### 3.20 D-96 全仓复核修复批次（2026-10-25，只读复核 → 主人全 A 批准后实施）
+
+> 背景：D-91 后的第二次全仓只读复核提出 10 项建议，主人逐项拍板批准（全 A），
+> 本节为实施登记。错误码全部**复用既有 `ERR_VALIDATION`**（无新增错误码/无新增 i18n 键）；
+> 前端 `src/lib/constants.ts` 不涉及（新增常量均为 Rust 内部防御上限，不上线、不进 wire）。
+
+#### 3.20.1 身份私钥 VK 包裹（同步安全）
+
+- **修法**：Host 长期身份私钥不再以 Base64 裸明文落盘，改用**保险库主密钥（VK）**
+  XChaCha20-Poly1305 包裹。新格式 = `PMSIDENT1\x00` 魔数(10B) ‖ nonce(24B) ‖ ct(48B)，
+  AAD 绑 `AAD_IDENTITY`（`b"identity"`）；旧格式（Base64 裸私钥）读取时识别后**立即
+  改写为新格式**（自动迁移，幂等，老库无感知）。落盘走「同目录临时文件 + rename」
+  原子替换，Unix 侧临时文件与目标文件 chmod 600（`#[cfg(unix)]`）。
+- **落点**：core 新模块 `sync/identity.rs`（`load_or_create_identity_file`，纯逻辑可测）；
+  外壳 `sync_cmd.rs` 在 `sync_start_pairing`（唯一调用点，必然已 `session.repo()?` 解锁）
+  从会话取 VK 传入；顺带删除 `state.rs` 死字段 `host_identity` 及 `HostIdentity` 导入。
+- **守门**：`sync/identity.rs` 单测 7 例（封/解回环与魔数 / 错 VK 拒绝 / 密文篡改拒绝 /
+  非魔数拒绝 / 旧格式迁移且私钥不变 / 新建即新格式 / Unix 600 权限）。
+
+#### 3.20.2 导入两级上限（资源防护）
+
+- **修法**：`import::preview_from_file` 在 `fs::read` 前 `metadata` 预检文件
+  ≤ `MAX_IMPORT_FILE_BYTES`（64 MB，新常量）；解析后条目数 ≤ `MAX_IMPORT_ITEMS`
+  （10 000，新常量）。超限 `ERR_VALIDATION`（信息带实际大小/数量）。Android SAF 入口
+  `content_uri::read_to_bytes_limited`（`read_to_bytes` 的限量化变体，附件入口 20 MB
+  语义不变）按 64 MB 读取，拿到字节后按同一常量复查。
+- **守门**：`tests/d96_guards.rs` 3 例（超限文件拒绝 / 超限条目数拒绝 / 9999 条放行对照组）。
+
+#### 3.20.3 同步接收侧资源夹取（协议防护）
+
+- **修法**：`paging::recv_push_pages` 接收循环累计 `estimate_record_size` 总和
+  ≤ `SYNC_MAX_RECV_TOTAL_BYTES`（= `MAX_VAULT_BYTES` 200 MB）且页数
+  ≤ `SYNC_MAX_RECV_PAGES`（4096，新常量），超限 `Validation("sync_recv_limit_exceeded:
+  pages=…, bytes=…")`。协议兼容：正常分页远低于阈值（200 MB 库最多几十页）。
+  内核 `recv_push_pages_with_limits` 限额注入可测。
+- **守门**：`paging.rs` 单测 3 例（页数超限拒绝 / 字节超限拒绝 / 限额充足时 3 页全收对照）。
+
+#### 3.20.4 KDF 参数夹取（解锁 DoS 防护）
+
+- **修法**：`kdf::derive_master_key` 入口校验头部 KDF 参数（**不可信输入**）：
+  `memory_kib ≤ KDF_MAX_MEMORY_KIB`（1 GiB）、`iterations ≤ KDF_MAX_ITERATIONS`（16）、
+  `parallelism ≤ KDF_MAX_PARALLELISM`（8），零值同样拒绝。超限
+  `Validation("kdf_params_out_of_range")`，绝不以超限参数执行 Argon2id。
+  默认 64 MiB/3/1 远低于上限，存量库零影响。
+- **守门**：`kdf.rs` 单测 3 例（默认放行 / 边界值 1 GiB·16·8 与下界放行 / 6 组越界拒绝）。
+
+#### 3.20.5 剪贴板 Rust 兜底（A-03 加固）
+
+- **修法**：`copy_secret` 成功后 spawn **detached 线程**等 `CLIPBOARD_TTL_SECS`（30s）
+  再调 `clear_owned_clipboard`（take+比对语义复用，与前端倒计时幂等协作——先到者清理、
+  后到者空转）；`lib.rs` 由 `.run(ctx)` 改 `.build(ctx)` + `app.run(callback)`，
+  在 `RunEvent::Exit` 同步调 `clear_owned_clipboard`（进程退出是最后一个清理窗口）。
+  前端 `clipboard.ts` 不动。
+- **守门**：外壳层逻辑（无 core 单测；依赖剪贴板系统状态，纯集成域）。
+
+#### 3.20.6 条目统一明文上限（同步卡死防护）
+
+- **修法**：`validate_item_kind` 新增统一上限：`serde_json::to_vec(kind)` 字节数
+  ≤ `MAX_ITEM_PLAINTEXT_BYTES`（384 KiB，新常量）。此前 Login.notes 无上限，一条巨型
+  笔记可把单条变更顶过同步分页阈值（`change_too_large` 每轮重发、永不收敛）。
+  换算关系：明文 384 KiB → 线上估算 ≈ 769 KiB < `PAGE_BUDGET_BYTES`（≈992 KiB，
+  单条拒绝线 ct ≈ 496 KiB），384 KiB 条目永远到不了 `change_too_large`。超限错误带
+  标题（截 64 字符）与上限值。`MAX_NOTE_BYTES`（256 KiB）既有语义不变。
+- **守门**：`tests/d96_guards.rs` 2 例（create/update 超限拒绝且报错带标题与上限 /
+  256 KiB 满额 SecureNote 正常创建回归锚点）。
+
+#### 3.20.7 头部计数交叉核对（静默丢数据预警）
+
+- **修法**：`Repository::open` 在 `rebuild_index` 后比对头部 `item_count`（
+  `persist_header` 维护的活条目数）与实际解密扫描计数；不一致**不阻断解锁**
+  （帧密文是真相源），警告 `header_item_count_mismatch: header=N, actual=M` 存入
+  `Repository::open_warnings`，由 `Session::unlock` 并入既有 `maintenance_warnings`
+  通道，`vault_cmd::unlock` 落文件日志（与 D-91 C4 同路）。
+- **守门**：`tests/d96_guards.rs` 1 例（等长改写头部计数 → 解锁出警告、业务数据完好）。
+
+#### 3.20.8 `update_header` 原地分支真刷盘（掉电防护）
+
+- **修法**：`Container::update_header` 原地写分支在 `flush` 后补 `sync_all`——
+  `flush` 对 `File` 是 no-op，头部仍在 page cache；本分支承载 `change_master_password`
+  改 `wrapped_vault_key` 的写入，掉电即「文件在、VK 没落盘」= 库锁死。压缩路径
+  （`rewrite_with_frames` 已有 `sync_all`）与记录分支（append/pwrite，flush 语义维持）
+  不动。
+- **守门**：随 `container_roundtrip.rs` 既有回归覆盖（行为增强无语义变更）。
+
+#### 3.20.9 导入去重回填（D-90 补漏）
+
+- **修法**：`import::apply` 的 `put_item_direct` 成功后把 `(title, type_name)` 回填
+  `existing_keys`——同一预览文件内的重复条目此前会双双落库（首条写入后集合未更新）。
+- **守门**：`tests/d96_guards.rs` 1 例（同文件两条同名同型 → 只导首条、
+  `duplicate_skipped=1`、库内唯一）。
+
+#### 3.20.10 条目 `folder_id` 存在性校验（数据完整性）
+
+- **修法**：`create_item` / `update_item` 对 `draft.folder_id = Some` 时
+  `folders.contains_key` 校验（对齐 `move_item_to_folder` 既有写法），不存在报
+  `Validation("folder <id> does not exist")`。此前引用不存在的分组后条目在列表中「隐身」。
+- **守门**：`tests/d96_guards.rs` 1 例（create/update 引用幽灵分组拒绝且报错带 id /
+  真实分组放行 / update 校验早退不半途改动原条目）。
+
+---
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。

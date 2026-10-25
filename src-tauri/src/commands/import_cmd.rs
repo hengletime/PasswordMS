@@ -28,7 +28,22 @@ pub fn import_preview(
 
     #[cfg(target_os = "android")]
     let preview = if source_path.starts_with("content://") {
-        let bytes = crate::content_uri::read_to_bytes(&app, &source_path)?;
+        // 【D-96】SAF 入口按导入上限（64 MB）读取；再按同一常量复查字节长度
+        // （超限报 `ERR_VALIDATION`，信息带实际字节数）。
+        let bytes = crate::content_uri::read_to_bytes_limited(
+            &app,
+            &source_path,
+            passwordms_core::constants::MAX_IMPORT_FILE_BYTES,
+        )?;
+        if bytes.len() as u64 > passwordms_core::constants::MAX_IMPORT_FILE_BYTES {
+            return Err(crate::error::IpcError::from(
+                passwordms_core::CoreError::Validation(format!(
+                    "import_file_too_large: {} > {} bytes",
+                    bytes.len(),
+                    passwordms_core::constants::MAX_IMPORT_FILE_BYTES
+                )),
+            ));
+        }
         let content = passwordms_core::import::decode_source(&bytes)?;
         import::preview_from_str(&content, fmt)?
     } else {

@@ -126,6 +126,12 @@ impl Container {
             file.seek(SeekFrom::Start(Self::HEADER_OFFSET))?;
             file.write_all(&bytes)?;
             file.flush()?;
+            // 【D-96】原地分支也要真刷盘：对 `std::fs::File` 的 `flush` 是 no-op，
+            // 头部数据仍留在 OS page cache。本分支承载着 `change_master_password`
+            // 改 `wrapped_vault_key` 的写入——掉电时「文件已存在、VK 却没落盘」
+            // 等于把库锁死（主密码换了但包裹密钥还是旧的）。压缩路径的
+            // `sync_all` 语义论证见 `rewrite_with_frames` 文档第 2 条。
+            file.sync_all()?;
             self.header = header;
             return Ok(false);
         }

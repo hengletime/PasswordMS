@@ -6,6 +6,8 @@ pub mod blob_transfer;
 pub mod client;
 pub mod discovery;
 pub mod handshake;
+/// 【D-96】Host 身份密钥文件（VK 包裹格式）。
+pub mod identity;
 pub mod merge;
 pub mod paging;
 pub mod protocol;

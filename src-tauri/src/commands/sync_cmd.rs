@@ -5,10 +5,7 @@
 //! **直连重同步**：`sync_now` 读取已配对设备地址 → 建立连接 → 复用 sync 层握手（会话密钥
 //! 派生 + 双向确认）→ 拉取/推送变更 → 合并（冲突入冲突箱）→ 更新游标（修复 D-11）。
 
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine as _;
 use tauri::Manager;
-
 use passwordms_core::constants::{SYNC_PORT_MAX, SYNC_PORT_MIN};
 use passwordms_core::crypto::rng;
 use passwordms_core::model::conflict::ConflictChoice;
@@ -29,16 +26,17 @@ pub fn sync_start_pairing(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<PairingDto> {
-    // 必须处于解锁态。
-    let host_id = {
+    // 必须处于解锁态；同时取出 VK（身份私钥的包裹密钥，D-96）。
+    let (host_id, host_vk) = {
         let session = state.session.lock().map_err(lock_err)?;
-        session.repo()?.device_id().to_string()
+        let repo = session.repo()?;
+        (repo.device_id().to_string(), repo.vault_key()[..].to_vec())
     };
 
     // 确保持久重同步监听器在线，并把其端口通告给 Joiner（D-11）。
     let sync_port = ensure_resync_listener(&app)?;
 
-    let identity = load_or_create_identity(&app)?;
+    let identity = load_or_create_identity(&app, &host_vk)?;
     // 若已有配对会话，先作废。
     *state.pairing.lock().map_err(lock_err)? = None;
 
@@ -334,21 +332,19 @@ pub fn resolve_conflict(
 // ===== 内部辅助 =====
 
 /// 加载或创建 Host 长期身份密钥对（持久化于应用数据目录）。
-fn load_or_create_identity(app: &tauri::AppHandle) -> IpcResult<HostIdentity> {
+///
+/// 【D-96】私钥不再以 Base64 裸明文落盘：改用**保险库主密钥（VK）**经
+/// XChaCha20-Poly1305 包裹（新格式带 `PMSIDENT1` 魔数，旧格式首次加载即自动迁移，
+/// 详见 core `sync::identity` 模块）。调用点 `sync_start_pairing` 必然已先
+/// `session.repo()?` 解锁，VK 必在——锁定态本命令入口就被 `NOT_UNLOCKED` 拦下。
+fn load_or_create_identity(
+    app: &tauri::AppHandle,
+    vault_key: &[u8],
+) -> IpcResult<HostIdentity> {
     let path = identity_path(app)?;
-    if path.exists() {
-        let raw = std::fs::read_to_string(&path)?;
-        if let Ok(bytes) = STANDARD.decode(raw.trim().as_bytes()) {
-            if bytes.len() == 32 {
-                let mut secret = [0u8; 32];
-                secret.copy_from_slice(&bytes);
-                return Ok(HostIdentity::from_secret_bytes(&secret));
-            }
-        }
-    }
-    let identity = HostIdentity::generate()?;
-    std::fs::write(&path, STANDARD.encode(identity.secret_bytes()).as_bytes())?;
-    Ok(identity)
+    let secret = passwordms_core::sync::identity::load_or_create_identity_file(&path, vault_key)
+        .map_err(IpcError::from)?;
+    Ok(HostIdentity::from_secret_bytes(&secret))
 }
 
 /// 便于用户识别的本机展示名（不含任何隐私信息）。

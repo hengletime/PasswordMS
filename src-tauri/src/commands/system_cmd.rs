@@ -1,5 +1,6 @@
 //! 系统类命令：状态、剪贴板、打开网址、文件信息（架构文档 §5.2）。
 
+use passwordms_core::constants::CLIPBOARD_TTL_SECS;
 use passwordms_core::session::Session;
 use passwordms_core::url_safety;
 use tauri::Manager;
@@ -29,6 +30,11 @@ pub fn get_status(
 ///
 /// 写入的同时把该内容以 [`Zeroizing`] 载体记入应用状态，供到期时**比对**用（A-03：
 /// 仅清空本应用写入的内容）。30 秒倒计时由前端 `clipboard.ts` 负责调度。
+///
+/// 【D-96】Rust 兜底：前端倒计时可能因页面休眠 / WebView 冻结 / 事件丢失而不触发，
+/// 这里在写入成功后另起 **detached 线程**等 [`CLIPBOARD_TTL_SECS`] 秒再调
+/// [`clear_owned_clipboard`]。两者是幂等协作：take 语义保证只有第一个到期者真正
+/// 清理，另一侧自然空转；用户若已复制别的内容，比对不相等则保持不动。
 #[tauri::command(rename_all = "snake_case")]
 pub fn copy_secret(
     app: tauri::AppHandle,
@@ -43,7 +49,23 @@ pub fn copy_secret(
         .map_err(|_| IpcError::internal("clipboard_write"))?;
     let mut guard = state.clipboard.lock().map_err(lock_err)?;
     *guard = Some(Zeroizing::new(text));
+    drop(guard);
+    spawn_clipboard_fallback(app);
     Ok(())
+}
+
+/// 【D-96】剪贴板兜底清理线程（detached）：等 [`CLIPBOARD_TTL_SECS`] 秒后调
+/// [`clear_owned_clipboard`]。不 join、不持锁跨越 sleep；应用退出时线程随之消亡，
+/// 残留剪贴板由 [`crate::run`] 的 `RunEvent::Exit` 钩子清理。
+fn spawn_clipboard_fallback(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(
+            CLIPBOARD_TTL_SECS as u64,
+        ));
+        if let Some(state) = app.try_state::<AppState>() {
+            let _ = clear_owned_clipboard(&app, state.inner());
+        }
+    });
 }
 
 /// A-03 核心逻辑：**仅当**剪贴板内容仍为本应用写入的内容时才清空；并在任何分支下

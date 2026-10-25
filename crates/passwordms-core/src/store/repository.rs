@@ -11,8 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{
     ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENT_BYTES,
-    MAX_ATTACHMENT_FILENAME_BYTES, MAX_NOTE_BYTES, MAX_VAULT_BYTES, MS_PER_DAY,
-    RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM,
+    MAX_ATTACHMENT_FILENAME_BYTES, MAX_ITEM_PLAINTEXT_BYTES, MAX_NOTE_BYTES, MAX_VAULT_BYTES,
+    MS_PER_DAY, RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM,
     RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS, USAGE_THROTTLE_MS,
 };
 use crate::crypto::keys::{self, VaultKey};
@@ -161,6 +161,10 @@ pub struct Repository {
     conflicts: BTreeMap<String, ConflictEntry>,
     devices: BTreeMap<String, PairedDevice>,
     sync_states: BTreeMap<String, DeviceSyncState>,
+    /// 【D-96】打开期一致性检查的警告（如头部计数与实际扫描不符）。
+    /// core 无日志设施，由命令层（`vault_cmd::unlock`）取走写入文件日志，
+    /// 与 `Session::unlock` 的 `maintenance_warnings` 同通道。
+    open_warnings: Vec<String>,
 }
 
 impl Repository {
@@ -185,6 +189,7 @@ impl Repository {
             conflicts: BTreeMap::new(),
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
+            open_warnings: Vec::new(),
         })
     }
 
@@ -204,9 +209,27 @@ impl Repository {
             conflicts: BTreeMap::new(),
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
+            open_warnings: Vec::new(),
         };
         repo.rebuild_index()?;
+        // 【D-96】头部计数交叉核对：`item_count`（persist_header 维护的活条目数）
+        // 与 rebuild_index 实际解密扫描到的条目数比对。不一致**不阻断解锁**（业务
+        // 数据以实际扫描为准——帧密文才是真相源），只产生警告走 maintenance_warnings
+        // 通道留痕。不一致的典型成因：写入路径漏调 persist_header、头部区损坏后
+        // 原地重写丢计数、历史版本缺陷的存量库。
+        let header_count = repo.container.header().item_count;
+        let actual_count = repo.items.len() as u32;
+        if header_count != actual_count {
+            repo.open_warnings.push(format!(
+                "header_item_count_mismatch: header={header_count}, actual={actual_count}"
+            ));
+        }
         Ok(repo)
+    }
+
+    /// 【D-96】取走打开期一致性警告（供命令层写入文件日志，取后清空）。
+    pub fn take_open_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.open_warnings)
     }
 
     /// 头部引用。
@@ -772,9 +795,25 @@ impl Repository {
             .ok_or(CoreError::ItemNotFound)
     }
 
+    /// 校验草稿的 `folder_id`（【D-96】对齐 [`Self::move_item_to_folder`] 的语义）：
+    /// `Some` 时分组必须存在，否则 [`CoreError::Validation`]（信息带 folder_id）。
+    /// 此前 create/update 不校验，引用不存在的分组后该条目在列表中「隐身」
+    /// （列表按 folder_id 过滤，无分组可命中）。
+    fn validate_draft_folder(&self, folder_id: &Option<String>) -> CoreResult<()> {
+        if let Some(fid) = folder_id {
+            if !self.folders.contains_key(fid) {
+                return Err(CoreError::Validation(format!(
+                    "folder {fid} does not exist"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// 新建条目。
     pub fn create_item(&mut self, draft: ItemDraft) -> CoreResult<Item> {
         self.validate_item_kind(&draft.kind)?;
+        self.validate_draft_folder(&draft.folder_id)?;
         let now = now_ms();
         let item = Item {
             item_id: uuid::Uuid::new_v4().to_string(),
@@ -805,6 +844,7 @@ impl Repository {
     /// 更新条目（逐条加密：仅重写该条）。
     pub fn update_item(&mut self, item_id: &str, draft: ItemDraft) -> CoreResult<Item> {
         self.validate_item_kind(&draft.kind)?;
+        self.validate_draft_folder(&draft.folder_id)?;
         let mut item = self.get_item(item_id)?;
         item.kind = draft.kind;
         item.folder_id = draft.folder_id;
@@ -1050,6 +1090,17 @@ impl Repository {
         Ok(())
     }
 
+    /// 条目类型合法性 + 统一明文上限校验（【D-96】）。
+    ///
+    /// - 标题非空、SecureNote 正文 ≤ [`MAX_NOTE_BYTES`]（既有语义不变）；
+    /// - **新增统一上限**：`ItemKind` 序列化后的字节 ≤ [`MAX_ITEM_PLAINTEXT_BYTES`]
+    ///   （384 KiB）。口径说明：帧明文就是 `Item` 的 JSON，其中变长部分几乎全部在
+    ///   `kind` 内，以 `serde_json::to_vec(kind)` 计量与真实落库量同源；固定元数据
+    ///   （uuid/时间戳/rev 等 ~300 B）量级可忽略。此前 Login.notes 无任何上限，
+    ///   一条巨型笔记可直接把条目密文顶过同步分页的单条阈值（`change_too_large`
+    ///   指名报错且**永不收敛**——每轮同步都从它开始重发），384 KiB < ~496 KiB
+    ///   阈值保证见 [`crate::constants::MAX_ITEM_PLAINTEXT_BYTES`] 文档。
+    /// - 超限错误信息带条目标题（截断）与上限值，便于用户定位是哪一条。
     fn validate_item_kind(&self, kind: &ItemKind) -> CoreResult<()> {
         if kind.title().trim().is_empty() {
             return Err(CoreError::Validation("title".to_string()));
@@ -1058,6 +1109,16 @@ impl Repository {
             if note.body.len() > MAX_NOTE_BYTES {
                 return Err(CoreError::Validation("note_too_large".to_string()));
             }
+        }
+        let est = serde_json::to_vec(kind)
+            .map_err(|_| CoreError::Internal("item kind serialize".to_string()))?
+            .len();
+        if est > MAX_ITEM_PLAINTEXT_BYTES {
+            // 标题仅截断展示（不含其它敏感字段）；上限值随报错给出，前端无需再查常量。
+            let title = &kind.title().chars().take(64).collect::<String>();
+            return Err(CoreError::Validation(format!(
+                "item_too_large:{title}: {est} > {MAX_ITEM_PLAINTEXT_BYTES} bytes"
+            )));
         }
         Ok(())
     }
@@ -2218,6 +2279,7 @@ impl Repository {
             conflicts: BTreeMap::new(),
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
+            open_warnings: Vec::new(),
         };
         // 逐帧解密归位：任何一帧解不开都会在这里暴露（这本身就是一次全量完整性校验）。
         fresh.rebuild_index()?;

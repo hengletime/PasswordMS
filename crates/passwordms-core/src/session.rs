@@ -172,6 +172,8 @@ impl Session {
         // 附件引用与 blob 状态漂移且无人知晓。失败收集为警告，由命令层落文件日志。
         // 均为幂等操作，本次失败下次解锁自动重试。
         let mut maintenance_warnings: Vec<String> = Vec::new();
+        // D-96：打开期一致性检查警告（头部计数与实际扫描不符等）并入同一通道。
+        maintenance_warnings.extend(repo.take_open_warnings());
         // D-60 §3.14.3：存量独立附件条目 → SecureNote 挂附件（幂等；必须在同步 export
         // 之前、wipe_plaintext 之前执行，避免迁移产物与远端旧语义帧竞态）。
         if let Err(e) = repo.migrate_legacy_attachments() {

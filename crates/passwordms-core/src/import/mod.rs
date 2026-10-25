@@ -12,6 +12,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::constants::{MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ITEMS};
 use crate::error::{CoreError, CoreResult};
 use crate::model::folder::Folder;
 use crate::model::item::Item;
@@ -73,7 +74,19 @@ pub struct ImportResult {
 }
 
 /// 从文件解析并生成预览。
+///
+/// 【D-96】两级上限（错误码复用 `ERR_VALIDATION`，信息带实际值）：
+/// - 文件大小 ≤ [`MAX_IMPORT_FILE_BYTES`]：`fs::read` 前 `metadata` 预检，
+///   超大文件不进内存；Android `content://` 入口由外壳层拿到字节后按同一常量复查；
+/// - 解析后条目数 ≤ [`MAX_IMPORT_ITEMS`]：巨型 CSV / JSON 不至于撑爆内存与库容量。
 pub fn preview_from_file(path: &Path, format: ImportFormat) -> CoreResult<ImportPreview> {
+    let meta = std::fs::metadata(path)?;
+    if meta.len() > MAX_IMPORT_FILE_BYTES {
+        return Err(CoreError::Validation(format!(
+            "import_file_too_large: {} > {MAX_IMPORT_FILE_BYTES} bytes",
+            meta.len()
+        )));
+    }
     let bytes = std::fs::read(path)?;
     let content = decode_source(&bytes)?;
     preview_from_str(&content, format)
@@ -128,11 +141,22 @@ pub fn decode_source(bytes: &[u8]) -> CoreResult<String> {
 }
 
 /// 从字符串解析并生成预览。
+///
+/// 【D-96】条目数上限（[`MAX_IMPORT_ITEMS`]）在本函数收口——桌面文件路径与
+/// Android `content://` 字节路径都汇到这里，单点拦截；超限
+/// `ERR_VALIDATION`（信息带实际数量）。
 pub fn preview_from_str(content: &str, format: ImportFormat) -> CoreResult<ImportPreview> {
-    match format {
-        ImportFormat::Json => bitwarden_json::parse(content),
-        ImportFormat::Csv => bitwarden_csv::parse(content),
+    let preview = match format {
+        ImportFormat::Json => bitwarden_json::parse(content)?,
+        ImportFormat::Csv => bitwarden_csv::parse(content)?,
+    };
+    if preview.items.len() > MAX_IMPORT_ITEMS {
+        return Err(CoreError::Validation(format!(
+            "import_too_many_items: {} > {MAX_IMPORT_ITEMS}",
+            preview.items.len()
+        )));
     }
+    Ok(preview)
 }
 
 /// 将预览落库（D-90：先与现有库做同名合并/查重，再直接写入）。
@@ -164,7 +188,7 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
         }
     }
 
-    let existing_keys: std::collections::HashSet<(String, &'static str)> = repo
+    let mut existing_keys: std::collections::HashSet<(String, &'static str)> = repo
         .list_items(None, false, None)
         .into_iter()
         .map(|it| (it.kind.title().to_string(), it.kind.type_name()))
@@ -173,7 +197,8 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
     let mut imported_items = 0usize;
     let mut duplicate_skipped = 0usize;
     for mut item in preview.items.clone() {
-        if existing_keys.contains(&(item.kind.title().to_string(), item.kind.type_name())) {
+        let key = (item.kind.title().to_string(), item.kind.type_name());
+        if existing_keys.contains(&key) {
             duplicate_skipped += 1;
             continue;
         }
@@ -183,6 +208,10 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
         }
         repo.put_item_direct(item)?;
         imported_items += 1;
+        // 【D-96】回填去重集合：同一预览文件内的重复条目（两条同名同型）此前
+        // 会双双落库——首条写入后集合未更新，第二条判定「不重复」再次写入。
+        // 回填后与「现有库查重」语义一致：只导首条，后续计 duplicate_skipped。
+        existing_keys.insert(key);
     }
     repo.persist_counts()?;
     Ok(ImportResult {

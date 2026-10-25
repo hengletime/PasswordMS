@@ -43,6 +43,19 @@ use crate::error::IpcError;
 /// `ERR_IO`（不新增错误码）。
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(crate) fn read_to_bytes(app: &AppHandle, uri: &str) -> Result<Vec<u8>, IpcError> {
+    read_to_bytes_limited(app, uri, passwordms_core::constants::MAX_ATTACHMENT_BYTES)
+}
+
+/// [`read_to_bytes`] 的限量化变体（【D-96】导入入口用 [`MAX_IMPORT_FILE_BYTES`]
+/// = 64 MB 而非附件的 20 MB）：上限语义与错误载荷由调用方决定（附件报
+/// `ERR_ATTACHMENT_TOO_LARGE`，导入报 `ERR_VALIDATION`），本函数只负责
+/// 「按上限读取 + 超限拒绝」的机械动作。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn read_to_bytes_limited(
+    app: &AppHandle,
+    uri: &str,
+    limit: u64,
+) -> Result<Vec<u8>, IpcError> {
     // 非 UTF-8 / 非合法 URI → 与文件读写失败同码（ERR_IO），不引入新错误语义。
     let url = tauri::Url::parse(uri).map_err(|_| IpcError::io("invalid_content_uri"))?;
     let mut opts = OpenOptions::new();
@@ -52,7 +65,6 @@ pub(crate) fn read_to_bytes(app: &AppHandle, uri: &str) -> Result<Vec<u8>, IpcEr
         .fs()
         .open(FilePath::Url(url), opts)
         .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
-    let limit = passwordms_core::constants::MAX_ATTACHMENT_BYTES;
     let mut data = Vec::new();
     file.take(limit + 1)
         .read_to_end(&mut data)

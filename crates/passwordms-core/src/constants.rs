@@ -37,6 +37,14 @@ pub const KDF_PARALLELISM: u32 = 1;
 pub const KDF_SALT_LEN: usize = 16;
 /// 派生输出长度（字节）= 主密钥长度。
 pub const KDF_OUTPUT_LEN: usize = 32;
+/// KDF 内存上限 1 GiB【D-96】：头部 KDF 参数是**不可信输入**（库文件可被替换），
+/// 恶意头部声明超大内存可让解锁路径一次分配炸掉进程（DoS）。夹在 1 GiB 与既有
+/// 默认 64 MiB 之间——存量库零影响，正常调参仍有约 16 倍向上空间。
+pub const KDF_MAX_MEMORY_KIB: u32 = 1_048_576;
+/// KDF 迭代次数上限【D-96】（默认 3；恶意头部声明 t=1e9 会让解锁永久挂起）。
+pub const KDF_MAX_ITERATIONS: u32 = 16;
+/// KDF 并行度上限【D-96】（默认 1；Argon2 并行度直接乘内存与 CPU 占用）。
+pub const KDF_MAX_PARALLELISM: u32 = 8;
 
 // ===== AEAD（XChaCha20-Poly1305，§2.3）=====
 pub const ENCRYPTION_SCHEME: &str = "xchacha20poly1305";
@@ -61,6 +69,11 @@ pub const HKDF_INFO_SYNC_SESSION: &str = "passwordms/sync/v1/session";
 pub const AAD_VAULT_KEY: &[u8] = b"passwordms/v1/vault-key";
 /// verify_mac 覆盖的固定上下文（与 HKDF_INFO_VERIFY 同值，语义不同故分别命名）。
 pub const AAD_VERIFY: &[u8] = b"passwordms/v1/verify";
+/// Host 身份密钥文件（D-96 VK 包裹格式）的 AAD。
+pub const AAD_IDENTITY: &[u8] = b"identity";
+/// 身份密钥文件新格式魔数（10 字节：9 ASCII "PMSIDENT1" + 0x00 终止）【D-96】。
+/// 旧格式 = Base64 裸私钥（无魔数，Base64 解码恒不以本串开头，判定无歧义）。
+pub const IDENTITY_MAGIC: &[u8; 10] = b"PMSIDENT1\x00";
 
 // ===== 记录类型 =====
 pub const RECORD_TYPE_FOLDER: u8 = 0x01;
@@ -90,6 +103,12 @@ pub const MAX_ATTACHMENTS_PER_ITEM: usize = 16;
 pub const MAX_ATTACHMENT_FILENAME_BYTES: usize = 255;
 /// 安全笔记正文上限 256 KiB。
 pub const MAX_NOTE_BYTES: usize = 256 * 1024;
+/// 单条目**统一明文上限** 384 KiB【D-96】：`ItemKind` 序列化后的字节总数上限。
+/// 覆盖登录 notes（此前无上限）等全部字段。换算关系：明文 384 KiB + AEAD tag 16 B
+/// → 线上估算（paging.rs `estimate_record_size` = ciphertext×2 + 512）≈ 2×(384 KiB+16)
+/// + 512 ≈ 769 KiB < 单条超限阈值（`PAGE_BUDGET_BYTES` ≈ 992 KiB → ct ≈ 496 KiB）。
+/// 故 384 KiB 的条目永远到不了「change_too_large」，同步链路不会因本上限而报错。
+pub const MAX_ITEM_PLAINTEXT_BYTES: usize = 384 * 1024;
 /// 附件同步分片大小 1 MB【已裁定 U4：≤ 1 MB 分片】。
 pub const ATTACHMENT_CHUNK_BYTES: usize = 1024 * 1024;
 /// 线上 blob 分片尺寸（D-53）：768 KiB 密文切片。
@@ -112,6 +131,12 @@ pub const AUTO_LOCK_MINUTES: u16 = 5;
 /// 自动锁合法档位。
 pub const AUTO_LOCK_OPTIONS: [u16; 3] = [1, 5, 15];
 
+// ===== 导入（F-14）【D-96】=====
+/// 导入源文件大小上限 64 MB：`std::fs::read` 前先 `metadata` 预检，超大文件不进内存。
+pub const MAX_IMPORT_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// 单次导入条目数上限（解析后可落库条目数）：防止巨型 CSV 撑爆内存与库容量。
+pub const MAX_IMPORT_ITEMS: usize = 10_000;
+
 // ===== 主密码（§U6 已裁定：< 8 位拦截）=====
 pub const MIN_MASTER_PASSWORD_LEN: usize = 8;
 
@@ -129,6 +154,13 @@ pub const SYNC_RETRY_BACKOFF_MS: [u64; 3] = [1000, 2000, 4000];
 pub const SYNC_CONNECT_TIMEOUT_SECS: u64 = 4;
 /// 长度前缀帧的单帧上限（附件分片 + 余量）。
 pub const SYNC_MAX_FRAME_BYTES: u32 = (ATTACHMENT_CHUNK_BYTES as u32) + 64 * 1024;
+/// 接收侧一次同步交换累计字节数上限【D-96】：等于库容量上限（[`MAX_VAULT_BYTES`]，
+/// 200 MB）。正常分页总量 = 库内活跃数据 ≪ 本值；超限说明对端在发垃圾帧（恶意或
+/// 协议失控），接收循环立即终止，防「无限 cursor 分页拖死接收端」。
+pub const SYNC_MAX_RECV_TOTAL_BYTES: usize = MAX_VAULT_BYTES as usize;
+/// 接收侧一次同步交换的最大页数【D-96】：按最小记录 ~512 B 计，4096 页可承载
+/// ~4 GB 估算量（远超 200 MB 库上限），正常同步最多几十页。
+pub const SYNC_MAX_RECV_PAGES: usize = 4096;
 /// 同步默认监听端口范围下界。
 pub const SYNC_PORT_MIN: u16 = 49152;
 /// 同步默认监听端口范围上界。

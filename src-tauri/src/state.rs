@@ -4,7 +4,6 @@
 //! - `pairing`：当前 Host 配对会话（一次性令牌）
 //! - `resync`：持久重同步监听器（修复 D-11；解锁期间运行）
 //! - `pending_imports`：解析后的导入预览缓存（`preview_token` 索引）
-//! - `host_identity`：Host 长期身份密钥对
 //! - `clipboard`：本应用最后一次写入剪贴板的**明文副本**（A-03 到期比对用；零化载体，
 //!   锁定时清空）
 
@@ -17,7 +16,6 @@ use passwordms_core::import::ImportPreview;
 use passwordms_core::model::now_ms;
 use passwordms_core::paths::portable_data_dir;
 use passwordms_core::session::Session;
-use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::resync::ResyncServer;
 use passwordms_core::sync::server::SyncServer;
 use tauri::Manager;
@@ -37,7 +35,6 @@ pub struct AppState {
     pub pairing: Mutex<Option<SyncServer>>,
     pub resync: Mutex<Option<ResyncHandle>>,
     pub pending_imports: Mutex<HashMap<String, ImportPreview>>,
-    pub host_identity: Mutex<Option<HostIdentity>>,
     /// 本应用最后一次写入剪贴板的内容（A-03 到期比对用）。
     ///
     /// 以 `Zeroizing` 托管，替换 / 清空时自动覆写旧值；锁定时一并清空。
@@ -58,7 +55,6 @@ impl AppState {
             pairing: Mutex::new(None),
             resync: Mutex::new(None),
             pending_imports: Mutex::new(HashMap::new()),
-            host_identity: Mutex::new(None),
             clipboard: Mutex::new(None),
             sync_busy: AtomicBool::new(false),
         }

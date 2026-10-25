@@ -8,7 +8,9 @@ pub mod dto;
 pub mod error;
 pub mod state;
 
+use crate::commands::system_cmd;
 use crate::state::AppState;
+use tauri::Manager as _;
 
 /// 启动应用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -92,11 +94,30 @@ pub fn run() {
             commands::settings_cmd::get_settings,
             commands::settings_cmd::update_settings,
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    // 不使用 unwrap/expect：启动失败时打印并退出。
-    if let Err(err) = result {
-        eprintln!("PasswordMS fatal startup error: {err}");
-        std::process::exit(1);
+    // 【D-96】退出兜底：进程退出前把「本应用写入且仍未被消费」的剪贴板内容清掉。
+    // 前端 30s 倒计时与 copy_secret 的兜底线程都只在应用存活时有效；直接退出
+    // （关闭窗口 / 任务栏退出）时密码可能刚好还挂在剪贴板上——`RunEvent::Exit`
+    // 在事件循环结束时同步触发，是最后一个清理窗口。
+    match result {
+        Ok(app) => {
+            app.run(|app_handle, event| {
+                if let tauri::RunEvent::Exit = event {
+                    if let Some(state) = app_handle.try_state::<AppState>() {
+                        // 刻意走 `system_cmd::` 短路径而非 `commands::system_cmd::` 全路径：
+                        // ipc-contract 契约测试以 `commands::<module>::<fn>` 提取
+                        // generate_handler! 注册面，本处是普通函数调用、不是命令注册，
+                        // 撞上模式会造成「注册面多出一个幽灵命令」的假红。
+                        let _ = system_cmd::clear_owned_clipboard(app_handle, state.inner());
+                    }
+                }
+            });
+        }
+        // 不使用 unwrap/expect：启动失败时打印并退出。
+        Err(err) => {
+            eprintln!("PasswordMS fatal startup error: {err}");
+            std::process::exit(1);
+        }
     }
 }

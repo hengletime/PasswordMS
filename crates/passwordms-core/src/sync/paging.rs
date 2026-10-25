@@ -15,7 +15,7 @@
 
 use std::io::Read;
 
-use crate::constants::SYNC_MAX_FRAME_BYTES;
+use crate::constants::{SYNC_MAX_RECV_PAGES, SYNC_MAX_RECV_TOTAL_BYTES, SYNC_MAX_FRAME_BYTES};
 use crate::error::{CoreError, CoreResult};
 use crate::sync::protocol::{
     open_envelope, seal_envelope, ChangeRecord, SyncEnvelope, SyncKind, SyncPayload,
@@ -103,6 +103,13 @@ pub fn send_push_pages<W: std::io::Write>(
 /// 每帧都过 [`ReplayGuard`]；`blob_support` 取最后一帧。老对端单页 Push 的
 /// cursor 恒 0 → 一帧即出，与旧版行为逐位一致。聚合后由调用方一次性 merge
 /// （页面间记录互不重叠，等价旧版单帧 merge；中途失败则什么都不落库）。
+///
+/// 【D-96】接收侧资源夹取（协议兼容：正常分页远低于阈值）：
+/// - 累计接收的变更估算字节（`estimate_record_size` 口径）≤ [`SYNC_MAX_RECV_TOTAL_BYTES`]；
+/// - 页数 ≤ [`SYNC_MAX_RECV_PAGES`]。
+/// 超限报 `Validation("sync_recv_limit_exceeded: pages=…, bytes=…")`（`ERR_VALIDATION`）
+/// ——cursor 由对端驱动，恶意/失控对端可以无限发页拖死接收端（内存与循环时间），
+/// 这里在聚合缓冲处一刀拦截。
 pub fn recv_push_pages<R: Read>(
     stream: &mut R,
     sync_key: &[u8],
@@ -110,14 +117,37 @@ pub fn recv_push_pages<R: Read>(
     replay: &mut ReplayGuard,
     now: i64,
 ) -> CoreResult<(Vec<ChangeRecord>, bool)> {
+    recv_push_pages_with_limits(stream, sync_key, session_id, replay, now, SYNC_MAX_RECV_TOTAL_BYTES, SYNC_MAX_RECV_PAGES)
+}
+
+/// [`recv_push_pages`] 的可测内核：上限由调用方注入（生产传 [`SYNC_MAX_RECV_TOTAL_BYTES`]
+/// / [`SYNC_MAX_RECV_PAGES`]，测试传极小值验证拒绝路径，不必真传 200 MB）。
+fn recv_push_pages_with_limits<R: Read>(
+    stream: &mut R,
+    sync_key: &[u8],
+    session_id: &[u8],
+    replay: &mut ReplayGuard,
+    now: i64,
+    max_total_bytes: usize,
+    max_pages: usize,
+) -> CoreResult<(Vec<ChangeRecord>, bool)> {
     let mut all: Vec<ChangeRecord> = Vec::new();
     let mut blob_support;
+    let mut total_bytes = 0usize;
+    let mut page_count = 0usize;
     loop {
         let bytes = transport::recv_frame(stream)?;
         let env: SyncEnvelope = serde_json::from_slice(&bytes)?;
         replay.accept(env.seq, env.ts, now)?;
         let payload = open_envelope(sync_key, session_id, &env)?;
         blob_support = payload.blob_support;
+        page_count += 1;
+        total_bytes += payload.changes.iter().map(estimate_record_size).sum::<usize>();
+        if total_bytes > max_total_bytes || page_count > max_pages {
+            return Err(CoreError::Validation(format!(
+                "sync_recv_limit_exceeded: pages={page_count}, bytes={total_bytes}"
+            )));
+        }
         all.extend(payload.changes);
         if payload.cursor == 0 {
             return Ok((all, blob_support));
@@ -206,5 +236,91 @@ mod tests {
         let legacy = r#"{"kind":"push","device_id":"dev","changes":[],"conflicts":[]}"#;
         let payload: SyncPayload = serde_json::from_str(legacy).unwrap();
         assert_eq!(payload.cursor, 0);
+    }
+
+    fn rng_key() -> [u8; 32] {
+        crate::crypto::rng::random_key().unwrap()
+    }
+
+    /// 构造「发端写满 cursor 分页 Push」的内存流，供接收侧测试回放。
+    fn feed_pages(
+        sync_key: &[u8],
+        session_id: &[u8],
+        pages: &[Vec<ChangeRecord>],
+        next_seq: &mut u64,
+    ) -> std::io::Cursor<Vec<u8>> {
+        let mut buf = Vec::new();
+        send_push_pages(
+            &mut buf,
+            sync_key,
+            session_id,
+            next_seq,
+            0,
+            "test-dev",
+            pages,
+            Vec::new(),
+        )
+        .unwrap();
+        std::io::Cursor::new(buf)
+    }
+
+    #[test]
+    fn recv_push_pages_page_limit_rejects() {
+        // 【D-96】页数超限：max_pages=2 时第三页必须被拒，报错信息带页数。
+        let sync_key = rng_key();
+        let session_id = b"sess-recv-pages".to_vec();
+        let mut next_seq = 1u64;
+        let pages: Vec<Vec<ChangeRecord>> = (0..3)
+            .map(|_| vec![rec("a", 32)])
+            .collect();
+        let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
+        let mut replay = crate::sync::replay::ReplayGuard::new(120);
+        let err = recv_push_pages_with_limits(&mut stream, &sync_key, &session_id, &mut replay, 0, 2_000_000_000, 2)
+            .unwrap_err();
+        match err {
+            CoreError::Validation(d) => {
+                assert!(d.contains("sync_recv_limit_exceeded"), "实得 {d}");
+                assert!(d.contains("pages=3"), "报错应带实际页数，实得 {d}");
+            }
+            other => panic!("期望 Validation，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recv_push_pages_byte_limit_rejects() {
+        // 【D-96】累计字节超限：max_bytes 设为 0（任何带记录的页都超）。
+        let sync_key = rng_key();
+        let session_id = b"sess-recv-bytes".to_vec();
+        let mut next_seq = 1u64;
+        let pages = vec![vec![rec("big", 256)]];
+        let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
+        let mut replay = crate::sync::replay::ReplayGuard::new(120);
+        let err = recv_push_pages_with_limits(&mut stream, &sync_key, &session_id, &mut replay, 0, 0, 4096)
+            .unwrap_err();
+        match err {
+            CoreError::Validation(d) => {
+                assert!(d.contains("sync_recv_limit_exceeded"), "实得 {d}");
+                assert!(d.contains("bytes="), "报错应带累计字节，实得 {d}");
+            }
+            other => panic!("期望 Validation，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn recv_push_pages_normal_flow_within_limits() {
+        // 对照组：限额充足时分页收发语义不变（3 页全收、停在 cursor=0）。
+        let sync_key = rng_key();
+        let session_id = b"sess-recv-ok".to_vec();
+        let mut next_seq = 1u64;
+        let pages: Vec<Vec<ChangeRecord>> = (0..3)
+            .map(|i| vec![rec(&format!("{i}"), 32), rec(&format!("{i}-b"), 32)])
+            .collect();
+        let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
+        let mut replay = crate::sync::replay::ReplayGuard::new(120);
+        let (all, blob_support) =
+            recv_push_pages_with_limits(&mut stream, &sync_key, &session_id, &mut replay, 0, 2_000_000_000, 4096)
+                .unwrap();
+        assert_eq!(all.len(), 6);
+        assert!(blob_support);
     }
 }
