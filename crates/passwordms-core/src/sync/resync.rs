@@ -34,9 +34,7 @@ use crate::sync::discovery::{self, DiscoveryResponder};
 use crate::sync::handshake::{self, ROLE_CLIENT, ROLE_SERVER};
 use crate::sync::merge;
 use crate::sync::paging;
-use crate::sync::protocol::{
-    seal_envelope, ChangeRecord, Reject, SyncKind, SyncPayload,
-};
+use crate::sync::protocol::{seal_envelope, ChangeRecord, Reject, SyncKind, SyncPayload};
 use crate::sync::replay::ReplayGuard;
 use crate::sync::server::device_key_aad;
 use crate::sync::transport;
@@ -403,14 +401,9 @@ pub fn resync_with_peer_access(
     }
 
     // 9) 收对端 Push（网络段，不持锁；O1：多页聚合，密文载荷）。
-    let (reply_changes, reply_blob_support) = paging::recv_push_pages(
-        &mut stream,
-        &sk[..],
-        &session_id,
-        &mut replay,
-        now,
-    )
-    .map_err(|e| stage_io(e, "reply_recv"))?;
+    let (reply_changes, reply_blob_support) =
+        paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
+            .map_err(|e| stage_io(e, "reply_recv"))?;
 
     // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并收到的变更。
     let mut merged: Option<CoreResult<(usize, Vec<String>)>> = None;
@@ -714,21 +707,17 @@ impl ResyncServer {
         let mut replay = ReplayGuard::with_state(last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
         // 6) 收发起方 Push（O1：多页聚合后一次合并——页面间记录互不重叠，等价单帧）。
-        let (push_changes, push_blob_support) = paging::recv_push_pages(
-            &mut stream,
-            &sk[..],
-            &session_id,
-            &mut replay,
-            now,
-        )
-        .map_err(|e| stage_io(e, "push_recv"))?;
+        let (push_changes, push_blob_support) =
+            paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
+                .map_err(|e| stage_io(e, "push_recv"))?;
 
         // ── 锁内段②（O2，毫秒级）：vault 未变校验 → 合并 → 导出回包页。
         // 水位/墓碑推进在此一并做：发送失败路径 `save_sync_state` 不执行、随会话丢弃，
         // 失败安全语义不变（宁多勿丢）。
-        let mut section: Option<
-            CoreResult<(DeviceSyncState, Vec<Vec<ChangeRecord>>, usize, Vec<String>)>,
-        > = None;
+        // 锁内段②的密文暂存类型（O2 三段式）：RepoAccess 闭包外只能持此不透明结果。
+        type SectionResult =
+            CoreResult<(DeviceSyncState, Vec<Vec<ChangeRecord>>, usize, Vec<String>)>;
+        let mut section: Option<SectionResult> = None;
         access.with_repo(Box::new(|repo| {
             if repo.device_id() != server_id {
                 // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。

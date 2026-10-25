@@ -138,9 +138,13 @@ impl JoinerSession {
         now: i64,
     ) -> CoreResult<JoinerSyncResult> {
         // ── 锁内段①（O2，毫秒级）：状态初值 + 导出待发页。
-        let mut prepared: Option<
-            CoreResult<(DeviceSyncState, Vec<Vec<crate::sync::protocol::ChangeRecord>>, String)>,
-        > = None;
+        // 锁内段①的暂存类型（O2 三段式）：RepoAccess 闭包外只能持此不透明结果。
+        type PreparedSection = CoreResult<(
+            DeviceSyncState,
+            Vec<Vec<crate::sync::protocol::ChangeRecord>>,
+            String,
+        )>;
+        let mut prepared: Option<PreparedSection> = None;
         access.with_repo(Box::new(|repo| {
             let st = repo.sync_state(&self.host_id);
             let changes = repo.export_changes(&st);
@@ -153,8 +157,7 @@ impl JoinerSession {
             }
             Ok(())
         }))?;
-        let (mut state, pages, my_device_id) =
-            prepared.take().ok_or(CoreError::SyncAborted)??;
+        let (mut state, pages, my_device_id) = prepared.take().ok_or(CoreError::SyncAborted)??;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
         // 网络段（O2，不持锁）：seq=c1.. 推送本端变更（D-53：随报文通告本端 blob 能力；
@@ -201,8 +204,7 @@ impl JoinerSession {
             merged = Some(Ok((st, rep.applied, rep.conflicts.clone())));
             Ok(())
         }))?;
-        let (mut state, applied, conflicts) =
-            merged.take().ok_or(CoreError::SyncAborted)??;
+        let (mut state, applied, conflicts) = merged.take().ok_or(CoreError::SyncAborted)??;
 
         // 网络段（O2）：Done（seq 延续分页序号）。
         let done = SyncPayload {

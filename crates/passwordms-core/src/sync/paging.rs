@@ -15,7 +15,7 @@
 
 use std::io::Read;
 
-use crate::constants::{SYNC_MAX_RECV_PAGES, SYNC_MAX_RECV_TOTAL_BYTES, SYNC_MAX_FRAME_BYTES};
+use crate::constants::{SYNC_MAX_FRAME_BYTES, SYNC_MAX_RECV_PAGES, SYNC_MAX_RECV_TOTAL_BYTES};
 use crate::error::{CoreError, CoreResult};
 use crate::sync::protocol::{
     open_envelope, seal_envelope, ChangeRecord, SyncEnvelope, SyncKind, SyncPayload,
@@ -69,6 +69,8 @@ pub fn paginate(mut records: Vec<ChangeRecord>) -> CoreResult<Vec<Vec<ChangeReco
 ///
 /// `next_seq` 为「下一帧可用序号」（先用后增），返回后指向最后一个已用序号 + 1。
 /// 每页都通告 `blob_support` 与 `conflicts`（对端逐帧读，取最后一帧语义即可）。
+// 参数均为协议帧的必要字段；打包成参数结构体需改公开签名（红线，同 session.rs 先例）。
+#[allow(clippy::too_many_arguments)]
 pub fn send_push_pages<W: std::io::Write>(
     stream: &mut W,
     sync_key: &[u8],
@@ -107,6 +109,7 @@ pub fn send_push_pages<W: std::io::Write>(
 /// 【D-96】接收侧资源夹取（协议兼容：正常分页远低于阈值）：
 /// - 累计接收的变更估算字节（`estimate_record_size` 口径）≤ [`SYNC_MAX_RECV_TOTAL_BYTES`]；
 /// - 页数 ≤ [`SYNC_MAX_RECV_PAGES`]。
+///
 /// 超限报 `Validation("sync_recv_limit_exceeded: pages=…, bytes=…")`（`ERR_VALIDATION`）
 /// ——cursor 由对端驱动，恶意/失控对端可以无限发页拖死接收端（内存与循环时间），
 /// 这里在聚合缓冲处一刀拦截。
@@ -117,7 +120,15 @@ pub fn recv_push_pages<R: Read>(
     replay: &mut ReplayGuard,
     now: i64,
 ) -> CoreResult<(Vec<ChangeRecord>, bool)> {
-    recv_push_pages_with_limits(stream, sync_key, session_id, replay, now, SYNC_MAX_RECV_TOTAL_BYTES, SYNC_MAX_RECV_PAGES)
+    recv_push_pages_with_limits(
+        stream,
+        sync_key,
+        session_id,
+        replay,
+        now,
+        SYNC_MAX_RECV_TOTAL_BYTES,
+        SYNC_MAX_RECV_PAGES,
+    )
 }
 
 /// [`recv_push_pages`] 的可测内核：上限由调用方注入（生产传 [`SYNC_MAX_RECV_TOTAL_BYTES`]
@@ -142,7 +153,11 @@ fn recv_push_pages_with_limits<R: Read>(
         let payload = open_envelope(sync_key, session_id, &env)?;
         blob_support = payload.blob_support;
         page_count += 1;
-        total_bytes += payload.changes.iter().map(estimate_record_size).sum::<usize>();
+        total_bytes += payload
+            .changes
+            .iter()
+            .map(estimate_record_size)
+            .sum::<usize>();
         if total_bytes > max_total_bytes || page_count > max_pages {
             return Err(CoreError::Validation(format!(
                 "sync_recv_limit_exceeded: pages={page_count}, bytes={total_bytes}"
@@ -213,7 +228,11 @@ mod tests {
             assert!(used <= PAGE_BUDGET_BYTES);
         }
         // 确定性排序：跨页记录 ID 单调不减。
-        let flat: Vec<&str> = pages.iter().flatten().map(|r| r.record_id.as_str()).collect();
+        let flat: Vec<&str> = pages
+            .iter()
+            .flatten()
+            .map(|r| r.record_id.as_str())
+            .collect();
         let mut sorted = flat.clone();
         sorted.sort();
         assert_eq!(flat, sorted);
@@ -270,13 +289,19 @@ mod tests {
         let sync_key = rng_key();
         let session_id = b"sess-recv-pages".to_vec();
         let mut next_seq = 1u64;
-        let pages: Vec<Vec<ChangeRecord>> = (0..3)
-            .map(|_| vec![rec("a", 32)])
-            .collect();
+        let pages: Vec<Vec<ChangeRecord>> = (0..3).map(|_| vec![rec("a", 32)]).collect();
         let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
         let mut replay = crate::sync::replay::ReplayGuard::new(120);
-        let err = recv_push_pages_with_limits(&mut stream, &sync_key, &session_id, &mut replay, 0, 2_000_000_000, 2)
-            .unwrap_err();
+        let err = recv_push_pages_with_limits(
+            &mut stream,
+            &sync_key,
+            &session_id,
+            &mut replay,
+            0,
+            2_000_000_000,
+            2,
+        )
+        .unwrap_err();
         match err {
             CoreError::Validation(d) => {
                 assert!(d.contains("sync_recv_limit_exceeded"), "实得 {d}");
@@ -295,8 +320,16 @@ mod tests {
         let pages = vec![vec![rec("big", 256)]];
         let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
         let mut replay = crate::sync::replay::ReplayGuard::new(120);
-        let err = recv_push_pages_with_limits(&mut stream, &sync_key, &session_id, &mut replay, 0, 0, 4096)
-            .unwrap_err();
+        let err = recv_push_pages_with_limits(
+            &mut stream,
+            &sync_key,
+            &session_id,
+            &mut replay,
+            0,
+            0,
+            4096,
+        )
+        .unwrap_err();
         match err {
             CoreError::Validation(d) => {
                 assert!(d.contains("sync_recv_limit_exceeded"), "实得 {d}");
@@ -317,9 +350,16 @@ mod tests {
             .collect();
         let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
         let mut replay = crate::sync::replay::ReplayGuard::new(120);
-        let (all, blob_support) =
-            recv_push_pages_with_limits(&mut stream, &sync_key, &session_id, &mut replay, 0, 2_000_000_000, 4096)
-                .unwrap();
+        let (all, blob_support) = recv_push_pages_with_limits(
+            &mut stream,
+            &sync_key,
+            &session_id,
+            &mut replay,
+            0,
+            2_000_000_000,
+            4096,
+        )
+        .unwrap();
         assert_eq!(all.len(), 6);
         assert!(blob_support);
     }

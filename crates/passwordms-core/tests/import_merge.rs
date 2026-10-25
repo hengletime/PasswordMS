@@ -52,8 +52,13 @@ fn fresh_repo(name: &str) -> Repository {
     let mk: MasterKey = Zeroizing::new(rng::random_key().expect("mk"));
     let kek = kdf::derive_kek(&mk[..]).expect("kek");
     let vk = rng::random_key().expect("vk");
-    Repository::create(&path, build_header(&kek, &vk), Zeroizing::new(vk), "qa_test_device".to_string())
-        .expect("create repo")
+    Repository::create(
+        &path,
+        build_header(&kek, &vk),
+        Zeroizing::new(vk),
+        "qa_test_device".to_string(),
+    )
+    .expect("create repo")
 }
 
 fn login_draft(title: &str) -> ItemDraft {
@@ -93,7 +98,9 @@ fn parse_csv(rows: &[String]) -> import::ImportPreview {
 #[test]
 fn 同名文件夹合并_条目归入既有分组() {
     let mut repo = fresh_repo("merge_folder");
-    let existing = repo.create_folder("Commander 办公".to_string(), None, None).expect("预置分组");
+    let existing = repo
+        .create_folder("Commander 办公".to_string(), None, None)
+        .expect("预置分组");
 
     let preview = parse_csv(&[
         csv_row("Commander 办公", "login", "条目甲"),
@@ -110,7 +117,11 @@ fn 同名文件夹合并_条目归入既有分组() {
     let folders = repo.list_folders();
     assert_eq!(folders.len(), 2, "总共只有 2 个分组（预置 1 + 新建 1）");
     assert!(
-        folders.iter().filter(|f| f.name == "Commander 办公").count() == 1,
+        folders
+            .iter()
+            .filter(|f| f.name == "Commander 办公")
+            .count()
+            == 1,
         "不得出现第二个同名分组"
     );
 
@@ -133,7 +144,10 @@ fn 同名文件夹合并_条目归入既有分组() {
         .into_iter()
         .find(|it| it.kind.title() == "条目丙")
         .expect("条目丙");
-    assert_eq!(bing.folder_id.as_deref(), Some(new_folder.folder_id.as_str()));
+    assert_eq!(
+        bing.folder_id.as_deref(),
+        Some(new_folder.folder_id.as_str())
+    );
 }
 
 #[test]
@@ -142,9 +156,9 @@ fn 同名同型跳过_同名不同型照导_不覆盖现有数据() {
     let seeded = repo.create_item(login_draft("条目A")).expect("预置条目");
 
     let preview = parse_csv(&[
-        csv_row("", "login", "条目A"),        // 同名同型 → 跳过
-        csv_row("", "secure note", "条目A"),  // 同名不同型 → 照导
-        csv_row("", "login", "条目B"),        // 新条目 → 导入
+        csv_row("", "login", "条目A"),       // 同名同型 → 跳过
+        csv_row("", "secure note", "条目A"), // 同名不同型 → 照导
+        csv_row("", "login", "条目B"),       // 新条目 → 导入
     ]);
     let result = import::apply(&preview, &mut repo).expect("apply");
 
@@ -161,12 +175,11 @@ fn 同名同型跳过_同名不同型照导_不覆盖现有数据() {
         logins_a[0].item_id, seeded.item_id,
         "现有条目必须原封不动（绝不覆盖）"
     );
-    assert_eq!(
-        logins_a[0].kind.title(),
-        "条目A",
-    );
+    assert_eq!(logins_a[0].kind.title(), "条目A",);
     assert!(
-        items.iter().any(|it| it.kind.type_name() == "secure_note" && it.kind.title() == "条目A"),
+        items
+            .iter()
+            .any(|it| it.kind.type_name() == "secure_note" && it.kind.title() == "条目A"),
         "同名不同型必须照常导入"
     );
 }
@@ -226,5 +239,9 @@ fn 笔记正文与登录标题混合场景_类型名判定正确() {
     });
     assert_eq!(note.type_name(), "secure_note");
     assert_eq!(login.type_name(), "login");
-    assert_ne!(note.type_name(), login.type_name(), "同名不同型判定依赖 type_name 区分");
+    assert_ne!(
+        note.type_name(),
+        login.type_name(),
+        "同名不同型判定依赖 type_name 区分"
+    );
 }

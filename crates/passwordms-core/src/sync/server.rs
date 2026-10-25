@@ -364,9 +364,14 @@ impl SyncServer {
         // 水位/墓碑推进在此一并做：发送失败路径 `save_sync_state` 不执行、随会话丢弃，
         // 失败安全语义不变（宁多勿丢）。
         let host_id = self.host_id.clone();
-        let mut sec: Option<
-            CoreResult<(DeviceSyncState, Vec<Vec<crate::sync::protocol::ChangeRecord>>, usize, Vec<String>)>,
-        > = None;
+        // 锁内段③的密文暂存类型（O2 三段式）：RepoAccess 闭包外只持此不透明结果。
+        type SectionResult = CoreResult<(
+            DeviceSyncState,
+            Vec<Vec<crate::sync::protocol::ChangeRecord>>,
+            usize,
+            Vec<String>,
+        )>;
+        let mut sec: Option<SectionResult> = None;
         access.with_repo(Box::new(|repo| {
             if repo.device_id().as_bytes() != host_id.as_bytes() {
                 // 锁定后换库重开（device_id 变化）→ 本场配对作废，密文暂存丢弃。
@@ -404,8 +409,14 @@ impl SyncServer {
         .map_err(|e| stage_io(e, "reply_send"))?;
 
         // 网络段：收 Done。
-        let _done = paging::recv_done(&mut stream, &keys.sync_key[..], &self.session_id, &mut replay, now)
-            .map_err(|e| stage_io(e, "done_recv"))?;
+        let _done = paging::recv_done(
+            &mut stream,
+            &keys.sync_key[..],
+            &self.session_id,
+            &mut replay,
+            now,
+        )
+        .map_err(|e| stage_io(e, "done_recv"))?;
 
         // 网络段：D-53 blob 阶段——双方都支持才进入；seq 从最后一个 reply 页之后单调延续
         // （过 ReplayGuard）。Host 次序：先供 Joiner 拉的（收 Pull、发 Meta/Data/End），再拉
@@ -494,7 +505,7 @@ fn persist_device(
     repo.upsert_paired_device(device)
 }
 
-/// Host 侧一次同步交换的内联实现已并入 [`SyncServer::handle_connection`]（O2 三段式）。
+// Host 侧一次同步交换的内联实现已并入 [`SyncServer::handle_connection`]（O2 三段式）。
 
 /// 设备密钥包裹 AAD。
 pub fn device_key_aad(device_id: &str) -> Vec<u8> {

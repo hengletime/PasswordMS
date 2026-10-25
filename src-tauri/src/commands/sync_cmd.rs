@@ -5,7 +5,6 @@
 //! **直连重同步**：`sync_now` 读取已配对设备地址 → 建立连接 → 复用 sync 层握手（会话密钥
 //! 派生 + 双向确认）→ 拉取/推送变更 → 合并（冲突入冲突箱）→ 更新游标（修复 D-11）。
 
-use tauri::Manager;
 use passwordms_core::constants::{SYNC_PORT_MAX, SYNC_PORT_MIN};
 use passwordms_core::crypto::rng;
 use passwordms_core::model::conflict::ConflictChoice;
@@ -15,6 +14,7 @@ use passwordms_core::sync::handshake::HostIdentity;
 use passwordms_core::sync::protocol::{qr_svg, QRPayload};
 use passwordms_core::sync::resync;
 use passwordms_core::sync::server::SyncServer;
+use tauri::Manager;
 
 use crate::dto::{ConflictDto, DeviceDto, PairResultDto, PairingDto, SyncResultDto, SyncStatusDto};
 use crate::error::{lock_err, IpcError, IpcResult};
@@ -337,10 +337,7 @@ pub fn resolve_conflict(
 /// XChaCha20-Poly1305 包裹（新格式带 `PMSIDENT1` 魔数，旧格式首次加载即自动迁移，
 /// 详见 core `sync::identity` 模块）。调用点 `sync_start_pairing` 必然已先
 /// `session.repo()?` 解锁，VK 必在——锁定态本命令入口就被 `NOT_UNLOCKED` 拦下。
-fn load_or_create_identity(
-    app: &tauri::AppHandle,
-    vault_key: &[u8],
-) -> IpcResult<HostIdentity> {
+fn load_or_create_identity(app: &tauri::AppHandle, vault_key: &[u8]) -> IpcResult<HostIdentity> {
     let path = identity_path(app)?;
     let secret = passwordms_core::sync::identity::load_or_create_identity_file(&path, vault_key)
         .map_err(IpcError::from)?;
@@ -400,10 +397,7 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                     Ok(a) => a,
                     Err(e) => {
                         drop(guard);
-                        crate::state::append_log(
-                            &app,
-                            &format!("[pairing] accept failed: {e:?}"),
-                        );
+                        crate::state::append_log(&app, &format!("[pairing] accept failed: {e:?}"));
                         continue;
                     }
                 },
@@ -474,10 +468,7 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
             Err(e) => {
                 // 诊断留痕：CoreError 的 Debug 只有错误码（Io 额外带 stage|kind），无隐私载荷。落盘到数据目录 passwordms.log。
                 eprintln!("[pairing] host session aborted: {e:?}");
-                crate::state::append_log(
-                    &app,
-                    &format!("[pairing] host session aborted: {e:?}"),
-                );
+                crate::state::append_log(&app, &format!("[pairing] host session aborted: {e:?}"));
                 if let Ok(mut g) = state.pairing.lock() {
                     *g = None;
                 }

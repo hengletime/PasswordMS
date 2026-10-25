@@ -16,7 +16,7 @@ use std::path::Path;
 
 use zeroize::Zeroizing;
 
-use crate::constants::{AAD_IDENTITY, IDENTITY_MAGIC, KEY_LEN, WRAPPED_KEY_CT_LEN, AEAD_NONCE_LEN};
+use crate::constants::{AAD_IDENTITY, AEAD_NONCE_LEN, IDENTITY_MAGIC, KEY_LEN, WRAPPED_KEY_CT_LEN};
 use crate::crypto::{aead, rng};
 use crate::error::{CoreError, CoreResult};
 
@@ -36,10 +36,7 @@ pub fn seal_identity_bytes(secret: &[u8; KEY_LEN], vault_key: &[u8]) -> CoreResu
 
 /// 解封新格式文件字节：magic 不符或长度异常返回 [`CoreError::Validation`]，
 /// tag 校验失败（VK 不对 / 密文被篡改）返回 [`CoreError::Crypto`]。
-pub fn open_identity_bytes(
-    bytes: &[u8],
-    vault_key: &[u8],
-) -> CoreResult<Zeroizing<[u8; KEY_LEN]>> {
+pub fn open_identity_bytes(bytes: &[u8], vault_key: &[u8]) -> CoreResult<Zeroizing<[u8; KEY_LEN]>> {
     if !bytes.starts_with(IDENTITY_MAGIC) {
         return Err(CoreError::Validation("identity_format".to_string()));
     }

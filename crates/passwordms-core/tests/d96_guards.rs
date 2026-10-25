@@ -78,9 +78,7 @@ fn import_item_count_over_limit_is_rejected() {
     let header = "folder,favorite,type,name,notes,login_uri,login_username,login_password,login_totp,fields\n";
     let mut csv = String::from(header);
     for i in 0..passwordms_core::constants::MAX_IMPORT_ITEMS + 1 {
-        csv.push_str(&format!(
-            ",,login,item-{i},,https://x.example,user,pw,,\n"
-        ));
+        csv.push_str(&format!(",,login,item-{i},,https://x.example,user,pw,,\n"));
     }
     let err = import::preview_from_str(&csv, ImportFormat::Csv).unwrap_err();
     match err {
@@ -97,9 +95,7 @@ fn import_within_limits_still_works() {
     let header = "folder,favorite,type,name,notes,login_uri,login_username,login_password,login_totp,fields\n";
     let mut csv = String::from(header);
     for i in 0..9999 {
-        csv.push_str(&format!(
-            ",,login,item-{i},,https://x.example,user,pw,,\n"
-        ));
+        csv.push_str(&format!(",,login,item-{i},,https://x.example,user,pw,,\n"));
     }
     let preview = import::preview_from_str(&csv, ImportFormat::Csv).unwrap();
     let path = temp_vault("imp-ok");
@@ -134,11 +130,18 @@ fn oversized_item_is_rejected_with_title_and_limit() {
         other => panic!("期望 Validation，实际 {other:?}"),
     }
     // update 同样拒绝。
-    let item = s.repo_mut().unwrap().create_item(login_draft("小条目", None)).unwrap();
+    let item = s
+        .repo_mut()
+        .unwrap()
+        .create_item(login_draft("小条目", None))
+        .unwrap();
     let err = s
         .repo_mut()
         .unwrap()
-        .update_item(&item.item_id, login_draft("小条目", Some("x".repeat(400 * 1024))))
+        .update_item(
+            &item.item_id,
+            login_draft("小条目", Some("x".repeat(400 * 1024))),
+        )
         .unwrap_err();
     assert!(matches!(err, CoreError::Validation(ref d) if d.contains("item_too_large")));
 }
@@ -169,8 +172,14 @@ fn header_count_mismatch_is_reported_via_maintenance_warnings() {
     let path = temp_vault("count-mismatch");
     {
         let mut s = Session::create(&path, PWD, true).unwrap();
-        s.repo_mut().unwrap().create_item(login_draft("甲", None)).unwrap();
-        s.repo_mut().unwrap().create_item(login_draft("乙", None)).unwrap();
+        s.repo_mut()
+            .unwrap()
+            .create_item(login_draft("甲", None))
+            .unwrap();
+        s.repo_mut()
+            .unwrap()
+            .create_item(login_draft("乙", None))
+            .unwrap();
         // 正常落盘后头部计数 = 2，无警告。
         assert!(s.repo_mut().unwrap().take_open_warnings().is_empty());
     }

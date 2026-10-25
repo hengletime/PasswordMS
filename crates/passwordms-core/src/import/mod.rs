@@ -107,9 +107,8 @@ pub fn preview_from_file(path: &Path, format: ImportFormat) -> CoreResult<Import
 ///    `ImportParse("encoding")`（`err.import_parse`，不再误报 IO）。
 pub fn decode_source(bytes: &[u8]) -> CoreResult<String> {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        let text = std::str::from_utf8(&bytes[3..]).map_err(|_| {
-            CoreError::ImportParse("encoding".to_string())
-        })?;
+        let text = std::str::from_utf8(&bytes[3..])
+            .map_err(|_| CoreError::ImportParse("encoding".to_string()))?;
         return Ok(text.to_string());
     }
     // encoding_rs 的 `decode` 只在 UTF-8 时做 BOM 嗅探；显式指定 UTF-16 端序时

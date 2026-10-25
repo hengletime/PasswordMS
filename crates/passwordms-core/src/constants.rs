@@ -106,7 +106,7 @@ pub const MAX_NOTE_BYTES: usize = 256 * 1024;
 /// 单条目**统一明文上限** 384 KiB【D-96】：`ItemKind` 序列化后的字节总数上限。
 /// 覆盖登录 notes（此前无上限）等全部字段。换算关系：明文 384 KiB + AEAD tag 16 B
 /// → 线上估算（paging.rs `estimate_record_size` = ciphertext×2 + 512）≈ 2×(384 KiB+16)
-/// + 512 ≈ 769 KiB < 单条超限阈值（`PAGE_BUDGET_BYTES` ≈ 992 KiB → ct ≈ 496 KiB）。
+/// 再 + 512 ≈ 769 KiB < 单条超限阈值（`PAGE_BUDGET_BYTES` ≈ 992 KiB → ct ≈ 496 KiB）。
 /// 故 384 KiB 的条目永远到不了「change_too_large」，同步链路不会因本上限而报错。
 pub const MAX_ITEM_PLAINTEXT_BYTES: usize = 384 * 1024;
 /// 附件同步分片大小 1 MB【已裁定 U4：≤ 1 MB 分片】。

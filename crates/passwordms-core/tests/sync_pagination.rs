@@ -19,9 +19,7 @@ use passwordms_core::session::Session;
 use passwordms_core::store::repository::ItemDraft;
 use passwordms_core::sync::client::{self, JoinerSyncResult};
 use passwordms_core::sync::paging;
-use passwordms_core::sync::protocol::{
-    envelope_aad, ChangeRecord, SyncKind, SyncPayload,
-};
+use passwordms_core::sync::protocol::{envelope_aad, ChangeRecord, SyncKind, SyncPayload};
 use passwordms_core::sync::replay::ReplayGuard;
 use passwordms_core::sync::resync::{self, ResyncOutcome, ResyncServer};
 use passwordms_core::sync::server::{HostSyncResult, SyncServer};
@@ -168,7 +166,11 @@ fn case1_many_items_arrive_via_multiple_pages() {
         .unwrap()
         .list_items(None, false, None)
         .len();
-    assert_eq!(got, 1500, "joiner 应收到全部 1500 条（配对 applied={}）", j1.applied);
+    assert_eq!(
+        got, 1500,
+        "joiner 应收到全部 1500 条（配对 applied={}）",
+        j1.applied
+    );
     assert_eq!(j1.applied, 1500);
     drop(joiner_session);
 
@@ -212,7 +214,8 @@ fn case2_failed_sync_keeps_watermark() {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let repo = hs.repo_mut().unwrap();
         for i in 0..50 {
-            repo.create_item(login_draft(&format!("extra-{i}"))).unwrap();
+            repo.create_item(login_draft(&format!("extra-{i}")))
+                .unwrap();
         }
         let state = repo.sync_state(&joiner_id);
         let exported = repo.export_changes(&state);
@@ -220,15 +223,16 @@ fn case2_failed_sync_keeps_watermark() {
     }
 
     // 制造一次同步失败：把 joiner 侧记录的对端地址指向一个已关闭端口。
-    let closed_port = {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let p = l.local_addr().unwrap().port();
-        p // listener 随即 drop → 端口关闭
-    };
+    let closed_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port(); // listener 随即 drop → 端口关闭
     {
         let mut js = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
         let repo = js.repo_mut().unwrap();
-        repo.update_paired_addr(&host_id, "127.0.0.1", closed_port).unwrap();
+        repo.update_paired_addr(&host_id, "127.0.0.1", closed_port)
+            .unwrap();
         let attempt = resync::resync_with_peer(repo, &host_id, now_ms(), 0);
         assert!(attempt.is_err(), "连已关闭端口必须失败");
         // 失败路径：水位不推进（本轮导出的 50 条下一轮仍要重发）。
@@ -245,24 +249,35 @@ fn case2_failed_sync_keeps_watermark() {
     {
         let mut js = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
         let repo = js.repo_mut().unwrap();
-        repo.update_paired_addr(&host_id, "127.0.0.1", resync_server2.port()).unwrap();
+        repo.update_paired_addr(&host_id, "127.0.0.1", resync_server2.port())
+            .unwrap();
     }
-    let (h2, j2) = run_resync(&host_vault, resync_server2, &mut {
-        Session::unlock(&joiner_vault, JOINER_PWD).unwrap()
-    }, &host_id);
+    let (h2, j2) = run_resync(
+        &host_vault,
+        resync_server2,
+        &mut { Session::unlock(&joiner_vault, JOINER_PWD).unwrap() },
+        &host_id,
+    );
     assert_eq!(j2.applied, 50);
     assert_eq!(h2.applied, 0);
 
     let joiner_session = Session::unlock(&joiner_vault, JOINER_PWD).unwrap();
     assert_eq!(
-        joiner_session.repo().unwrap().list_items(None, false, None).len(),
+        joiner_session
+            .repo()
+            .unwrap()
+            .list_items(None, false, None)
+            .len(),
         62
     );
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let repo = hs.repo().unwrap();
         let state = repo.sync_state(&joiner_id);
-        assert!(repo.export_changes(&state).is_empty(), "第二轮同步后 host 导出必须为空");
+        assert!(
+            repo.export_changes(&state).is_empty(),
+            "第二轮同步后 host 导出必须为空"
+        );
     }
 }
 
@@ -324,7 +339,11 @@ fn case3_legacy_payload_interop() {
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].record_id.len(), 36);
     assert!(!blob_support, "老端无 blob_support 字段 → false");
-    assert_eq!(stream.len(), framed(b"garbage-not-json").len(), "必须恰好停在 cursor=0 那帧");
+    assert_eq!(
+        stream.len(),
+        framed(b"garbage-not-json").len(),
+        "必须恰好停在 cursor=0 那帧"
+    );
 }
 
 // ===== 收发循环：多页发送 → 聚合接收，停在最后一帧 =====

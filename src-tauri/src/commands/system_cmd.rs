@@ -59,9 +59,7 @@ pub fn copy_secret(
 /// 残留剪贴板由 [`crate::run`] 的 `RunEvent::Exit` 钩子清理。
 fn spawn_clipboard_fallback(app: tauri::AppHandle) {
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(
-            CLIPBOARD_TTL_SECS as u64,
-        ));
+        std::thread::sleep(std::time::Duration::from_secs(CLIPBOARD_TTL_SECS as u64));
         if let Some(state) = app.try_state::<AppState>() {
             let _ = clear_owned_clipboard(&app, state.inner());
         }

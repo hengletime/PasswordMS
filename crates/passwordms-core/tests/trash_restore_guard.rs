@@ -47,14 +47,20 @@ fn setup_anomaly(tag: &str) -> (Session, String, String, u64) {
     let path = temp_vault(tag);
     let mut s = Session::create(&path, PWD, true).unwrap();
     let item = s.repo_mut().unwrap().create_item(draft("旧标题")).unwrap();
-    s.repo_mut().unwrap().delete_item(&item.item_id, false).unwrap();
+    s.repo_mut()
+        .unwrap()
+        .delete_item(&item.item_id, false)
+        .unwrap();
     let trash_id = s.repo().unwrap().list_trash()[0].trash_id.clone();
 
     // 对端删除后又编辑、同步复活（rev 更高 + updated_at 更新）的等价形态。
     let mut revived: Item = item.clone();
     revived.rev = item.rev + 5;
     revived.updated_at = now_ms() + 1000;
-    s.repo_mut().unwrap().put_item_direct(revived.clone()).unwrap();
+    s.repo_mut()
+        .unwrap()
+        .put_item_direct(revived.clone())
+        .unwrap();
     (s, item.item_id, trash_id, revived.rev)
 }
 
@@ -78,14 +84,22 @@ fn revival_cleans_stale_trash_snapshots() {
     let (mut s, item_id, trash_id, _) = setup_anomaly("drop");
     // 正常同步复活路径现在会调 drop_trash_snapshots（merge.rs）；此处直接验证
     // 该方法本身的幂等清理语义。
-    let n = s.repo_mut().unwrap().drop_trash_snapshots(&item_id).unwrap();
+    let n = s
+        .repo_mut()
+        .unwrap()
+        .drop_trash_snapshots(&item_id)
+        .unwrap();
     assert_eq!(n, 1, "应清除恰好一条陈旧快照");
     assert!(s.repo().unwrap().list_trash().is_empty());
     // 快照已清：restore 报 ItemNotFound（而非拿着旧快照覆盖 live）。
     let err = s.repo_mut().unwrap().restore_item(&trash_id).unwrap_err();
     assert!(matches!(err, CoreError::ItemNotFound));
     // 幂等：再清一次返回 0。
-    let n = s.repo_mut().unwrap().drop_trash_snapshots(&item_id).unwrap();
+    let n = s
+        .repo_mut()
+        .unwrap()
+        .drop_trash_snapshots(&item_id)
+        .unwrap();
     assert_eq!(n, 0);
 }
 
@@ -104,9 +118,7 @@ fn conflict_take_remote_deleted_skips_duplicate_trash_entry() {
         .unwrap();
     assert!(s.repo().unwrap().get_item_opt(&item.item_id).is_none());
     let item_id = item.item_id.clone();
-    let local_snapshot = s.repo().unwrap().list_trash()[0]
-        .item_snapshot
-        .clone();
+    let local_snapshot = s.repo().unwrap().list_trash()[0].item_snapshot.clone();
     let remote_snapshot = {
         let mut r = item.clone();
         r.rev += 1;
@@ -176,5 +188,9 @@ fn conflict_take_remote_deleted_still_soft_deletes_live_item() {
         .unwrap();
 
     assert!(s.repo().unwrap().get_item_opt(&item.item_id).is_none());
-    assert_eq!(s.repo().unwrap().list_trash().len(), 1, "live 在场时正常软删入回收站");
+    assert_eq!(
+        s.repo().unwrap().list_trash().len(),
+        1,
+        "live 在场时正常软删入回收站"
+    );
 }

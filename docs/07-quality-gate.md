@@ -1,7 +1,7 @@
 # 07 · 质量门与出包门禁（权威）
 
 > **本文档的性质**：PasswordMS 交付前的**唯一门禁权威**。§1 日常门 = 一条命令跑完的自动化总门；§2 出包门 = 产出安装包/APK 的**唯一正道**与出包后的人工验收；§3 安全验收点 A-01~A-10 与测试证据的映射；§4 已知边界（**未验证 ≠ 通过**）。
-> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 / §1.3 已按 2026-10-23 22:03（v1.2.14 + D-83，**8 门**）实跑刷新**（总判定 **PASS**，8 门全过 / 0 失败 / 0 跳过；Rust **156 例通过 + 1 例 `#[ignore]`**、前端 **32 文件 256 例**；各门耗时 15s / 13s / 5s / 3s / 353s / 14s / 39s / 19s；门禁期间 `find … -newermt 22:03:59` **空输出** = 零改动）；2026-10-23 21:15（v1.2.13 + #531，8 门，156 例 / 253 例，12s / 13s / 5s / 2s / 354s / 18s / 35s / 17s）；2026-10-23 10:07（v1.2.12 + D-81，8 门，148 例 / 223 例，13s / 15s / 4s / 3s / 334s / 17s / 32s / 16s）；2026-10-22 22:35（v1.2.11 + Q-2 + #530-clippy清零，8 门，148 例 / 204 例，13s / 14s / 4s / 2s / 400s / 4s / 30s / 15s）；2026-10-22 16:19（v1.2.11 + Q-2，clippy 尚为 7 条，148 例 / 204 例，12s / 11s / 4s / 2s / 325s / 12s / 30s / 15s）；2026-10-22 14:10（v1.2.11，**7 门**——Q-2 尚未纳入，148 例 / 204 例，12s / 11s / 4s / 341s / 12s / 28s / 13s）；2026-10-22 12:51（v1.2.10，145 例 / 204 例）、2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
+> 所有数字均来自 `bash scripts/gate-all.sh` **完整实跑**，不接受口头计数。**§1.2 已按 2026-10-25 18:29（v1.2.19 + D-96 + #530 lint 清零，**8 门**）实跑刷新**（总判定 **PASS**，8 门全过 / 0 失败 / 0 跳过；Rust **205 例通过 + 1 例 `#[ignore]`**、前端 **37 文件 300 例**；各门耗时 5s / 7s / 1s / 1s / 355s / 3s / 16s / 7s；门禁期间 `find … -newermt 18:29:00` **空输出** = 零改动）；其前一次为 2026-10-23 22:03（v1.2.14 + D-83，**8 门**）实跑（总判定 **PASS**，8 门全过 / 0 失败 / 0 跳过；Rust **156 例通过 + 1 例 `#[ignore]`**、前端 **32 文件 256 例**；各门耗时 15s / 13s / 5s / 3s / 353s / 14s / 39s / 19s；门禁期间 `find … -newermt 22:03:59` **空输出** = 零改动）；2026-10-23 21:15（v1.2.13 + #531，8 门，156 例 / 253 例，12s / 13s / 5s / 2s / 354s / 18s / 35s / 17s）；2026-10-23 10:07（v1.2.12 + D-81，8 门，148 例 / 223 例，13s / 15s / 4s / 3s / 334s / 17s / 32s / 16s）；2026-10-22 22:35（v1.2.11 + Q-2 + #530-clippy清零，8 门，148 例 / 204 例，13s / 14s / 4s / 2s / 400s / 4s / 30s / 15s）；2026-10-22 16:19（v1.2.11 + Q-2，clippy 尚为 7 条，148 例 / 204 例，12s / 11s / 4s / 2s / 325s / 12s / 30s / 15s）；2026-10-22 14:10（v1.2.11，**7 门**——Q-2 尚未纳入，148 例 / 204 例，12s / 11s / 4s / 341s / 12s / 28s / 13s）；2026-10-22 12:51（v1.2.10，145 例 / 204 例）、2026-10-22 09:25（v1.2.9，134 例 / 204 例）、2026-10-21 23:11（v1.2.8，131 例 / 204 例）、2026-10-21 20:33（v1.2.7，5m55s / 164 例 / 24 文件）、2026-10-21 16:17（v1.2.6，6m26s / 124 例 / 21 文件 149 例）、2026-10-21 15:11（6m39s / 120 例 / 20 文件 138 例）、2026-10-18 的旧值（4m36s、80 例、clippy 11 条）与更早的 7m03s/109 例仅作历史对照，勿跨轮引用。
 > **记录人**：工程师（寇豆码）　**最近一次执行**：2026-10-23
 
 ---
@@ -30,16 +30,16 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 ### 1.2 门清单与本次实跑数字
 
-| # | 门 | 命令 | 本次实测（2026-10-23 22:03 · v1.2.14 + D-83） | 判定 |
+| # | 门 | 命令 | 本次实测（2026-10-25 18:29 · v1.2.19 + D-96） | 判定 |
 |---|----|------|---------|------|
-| 1 | 前端单测 | `npm run test`（vitest） | **32 文件 256/256 通过**（较 v1.2.13 的 253 新增 **3 例**：D-83 防回归守卫 `dnd-settle.test.ts`——onDrop 时目标仍在 / 回调后全清空 / x-y 复位；例数以门禁窗口冻结断言佐证） | ✅ 15s |
-| 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 13s |
-| 3 | CSS 层叠契约 | `npm run check:css` | **0 FAIL / 6 WARN**（6 WARN 为既有浅色主/危险按钮对比度 3.74~4.38:1，过控件底线 3.0 未达 AA 4.5，已知项；本轮 CSS 零改动 → 资产哈希 `style-BKBVv8F7.css` 与 v1.2.13 同名） | ✅ 5s |
-| 4 | **Rust 格式基线**（**Q-2 新增**） | `cargo fmt --all -- --check` | **0 处差异** | ✅ 3s |
-| 5 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **156 通过 / 0 失败 / 1 忽略**（与 v1.2.13 同数——D-83 纯前端修复，`crates/` 零改动；忽略项仍为 `compaction.rs` 的 `real_vault_ledger`，`#[ignore]` 显式跳过） | ✅ 353s |
-| 6 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 0 条 lint**（基线 0——**此后任何 warning 都是新引入**，门禁 `-gt 0` 会打 `⚠` 行如实登记；逐条修法见 §1.4） | ✅ 14s |
-| 7 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | MSI **2.44 MB**（2,555,904 B）+ NSIS **1.68 MB**（1,759,833 B，含 WebView2Loader.dll——D-82 installerHooks 入线延续），均 ≤ 10 MB；绿色版 zip **1.96 MB**（2,060,028 B，4 件含 `WebView2Loader.dll`，**zip 内 exe 与最终 exe 逐字节相同，sha256 `07e0a7d0…`**） | ✅ 39s |
-| 8 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **6.68 MB ≤ 12 MB**（`PasswordMS-1.2.14-arm64.apk`，7,003,795 B / sha256 `59b9afd6…`；包内 .so 四断言 4/4（sha `5fbec311…`），V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书；`target/` 下**共 16 个** APK 逐个核验全达标） | ✅ 19s |
+| 1 | 前端单测 | `npm run test`（vitest 5） | **37 文件 300/300 通过**（较 v1.2.14 的 32 文件 256 例新增 5 文件 44 例——D-95/D-96 新增守卫；本轮前端零改动，例数较上一轮稳定） | ✅ 5s |
+| 2 | 前端类型检查 | `npm run check`（svelte-check） | **0 errors / 0 warnings** | ✅ 7s |
+| 3 | CSS 层叠契约 | `npm run check:css` | **0 FAIL / 6 WARN**（6 WARN 为既有浅色主/危险按钮对比度 3.74~4.38:1，过控件底线 3.0 未达 AA 4.5，已知项；本轮 CSS 零改动） | ✅ 1s |
+| 4 | **Rust 格式基线**（**Q-2 新增**） | `cargo fmt --all -- --check` | **0 处差异**（D-96 落码遗留 50 处已于本轮 #530 独立拉平，见 §1.6 补记） | ✅ 1s |
+| 5 | Rust 全量测试 | `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm` | **205 通过 / 0 失败 / 1 忽略**（较 v1.2.14 的 156 净增 49 例——D-95/D-96 新增守卫与上限校验用例；30 条 `test result` 行；忽略项仍为 `compaction.rs` 的 `real_vault_ledger`） | ✅ 355s |
+| 6 | Rust 静态检查 | `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm` | **0 error / 0 条 lint**（D-96 落码曾带入 10 条，本轮 #530 已全部清零回基线——修法见表后补记；此后任何 warning 仍视为新引入） | ✅ 3s |
+| 7 | 体积门-桌面 | `bash scripts/check-size.sh desktop --allow-missing` | **target 下全部历史 MSI/NSIS/portable 逐个达标**；v1.2.19 正式产物：MSI **2.58 MB** + NSIS **1.80 MB**（含 WebView2Loader.dll——D-82 installerHooks 入线延续）+ 绿色版 zip **2.10 MB**，均 ≤ 10 MB | ✅ 16s |
+| 8 | 体积门-Android | 扫 `target/PasswordMS-*-arm64.apk` 逐个核验 | **21 个产物逐个核验全达标**；v1.2.19 APK **6.87 MB**（7,204,611 B）≤ 12 MB，包内 .so 四断言 4/4（sha `ee06b790…`），V3 签名证书 SHA-256 `610ca6f0…3c7c` = 正式证书 | ✅ 7s |
 
 > **§1.2 的读数口径（重要）**：第 1~6 行来自**同一次** `bash scripts/gate-all.sh` 完整实跑（2026-10-23 22:03:59 前端起跑，**8 门全 PASS / 0 失败 / 0 跳过，EXIT=0**）；
 > 第 7~8 行的字节数来自**同一棵树**的 v1.2.14 正式出包产物（`--allow-missing` 口径不变；桌面/Android 体积门在出包后复跑一次 EXIT=0，因门禁时 1.2.14 产物尚未生成）。
@@ -126,6 +126,19 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 > 历史口径（已作废，留档）：2026-10-21 复核为 7 条「登记不动」，行号旧值 786/846/258/361/1226/125 → 1097/1171/265/361/1680/131 → D-80 后 1232/1306/265/23/2118/137。当时不切 `-D warnings` 的理由（存量含 `error.rs` impl 挪位、`session.rs` Box 化等结构性改动）随 #530 清零而消失——**此后任何 warning 都应视为新引入**，`gate-all.sh` 的基线判定已同步从 `-gt 7` 改为 `-gt 0`（见下）。
 >
+> **D-96 批次 10 条清零（2026-10-25 #530，v1.2.19 后）**：D-96 落码未跑 clippy，v1.2.19 门禁实测 10 条（lib 9 + 测试 1），全部 lint 修整、**零行为变更、零公开签名变更**，当轮复跑 = **0 error / 0 warning**：
+
+| lint | 位置 | 修法（一句话） | 涉签名/行为？ |
+|------|------|------|------|
+| empty line after doc comment | `sync/server.rs:508` | 悬空说明行（描述已并入 `handle_connection` 的旧实现）由 `///` 转普通 `//` 注释 | 否 |
+| doc list item without indentation | `constants.rs:110` | 行首 `+ 512`（算式续行被误判列表项）改写为「再 + 512」 | 否 |
+| very complex type | `sync/client.rs:141` | 局部变量类型引私有别名 `type PreparedSection = CoreResult<(…)>` | 否（类型不变，纯别名） |
+| very complex type | `sync/resync.rs:717` | 同上，别名 `SectionResult` | 否 |
+| very complex type | `sync/server.rs:367` | 同上，别名 `SectionResult` | 否 |
+| too many arguments (8/7) | `sync/paging.rs:72` | `#[allow(clippy::too_many_arguments)]` + 注释——参数均为协议帧必要字段，打包结构体需改公开签名（红线，同 `session.rs` 先例） | 否（allow，**未重构**） |
+| doc list item without indentation ×3 | `sync/paging.rs:110-112` | `recv_push_pages` doc 的 D-96 列表项后补 `///` 空行分段 | 否 |
+| let binding then return | `tests/sync_pagination.rs:229` | 取端口的 `let l / let p / p` 改链式调用（listener 仍在语句末 drop，端口已取出，语义不变）；该测试 4/4 复跑通过 | 否 |
+>
 > `gate-all.sh` 同步改四处（原「基线 ≤7」→「基线 0」）：头注释、clippy 段注释、pass 文案、`-gt` 判定。**注意 `-gt 0` 的语义变化**：≤7 时代码含义是"warning 超基线才提示（不阻塞）"，0 时代码含义是"**任何 warning 都该提示**"——pass 文案同步改为 `warning 0 条（基线 0）`，一旦出现 warning 行即打印 `⚠ warning 数超过已知基线 0`，仍不阻塞但如实登记。（门禁脚本改动的完整实跑读数由主理人复核后刷新 §1.2，此处不预填。）
 >
 > 脚本对 warning 只**如实计数不阻塞**（0 error 是唯一硬约束）；计数已剔除 cargo 汇总行与 build-script（windres 兜底）提示，避免重复统计。
@@ -180,6 +193,8 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 > 得到 `NEG_EXIT=1`、`[FAIL] fmt 失败（2s，1 处差异）`、坐标精确打在 `src-tauri\src\commands\system_cmd.rs:125`、
 > 汇总 `[FAIL] 总判定：FAIL（通过 3 / 失败 1 / 跳过 0）`，且 **fail-fast 使 Rust 全量门根本没启动**（省掉约 5 分钟）。
 > 还原后 `--check` 立刻回到 `EXIT=0`，8 门重新全 PASS。
+
+> **D-96 遗留 50 处拉平（2026-10-25 #530，v1.2.19 后）**：D-96 落码未跑 `cargo fmt`，v1.2.19 门禁 fmt 门实测 **50 处差异**（集中在 `sync/`、`import/` 与新增测试文件）。D-96 已提交推送，按 Q-2 同款纪律做**独立格式化**（`cargo fmt --all`，纯换行重排、零语义改动，12 文件）；拉平后 `--check` EXIT=0，clippy 0/0 不变，`sync_pagination` 4/4 复跑通过。**教训入库：落码命令的收尾必须带 `cargo fmt --all && cargo clippy`，不能等门禁来抓**——本轮 fmt 门第一次真的红在交付读数上（此前 Q-2 负向探针只验证过「会红」）。
 
 ---
 
