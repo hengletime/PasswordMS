@@ -1,7 +1,7 @@
 {
   "name": "passwordms",
   "private": true,
-  "version": "1.2.18",
+  "version": "1.2.19",
   "type": "module",
   "description": "PasswordMS —— 体积小巧、本地优先、零知识的密码管理工具（Tauri 2 + Svelte 5）",
   "scripts": {
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "@tauri-apps/cli": "^2.12.4",
     "svelte": "^5.0.0",
     "svelte-check": "^4.0.0",
     "typescript": "^5.6.0",
