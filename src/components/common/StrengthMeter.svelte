@@ -6,28 +6,17 @@
   //   min-width:2.6rem，实测暗色下条带 #18222E 叠在卡片 #121A24 上、RGB 差仅 24，肉眼
   //   几乎不可见；右侧还凭空多出 47px 留白。现改为：轨道用中性可见色（--pms-track 已提亮），
   //   空态直接隐藏 label 让条带占满整行。
+  //
+  // D-100（2026-10-25）：评分从「字符类数 + 长度加成」改为**信息熵估算**，实现抽到
+  //   lib/strength.ts（可单测）。旧公式 4 类全开时 base=4 恒封顶——生成器里拖长度
+  //   质量恒为「很强」（主人实测反馈）。阈值 40/60/80 bits 详见该模块文档。
+  import { scoreOf } from '../../lib/strength';
   import { ui } from '../../lib/stores/ui.svelte';
 
   interface Props {
     password: string;
   }
   const { password }: Props = $props();
-
-  /** 强度分级：0（空）~ 4（很强）。 */
-  function scoreOf(value: string): number {
-    if (value.length === 0) {
-      return 0;
-    }
-    let classes = 0;
-    if (/[a-z]/.test(value)) classes += 1;
-    if (/[A-Z]/.test(value)) classes += 1;
-    if (/[0-9]/.test(value)) classes += 1;
-    if (/[^A-Za-z0-9]/.test(value)) classes += 1;
-    let base = classes;
-    if (value.length >= 12) base += 1;
-    if (value.length >= 20) base += 1;
-    return Math.max(1, Math.min(4, base));
-  }
 
   const LABEL_KEYS: Record<number, string> = {
     1: 'meter.weak',
