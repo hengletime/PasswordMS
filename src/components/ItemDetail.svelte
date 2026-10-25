@@ -23,12 +23,16 @@
   let copyCountdown = $state(0);
   let totpCode = $state('');
   let totpRemaining = $state(0);
+  // D-97（B）：密钥无效进入错误态——只弹一次 toast，行内给出可见错误行，
+  // 不再每个 30s 窗口 / 每次切回条目都骚扰一次（旧版 toast 会堆积）。
+  let totpInvalid = $state(false);
 
   // 切换条目时复位秘密展示状态。
   $effect((): void => {
     const id = item?.item_id ?? null;
     revealed = false;
     totpCode = '';
+    totpInvalid = false;
     // 引用 id 以建立依赖（切换条目即复位）。
     void id;
   });
@@ -45,7 +49,8 @@
     let cancelled = false;
     let lastWindow = -1;
     const tick = async (): Promise<void> => {
-      if (cancelled) {
+      if (cancelled || totpInvalid) {
+        // D-97（B）：已判定密钥无效即停止取码循环（错误态行内可见，无需反复重试）。
         return;
       }
       const now = Date.now();
@@ -58,9 +63,11 @@
           const result = await currentTotp(totpSecret);
           if (!cancelled) {
             totpCode = result.code;
+            totpInvalid = false;
           }
         } catch (err) {
           if (!cancelled) {
+            totpInvalid = true;
             ui.toast('error', toAppError(err).messageKey);
           }
         }
@@ -293,8 +300,13 @@
       {#if totpSecret}
         <div class="detail-totp">
           <span class="pms-label">{ui.t('editor.totp_now')}</span>
-          <strong class="detail-mono detail-totp-code">{formatCode(totpCode)}</strong>
-          <span class="pms-meta">{ui.t('common.seconds', { n: totpRemaining })}</span>
+          {#if totpInvalid}
+            <!-- D-97（B）：错误必须是可见的一行字，不渲染 = 把失败伪装成「本来就没有」。 -->
+            <span class="pms-hint is-danger">{ui.t('err.totp_invalid_detail')}</span>
+          {:else}
+            <strong class="detail-mono detail-totp-code">{formatCode(totpCode)}</strong>
+            <span class="pms-meta">{ui.t('common.seconds', { n: totpRemaining })}</span>
+          {/if}
         </div>
       {/if}
 

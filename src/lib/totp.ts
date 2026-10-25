@@ -31,6 +31,27 @@ export function isValidBase32(secret: string): boolean {
   return normalized.length > 0 && /^[A-Z2-7]+$/.test(normalized);
 }
 
+/**
+ * D-97（C）：归一化用户输入的 TOTP 密钥。
+ *
+ * 网站两步验证设置页默认给的是 `otpauth://totp/…?secret=XXXX` 整串链接，
+ * 直接入库必然解码失败（详情页反复弹「输入无效」）——这里自动抽出 `secret`
+ * 参数；其余输入 trim 后原样返回。
+ */
+export function normalizeTotpInput(raw: string): string {
+  const trimmed = raw.trim();
+  if (!/^otpauth:\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    const secret = parsed.searchParams.get('secret');
+    return secret !== null ? secret.trim() : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 /** 格式化为展示用分组（每 3 位一组，如 `123 456`）。 */
 export function formatCode(code: string): string {
   const groups: string[] = [];

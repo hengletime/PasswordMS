@@ -447,6 +447,10 @@ export const enUS: Messages = {
     folder_not_found: 'Folder not found.',
     folder_name: 'Invalid folder name.',
     validation: 'Invalid input.',
+    // D-97: TOTP secret validation failure (editor) and error state (detail page).
+    totp_invalid:
+      'Invalid TOTP secret: use a Base32 key (letters A-Z, digits 2-7, no 0/1/8/9), or paste an otpauth:// URI to extract it automatically.',
+    totp_invalid_detail: 'Invalid TOTP secret — edit this item to fix it.',
     attachment_too_large: 'Attachment exceeds the size limit.',
     attachment_limit: 'Attachment limit reached (16).',
     vault_capacity: 'Vault capacity is full.',

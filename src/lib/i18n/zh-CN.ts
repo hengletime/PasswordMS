@@ -441,6 +441,11 @@ export const zhCN = {
     folder_not_found: '分组不存在。',
     folder_name: '分组名称无效。',
     validation: '输入无效。',
+    // D-97：TOTP 密钥入库前校验失败（编辑器）与展示错误态（详情页）。
+    // 必须点名合法形态（Base32 / otpauth 链接）——只说「输入无效」用户不知道改什么。
+    totp_invalid:
+      '动态口令密钥无效：须为 Base32 密钥（字母 A-Z、数字 2-7，不含 0/1/8/9），或直接粘贴 otpauth:// 链接自动提取。',
+    totp_invalid_detail: '动态口令密钥无效，请编辑条目修正。',
     attachment_too_large: '附件超过大小上限。',
     attachment_limit: '附件数量已达上限（16）。',
     vault_capacity: '保险库容量已满。',

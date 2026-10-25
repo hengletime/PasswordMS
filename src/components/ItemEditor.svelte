@@ -5,6 +5,8 @@
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
   import { MAX_NOTE_BYTES } from '../lib/constants';
   import { isSafeUrl } from '../lib/url-safety';
+  import { toAppError, ErrorCode } from '../lib/errors';
+  import { currentTotp, normalizeTotpInput } from '../lib/totp';
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import type { CustomField, ItemDraftDto, ItemDto } from '../types';
@@ -43,6 +45,10 @@
   );
   let showPassword = $state(false);
   let showGenerator = $state(false);
+  // D-97（A）：TOTP 密钥入库前校验失败 → 行内错误态（对齐 urlUnsafe 模式）。
+  let totpInvalid = $state(false);
+  // D-97：校验失败聚焦用（bind:this）。
+  let totpInput = $state<HTMLInputElement | null>(null);
 
   let noteBytes = $derived(new Blob([body]).size);
   let bodyTooLong = $derived(kind === 'secure_note' && noteBytes > MAX_NOTE_BYTES);
@@ -63,6 +69,26 @@
     if (!canSave) {
       return;
     }
+    // D-97（A+C）：TOTP 入库前真校验。otpauth:// 链接先提取 secret（C），
+    // 再调 Rust 侧 totp_now 试算（等价 base32 真解码，含 0/1/8/9 等非法字符必失败）。
+    // 仅 ERR_VALIDATION 拦截保存并聚焦字段；环境类错误放行原流程（不因 IPC 故障卡死编辑器）。
+    let totpSecret: string | null = null;
+    if (kind === 'login' && totp.trim().length > 0) {
+      totpSecret = normalizeTotpInput(totp);
+      try {
+        await currentTotp(totpSecret);
+        totpInvalid = false;
+      } catch (err) {
+        if (toAppError(err).code === ErrorCode.ERR_VALIDATION) {
+          totpInvalid = true;
+          totpInput?.focus();
+          return;
+        }
+        totpInvalid = false;
+      }
+    } else if (kind === 'login') {
+      totpInvalid = false;
+    }
     let draft: ItemDraftDto;
     if (kind === 'login') {
       draft = {
@@ -73,7 +99,7 @@
           username: username.trim() || null,
           password: password.length > 0 ? password : null,
           notes: notes.trim() || null,
-          totp_secret: totp.trim() || null,
+          totp_secret: totpSecret,
           custom_fields: fields.filter((f): boolean => f.key.trim().length > 0),
         },
         folder_id: folderId,
@@ -172,7 +198,20 @@
 
     <div class="pms-field">
       <label class="pms-label" for="ed-totp">{ui.t('editor.field_totp')}</label>
-      <input id="ed-totp" class="pms-input" bind:value={totp} autocomplete="off" placeholder="BASE32" />
+      <!-- D-97：支持直接粘贴 otpauth:// 链接（保存时自动提取 secret 并试算校验）。
+           非法字符（如 0/1/8/9）在入库前被拦截并聚焦本字段，不再产生「反复弹输入无效」的坏存量。 -->
+      <input
+        id="ed-totp"
+        class="pms-input"
+        bind:value={totp}
+        bind:this={totpInput}
+        autocomplete="off"
+        placeholder="BASE32 或 otpauth://"
+        aria-invalid={totpInvalid}
+      />
+      {#if totpInvalid}
+        <p class="pms-hint is-danger">{ui.t('err.totp_invalid')}</p>
+      {/if}
     </div>
 
     <!-- D-89：备注编辑框。notes 状态与保存逻辑一直都在（导入的备注详情页可见），
