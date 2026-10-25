@@ -171,6 +171,8 @@ export interface HealthReport {
   login_count: number;
   weak: string[];
   reused: string[];
+  /** 重复使用按密码分组（D-99）：每组 = 共用同一密码的条目 ID 列表。 */
+  reused_groups: string[][];
   stale: string[];
   suggestions: string[];
 }

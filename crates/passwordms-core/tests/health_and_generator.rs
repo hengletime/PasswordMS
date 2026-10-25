@@ -128,9 +128,50 @@ fn health_detects_weak_reused_and_stale() {
     assert!(report.weak.contains(&"b".to_string()));
     assert!(report.reused.contains(&"d".to_string()));
     assert!(report.reused.contains(&"e".to_string()));
+    // D-99：单组重复 → 恰好 1 组、组内全收、组序稳定。
+    assert_eq!(report.reused_groups.len(), 1);
+    assert_eq!(
+        report.reused_groups[0],
+        vec!["d".to_string(), "e".to_string()]
+    );
     assert!(report.stale.contains(&"f".to_string()));
     assert!(report.total_score <= 100);
     assert!(!report.suggestions.is_empty());
+}
+
+/// D-99 回归：多组重复必须按组分列（3+2 形态）——分组信息丢失则 UI 无从区分。
+#[test]
+fn health_reports_reused_groups_separately() {
+    let cfg = HealthConfig {
+        weak_max_len: 8,
+        stale_days: 180,
+    };
+    let now = 10_000_000_000i64;
+    let items = vec![
+        login("x1", "qa_test_pw_alpha_1", now, 1),
+        login("x2", "qa_test_pw_alpha_1", now, 1),
+        login("x3", "qa_test_pw_alpha_1", now, 1),
+        login("y1", "qa_test_pw_beta_22", now, 1),
+        login("y2", "qa_test_pw_beta_22", now, 1),
+    ];
+    let report = health::check(&items, &cfg, now);
+    assert_eq!(report.reused_groups.len(), 2, "两组密码各成一组");
+    assert_eq!(
+        report.reused_groups[0],
+        vec!["x1".to_string(), "x2".to_string(), "x3".to_string()]
+    );
+    assert_eq!(
+        report.reused_groups[1],
+        vec!["y1".to_string(), "y2".to_string()]
+    );
+    // 拍平视图与分组视图一致（幂等不变量）。
+    let mut flat: Vec<String> = report.reused_groups.concat();
+    flat.sort();
+    flat.dedup();
+    assert_eq!(flat, report.reused);
+    assert_eq!(report.reused.len(), 5);
+    // 建议按组数措辞。
+    assert!(report.suggestions.iter().any(|s| s.contains("2 组")));
 }
 
 #[test]

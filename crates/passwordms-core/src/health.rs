@@ -24,8 +24,12 @@ pub struct HealthReport {
     pub login_count: usize,
     /// 弱口令条目 ID。
     pub weak: Vec<String>,
-    /// 重复使用密码的条目 ID。
+    /// 重复使用密码的条目 ID（全部重复组的拍平视图，供统计与扣分）。
     pub reused: Vec<String>,
+    /// 重复使用按密码分组视图（D-99）：`reused_groups[g]` = 共用同一密码的一组条目 ID。
+    /// 组内按条目 ID 升序；组间按组内最小条目 ID 升序，输出稳定可快照比对。
+    /// 与 `reused` 一一对应：拍平 `reused_groups` 排序去重即 `reused`。
+    pub reused_groups: Vec<Vec<String>>,
     /// 超期未改条目 ID。
     pub stale: Vec<String>,
     /// 整改建议（可执行文案）。
@@ -63,15 +67,22 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
         }
     }
 
-    // 重复使用：同一密码被 ≥ 2 条登录条目使用。
+    // 重复使用：同一密码被 ≥ 2 条登录条目使用（D-99：同时保留分组视图，
+    // 否则「6 条重复」是一组共用还是多组各用，UI 无从区分）。
     let mut reused: Vec<String> = Vec::new();
+    let mut reused_groups: Vec<Vec<String>> = Vec::new();
     for ids in password_users.values() {
         if ids.len() >= 2 {
-            reused.extend(ids.iter().cloned());
+            let mut group: Vec<String> = ids.to_vec();
+            group.sort();
+            reused.extend(group.iter().cloned());
+            reused_groups.push(group);
         }
     }
     reused.sort();
     reused.dedup();
+    // 组间按组内最小条目 ID 升序：HashMap 遍历序不稳定，输出必须可复现。
+    reused_groups.sort_by(|a, b| a[0].cmp(&b[0]));
 
     let total = logins.len().max(1) as u32;
     let mut penalties: u32 = 0;
@@ -88,8 +99,10 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
         ));
     }
     if !reused.is_empty() {
+        // D-99：按组数措辞——「6 条重复」可能是一组 6 条共用，也可能是 3 组各 2 条。
         suggestions.push(format!(
-            "有 {} 条条目重复使用同一密码，建议为每站设置独立密码。",
+            "有 {} 组条目重复使用同一密码（共 {} 条），建议为每站设置独立密码。",
+            reused_groups.len(),
             reused.len()
         ));
     }
@@ -109,6 +122,7 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
         login_count: logins.len(),
         weak,
         reused,
+        reused_groups,
         stale,
         suggestions,
     }

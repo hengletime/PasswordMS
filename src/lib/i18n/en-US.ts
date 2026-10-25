@@ -263,6 +263,7 @@ export const enUS: Messages = {
     logins: 'Login items',
     weak: 'Weak',
     reused: 'Reused',
+    reused_group: 'Group {n}',
     stale: 'Stale',
     suggestions: 'Suggestions',
     good: 'Password health looks good.',

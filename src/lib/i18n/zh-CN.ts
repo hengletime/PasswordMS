@@ -258,6 +258,7 @@ export const zhCN = {
     logins: '登录条目',
     weak: '弱口令',
     reused: '重复密码',
+    reused_group: '第 {n} 组',
     stale: '超期未改',
     suggestions: '建议',
     good: '密码健康状况良好。',

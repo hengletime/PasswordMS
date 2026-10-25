@@ -12,15 +12,24 @@
 
   let report = $state<HealthReport | null>(null);
   let busy = $state(false);
+  // D-99：标题映射必须用**全量**条目——vault.items 是按当前筛选过滤后的列表，
+  // 不在当前视图的条目会退回显示裸 UUID（主人实测踩中）。
+  let titleMap = new Map<string, string>();
 
   function titleOf(itemId: string): string {
-    return vault.items.find((i): boolean => i.item_id === itemId)?.kind.title ?? itemId;
+    return titleMap.get(itemId) ?? itemId;
   }
 
   async function run(): Promise<void> {
     busy = true;
     try {
-      report = await api.health.check(null);
+      // 体检与全量条目并行拉取；条目列表仅用于标题映射，不落 store。
+      const [rep, allItems] = await Promise.all([
+        api.health.check(null),
+        api.items.list(null, false, undefined),
+      ]);
+      titleMap = new Map(allItems.map((i) => [i.item_id, i.kind.title]));
+      report = rep;
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
     } finally {
@@ -78,9 +87,15 @@
         {#if report.reused.length > 0}
           <div class="health-list">
             <span class="pms-label">{ui.t('health.reused')}</span>
-            <div class="health-chips">
-              {#each report.reused as id (id)}<span class="pms-badge is-warning">{titleOf(id)}</span>{/each}
-            </div>
+            <!-- D-99：按密码分组渲染——一组共用 vs 多组各用，一眼可辨。 -->
+            {#each report.reused_groups as group, gi (group[0])}
+              <div class="health-group">
+                <span class="pms-meta">{ui.t('health.reused_group', { n: gi + 1 })}</span>
+                <div class="health-chips">
+                  {#each group as id (id)}<span class="pms-badge is-warning">{titleOf(id)}</span>{/each}
+                </div>
+              </div>
+            {/each}
           </div>
         {/if}
         {#if report.stale.length > 0}
@@ -177,6 +192,14 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.35rem;
+  }
+  .health-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--pms-border);
+    border-radius: 8px;
   }
   .health-suggestions ul {
     margin: 0.4rem 0 0;
