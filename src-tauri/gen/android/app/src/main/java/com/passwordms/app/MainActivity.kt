@@ -2,12 +2,19 @@ package com.passwordms.app
 
 import android.os.Bundle
 import android.view.ViewGroup
+import android.view.WindowManager
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
+    // 截屏/录屏/最近任务缩略图防护：FLAG_SECURE 必须在 super.onCreate 之前设置，
+    // 否则 Activity 首帧可能以无防护状态渲染。
+    window.setFlags(
+      WindowManager.LayoutParams.FLAG_SECURE,
+      WindowManager.LayoutParams.FLAG_SECURE
+    )
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
     // D-41：enableEdgeToEdge 后 WebView 直接铺满屏幕，系统状态栏（时间/电量）会压住前端顶栏，
