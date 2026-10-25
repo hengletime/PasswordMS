@@ -2,8 +2,9 @@
 //!
 //! 覆盖：①软删过线→对端进回收站→还原→两端 rev 收敛 ②删除-复活拉锯→冲突箱
 //! （死亡快照）+ 两种仲裁收敛 ③peer base 免重发过滤 ④分组删除两形态且对端无自发级联
-//! ⑤blob 连带（软删保留/purge 清且不过线）⑥载荷类型白名单 ⑦墓碑密文性（A-01）+
-//! 损坏墓碑跳过不中断 + 信封重放被拒（A-08）⑧老格式墓碑帧零迁移。
+//! ⑤blob 连带（软删保留/还原补齐；D-98 后 purge 以墓碑 rev+1 过线传播、对端快照顺带
+//! 清除且 blob 孤儿 GC）⑥载荷类型白名单 ⑦墓碑密文性（A-01）+ 损坏墓碑跳过不中断 +
+//! 信封重放被拒（A-08）⑧老格式墓碑帧零迁移。
 //!
 //! **实现补注（与 §3.13.2 伪码的两处细化，均经用例实证必要）**：
 //! 1. merge 幂等判重按 base.hash 细化：`hash == [0;32]` 才代表「该墓碑已应用」——
@@ -523,7 +524,7 @@ fn case4_folder_deletion_two_strategies_no_spontaneous_cascade() {
 // ===== ⑤ blob 连带：远端软删 blob 保留、还原导出一致；purge → blob 墓碑且不过线 =====
 
 #[test]
-fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
+fn case5_attachment_soft_delete_keeps_blob_and_purge_propagates() {
     let dir = temp_dir("case5");
     let host_vault = dir.join("host.vault");
     let joiner_vault = dir.join("joiner.vault");
@@ -571,38 +572,6 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
         assert_eq!(repo.list_trash().len(), 1);
     }
 
-    // Joiner purge（彻底删其回收站快照）→ GC 清 blob，仅本地生效。
-    {
-        let trash_id = joiner_session.repo().unwrap().list_trash()[0]
-            .trash_id
-            .clone();
-        joiner_session
-            .repo_mut()
-            .unwrap()
-            .purge_item(&trash_id)
-            .unwrap();
-        assert!(
-            !joiner_session.repo().unwrap().has_blob(&att_id),
-            "purge 应清 blob"
-        );
-    }
-    // purge 事件不过线：TRASH 墓碑（白名单外）与 blob 墓碑（不独立导出）均不出网，
-    // Host 的 blob 与回收站不受影响。
-    let (_h2o, _j2o) = run_resync(
-        &host_vault,
-        rebind(resync_port),
-        &mut joiner_session,
-        &host_id,
-    );
-    {
-        let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        assert!(
-            hs.repo().unwrap().has_blob(&att_id),
-            "对端 blob 不受本端 purge 影响"
-        );
-        assert_eq!(hs.repo().unwrap().list_trash().len(), 1, "purge 事件不过线");
-    }
-
     // Host 还原 → blob 可用、导出字节一致 → 再同步 → Joiner 复活 + blob 经 D-53 阶段补齐。
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
@@ -644,6 +613,73 @@ fn case5_attachment_soft_delete_keeps_blob_and_purge_stays_local() {
             .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), original);
     }
+
+    // D-98（C 案）：Joiner 再次软删 → 同步 → purge → 墓碑 rev+1 过线 →
+    // Host 回收站快照顺带清除、blob 经孤儿 GC 消失（删除意图跨端收敛）。
+    joiner_session
+        .repo_mut()
+        .unwrap()
+        .delete_item(&parent_id, false)
+        .unwrap();
+    let (_h4o, _j4o) = run_resync(
+        &host_vault,
+        rebind(resync_port),
+        &mut joiner_session,
+        &host_id,
+    );
+    {
+        let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
+        assert_eq!(
+            hs.repo().unwrap().list_trash().len(),
+            1,
+            "软删先照旧进回收站"
+        );
+        assert!(hs.repo().unwrap().has_blob(&att_id));
+    }
+    {
+        let trash_id = joiner_session.repo().unwrap().list_trash()[0]
+            .trash_id
+            .clone();
+        joiner_session
+            .repo_mut()
+            .unwrap()
+            .purge_item(&trash_id)
+            .unwrap();
+        assert!(
+            !joiner_session.repo().unwrap().has_blob(&att_id),
+            "purge 应清本端 blob"
+        );
+    }
+    let (_h5o, _j5o) = run_resync(
+        &host_vault,
+        rebind(resync_port),
+        &mut joiner_session,
+        &host_id,
+    );
+    {
+        let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
+        assert!(
+            hs.repo().unwrap().list_trash().is_empty(),
+            "D-98：对端 purge 应顺带清除本端回收站快照"
+        );
+        assert!(
+            hs.repo().unwrap().get_item_opt(&parent_id).is_none(),
+            "无活跃条目"
+        );
+        assert!(
+            !hs.repo().unwrap().has_blob(&att_id),
+            "回收站快照清除后 blob 无引用 → 孤儿 GC"
+        );
+    }
+    // 第三轮：收敛无回声（墓碑零重发、applied=0）。
+    let (h6, j6) = run_resync(
+        &host_vault,
+        rebind(resync_port),
+        &mut joiner_session,
+        &host_id,
+    );
+    assert_eq!(h6.applied, 0, "收敛后 applied=0");
+    assert_eq!(j6.applied, 0, "收敛后 applied=0");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

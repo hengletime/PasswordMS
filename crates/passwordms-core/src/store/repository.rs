@@ -461,6 +461,27 @@ impl Repository {
         Ok(())
     }
 
+    /// 追加一枚**新 payload** 的墓碑帧（不进 `live`/`blobs` 索引——墓碑不属于活跃
+    /// 记录；`rebuild_index` 对墓碑帧同样只进 slots，重载语义一致）。
+    ///
+    /// 与 [`Self::tombstone`] 的区别：tombstone 只把既有活跃帧**原 payload** 置位
+    /// flags；本函数写入新密文的墓碑（D-98 purge 意图过线用）。同 `(type, id)` 多枚
+    /// 墓碑帧并存是有意设计：导出（`tombstone_changes`）与复活抑制（`tombstone_rev`）
+    /// 均取 rev 最高者，压缩每死记录只留 rev 最高一枚。
+    fn append_tombstone_frame(
+        &mut self,
+        record_type: u8,
+        id: &str,
+        payload: &[u8],
+    ) -> CoreResult<()> {
+        let rid = record_id_to_bytes(id)?;
+        let frame =
+            self.build_frame(record_type, &rid, crate::constants::FLAG_TOMBSTONE, payload)?;
+        let offset = self.container.append_frame(&frame)?;
+        self.slots.push(Slot { offset, frame });
+        Ok(())
+    }
+
     /// 将附件 blob 置为墓碑。
     fn tombstone_blob(&mut self, id: &str) -> CoreResult<()> {
         if let Some(idx) = self.blobs.remove(id) {
@@ -1589,12 +1610,23 @@ impl Repository {
     }
 
     /// 彻底删除回收站条目（D-60 §3.14.4：blob 清理交孤儿 GC，不再 1:1 连带）。
+    ///
+    /// **D-98（C 案，2026-10-25）：删除意图过线**——以回收站死亡快照为载荷、`rev+1`
+    /// 重封一枚 ITEM 墓碑追加落盘。对端收到更高 rev 墓碑且本端无活跃条目时，顺带
+    /// 彻底删除其回收站快照（`sync::merge::apply_changes` → `purge_trash_snapshots`）。
+    /// 旧墓碑帧保留：导出/复活抑制均取 rev 最高者，压缩每死记录也只留最高一枚。
     pub fn purge_item(&mut self, trash_id: &str) -> CoreResult<()> {
-        if !self.trash.contains_key(trash_id) {
-            return Err(CoreError::ItemNotFound);
-        }
+        let entry = self
+            .trash
+            .get(trash_id)
+            .cloned()
+            .ok_or(CoreError::ItemNotFound)?;
         self.tombstone(RECORD_TYPE_TRASH, trash_id)?;
         self.trash.remove(trash_id);
+        let mut death = entry.item_snapshot;
+        death.rev += 1;
+        let payload = serde_json::to_vec(&death)?;
+        self.append_tombstone_frame(RECORD_TYPE_ITEM, &death.item_id, &payload)?;
         self.gc_orphan_blobs()?;
         Ok(())
     }
@@ -1624,6 +1656,30 @@ impl Repository {
         for trash_id in stale {
             self.tombstone(RECORD_TYPE_TRASH, &trash_id)?;
             self.trash.remove(&trash_id);
+        }
+        Ok(n)
+    }
+
+    /// 【D-98】对端「彻底删除」意图的落点：本端无活跃条目时，清掉 rev 不高于对端
+    /// 墓碑的回收站快照（blob 引用随之收窄，孤儿交 `gc_orphan_blobs`）。
+    ///
+    /// rev 条件保护本端「删了更新版本」的快照：快照 rev 高于对端墓碑 → 保留，待
+    /// 自身墓碑过线收敛。返回清理的快照数。调用约束：该 item_id 无活跃条目（merge
+    /// 侧已保证——活跃分支走删除-修改拉锯/常规软删，不进本方法）。
+    pub fn purge_trash_snapshots(&mut self, item_id: &str, tomb_rev: u64) -> CoreResult<usize> {
+        let stale: Vec<String> = self
+            .trash
+            .values()
+            .filter(|t| t.item_snapshot.item_id == item_id && t.item_snapshot.rev <= tomb_rev)
+            .map(|t| t.trash_id.clone())
+            .collect();
+        let n = stale.len();
+        for trash_id in stale {
+            self.tombstone(RECORD_TYPE_TRASH, &trash_id)?;
+            self.trash.remove(&trash_id);
+        }
+        if n > 0 {
+            self.gc_orphan_blobs()?;
         }
         Ok(n)
     }

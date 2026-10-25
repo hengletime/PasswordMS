@@ -651,8 +651,18 @@ state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分�
 #### 3.13.5 裁定五：与 blob 阶段的交互（确认）
 
 - 远端 item 墓碑 → 对端**软删**（blob 保留）→ 条目进对端回收站，`attachment_blob_refs()`（基于活跃条目）不再含该 `blob_ref` → §3.12.6 的孤儿清理**只清 spool 目录，不清正式 blob 索引**（现状设计即如此，确认无需改）→ 回收站内附件可正常还原导出；
-- 对端 30 天到期 `purge_expired_trash` / 手动彻底删 → 本端 `tombstone_blob` → blob 不可读、密文留待 compaction（TODO）；对端 purge 事件**不需要**额外过线报文（各端回收站生命周期自治，最终一致）；
+- 对端 30 天到期 `purge_expired_trash` / 手动彻底删 → 本端 `tombstone_blob` → blob 不可读、密文留待 compaction（TODO）；~~对端 purge 事件不需要额外过线报文~~ **D-98（C 案，2026-10-25）修订：purge 意图过线**，见 §3.13.7；
 - `blob_transfer.rs` 拉取判定基于活跃条目 → 已删条目的 blob 既不会被拉取也不会被误清 ✓。
+
+#### 3.13.7 裁定七：purge 意图过线（D-98，C 案）
+
+**背景**：裁定四使 TRASH 记录永不过线，本端「彻底删除」对端不可感知——实测（主人 2026-10-25）手机彻底删除后同步，电脑端回收站纹丝不动，只能等 30 天过期。与 e2e 走查单 2.6 的期望（彻底删除后对端消失）天生矛盾。**修订**：purge 意图借道 ITEM 墓碑过线，**零 wire 格式变更**：
+
+1. **发送侧**（`Repository::purge_item`）：以回收站死亡快照（`TrashEntry.item_snapshot`）为载荷、`rev+1` 重封一枚 ITEM 墓碑**追加**落盘（`append_tombstone_frame`，不进 live 索引；`empty_trash`/`purge_expired_trash` 逐条走同一路径）。同 `(type,id)` 多枚墓碑帧并存：导出（`tombstone_changes`）/ 复活抑制（`tombstone_rev`）取 rev 最高者，compaction 每死记录只留最高一枚——旧帧无需清理。死亡快照密文仍可对端解出（冲突箱/审计依赖不变）。
+2. **接收侧**（`merge::apply_changes` ITEM deleted 分支的 None 臂）：本端无活跃条目且持有 `snapshot.rev ≤ 墓碑 rev` 的回收站快照 → `purge_trash_snapshots` 顺带彻底删除（TRASH 墓碑照旧仅本地，blob 引用收窄交孤儿 GC）。快照 rev 更高（本端删了更新版本）→ 保留，待自身墓碑过线收敛。幂等/免重发由既有 base 机制天然承担（对端 note_sent 后 `(rev+1, hash=0)`，第二轮零重发、零回声）。
+3. **边界（文档化）**：对端在 purge 到达前**还原**（live rev == 墓碑 rev）→ 沿用既有「等 rev 删除胜」语义软删（可从回收站再恢复，不丢数据）；live rev 更高 → 删除-修改拉锯进冲突箱（不变）。对端从未见过该条目 → 不复活、仅推进 base（复活抑制不变）。
+
+守门：`tests/d98_purge_sync.rs`（传播收敛/rev 保护/等 rev 竞速/单机语义/empty_trash 批量/从未见过六例）+ `tests/sync_deletion.rs` case5（重写：软删 blob 保留 → 还原补齐 → purge 传播 → blob 孤儿 GC → 收敛无回声）。
 
 #### 3.13.6 函数签名变更（前后端契约不变，仅 Rust 内部）
 

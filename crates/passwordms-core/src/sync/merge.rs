@@ -48,6 +48,9 @@ pub fn detect_conflict(local: &Item, remote: &Item, base: Option<&BaseRev>) -> C
 /// - **删除-修改拉锯**：本端条目 rev 更高 → 墓碑密文解出死亡前快照入冲突箱
 ///   （`remote_deleted = true`，仲裁「采用远端」= 接受删除走软删）；
 /// - **常规远端删除**：软删（`trash_item_direct`，blob 保留）；
+/// - **D-98 purge 传播（C 案）**：本端无活跃条目且持有 rev ≤ 墓碑的回收站快照 →
+///   顺带彻底删除该快照——对端 `purge_item` 以死亡快照 rev+1 重封 ITEM 墓碑过线
+///   （见 `Repository::purge_item` / `purge_trash_snapshots`），快照 rev 更新者保留；
 /// - **复活抑制**：本端无活跃条目但持有 `rev >= change.rev` 的墓碑 → 对端 live 变更
 ///   已陈旧，不得复活（否则「采用远端」删除仲裁会被对端陈旧 live 变更回滚）；
 /// - **base 推进**：无论何分支，base 推进到本变更 rev。
@@ -94,8 +97,15 @@ pub fn apply_changes(
                             repo.trash_item_direct(&local)?;
                             report.applied += 1;
                         }
-                        // 本端从未见过该条目：仅推进 base。
+                        // 本端无活跃条目：
+                        // - 持有回收站快照（rev ≤ 墓碑 rev）+ 对端更高 rev 墓碑 =
+                        //   **D-98（C 案）对端已彻底删除** → 顺带清理本端回收站快照
+                        //   （删除意图跨端收敛；blob 引用收窄交孤儿 GC）；
+                        // - 快照 rev 更高（本端删了更新版本）→ 保留，待自身墓碑过线；
+                        // - 两者皆无（从未见过）→ 仅推进 base。
                         None => {
+                            let _purged =
+                                repo.purge_trash_snapshots(&change.record_id, change.rev)?;
                             report.applied += 1;
                         }
                     }
