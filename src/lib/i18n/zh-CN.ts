@@ -20,6 +20,7 @@ export const zhCN = {
     confirm: '确认',
     back: '返回',
     search: '搜索',
+    clear_search: '清空搜索',
     loading: '加载中…',
     none: '暂无',
     yes: '是',

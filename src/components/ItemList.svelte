@@ -62,6 +62,18 @@
     }, 220);
   }
 
+  // D-101：一键清空搜索——必须**先取消挂着的 220ms 防抖**（否则旧词随后 setQuery
+  // 又写回去），再同步本地显示与 store（setQuery 内部走 load()，与手输路径同源）。
+  // 不碰 queryEpoch：epoch 只由外部重置路径推进（D-81），本按钮是自己发起的清空。
+  function clearSearch(): void {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    query = '';
+    void vault.setQuery('');
+  }
+
   function iconFor(item: ItemDto): string {
     if (item.kind.type === 'login') return 'key';
     if (item.kind.type === 'secure_note') return 'note';
@@ -205,6 +217,18 @@
     <div class="pms-input-group list-search">
       <span class="list-search-icon"><Icon name="search" size={16} /></span>
       <input class="pms-input" placeholder={ui.t('common.search')} value={query} oninput={onSearchInput} />
+      <!-- D-101：搜索词非空才渲染清空按钮（空态不占位）。 -->
+      {#if query.length > 0}
+        <button
+          class="list-search-clear"
+          type="button"
+          aria-label={ui.t('common.clear_search')}
+          title={ui.t('common.clear_search')}
+          onclick={clearSearch}
+        >
+          <Icon name="close" size={14} />
+        </button>
+      {/if}
     </div>
     <div class="list-actions">
       <button class="pms-btn is-primary is-sm" type="button" onclick={() => onnew('login')}>
@@ -348,6 +372,27 @@
   .list-search-icon {
     display: flex;
     color: var(--pms-faint);
+  }
+  /* D-101：清空按钮（input-group 尾部）。圆形 hitbox 22px，空态不渲染不占位。 */
+  .list-search-clear {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--pms-faint);
+    cursor: pointer;
+    transition:
+      color var(--pms-dur) var(--pms-ease),
+      background var(--pms-dur) var(--pms-ease);
+  }
+  .list-search-clear:hover {
+    color: var(--pms-danger);
+    background: var(--pms-danger-soft);
   }
   .list-actions {
     display: flex;

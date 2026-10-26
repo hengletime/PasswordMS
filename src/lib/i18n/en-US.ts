@@ -22,6 +22,7 @@ export const enUS: Messages = {
     confirm: 'Confirm',
     back: 'Back',
     search: 'Search',
+    clear_search: 'Clear search',
     loading: 'Loading…',
     none: 'None',
     yes: 'Yes',
