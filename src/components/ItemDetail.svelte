@@ -390,8 +390,16 @@
     margin: 0;
     font-size: 1.15rem;
     font-weight: 600;
+    /* D-103：flex 子项默认 min-width:auto，长标题会把 h2 最小宽度撑到内容宽，
+       ellipsis 永不触发且把右侧类型徽章挤成竖排——必须允许 h2 收缩。 */
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* D-103：类型徽章（登录/笔记）永不被标题挤压换行。 */
+  .detail-titles :global(.pms-badge) {
+    flex-shrink: 0;
     white-space: nowrap;
   }
   .detail-tools {
