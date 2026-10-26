@@ -2,7 +2,7 @@
 //
 // 路由、Toast、确认框为内存态；**语言持久化**到 localStorage（D-42：切语言重启即回中文的缺口）。
 
-import { DEFAULT_LOCALE, LOCALES, translate, type Locale } from '../i18n';
+import { DEFAULT_LOCALE, LOCALES, mapSystemLanguage, translate, type Locale } from '../i18n';
 
 /** Toast 类型。 */
 export type ToastKind = 'info' | 'success' | 'error';
@@ -63,14 +63,27 @@ export function toastDurationMs(kind: ToastKind, message: string): number {
   return Math.min(TOAST_ERROR_MAX_MS, Math.max(TOAST_ERROR_MIN_MS, length * TOAST_ERROR_PER_CHAR_MS));
 }
 
-/** 读取持久化语言；非法值 / 隐私模式 / 无 localStorage 时兜底为默认语言。 */
+/**
+ * 读取持久化语言；非法值 / 隐私模式 / 无 localStorage 时兜底为默认语言。
+ *
+ * D-102：**从未存储过**（全新安装）时跟随系统语言 —— 检测 `navigator.language`
+ * 映射到受支持语言，未支持的语言兜底英文（主人拍板口径）。已存储过语言的老用户
+ * 不受影响；`navigator` 不存在（Node 测试环境）才落到 DEFAULT_LOCALE。
+ */
 function readStoredLocale(): Locale {
   try {
     if (typeof localStorage === 'undefined') {
       return DEFAULT_LOCALE;
     }
     const raw = localStorage.getItem(LOCALE_STORAGE_KEY);
-    return raw !== null && (LOCALES as readonly string[]).includes(raw) ? (raw as Locale) : DEFAULT_LOCALE;
+    if (raw !== null) {
+      return (LOCALES as readonly string[]).includes(raw) ? (raw as Locale) : DEFAULT_LOCALE;
+    }
+    // 全新安装：无存储值 → 检测系统语言。
+    if (typeof navigator === 'undefined' || typeof navigator.language !== 'string') {
+      return DEFAULT_LOCALE;
+    }
+    return mapSystemLanguage(navigator.language);
   } catch {
     return DEFAULT_LOCALE;
   }

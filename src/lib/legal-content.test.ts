@@ -13,7 +13,7 @@ import {
   type LegalLang,
 } from './legal-content';
 
-const LANGS: LegalLang[] = ['zh', 'en'];
+const LANGS: LegalLang[] = ['zh', 'zh-TW', 'en', 'th'];
 
 describe('legal-content —— D-63 法律文本数据源', () => {
   it('两种语言的两份文档都存在且标题非空', () => {
@@ -58,17 +58,46 @@ describe('legal-content —— D-63 法律文本数据源', () => {
     }
   });
 
-  it('中英文本文档条目标题不串语（同一索引 heading 不相同）', () => {
-    // 粗判：若误把中文塞进英文分支会在此暴露。
-    const zhDisclaimer = getDisclaimer('zh');
-    const enDisclaimer = getDisclaimer('en');
-    zhDisclaimer.sections.forEach((section, index): void => {
-      expect(section.heading).not.toBe(enDisclaimer.sections[index]?.heading);
-    });
-    const zhTerms = getTerms('zh');
-    const enTerms = getTerms('en');
-    zhTerms.sections.forEach((section, index): void => {
-      expect(section.heading).not.toBe(enTerms.sections[index]?.heading);
-    });
+  it('各语言文本文档不串语（跨文字体系逐条比对；简繁对比文档标题）', () => {
+    // 粗判：若误把某语言的文本塞进另一语言分支会在此暴露。
+    // 注意：zh 与 zh-TW 的个别标题可能简繁同形（如「使用限制」），逐条比对会误报；
+    // 简繁之间改比文档标题（免责声明/免責聲明、用户协议/使用者條款必然不同）。
+    const langs: LegalLang[] = ['zh', 'zh-TW', 'en', 'th'];
+    for (const a of langs) {
+      for (const b of langs) {
+        if (a >= b) {
+          continue;
+        }
+        const sameScriptPair =
+          (a === 'zh' && b === 'zh-TW') || (a === 'zh-TW' && b === 'zh');
+        if (sameScriptPair) {
+          expect(getDisclaimer(a).title, `${a}/${b}:disclaimer.title`).not.toBe(getDisclaimer(b).title);
+          expect(getTerms(a).title, `${a}/${b}:terms.title`).not.toBe(getTerms(b).title);
+          continue;
+        }
+        const da = getDisclaimer(a);
+        const db = getDisclaimer(b);
+        da.sections.forEach((section, index): void => {
+          expect(section.heading, `${a}/${b}:disclaimer#${index}`).not.toBe(db.sections[index]?.heading);
+        });
+        const ta = getTerms(a);
+        const tb = getTerms(b);
+        ta.sections.forEach((section, index): void => {
+          expect(section.heading, `${a}/${b}:terms#${index}`).not.toBe(tb.sections[index]?.heading);
+        });
+      }
+    }
+  });
+
+  it('泰文文档必须是泰文（字形守门：正文含泰文字符）', () => {
+    for (const doc of [getDisclaimer('th'), getTerms('th')]) {
+      expect(doc.title, 'th:title').toMatch(/[\u0E00-\u0E7F]/);
+      for (const section of doc.sections) {
+        expect(section.heading, `th:${section.heading}`).toMatch(/[\u0E00-\u0E7F]/);
+        for (const paragraph of section.paragraphs) {
+          expect(paragraph, 'th:paragraph').toMatch(/[\u0E00-\u0E7F]/);
+        }
+      }
+    }
   });
 });

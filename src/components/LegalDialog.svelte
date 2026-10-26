@@ -1,6 +1,6 @@
 <script lang="ts">
   // 法律条款弹窗（D-63）：免责声明 / 用户协议通用，复用通用 Modal（设计规范 §5.4）。
-  // 语言跟随 `ui.locale`（zh-CN → 中文文本；en-US → 英文文本），文本源见 src/lib/legal-content.ts。
+  // 语言跟随 `ui.locale`（zh-CN → 中文 / zh-TW → 繁體 / en-US → 英文 / th → ไทย），文本源见 src/lib/legal-content.ts。
   // props：`open` 可绑定（父组件 bind:open），`kind` 选择文档；底部「我知道了」关闭。
   import Modal from './common/Modal.svelte';
   import { getDisclaimer, getTerms, type LegalDoc, type LegalLang } from '../lib/legal-content';
@@ -12,7 +12,9 @@
   }
   let { open = $bindable(false), kind }: Props = $props();
 
-  const lang = $derived<LegalLang>(ui.locale === 'en-US' ? 'en' : 'zh');
+  const lang = $derived<LegalLang>(
+    ui.locale === 'zh-CN' ? 'zh' : ui.locale === 'en-US' ? 'en' : ui.locale,
+  );
   const doc = $derived<LegalDoc>(kind === 'terms' ? getTerms(lang) : getDisclaimer(lang));
   const titleKey = $derived(kind === 'terms' ? 'legal.terms_title' : 'legal.disclaimer_title');
 

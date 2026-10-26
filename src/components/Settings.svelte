@@ -26,8 +26,13 @@
   /** D-63：项目主页（「关于」分组打开外链，走与详情页相同的安全校验 + IPC 链路）。 */
   const HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS';
 
-  // 语言分段钮的显示名：语言名用母语书写（中文/English），属于专有名词，不做翻译。
-  const LOCALE_NAMES: Record<Locale, string> = { 'zh-CN': '中文', 'en-US': 'English' };
+  // 语言分段钮的显示名：语言名用母语书写（中文/繁體中文/English/ไทย），属于专有名词，不做翻译。
+  const LOCALE_NAMES: Record<Locale, string> = {
+    'zh-CN': '中文',
+    'zh-TW': '繁體中文',
+    'en-US': 'English',
+    th: 'ไทย',
+  };
 
   let draft = $state<VaultSettings>({ ...settings.value });
   let fileInfo = $state<VaultFileInfoDto | null>(null);

@@ -1,16 +1,24 @@
-// i18n 键完整性：zh-CN 与 en-US 键集合必须完全一致。
+// i18n 键完整性：全部语言键集合必须与 zh-CN（键的唯一事实来源）完全一致。
 
 import { describe, expect, it } from 'vitest';
 
 import { enUS } from './i18n/en-US';
+import { th } from './i18n/th';
 import { zhCN } from './i18n/zh-CN';
+import { zhTW } from './i18n/zh-TW';
 import { dictionaries, flattenKeys, hasKey, LOCALES, translate } from './i18n/index';
 
 describe('i18n key parity', () => {
-  it('zh-CN and en-US expose the identical key set', () => {
+  it('every locale exposes the identical key set as zh-CN', () => {
     const zhKeys = flattenKeys(zhCN as unknown as Record<string, unknown>).sort();
-    const enKeys = flattenKeys(enUS as unknown as Record<string, unknown>).sort();
-    expect(enKeys).toEqual(zhKeys);
+    for (const [name, dict] of [
+      ['zh-TW', zhTW],
+      ['en-US', enUS],
+      ['th', th],
+    ] as const) {
+      const keys = flattenKeys(dict as unknown as Record<string, unknown>).sort();
+      expect(keys, `${name} key set`).toEqual(zhKeys);
+    }
   });
 
   it('every locale has no empty strings', () => {
