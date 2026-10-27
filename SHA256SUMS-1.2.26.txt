@@ -1,0 +1,4 @@
+8b8a61ab32ee4e28069b6e954f5b7e6b6b1f680a66107097b8a6d22da5a0b9fe *PasswordMS_1.2.26_x64-setup.exe  (1,915,805 B)
+61c2fcdc8564da77f5f4b190507d956db937aabfcf6e987803b7adf95445d0e9 *PasswordMS_1.2.26_x64_en-US.msi  (2,727,936 B)
+c0b3077df6fbd4813f49f3fcf14603984dd5c39a4469de34de94d1af3517a0b8 *PasswordMS-1.2.26-portable-x64.zip  (2,233,749 B)
+577edc87ca86ebbfa1ee48fcf932fcd4e71877cb8c2fbe6a542deeae28b4f6d6 *PasswordMS-1.2.26-arm64.apk  (7,237,379 B)
