@@ -66,11 +66,11 @@ export const enUS: Messages = {
     hint: '8+ characters; mixing upper/lower case, digits and symbols is recommended',
     mismatch: 'The passwords do not match.',
     too_short: 'Master password must be at least {n} characters.',
-    weak_hint: 'The password is short. A longer passphrase is recommended; check to continue.',
+    weak_hint: 'The password is short — a longer one is recommended. Select the checkbox to continue.',
     // D-63: the acknowledgement row is split into prefix + disclaimer link + "&" + terms link —
     // both links are siblings of the checkbox label, so clicking them never toggles the checkbox.
     acknowledge_prefix: 'I have read and agree to the',
-    disclaimer_link: 'Disclaimers',
+    disclaimer_link: 'Disclaimer',
     acknowledge_middle: '&',
     terms_link: 'Terms of Use',
     submit: 'Create and unlock',
@@ -181,8 +181,8 @@ export const enUS: Messages = {
     lowercase: 'Lowercase',
     digits: 'Digits',
     symbols: 'Symbols',
-    symbol_pick: 'Tap to choose which symbols may appear (none = default safe set + - _ . , :)',
-    exclude_ambiguous: 'Exclude ambiguous',
+    symbol_pick: 'Choose which symbols may appear (select none for the default safe set + - _ . , :)',
+    exclude_ambiguous: 'Exclude ambiguous characters',
     generate: 'Generate',
     copy: 'Copy',
     use: 'Use this password',
@@ -206,14 +206,14 @@ export const enUS: Messages = {
     import: 'Import as attachment',
     export: 'Export',
     export_confirm_title: 'Export attachment',
-    export_confirm_body: 'The exported file will be written to disk in plaintext. Confirm the location is safe.',
+    export_confirm_body: 'The exported file will be written to disk in plaintext. Please make sure the location is safe.',
     size: 'Size',
     too_large: 'A single attachment must not exceed {n} MB.',
     vault_full: 'The vault has reached its {n} MB capacity limit.',
     filename: 'Original filename',
     mime: 'Type',
     // D-53：blob 未同步时的占位态。
-    pending_sync: 'Attachment content pending sync; export will be available once the blob arrives.',
+    pending_sync: 'Attachment content is pending sync; export will be available once it has synced.',
     // D-60：详情页附件区（父条目内嵌 attachments）。
     add: 'Add attachment',
     remove: 'Remove',
@@ -247,7 +247,7 @@ export const enUS: Messages = {
     supported_hint:
       "Only unencrypted Bitwarden exports (JSON / CSV) are supported. Encrypted exports and other password managers' formats must be converted first.",
     template_hint:
-      'The CSV reader recognises these 10 columns: folder / favorite / type / name / notes / login_uri / login_username / login_password / login_totp / fields; any other column is kept as a custom field. Only type values login or 1 (login) and secure note / note / 2 (secure note) are imported; other types are skipped.',
+      'The CSV reader recognizes these 10 columns: folder / favorite / type / name / notes / login_uri / login_username / login_password / login_totp / fields; any other column is kept as a custom field. Only type values login or 1 (login) and secure note / note / 2 (secure note) are imported; other types are skipped.',
     // D-87: encoding fallback is live; saving as UTF-8 stays the safest route.
     encoding_hint:
       'After editing a CSV in Excel / WPS, save it as "CSV UTF-8" when possible; GBK (ANSI) and UTF-16 files are detected and converted automatically.',
@@ -299,10 +299,10 @@ export const enUS: Messages = {
     group_health: 'Health thresholds',
     group_sync: 'Sync',
     group_about: 'About',
-    clipboard_ttl: 'Clipboard clear (seconds)',
+    clipboard_ttl: 'Clipboard auto-clear (seconds)',
     auto_lock: 'Auto-lock (minutes)',
     auto_lock_updated: 'Auto-lock updated ({n} min)',
-    auto_lock_failed: 'Could not read your setting; the value shown is a fallback.',
+    auto_lock_failed: 'Could not read this setting; the value shown is the default.',
     auto_sync: 'Auto sync',
     sync_on_start: 'Sync on start',
     change_password: 'Change master password',
@@ -324,7 +324,7 @@ export const enUS: Messages = {
 
     // D-76: vault compaction entry (size breakdown + reclaim action).
     compact: 'Compact vault',
-    compact_dead_attachments: 'Deleted attachments use {size}',
+    compact_dead_attachments: 'Deleted attachments take up {size}',
     compact_reclaimable: '{size} reclaimable',
     compact_none: 'Nothing to reclaim',
     // When the breakdown cannot be read, saying "nothing to reclaim" would be a **conclusion**
@@ -345,13 +345,13 @@ export const enUS: Messages = {
     compact_hint_trash: 'Attachments in the trash are not reclaimed; empty the trash first.',
     compact_hint_disk:
       'Compaction temporarily needs about twice the disk space. Do not close the app.',
-    compact_start: 'Start',
+    compact_start: 'Start compaction',
     compact_done: 'Reclaimed {size}',
     // Generic failure copy for compaction (replaces `err.internal` only; specific backend
     // reasons still surface verbatim). Must state that the vault is unchanged.
     compact_failed: 'Compaction did not finish. Your vault is unchanged.',
     weak_max_len: 'Weak length threshold',
-    stale_days: 'Stale days',
+    stale_days: 'Stale after (days)',
     // D-63: "About" group (version / author / license / homepage / legal entries).
     about_version: 'Version',
     about_author: 'Author',
@@ -367,7 +367,7 @@ export const enUS: Messages = {
     tab_devices: 'Devices',
     tab_status: 'Status',
     tab_conflicts: 'Conflicts',
-    start_pairing: 'Generate pairing QR',
+    start_pairing: 'Generate pairing QR code',
     qr_hint: 'Scan this QR code on the other device to pair.',
     pair_ip: 'LAN address: {ip}',
     firewall_hint: "Can't connect? Make sure the phone and this PC are on the same Wi‑Fi, and allow PasswordMS through Windows Firewall (private networks).",
@@ -398,16 +398,16 @@ export const enUS: Messages = {
     pending: 'Pending changes',
     device_count: 'Devices',
     result_applied: 'Merged {n} items',
-    result_conflicts: '{n} conflicts created',
+    result_conflicts: '{n} conflicts detected',
     adopt_requires_empty: 'The local vault is not empty ({n} items), so the peer key cannot be adopted directly. If these devices were paired before, use "Devices → Sync now" instead; if they are separate vaults, they cannot be merged directly — export and clear one side first, or re-create the vault from the peer.',
     never: 'Never',
     // D-66: device readability. "Rename / Save / Cancel" reuse the existing common.*
     // keys (no duplicates); only the device-list-specific strings live here.
-    rename_hint: 'Give this device a recognisable name',
+    rename_hint: 'Give this device a recognizable name',
     renamed: 'Device name updated',
     paired_at: 'Paired at',
     // Backend limit is 64 **bytes** (22 CJK chars overflow), unlike `maxlength` (UTF-16 units).
-    rename_too_long: 'Name too long: max 64 bytes (about 21 Chinese characters)',
+    rename_too_long: 'Name too long: max 64 bytes (about 21 CJK characters)',
     // D-69: the two pairing screens verify a **session code** (replaces the D-68 fingerprint
     // check — the screens hashed different keys: the host showed its long-term identity
     // fingerprint, the joining side showed the ephemeral key's, so they could never match).
@@ -424,7 +424,7 @@ export const enUS: Messages = {
     local: 'Local version',
     remote: 'Remote version',
     keep_local: 'Keep local',
-    take_remote: 'Take remote',
+    take_remote: 'Use remote',
     keep_both: 'Keep both',
     choose: 'Choose an action',
     local_title: 'Local title',
@@ -461,7 +461,7 @@ export const enUS: Messages = {
       'Failed to parse the import file. Check that it is an unencrypted Bitwarden export (JSON / CSV) and the content is intact.',
     import_encrypted: 'Encrypted export files are not supported.',
     pair_token_invalid: 'Invalid pairing information.',
-    pair_token_expired: 'The pairing QR has expired; please regenerate it.',
+    pair_token_expired: 'The pairing QR code has expired; please regenerate it.',
     pair_token_used: 'This pairing information has already been used.',
     not_paired: 'The device is not paired.',
     replay: 'A replay attack was detected; sync aborted.',
@@ -470,7 +470,7 @@ export const enUS: Messages = {
     sync_busy: 'A sync is already in progress; please try again shortly.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',
-    restore_conflict: 'Cannot restore: a newer version of this item already exists (caused by multi-device sync). Handle it in the item list or the conflict box.',
+    restore_conflict: 'Cannot restore: a newer version of this item already exists (caused by multi-device sync). Handle it in the item list or the Conflicts tab.',
     blob_missing: 'The attachment content has not been synced to this device yet; try again after syncing.',
     blob_incomplete: 'The attachment content transfer was incomplete; please sync again.',
     blob_capacity: 'The attachment exceeds the remaining vault capacity on this device.',

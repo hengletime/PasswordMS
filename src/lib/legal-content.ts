@@ -38,7 +38,7 @@ const DISCLAIMER_ZH: LegalDoc = {
       heading: '主密码不可找回',
       paragraphs: [
         'PasswordMS 为本地优先的零知识密码管理器：主密码仅在你本机用于派生加密密钥，软件不设任何后门，也不提供密钥托管、找回或重置服务。',
-        '一旦忘记主密码，保险库中的数据将永久无法解密与恢复，作者无法也不应为你绕过加密。请务必定期使用「设置 → 数据 → 导出保险库」生成加密备份，并妥善保管备份文件与主密码。',
+        '一旦忘记主密码，保险库中的数据将永久无法解密与恢复，作者无法也不应为你绕过加密。请务必定期使用「设置 → 导出保险库」生成加密备份，并妥善保管备份文件与主密码。',
       ],
     },
     {
@@ -87,7 +87,7 @@ const DISCLAIMER_EN: LegalDoc = {
       heading: 'Master password cannot be recovered',
       paragraphs: [
         'PasswordMS is a local-first, zero-knowledge password manager: your master password is used only on your own device to derive encryption keys. The software contains no backdoors and offers no key escrow, recovery, or reset service.',
-        'If you forget your master password, the vault contents become permanently undecryptable and unrecoverable. The author cannot and will not bypass the encryption for you. Export an encrypted backup regularly via Settings → Data → Export vault, and keep both the backup file and your master password safe.',
+        'If you forget your master password, the vault contents become permanently undecryptable and unrecoverable. The author cannot and will not bypass the encryption for you. Export an encrypted backup regularly via Settings → Export vault, and keep both the backup file and your master password safe.',
       ],
     },
     {
@@ -258,13 +258,13 @@ const DISCLAIMER_ZHTW: LegalDoc = {
       heading: '主密碼不可找回',
       paragraphs: [
         'PasswordMS 為本地優先的零知識密碼管理器：主密碼僅在你本機用於衍生加密金鑰，軟體不設任何後門，也不提供金鑰託管、找回或重設服務。',
-        '一旦忘記主密碼，保險庫中的資料將永久無法解密與恢復，作者無法也不應為你繞過加密。請務必定期使用「設定 → 資料 → 匯出保險庫」產生加密備份，並妥善保管備份檔案與主密碼。',
+        '一旦忘記主密碼，保險庫中的資料將永久無法解密與恢復，作者無法也不應為你繞過加密。請務必定期使用「設定 → 匯出保險庫」產生加密備份，並妥善保管備份檔案與主密碼。',
       ],
     },
     {
-      heading: '軟體按「現狀」提供',
+      heading: '軟體按「現況」提供',
       paragraphs: [
-        '本軟體按「現狀」（AS IS）提供，不附帶任何形式的明示或默示保證，包括但不限於適銷性、特定用途適用性與無侵權保證。',
+        '本軟體按「現況」（AS IS）提供，不附帶任何形式的明示或默示保證，包括但不限於適售性、特定用途適用性與無侵權保證。',
         '作者不保證軟體完全無缺陷、不中斷或與你的所有裝置、系統版本完全相容；使用本軟體的風險由你自行承擔。',
       ],
     },
@@ -285,8 +285,8 @@ const DISCLAIMER_ZHTW: LegalDoc = {
     {
       heading: '資料遺失風險',
       paragraphs: [
-        '裝置損壞、系統重裝、誤刪除、主密碼遺忘或同步誤操作等均可能導致資料遺失。請保持定期匯出備份的習慣。',
-        '因上述情形造成的資料遺失或損壞，作者不承擔責任；軟體內提供的資源回收筒與備份還原功能僅為降低風險，不構成資料安全的兜底承諾。',
+        '裝置損壞、系統重新安裝、誤刪除、主密碼遺忘或同步操作失誤等均可能導致資料遺失。請保持定期匯出備份的習慣。',
+        '因上述情形造成的資料遺失或損壞，作者不承擔責任；軟體內提供的資源回收筒與備份還原功能僅為降低風險的輔助功能，並非資料安全的保證。',
       ],
     },
     {
@@ -307,7 +307,7 @@ const DISCLAIMER_TH: LegalDoc = {
       heading: 'รหัสผ่านหลักกู้คืนไม่ได้',
       paragraphs: [
         'PasswordMS เป็นโปรแกรมจัดการรหัสผ่านแบบ local-first และ zero-knowledge: รหัสผ่านหลักถูกใช้เพียงบนอุปกรณ์ของคุณเองเพื่อสร้างกุญแจเข้ารหัส ซอฟต์แวร์ไม่มีประตูหลังใด ๆ และไม่มีบริการรับฝากกุญแจ กู้คืน หรือรีเซ็ต',
-        'หากลืมรหัสผ่านหลัก ข้อมูลในตู้เซฟจะถอดรหัสและกู้คืนไม่ได้อย่างถาวร ผู้สร้างไม่สามารถและจะไม่เจาะระบบเข้ารหัสแทนคุณ กรุณาส่งออกข้อมูลสำรองแบบเข้ารหัสเป็นประจำผ่าน การตั้งค่า → ข้อมูล → ส่งออกตู้เซฟ และเก็บรักษาทั้งไฟล์สำรองและรหัสผ่านหลักให้ปลอดภัย',
+        'หากลืมรหัสผ่านหลัก ข้อมูลในตู้เซฟจะถอดรหัสและกู้คืนไม่ได้อย่างถาวร ผู้สร้างไม่สามารถและจะไม่เจาะระบบเข้ารหัสแทนคุณ กรุณาส่งออกข้อมูลสำรองแบบเข้ารหัสเป็นประจำผ่าน การตั้งค่า → ส่งออกตู้เซฟ และเก็บรักษาทั้งไฟล์สำรองและรหัสผ่านหลักให้ปลอดภัย',
       ],
     },
     {
