@@ -197,22 +197,31 @@ impl Container {
     }
 
     /// 尾部追加一帧，返回其偏移。
+    ///
+    /// **D-106（豆包审查 3.1-1）**：`flush()` 在 `std::fs::File` 上是 no-op（数据仍在
+    /// OS page cache），掉电会丢最后几秒写入——这里补 `sync_all()` 真正落盘。
+    /// 业务写路径（create/update/delete/attach）每帧一次 fsync：本库写频低
+    /// （用户交互级），可靠性优先于吞吐。
     pub fn append_frame(&self, frame: &Frame) -> CoreResult<u64> {
         let bytes = frame.encode()?;
         let mut file = OpenOptions::new().append(true).open(&self.path)?;
         let offset = file.seek(SeekFrom::End(0))?;
         file.write_all(&bytes)?;
         file.flush()?;
+        file.sync_all()?;
         Ok(offset)
     }
 
     /// 在指定偏移处覆写一帧（要求字节长度不变）。
+    ///
+    /// **D-106（豆包审查 3.1-1）**：同 [`Self::append_frame`] 补 `sync_all()`。
     pub fn pwrite_frame(&self, offset: u64, frame: &Frame) -> CoreResult<()> {
         let bytes = frame.encode()?;
         let mut file = OpenOptions::new().write(true).open(&self.path)?;
         file.seek(SeekFrom::Start(offset))?;
         file.write_all(&bytes)?;
         file.flush()?;
+        file.sync_all()?;
         Ok(())
     }
 

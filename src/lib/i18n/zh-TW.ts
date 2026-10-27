@@ -21,6 +21,9 @@ export const zhTW = {
     back: '返回',
     search: '搜尋',
     clear_search: '清空搜尋',
+    minimize: '最小化',
+    maximize_restore: '最大化 / 還原',
+    close_window: '關閉視窗',
     loading: '載入中…',
     none: '無',
     yes: '是',
@@ -151,6 +154,7 @@ export const zhTW = {
     field_password: '密碼',
     field_notes: '備註',
     field_totp: 'TOTP 金鑰',
+    totp_placeholder: 'BASE32 或 otpauth://',
     custom_fields: '自訂欄位',
     field_key: '欄位名稱',
     field_value: '欄位值',
@@ -366,7 +370,8 @@ export const zhTW = {
     session_code: '本次配對核對碼',
     peer_session_code: '電腦上的核對碼',
     session_code_hint: '請與另一台裝置上顯示的核對碼逐字核對；不一致表示本次連線可能遭到中間人攻擊——請立即解除配對並重試。',
-  },  conflict: {
+  },
+  conflict: {
     title: '衝突處理',
     none: '沒有待處理衝突',
     local: '本機版本',
@@ -386,6 +391,8 @@ export const zhTW = {
     updated: '最後更新',
   },
   err: {
+    startup_failed: '啟動狀態查詢失敗，請重試。',
+    clipboard_clear_failed: '剪貼簿自動清空失敗，請手動清理。',
     unlock_failed: '解鎖失敗，請重試。',
     no_vault: '未找到保險庫。',
     vault_exists: '保險庫已存在。',

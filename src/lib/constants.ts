@@ -78,5 +78,10 @@ export function formatDateTime(ms: number, locale: string): string {
   const da = two(d.getDate());
   const h = two(d.getHours());
   const mi = two(d.getMinutes());
+  // D-106（豆包审查 5.2-9）：泰文用佛历（佛历年 = 公历年 + 543）+ DD/MM/YYYY，
+  // 与泰国日常读法一致；其余非中文沿用 MM/DD/YYYY 西元。
+  if (locale === 'th') {
+    return `${da}/${mo}/${y + 543} ${h}:${mi}`;
+  }
   return locale === 'zh-CN' ? `${y}-${mo}-${da} ${h}:${mi}` : `${mo}/${da}/${y} ${h}:${mi}`;
 }

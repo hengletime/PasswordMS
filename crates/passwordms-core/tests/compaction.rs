@@ -259,7 +259,7 @@ fn compact_keeps_blob_referenced_by_trash_snapshot() {
     let restored = repo.restore_item(&trash_id).unwrap();
     assert_eq!(restored.attachments.len(), 1);
     assert_eq!(
-        repo.read_blob(&attachment_id).unwrap(),
+        *repo.read_blob(&attachment_id).unwrap(),
         payload,
         "还原后附件字节必须原样可读"
     );
@@ -493,7 +493,7 @@ fn compact_keeps_blob_referenced_by_conflict_snapshot() {
     add_conflict(repo, &item.item_id, live.clone(), remote_snapshot);
 
     assert!(repo.has_blob(&att_a), "构造前提：A 的 blob 帧此刻还在库里");
-    let hash_before = hash32(&repo.read_blob(&att_a).unwrap());
+    let hash_before = hash32(&*repo.read_blob(&att_a).unwrap());
 
     repo.compact().unwrap();
 
@@ -502,7 +502,7 @@ fn compact_keeps_blob_referenced_by_conflict_snapshot() {
         "冲突快照引用的附件被压缩删掉了 —— 用户一仲裁就会 BlobMissing"
     );
     assert_eq!(
-        hash32(&repo.read_blob(&att_a).unwrap()),
+        hash32(&*repo.read_blob(&att_a).unwrap()),
         hash_before,
         "保活下来的附件字节必须与压缩前逐字节一致"
     );
@@ -546,7 +546,7 @@ fn gc_orphan_blobs_keeps_blob_referenced_by_conflict_snapshot() {
         "孤儿 GC 把冲突快照引用的附件墓碑掉了（返回 {collected} 个孤儿）"
     );
     assert_eq!(
-        repo.read_blob(&att_c).unwrap(),
+        *repo.read_blob(&att_c).unwrap(),
         a_payload,
         "GC 后附件字节必须仍可读"
     );
@@ -596,7 +596,7 @@ fn compact_drops_blob_referenced_by_nobody() {
         "被丢掉的 blob 不得仍可读"
     );
     assert!(repo.has_blob(&att_keep), "被引用的 blob 必须留下");
-    assert_eq!(repo.read_blob(&att_keep).unwrap(), keep_payload);
+    assert_eq!(*repo.read_blob(&att_keep).unwrap(), keep_payload);
 
     cleanup(&dir);
 }
@@ -792,7 +792,7 @@ fn resolve_conflict_keep_both_keeps_inherited_blob_alive() {
         "KeepBoth 继承进副本条目的附件被 GC 回收了 —— 仲裁后副本会 BlobMissing（本次回收 {collected} 个孤儿）"
     );
     assert_eq!(
-        repo.read_blob(&att).unwrap(),
+        *repo.read_blob(&att).unwrap(),
         payload,
         "继承下来的附件字节必须可读且一致"
     );

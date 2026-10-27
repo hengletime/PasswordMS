@@ -166,7 +166,20 @@
     }
   }
 
+  /**
+   * D-106（豆包审查 3.5-4）：剪贴板 TTL 钳制——HTML min/max 不阻止键入，
+   * 0/负值会导致复制即清空、极大值会让密码长期残留剪贴板。
+   */
+  function clampClipboardTtl(raw: number): number {
+    const n = Math.floor(Number(raw));
+    if (!Number.isFinite(n)) {
+      return 30;
+    }
+    return Math.min(120, Math.max(5, n));
+  }
+
   async function saveSettings(): Promise<void> {
+    draft.clipboard_clear_secs = clampClipboardTtl(draft.clipboard_clear_secs);
     await settings.save($state.snapshot(draft));
   }
 
@@ -326,7 +339,8 @@
     {/if}
     <div class="set-row">
       <label class="set-label" for="set-ttl">{ui.t('settings.clipboard_ttl')}</label>
-      <input id="set-ttl" class="pms-input set-ctl" type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs} />
+      <input id="set-ttl" class="pms-input set-ctl" type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs}
+        onchange={() => { draft.clipboard_clear_secs = clampClipboardTtl(draft.clipboard_clear_secs); }} />
     </div>
   </div>
 

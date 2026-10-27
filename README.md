@@ -14,8 +14,8 @@ English | [简体中文](README.zh-CN.md)
 - **Two platforms**: Windows 10/11 (installer / portable version) + Android (arm64)
 - **LAN sync**: QR-code pairing, end-to-end encrypted — data never touches any cloud server
 - **Auto-lock**: locks automatically after inactivity (1 / 5 / 15 minutes); Android locks immediately when returning from background after timeout
-- **Attachments**: login / note entries can carry attachments (up to 16 per entry, ≤ 2 MB each), encrypted with the vault
-- **Recycle bin**: soft delete → restore → permanent purge; attachments are cleaned up alongside entries
+- **Attachments**: login / note entries can carry attachments (up to 16 per entry, ≤ 20 MB each), encrypted with the vault
+- **Trash**: soft delete → restore → delete permanently; attachments are cleaned up alongside entries
 - **Tiny footprint**: desktop installer ≈ 1.6 MB, APK ≈ 6.9 MB
 
 ## 📦 Download

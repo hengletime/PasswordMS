@@ -68,11 +68,26 @@ pub fn lock(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> IpcResu
     let _ = crate::commands::system_cmd::clear_owned_clipboard(&app, state.inner());
     // A-04：导入预览缓存持有完整条目明文，锁定须先擦后清。
     // 顺序不能颠倒——clear() 直接 drop 值，不会覆写明文缓冲。
-    if let Ok(mut guard) = state.pending_imports.lock() {
-        for preview in guard.values_mut() {
-            preview.wipe_plaintext();
+    // D-106（豆包审查 3.4-1）：锁中毒不得跳过清理（A-04 旁路）——
+    // into_inner() 兜底拿 guard 照常擦除；仍失败则留痕（CoreError Debug 脱敏）。
+    match state.pending_imports.lock() {
+        Ok(mut guard) => {
+            for preview in guard.values_mut() {
+                preview.wipe_plaintext();
+            }
+            guard.clear();
         }
-        guard.clear();
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            for preview in guard.values_mut() {
+                preview.wipe_plaintext();
+            }
+            guard.clear();
+            crate::state::append_log(
+                &app,
+                "[lock] pending_imports mutex poisoned; wiped via into_inner",
+            );
+        }
     }
     // 锁定后停止重同步监听，避免持有明文上下文。
     stop_resync_listener(&app);

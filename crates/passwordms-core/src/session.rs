@@ -158,7 +158,16 @@ impl Session {
         };
         drop(container);
 
-        let mk = kdf::derive_master_key(master_password, &salt, &params)?;
+        // D-106（豆包审查 3.2-1）：KDF 参数校验失败（本地篡改头，超限被夹取拒绝）
+        // 发生在 Argon2 **之前**——原样上抛会毫秒级返回 ERR_VALIDATION，绕开
+        // burn-KDF 耗时均衡（A-05 逃逸口）。补一次等价 burn 后折叠为 UnlockFailed。
+        let mk = match kdf::derive_master_key(master_password, &salt, &params) {
+            Ok(mk) => mk,
+            Err(_) => {
+                burn_unlock_kdf(master_password);
+                return Err(CoreError::UnlockFailed);
+            }
+        };
         let kek = kdf::derive_kek(&mk[..])?;
         let verify_key = kdf::derive_verify_key(&mk[..])?;
         drop(mk);
@@ -166,8 +175,17 @@ impl Session {
         // 统一校验：任何失败（密码错 / 数据损坏）都映射为同一错误码。
         let vault_key = verify::unlock_check(&kek, &verify_key, &verify_mac, &wrapped)?;
 
-        let device_id = load_or_create_device_id(path)?;
-        let mut repo = Repository::open(path, vault_key, device_id)?;
+        // D-106（豆包审查 3.2-1）：此处已跑过真实 Argon2 且 verify 通过（时序与
+        // 正常解锁相当，无侧信道），但错误码仍要折叠——ERR_IO / ERR_INTERNAL 会向
+        // 本地篡改者暴露「密码正确但后续失败」这一与统一化承诺不符的信号。
+        let device_id = match load_or_create_device_id(path) {
+            Ok(id) => id,
+            Err(_) => return Err(CoreError::UnlockFailed),
+        };
+        let mut repo = match Repository::open(path, vault_key, device_id) {
+            Ok(r) => r,
+            Err(_) => return Err(CoreError::UnlockFailed),
+        };
         // D-91（审查 C4）：三项维护此前 `let _ =` 全静默——migrate 半途失败会让
         // 附件引用与 blob 状态漂移且无人知晓。失败收集为警告，由命令层落文件日志。
         // 均为幂等操作，本次失败下次解锁自动重试。

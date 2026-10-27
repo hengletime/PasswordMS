@@ -190,21 +190,23 @@ impl JoinerSession {
         )?;
 
         // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并。
-        let mut merged: Option<CoreResult<(DeviceSyncState, usize, Vec<String>)>> = None;
-        let host_id = self.host_id.clone();
+        // D-106（豆包审查 3.3-1）：直接复用段①导出后在**内存 state** 上推进过发送
+        // 水位（W'）的同一份状态——原实现在这里重新 `repo.sync_state()` 读盘（仍是
+        // 旧水位 W），W' 整体丢弃未落盘，配对 → 首轮重同步整库全量重发（O1 失效）。
+        // 逐行对齐 resync.rs 的正确实现；不丢数据（merge 幂等）但大库性能回退。
+        let mut merged: Option<CoreResult<(usize, Vec<String>)>> = None;
         access.with_repo(Box::new(|repo| {
             if repo.device_id().as_bytes() != my_device_id.as_bytes() {
                 // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
                 return Err(CoreError::SyncAborted);
             }
-            let mut st = repo.sync_state(&host_id);
-            let rep = merge::apply_changes(repo, &mut st, &reply_changes)?;
+            let rep = merge::apply_changes(repo, &mut state, &reply_changes)?;
             // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
-            merge::note_received_changes(&mut st, &reply_changes);
-            merged = Some(Ok((st, rep.applied, rep.conflicts.clone())));
+            merge::note_received_changes(&mut state, &reply_changes);
+            merged = Some(Ok((rep.applied, rep.conflicts.clone())));
             Ok(())
         }))?;
-        let (mut state, applied, conflicts) = merged.take().ok_or(CoreError::SyncAborted)??;
+        let (applied, conflicts) = merged.take().ok_or(CoreError::SyncAborted)??;
 
         // 网络段（O2）：Done（seq 延续分页序号）。
         let done = SyncPayload {

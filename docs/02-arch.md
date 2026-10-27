@@ -2247,3 +2247,28 @@ graph TD
 ---
 
 > **交付说明**：本文严格遵循冻结书四项决策，加密参数、协议报文、容器格式、模块划分均在本文定稿。设计与实现分离——本文只定义结构/签名/schema，不含实现函数体。工程师寇豆码可依据 §7 任务表按序实现。
+
+#### 3.14.13 外部审查修复（D-106，2026-10-27，v1.2.23 待发布）
+
+豆包六路静态审查（`docs/PasswordMS-审查报告-2026-10-27.md`）逐条核实后落码的 Rust 侧修复（前端部分见 06 文档 §6.20）：
+
+| # | 审查编号 | 修复 | 文件 |
+|---|---|---|---|
+| 1 | 3.4-1 P1 | `lock` 清理 `pending_imports` 锁中毒不再跳过——`into_inner()` 兜底照常 `wipe_plaintext()+clear()` 并留痕（A-04 旁路封堵） | `vault_cmd.rs` |
+| 2 | 3.1-1 P2 | `append_frame`/`pwrite_frame` 补 `sync_all()`（`flush()` 在 std File 上是 no-op，掉电丢尾帧）；写频为用户交互级，可靠性优先 | `container.rs` |
+| 3 | 3.1-2 P2 | `place_frame` 长度变更路径改**先 append 新帧、后墓碑旧帧**——原顺序磁盘满时旧毁新未落＝条目丢失；改后追加失败可重试，墓碑失败时 rebuild 后写胜（新帧生效） | `repository.rs` |
+| 4 | 3.1-7 P2 | `tombstone` 改先写盘后删内存索引——原顺序 IO 失败时条目重启「复活」 | `repository.rs` |
+| 5 | 3.1-3 P2 | `restore_item` 还原时校验 `folder_id` 存在性，悬空则置 `None`（移入未分组），与 create/update 守卫口径一致 | `repository.rs` |
+| 6 | 3.1-4 P2 | `read_blob`/`export_attachment_bytes` 返回 `Zeroizing<Vec<u8>>`，附件明文不再以普通 Vec 残留堆 | `repository.rs` |
+| 7 | 3.1-5 P2 | `write_blob_frame`（同步接收）补明文 ≤20MB + 库容量 ≤200MB 守卫（与本地 `insert_attachment` 同口径，防异常配对端 DoS） | `repository.rs` |
+| 8 | 3.1-6 P2 | `put_item_direct` / `resolve_conflict`（TakeRemote/KeepBoth）补 384KiB 序列化上限（同步路径贯穿 D-96 统一明文上限） | `repository.rs` |
+| 9 | 3.2-1 P2 | `Session::unlock` 三处 `?` 逃逸口折叠：KDF 参数校验失败（篡改头）补 burn-KDF 后统一 `UnlockFailed`；device/Repository::open 失败统一折叠（Argon2 已跑，无需再 burn） | `session.rs` |
+| 10 | 3.3-1 P2 | Joiner 段②删除 fresh-read，直接复用段①内存 state（W' 不再被丢弃）——配对 → 首轮重同步免整库重发（O1 恢复），逐行对齐 `resync.rs` 正确实现 | `client.rs` |
+| 11 | 3.4-2 P2 | resync 锁不再跨网络 I/O：stop 信号提升为 `AppState.resync_stop`，worker 锁内 `take` handle、锁外整场 `handle_connection`、结束放回（`is_none` 防覆盖） | `state.rs` |
+| 12 | 3.4-3 P2 | `stop_resync_listener` 先无条件置 stop（不依赖锁），锁中毒 `into_inner()` 兜底清 handle 并留痕 | `state.rs` |
+| 13 | 3.4-5 P2 | `copy_secret` 的 `ttl_secs` 生效——兜底清理按用户配置 TTL 睡眠（原恒 30s，用户配 60s 时密码被提前清） | `system_cmd.rs` |
+| 14 | 5.2-4 P2 | 泰文 `auto_lock_failed`「ไลบรารี」（library/图书馆）→「ตู้เซฟ」（保险库） | `th.ts` |
+
+**核实后不修项**：IPC 路径白名单（3.4-4 / 历史 S2：本地单用户威胁模型，前端被投毒属更大面失守，接受风险、报告已确认设计取舍）；Rust 侧 auto-lock 兜底线程（3.4-6：跨 session/事件层改动，另行排期）；错误码细化（3.1-10：新增 `AttachmentNotFound` 变体牵动 31 变体错误码表与四语言 messageKey 映射，P3 分批）；C3/S1/S6/Q3 历史遗留项维持 D-91 核对结论（C3 单测靠同时间戳掩盖属实，留待 item_hash 重构时一并处理；Q3 为 windres 缺 DLL 环境项）。
+
+守门：core `tests/d106_external_audit.rs` 3 例（还原悬空分组 / blob 帧超限拒收 / 同步条目超限拒收）。全量验证：core 215 例全绿（212+3）、前端 44 文件 341 例、clippy 0、fmt 过。

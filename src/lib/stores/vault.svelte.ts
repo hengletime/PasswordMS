@@ -30,6 +30,9 @@ class VaultStore {
   /** 是否加载中。 */
   busy = $state(false);
 
+  /** D-106（豆包审查 3.5-1）：单调递增请求序号——过期响应不得覆盖最新列表。 */
+  private loadSeq = 0;
+
   /** 当前选中条目对象。 */
   get selectedItem(): ItemDto | null {
     if (this.selectedItemId === null) {
@@ -40,21 +43,32 @@ class VaultStore {
 
   /** 加载（条目 + 分组）。 */
   async load(): Promise<void> {
+    const seq = ++this.loadSeq;
     this.busy = true;
     try {
       const [items, folders] = await Promise.all([
         api.items.list(this.selectedFolderId, this.favoriteOnly, this.query || undefined),
         api.folders.list(),
       ]);
+      // 快速切分组/搜索时多个请求在途：只有最新一次的响应才允许写状态，
+      // 否则后返回的旧结果会覆盖新筛选的列表（UI 状态与数据不一致）。
+      if (seq !== this.loadSeq) {
+        return;
+      }
       this.items = items;
       this.folders = folders;
       if (this.selectedItemId !== null && !items.some((i): boolean => i.item_id === this.selectedItemId)) {
         this.selectedItemId = null;
       }
     } catch (err) {
-      ui.toast('error', toAppError(err).messageKey);
+      // 过期请求的失败同样不打扰当前视图（toast 属于最新一次交互）。
+      if (seq === this.loadSeq) {
+        ui.toast('error', toAppError(err).messageKey);
+      }
     } finally {
-      this.busy = false;
+      if (seq === this.loadSeq) {
+        this.busy = false;
+      }
     }
   }
 

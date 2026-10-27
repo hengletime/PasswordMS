@@ -23,10 +23,13 @@ use zeroize::Zeroizing;
 
 use crate::error::{lock_err, IpcError, IpcResult};
 
-/// 持久重同步监听器句柄（含停止信号）。
+/// 持久重同步监听器句柄。
+///
+/// **D-106（豆包审查 3.4-2）**：停止信号提升为 [`AppState::resync_stop`]——
+/// 停止不再依赖「能拿到 resync 锁 + handle 还在」，且被动同步整场网络 I/O
+/// 可以在锁外进行（worker 锁内 `take`、锁外 `handle_connection`）。
 pub struct ResyncHandle {
     pub server: ResyncServer,
-    pub stop: Arc<AtomicBool>,
 }
 
 /// 应用全局状态。
@@ -34,6 +37,8 @@ pub struct AppState {
     pub session: Mutex<Session>,
     pub pairing: Mutex<Option<SyncServer>>,
     pub resync: Mutex<Option<ResyncHandle>>,
+    /// 重同步 worker 的停止信号（提升到状态层，见 [`ResyncHandle`] 文档）。
+    pub resync_stop: Arc<AtomicBool>,
     pub pending_imports: Mutex<HashMap<String, ImportPreview>>,
     /// 本应用最后一次写入剪贴板的内容（A-03 到期比对用）。
     ///
@@ -54,6 +59,7 @@ impl AppState {
             session: Mutex::new(Session::locked()),
             pairing: Mutex::new(None),
             resync: Mutex::new(None),
+            resync_stop: Arc::new(AtomicBool::new(false)),
             pending_imports: Mutex::new(HashMap::new()),
             clipboard: Mutex::new(None),
             sync_busy: AtomicBool::new(false),
@@ -171,30 +177,41 @@ pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
         );
     }
 
-    let stop = Arc::new(AtomicBool::new(false));
+    let stop = state.resync_stop.clone();
+    // D-106：stop 提升到状态层——上一轮 lock() 已把它置 true，重启监听前必须复位。
+    stop.store(false, Ordering::SeqCst);
     {
         let mut guard = state.resync.lock().map_err(lock_err)?;
         // 并发启动竞态：保留先到者。
         if let Some(handle) = guard.as_ref() {
             return Ok(handle.server.port());
         }
-        *guard = Some(ResyncHandle {
-            server,
-            stop: stop.clone(),
-        });
+        *guard = Some(ResyncHandle { server });
     }
     spawn_resync_worker(app.clone(), stop);
     Ok(port)
 }
 
 /// 停止重同步监听（锁定 / 重新解锁时调用）。
+///
+/// **D-106（豆包审查 3.4-3）**：先**无条件**置停止信号（不再依赖能否拿到锁），
+/// 再清理 handle——锁中毒时 `into_inner()` 兜底照常清空并留痕。原实现中毒即
+/// 静默返回，worker 会带着 socket 继续接受连接（虽然业务被 NotUnlocked 拒绝）。
 pub fn stop_resync_listener(app: &tauri::AppHandle) {
-    if let Ok(mut guard) = app.state::<AppState>().resync.lock() {
-        if let Some(handle) = guard.as_ref() {
-            handle.stop.store(true, Ordering::SeqCst);
+    let state = app.state::<AppState>();
+    state.resync_stop.store(true, Ordering::SeqCst);
+    // match 语句以分号结尾，让 lock() 的临时值在函数尾之前 drop（borrow checker 要求）。
+    match state.resync.lock() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => {
+            let mut guard = poisoned.into_inner();
+            *guard = None;
+            append_log(
+                app,
+                "[resync] stop: resync lock poisoned, cleared via into_inner",
+            );
         }
-        *guard = None;
-    }
+    };
 }
 
 /// 后台轮询线程：非阻塞接受入站重同步连接，直到收到停止信号。
@@ -202,6 +219,8 @@ pub fn stop_resync_listener(app: &tauri::AppHandle) {
 /// **O2 三段式**：`poll_accept` 与 UDP 发现应答**不持 session 锁**；连接建立后
 /// 由 [`SessionAccess`] 在「读写库的瞬间」短暂取锁，网络 I/O 全程锁外——
 /// 同步期间 UI 的一切 IPC（列表/复制/自动锁定）不再排队等待。
+/// **D-106（豆包审查 3.4-2）**：resync 锁同样不再跨网络 I/O——锁内 `take` handle、
+/// 锁外整场 `handle_connection`，结束后放回（停止信号在状态层，见 [`AppState`]）。
 fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_millis(200));
@@ -266,19 +285,37 @@ fn spawn_resync_worker(app: tauri::AppHandle, stop: Arc<AtomicBool>) {
                     break;
                 }
             };
-            let handle = match guard.as_mut() {
-                Some(h) => h,
+            // D-106（豆包审查 3.4-2）：`take` 出 handle 后**立即释放 resync 锁**——
+            // `handle_connection` 是整场被动同步网络 I/O（毫秒到秒级），原实现持锁
+            // 跨越它，锁定 / `ensure_resync_listener` / `sync_now` 在此期间全部阻塞。
+            match guard.take() {
+                Some(mut handle) => {
+                    drop(guard);
+                    let mut access = SessionAccess {
+                        session: &state.session,
+                    };
+                    let result =
+                        handle
+                            .server
+                            .handle_connection(stream, &peer_ip, now_ms(), &mut access);
+                    // 放回 handle：仅当期间没有被 stop 清掉（stop 置位则 worker 即将
+                    // 退出，drop 即关闭监听）。放不回（竞态窗口内 handle 位被占）也
+                    // 直接 drop——旧监听关闭，port 文件语义不变，下轮 ensure 重建。
+                    if !stop.load(Ordering::SeqCst) {
+                        if let Ok(mut g) = state.resync.lock() {
+                            if g.is_none() {
+                                *g = Some(handle);
+                            }
+                        }
+                    }
+                    result
+                }
                 None => {
+                    // handle 已被 stop_resync_listener 清掉：复位互斥位后退出。
                     state.sync_busy.store(false, Ordering::SeqCst);
                     break;
                 }
-            };
-            let mut access = SessionAccess {
-                session: &state.session,
-            };
-            handle
-                .server
-                .handle_connection(stream, &peer_ip, now_ms(), &mut access)
+            }
         };
         state.sync_busy.store(false, Ordering::SeqCst);
 

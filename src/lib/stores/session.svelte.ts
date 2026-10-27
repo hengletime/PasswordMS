@@ -13,14 +13,18 @@ class SessionStore {
   busy = $state(false);
   /** 解锁失败统一提示（不区分原因，A-05）。 */
   unlockError = $state(false);
+  /** D-106（豆包审查 3.5-5）：启动状态查询失败——不得伪装成「无库」误导向创建向导。 */
+  statusError = $state(false);
 
   /** 刷新状态。 */
   async refresh(): Promise<void> {
     try {
       this.status = await api.system.getStatus();
+      this.statusError = false;
     } catch {
-      // 启动阶段的状态查询失败不应阻塞界面。
-      this.status = { has_vault: false, locked: true };
+      // 启动瞬态 IPC 故障：保持上一次状态，置错误位由路由层显式处理——
+      // 归一为 has_vault:false 会把用户误导向「创建保险库」向导（有写库路径）。
+      this.statusError = true;
     }
   }
 

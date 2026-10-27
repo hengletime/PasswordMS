@@ -28,6 +28,7 @@ use crate::model::vault::{Vault, VaultSettings, WrappedKey};
 use crate::store::container::Container;
 use crate::store::frame::{bytes_to_record_id, record_id_to_bytes, Frame};
 use crate::sync::protocol::ChangeRecord;
+use zeroize::Zeroizing;
 
 /// 删除分组时其下条目的处置策略（前端二次确认后传入）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,6 +434,12 @@ impl Repository {
     }
 
     /// 长度不变则原位移位写入（A-02）；否则旧帧置墓碑并在尾部追加新帧。
+    ///
+    /// **D-106（豆包审查 3.1-2）**：顺序为**先追加新帧、成功后再墓碑化旧帧**。
+    /// 原顺序（先墓碑后追加）在磁盘满 / IO 错误下旧内容已毁、新内容未落，重启后
+    /// 条目从索引消失且不可恢复。改后：追加失败 → 旧帧未动可重试；追加成功但
+    /// 墓碑失败 → 磁盘短暂双 live（`rebuild_index` HashMap 后写胜，尾部新帧生效，
+    /// 用户更新不丢），仅内存侧报错——两者都不再丢数据。
     fn place_frame(&mut self, idx: usize, frame: Frame) -> CoreResult<usize> {
         if self.slots[idx].frame.encoded_len() == frame.encoded_len() {
             self.container
@@ -440,22 +447,26 @@ impl Repository {
             self.slots[idx].frame = frame;
             return Ok(idx);
         }
+        let offset = self.container.append_frame(&frame)?;
         let mut tomb = self.slots[idx].frame.clone();
         tomb.flags |= crate::constants::FLAG_TOMBSTONE;
         self.container.pwrite_frame(self.slots[idx].offset, &tomb)?;
         self.slots[idx].frame = tomb;
-
-        let offset = self.container.append_frame(&frame)?;
         self.slots.push(Slot { offset, frame });
         Ok(self.slots.len() - 1)
     }
 
     /// 将一条活跃记录置为墓碑。
+    ///
+    /// **D-106（豆包审查 3.1-7）**：先写盘、成功后再删内存索引——原顺序在写盘失败
+    /// 时内存已删、磁盘仍 live，重启后条目「复活」，与用户删除预期冲突。失败时
+    /// live 保留，下次操作自然重试。
     fn tombstone(&mut self, record_type: u8, id: &str) -> CoreResult<()> {
-        if let Some(idx) = self.live.remove(&(record_type, id.to_string())) {
+        if let Some(idx) = self.live.get(&(record_type, id.to_string())).copied() {
             let mut tomb = self.slots[idx].frame.clone();
             tomb.flags |= crate::constants::FLAG_TOMBSTONE;
             self.container.pwrite_frame(self.slots[idx].offset, &tomb)?;
+            self.live.remove(&(record_type, id.to_string()));
             self.slots[idx].frame = tomb;
         }
         Ok(())
@@ -1278,10 +1289,15 @@ impl Repository {
     }
 
     /// 读取附件明文（供导出；`U4` 本地存储不分片）。
-    pub fn read_blob(&self, blob_ref: &str) -> CoreResult<Vec<u8>> {
-        let idx = *self.blobs.get(blob_ref).ok_or(CoreError::ItemNotFound)?;
+    ///
+    /// **D-106（豆包审查 3.1-4）**：返回 [`Zeroizing`] 载体——原实现 `.to_vec()` 把
+    /// `open_frame` 的零化缓冲克隆进普通 `Vec<u8>`，Drop 不覆写，附件明文（≤20MB）
+    /// 在导出/同步后残留堆中，与 A-04「锁定无明文残留」目标不符。
+    pub fn read_blob(&self, blob_ref: &str) -> CoreResult<Zeroizing<Vec<u8>>> {
+        let idx = *self.blobs.get(blob_ref).ok_or(CoreError::BlobMissing)?;
         let frame = &self.slots[idx].frame;
-        Ok(self.open_frame(frame)?.to_vec())
+        // Zeroizing<Vec<u8>> → Zeroizing<Vec<u8>> 的 map 保持零化语义。
+        Ok(Zeroizing::new(self.open_frame(frame)?.to_vec()))
     }
 
     /// 导出附件到目标路径（§3.14.5：按 `(item_id, attachment_id)` 定位）。
@@ -1309,7 +1325,7 @@ impl Repository {
         &self,
         item_id: &str,
         attachment_id: &str,
-    ) -> CoreResult<Vec<u8>> {
+    ) -> CoreResult<Zeroizing<Vec<u8>>> {
         let item = self.get_item(item_id)?;
         let meta = item
             .attachments
@@ -1323,6 +1339,9 @@ impl Repository {
     }
 
     /// 附件分片（同步用，`U4`：≤ 1 MB）。
+    ///
+    /// D-106：`read_blob` 已零化；分片逐个 `to_vec` 后立刻进入 AEAD 帧序列化，
+    /// 网络缓冲层的零化超出本层边界（帧层 `Zeroizing` 为后续项）。
     pub fn blob_chunks(&self, blob_ref: &str) -> CoreResult<Vec<Vec<u8>>> {
         let data = self.read_blob(blob_ref)?;
         Ok(data
@@ -1554,6 +1573,18 @@ impl Repository {
                 BlobWriteOutcome::KeptLocal
             });
         }
+        // D-106（豆包审查 3.1-5）：同步接收路径补齐与本地 insert_attachment 相同的
+        // 大小守卫——本地库校验只防「自己传大文件」，防不住异常/被入侵的配对端
+        // 直接推帧（信任边界内 DoS 纵深）。口径与本地路径一致：明文 ≤ 20MB、
+        // 库容量预留 4KB 密文膨胀余量。
+        let plaintext_len = frame.plaintext_len as u64;
+        if plaintext_len > MAX_ATTACHMENT_BYTES {
+            return Err(CoreError::AttachmentTooLarge);
+        }
+        let current = self.file_size()?;
+        if current + plaintext_len + 4096 > MAX_VAULT_BYTES {
+            return Err(CoreError::VaultCapacityExceeded);
+        }
         let offset = self.container.append_frame(&frame)?;
         self.slots.push(Slot { offset, frame });
         self.blobs.insert(id, self.slots.len() - 1);
@@ -1596,6 +1627,14 @@ impl Repository {
         item.rev += 1;
         item.updated_at = now_ms();
         item.modified_by = self.device_id.clone();
+        // D-106（豆包审查 3.1-3）：回收站期间原分组可能已被删除——照抄快照的
+        // folder_id 会让条目落进悬空分组（分组视图不可见，用户误以为丢失）。
+        // 分组不存在则置 None 移入「未分组」，与 create/update/move 的守卫口径一致。
+        if let Some(fid) = item.folder_id.as_ref() {
+            if !self.folders.contains_key(fid) {
+                item.folder_id = None;
+            }
+        }
         self.write_record(
             RECORD_TYPE_ITEM,
             &item.item_id,
@@ -1754,12 +1793,15 @@ impl Repository {
                     remote.rev = entry.local_snapshot.rev.max(remote.rev) + 1;
                     remote.updated_at = now_ms();
                     remote.modified_by = self.device_id.clone();
-                    self.write_record(
-                        RECORD_TYPE_ITEM,
-                        &remote.item_id,
-                        0,
-                        &serde_json::to_vec(&remote)?,
-                    )?;
+                    // D-106（豆包审查 3.1-6）：与 put_item_direct 同款上限校验。
+                    let bytes = serde_json::to_vec(&remote)?;
+                    if bytes.len() > MAX_ITEM_PLAINTEXT_BYTES {
+                        return Err(CoreError::Validation(format!(
+                            "sync item_too_large: {} > {MAX_ITEM_PLAINTEXT_BYTES} bytes",
+                            bytes.len()
+                        )));
+                    }
+                    self.write_record(RECORD_TYPE_ITEM, &remote.item_id, 0, &bytes)?;
                     self.items.insert(remote.item_id.clone(), remote);
                 }
             }
@@ -1772,12 +1814,15 @@ impl Repository {
                 dup.created_at = now_ms();
                 dup.updated_at = now_ms();
                 dup.modified_by = self.device_id.clone();
-                self.write_record(
-                    RECORD_TYPE_ITEM,
-                    &dup.item_id,
-                    0,
-                    &serde_json::to_vec(&dup)?,
-                )?;
+                // D-106（豆包审查 3.1-6）：与 put_item_direct 同款上限校验。
+                let bytes = serde_json::to_vec(&dup)?;
+                if bytes.len() > MAX_ITEM_PLAINTEXT_BYTES {
+                    return Err(CoreError::Validation(format!(
+                        "sync item_too_large: {} > {MAX_ITEM_PLAINTEXT_BYTES} bytes",
+                        bytes.len()
+                    )));
+                }
+                self.write_record(RECORD_TYPE_ITEM, &dup.item_id, 0, &bytes)?;
                 self.items.insert(dup.item_id.clone(), dup);
             }
         }
@@ -1809,13 +1854,18 @@ impl Repository {
     }
 
     /// 直接落库（同步应用远端变更；不改写 rev 语义由调用方决定）。
+    ///
+    /// **D-106（豆包审查 3.1-6）**：补 384KiB 统一明文上限校验——本地 create/update
+    /// 有守卫，但同步路径直接 `write_record`，异常对端可绕过上限把库撑爆。
     pub fn put_item_direct(&mut self, item: Item) -> CoreResult<()> {
-        self.write_record(
-            RECORD_TYPE_ITEM,
-            &item.item_id,
-            0,
-            &serde_json::to_vec(&item)?,
-        )?;
+        let bytes = serde_json::to_vec(&item)?;
+        if bytes.len() > MAX_ITEM_PLAINTEXT_BYTES {
+            return Err(CoreError::Validation(format!(
+                "sync item_too_large: {} > {MAX_ITEM_PLAINTEXT_BYTES} bytes",
+                bytes.len()
+            )));
+        }
+        self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &bytes)?;
         self.items.insert(item.item_id.clone(), item);
         Ok(())
     }

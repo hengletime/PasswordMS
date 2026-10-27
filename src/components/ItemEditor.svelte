@@ -206,7 +206,7 @@
         bind:value={totp}
         bind:this={totpInput}
         autocomplete="off"
-        placeholder="BASE32 或 otpauth://"
+        placeholder={ui.t('editor.totp_placeholder')}
         aria-invalid={totpInvalid}
       />
       {#if totpInvalid}

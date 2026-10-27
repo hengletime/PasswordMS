@@ -102,7 +102,7 @@ fn bytes_entry_persists_blob_and_bumps_parent_rev() {
             "blob 帧必须已落库（否则导出/同步都会 BlobMissing）"
         );
         assert_eq!(
-            repo.read_blob(&meta.attachment_id).unwrap(),
+            *repo.read_blob(&meta.attachment_id).unwrap(),
             payload,
             "读回的明文必须与写入字节逐字节一致"
         );
@@ -116,7 +116,7 @@ fn bytes_entry_persists_blob_and_bumps_parent_rev() {
     let item = repo.get_item(&item_id).unwrap();
     assert_eq!(item.attachments.len(), 1);
     assert_eq!(item.attachments[0].attachment_id, attachment_id);
-    assert_eq!(repo.read_blob(&attachment_id).unwrap(), payload);
+    assert_eq!(*repo.read_blob(&attachment_id).unwrap(), payload);
     cleanup(&dir);
 }
 
@@ -135,7 +135,7 @@ fn bytes_entry_accepts_empty_payload() {
     assert_eq!(meta.size_bytes, 0);
     assert_eq!(meta.blob_size_bytes, AEAD_TAG_LEN as u64);
     assert_eq!(
-        repo.read_blob(&meta.attachment_id).unwrap(),
+        *repo.read_blob(&meta.attachment_id).unwrap(),
         Vec::<u8>::new()
     );
     cleanup(&dir);

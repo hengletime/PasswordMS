@@ -5,6 +5,7 @@
 
 import { CLIPBOARD_TTL_SECS } from './constants';
 import { api } from './ipc';
+import { ui } from './stores/ui.svelte';
 
 /** 可取消的倒计时句柄。 */
 export interface CountdownTimer {
@@ -65,7 +66,11 @@ export async function copySecretWithAutoClear(
       onTick?.(remaining);
     },
     (): void => {
-      void api.system.clearSecretIfOwn();
+      // D-106（豆包审查 3.5-3）：清空 IPC 失败不得静默——密码可能仍留在剪贴板，
+      // 用户必须被告知手动清理。
+      api.system.clearSecretIfOwn().catch((): void => {
+        ui.toast('error', 'err.clipboard_clear_failed');
+      });
     },
   );
 }

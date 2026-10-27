@@ -135,6 +135,12 @@
       onLongPress: (x, y): void => openMenu(item.item_id, x, y),
       onDrop: (draggedId): void => {
         clickSuppressed = true;
+        // D-106（豆包审查 3.5-6）：兜底复位——若拖拽后浏览器未派发 click
+        // （指针落行外/窗口失焦），flag 会永真吞掉下一次真实点击。
+        // 正常路径 click 事件先于 setTimeout(0) 执行，语义不变。
+        setTimeout((): void => {
+          clickSuppressed = false;
+        }, 0);
         handleItemDrop(draggedId);
       },
       getScrollContainer: (): HTMLElement | null => listEl,
