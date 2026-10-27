@@ -11,7 +11,7 @@
 //! ① hash 元数据无关性（单测）；② 双端 TakeRemote 三轮收敛（e2e，旧实现第 3 轮仍出冲突）；
 //! ③ KeepLocal 双端第二轮零重发零冲突；④ folder_hash 同口径。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use passwordms_core::model::conflict::ConflictChoice;
 use passwordms_core::model::item::{Item, ItemKind, LoginData};
@@ -124,7 +124,7 @@ struct Side {
 }
 
 impl Side {
-    fn create(vault: &PathBuf, pwd: &str, device_id: &str) -> Side {
+    fn create(vault: &Path, pwd: &str, device_id: &str) -> Side {
         let session = Session::create(vault, pwd, true).expect("create vault");
         Side {
             session,
@@ -220,7 +220,7 @@ fn resolve_all_take_remote(side: &mut Side) {
             .session
             .repo_mut()
             .expect("repo")
-            .resolve_conflict(&cid, ConflictChoice::TakeRemote)
+            .resolve_conflict(&cid, ConflictChoice::TakeRemote, " (copy)")
             .expect("resolve_conflict");
         // D-109：水位回落清单应用到本测试持有的 per-peer 内存 state（等价命令层行为）。
         for r in resets {
@@ -239,7 +239,7 @@ fn resolve_all_keep_local(side: &mut Side) {
             .session
             .repo_mut()
             .expect("repo")
-            .resolve_conflict(&cid, ConflictChoice::KeepLocal)
+            .resolve_conflict(&cid, ConflictChoice::KeepLocal, " (copy)")
             .expect("resolve_conflict");
         // D-111：base 推进清单应用到本测试持有的 per-peer 内存 state（与命令层
         // sync_cmd 同构——rev 抬升天然高于发送水位，无水位回落项）。

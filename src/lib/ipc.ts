@@ -25,6 +25,7 @@ import type {
   StatusDto,
   SyncResultDto,
   SyncStatusDto,
+  TemplateTexts,
   TotpDto,
   TrashDto,
   VaultFileInfoDto,
@@ -188,8 +189,9 @@ export const importer = {
    * `import_preview` / `import_apply` 也是），所以 wire 上的键必须与 Rust 形参同名。
    * 若某天该命令去掉 `rename_all`，这里要同步改成 `destPath`，否则会 invalid args。
    */
-  saveTemplate: (destPath: string): Promise<void> =>
-    invoke<void>('save_import_template', { dest_path: destPath }),
+  // D-112：texts 为本地化示例文本（前端从 i18n 取值），结构（表头/转义示范）在 core。
+  saveTemplate: (destPath: string, texts: TemplateTexts): Promise<void> =>
+    invoke<void>('save_import_template', { dest_path: destPath, texts }),
 };
 
 /** 回收站类。 */
@@ -224,8 +226,9 @@ export const sync = {
     invoke<SyncResultDto>('sync_now', { device_id: deviceId }),
   status: (): Promise<SyncStatusDto> => invoke<SyncStatusDto>('sync_status'),
   listConflicts: (): Promise<ConflictDto[]> => invoke<ConflictDto[]>('list_conflicts'),
-  resolveConflict: (conflictId: string, choice: ConflictChoice): Promise<void> =>
-    invoke<void>('resolve_conflict', { conflict_id: conflictId, choice }),
+  // D-112：copySuffix 为 KeepBoth 副本标题后缀（前端按 UI 语言传 i18n 文案）。
+  resolveConflict: (conflictId: string, choice: ConflictChoice, copySuffix: string): Promise<void> =>
+    invoke<void>('resolve_conflict', { conflict_id: conflictId, choice, copy_suffix: copySuffix }),
 };
 
 /** 设置类。 */

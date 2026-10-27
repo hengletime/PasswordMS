@@ -261,6 +261,13 @@ export const enUS: Messages = {
     merged_folders: '{n} folders merged',
     download_template: 'Download CSV template',
     template_saved: 'Template saved',
+    // D-112: localized sample texts for the import template (structure lives in core).
+    // tpl_login_notes must contain a half-width comma (part of the CSV escaping demo).
+    tpl_folder: 'Sample Folder',
+    tpl_login_name: 'Sample Login',
+    tpl_login_notes: 'Notes may contain commas, but the whole field must be wrapped in double quotes',
+    tpl_note_name: 'Sample Secure Note',
+    tpl_note_body: 'Write the note body here',
   },
   health: {
     title: 'Password health',
@@ -273,6 +280,11 @@ export const enUS: Messages = {
     stale: 'Stale',
     suggestions: 'Suggestions',
     good: 'Password health looks good.',
+    // D-112: suggestions are assembled on the frontend from report counts (core no longer emits text).
+    sug_weak: '{n} item(s) use weak passwords. Consider switching to 12+ character mixed-type passwords.',
+    sug_reused:
+      '{groups} group(s) of items share the same password ({n} items in total). Use a unique password per site.',
+    sug_stale: '{n} item(s) have not had their password changed for over {days} days. Rotate them regularly.',
   },
   trash: {
     title: 'Trash',
@@ -443,6 +455,8 @@ export const enUS: Messages = {
     local_title: 'Local title',
     remote_title: 'Remote title',
     detected_at: 'Detected',
+    // D-112: KeepBoth duplicate title suffix (leading space is intentional).
+    copy_suffix: ' (conflict copy)',
   },
   // D-63: legal dialog (disclaimer / terms) titles and button label.
   // The body text lives in src/lib/legal-content.ts, not in i18n.

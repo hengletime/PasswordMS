@@ -1813,10 +1813,13 @@ impl Repository {
     /// `min(现值, new_rev)` 应用（见 [`WatermarkReset`]）。
     /// D-111：KeepLocal 改为**抬 rev 落地本机胜出版本**并在 repo 内直接推进各对端
     /// base——「保留本机」的语义是以本机为准收敛全网，而非两端各留一份永不一致。
+    /// D-112：`copy_suffix` 由调用方（前端 i18n）传入 KeepBoth 副本标题后缀
+    /// （如「 (冲突副本)」）——core 只出数据不出文案，UI 语言跟随前端。
     pub fn resolve_conflict(
         &mut self,
         conflict_id: &str,
         choice: ConflictChoice,
+        copy_suffix: &str,
     ) -> CoreResult<Vec<WatermarkReset>> {
         let entry = self
             .conflicts
@@ -1903,7 +1906,8 @@ impl Repository {
             ConflictChoice::KeepBoth => {
                 let mut dup = entry.remote_snapshot.clone();
                 dup.item_id = uuid::Uuid::new_v4().to_string();
-                let new_title = format!("{} (冲突副本)", dup.title());
+                // D-112：后缀由前端 i18n 传入（core 不再硬编码中文文案）。
+                let new_title = format!("{}{copy_suffix}", dup.title());
                 dup.kind.set_title(new_title);
                 dup.rev = 1;
                 dup.created_at = now_ms();

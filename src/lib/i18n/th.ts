@@ -242,6 +242,14 @@ export const th = {
     merged_folders: 'รวมกลุ่มชื่อเดียวกัน {n} กลุ่ม',
     download_template: 'ดาวน์โหลดเทมเพลต CSV',
     template_saved: 'บันทึกเทมเพลตแล้ว',
+    // D-112: localized sample texts for the import template (structure lives in core).
+    // tpl_login_notes must contain a half-width comma (part of the CSV escaping demo).
+    tpl_folder: 'โฟลเดอร์ตัวอย่าง',
+    tpl_login_name: 'รายการเข้าสู่ระบบตัวอย่าง',
+    tpl_login_notes:
+      'หมายเหตุใส่เครื่องหมายจุลภาคได้, แต่ทั้งฟิลด์ต้องครอบด้วยเครื่องหมายอัญประกาศคู่',
+    tpl_note_name: 'โน้ตความปลอดภัยตัวอย่าง',
+    tpl_note_body: 'เขียนเนื้อหาโน้ตที่นี่',
   },
   health: {
     // v2.30 泰文审校：体检页整体改「密码安全检查」语境，不再用สุขภาพ（人体健康）。
@@ -255,6 +263,13 @@ export const th = {
     stale: 'ไม่เปลี่ยนเกินกำหนด',
     suggestions: 'คำแนะนำ',
     good: 'รหัสผ่านทั้งหมดอยู่ในสภาพดี',
+    // D-112: suggestions are assembled on the frontend from report counts (core no longer emits text).
+    sug_weak:
+      'มี {n} รายการที่ใช้รหัสผ่านอ่อน ควรเปลี่ยนเป็นรหัสผ่านอย่างน้อย 12 ตัวอักษรที่ผสมอักขระหลายประเภท',
+    sug_reused:
+      'มี {groups} กลุ่มที่ใช้รหัสผ่านเดียวกันซ้ำกัน (รวม {n} รายการ) ควรตั้งรหัสผ่านแยกกันสำหรับแต่ละเว็บไซต์',
+    sug_stale:
+      'มี {n} รายการที่ไม่ได้เปลี่ยนรหัสผ่านมานานเกิน {days} วัน ควรหมุนเวียนเปลี่ยนเป็นระยะ',
   },
   trash: {
     title: 'ถังขยะ',
@@ -397,6 +412,8 @@ export const th = {
     local_title: 'ชื่อเรื่องเครื่องนี้',
     remote_title: 'ชื่อเรื่องอีกฝั่ง',
     detected_at: 'พบเมื่อ',
+    // D-112: KeepBoth duplicate title suffix (leading space is intentional).
+    copy_suffix: ' (สำเนาข้อขัดแย้ง)',
   },
   legal: {
     disclaimer_title: 'ข้อปฏิเสธความรับผิด',

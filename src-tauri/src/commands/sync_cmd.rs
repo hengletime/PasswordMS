@@ -300,11 +300,15 @@ pub fn list_conflicts(state: tauri::State<'_, AppState>) -> IpcResult<Vec<Confli
 }
 
 /// 三选一仲裁（`keep_local` / `take_remote` / `keep_both`）。
+///
+/// D-112：`copy_suffix` 为 KeepBoth 副本标题后缀，由前端按当前 UI 语言传入
+/// （如「 (冲突副本)」）——core 不硬编码文案。注意保留前导空格。
 #[tauri::command(rename_all = "snake_case")]
 pub fn resolve_conflict(
     state: tauri::State<'_, AppState>,
     conflict_id: String,
     choice: String,
+    copy_suffix: String,
 ) -> IpcResult<()> {
     let parsed = match choice.as_str() {
         "keep_local" => ConflictChoice::KeepLocal,
@@ -318,7 +322,7 @@ pub fn resolve_conflict(
     };
     let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
-    let resets = repo.resolve_conflict(&conflict_id, parsed)?;
+    let resets = repo.resolve_conflict(&conflict_id, parsed, &copy_suffix)?;
     // D-109/D-111：对每个对端应用仲裁的状态修正——
     // ① 水位回落（TakeRemote）：落地 rev 回落后，min 回落防「rev ≤ 水位免重发」
     //    永久吞掉本端后续修改；

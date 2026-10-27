@@ -323,7 +323,7 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
         let _resets = hs
             .repo_mut()
             .unwrap()
-            .resolve_conflict(&cid, ConflictChoice::KeepLocal)
+            .resolve_conflict(&cid, ConflictChoice::KeepLocal, " (copy)")
             .unwrap();
     }
     let server2 = rebind(resync_port);
@@ -376,7 +376,7 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
         let _resets = hs
             .repo_mut()
             .unwrap()
-            .resolve_conflict(&cid, ConflictChoice::TakeRemote)
+            .resolve_conflict(&cid, ConflictChoice::TakeRemote, " (copy)")
             .unwrap();
         let repo = hs.repo().unwrap();
         assert!(

@@ -20,6 +20,31 @@
     return titleMap.get(itemId) ?? itemId;
   }
 
+  // D-112：建议文案由前端组装（core 只出数据，不再硬编码任何语言）——
+  // 按弱口令 / 重复分组 / 超期计数取 i18n 文案，三项皆空时显示「良好」。
+  const suggestions = $derived.by((): string[] => {
+    if (report === null) return [];
+    const out: string[] = [];
+    if (report.weak.length > 0) {
+      out.push(ui.t('health.sug_weak', { n: report.weak.length }));
+    }
+    if (report.reused_groups.length > 0) {
+      out.push(
+        ui.t('health.sug_reused', {
+          groups: report.reused_groups.length,
+          n: report.reused.length,
+        }),
+      );
+    }
+    if (report.stale.length > 0) {
+      out.push(ui.t('health.sug_stale', { n: report.stale.length, days: HEALTH_STALE_DAYS }));
+    }
+    if (out.length === 0) {
+      out.push(ui.t('health.good'));
+    }
+    return out;
+  });
+
   async function run(): Promise<void> {
     busy = true;
     try {
@@ -112,7 +137,7 @@
     <div class="health-suggestions">
       <span class="pms-label">{ui.t('health.suggestions')}</span>
       <ul>
-        {#each report.suggestions as suggestion (suggestion)}
+        {#each suggestions as suggestion, i (i)}
           <li>{suggestion}</li>
         {/each}
       </ul>

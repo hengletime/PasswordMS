@@ -966,7 +966,7 @@ Android 的保存对话框（`ACTION_CREATE_DOCUMENT`）回传的是 `content://
   | `write(dest)` 成功 | 成功 | `saved` |
 
   这样**不需要知道**插件取消时走 reject 还是 resolve(null)，两条都判成取消。
-- **IPC 形状**：新增命令 `save_import_template(app, dest_path)`，`rename_all = "snake_case"`，
+- **IPC 形状**：新增命令 `save_import_template(app, dest_path, texts)`（D-112 起 `texts` 为本地化示例文本，此前仅 `dest_path`），`rename_all = "snake_case"`，
   wire 键 `dest_path`（见 `docs/03-impl.md` §14 不变量：全仓 50 → **51** 处 `tauri::command`，51 处带该属性，0 例外）。
   **既有命令形状一律未变**（`export_attachment` 仍是 `item_id` / `attachment_id` / `dest_path`）。
 
@@ -1858,7 +1858,7 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `sync_now` | `{device_id}` | `SyncResultDto` | 手动同步 |
 | `sync_status` | — | `SyncStatusDto` | 状态查询 |
 | `list_conflicts` | — | `Vec<ConflictDto>` | 冲突箱 |
-| `resolve_conflict` | `{conflict_id,choice}` | `()` | 三选一 |
+| `resolve_conflict` | `{conflict_id,choice,copy_suffix}` | `()` | 三选一（D-112：copy_suffix=KeepBoth 副本标题后缀，前端 i18n 传入） |
 | `get_settings` / `update_settings` | `VaultSettings` | `VaultSettings` | 设置 |
 | `vault_file_info` | — | `{path,size_bytes}` | P-10 展示 |
 
@@ -2356,3 +2356,17 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 **测试盲区教训**：测试环境 `Side.state` 是模拟同步会话的内存副本，repo 内直改 state（首次实现走的 `list_paired_devices` 遍历）对副本不可见且测试双端未注册配对（遍历空转）；正确模式是**与 TakeRemote 同构的返回值上交**——repo 层不持有权威副本，仲裁对状态的影响一律返回值上交、调用方应用。
 
 守门：`tests/d109_conflict_hash.rs` 扩至 8 例——⑦KeepLocal 传播胜出版本 + 对端挂起冲突自动过期 + 两端 rev/hash 收敛（主人实测场景）⑧删除冲突 KeepLocal 后对端复活为保留版本；KeepLocal 双端用例改断言 LWW 收敛（后仲裁者胜）。`sync_deletion.rs` case2 断言随新语义更新（rev 3）。core 全量 233 例绿（231+2），clippy 0 告警，fmt 过。前端零改动（IPC 命令面不变，`resolve_conflict` 签名不变）。
+
+#### 3.14.17 core 层文案本地化（D-112，2026-10-27 晚）
+
+- **症状**（泰国朋友真机实测）：泰文 UI 下健康检查「建议」显示中文（「密码健康状况良好，继续保持。」）。主人指示「其它地方也检查一下」→ 全仓排查出**同一病根三处**：Rust core 硬编码中文用户文案。
+  ① `health.rs`：4 条整改建议句子硬编码中文（四语言用户全看到中文；前端 i18n 早备有 `health.good` 键但从未被用上——设计意图本是前端出文案）；
+  ② `repository.rs`：仲裁「两者都留」生成的冲突副本标题硬编码追加 ` (冲突副本)`；
+  ③ `import/template.rs`：CSV 导入模板示例行硬编码中文。
+- **架构裁定（方案 A，主人拍板「三处全修」）**：**core 只出数据，前端出文案**——与 D-102「zh-CN 唯一事实来源、四语言字典同加」一致，不在 Rust 里再造一套翻译。src-tauri 命令层与前端四语言字典本身无泄漏（全仓 grep 复核）。
+- **修法**：
+  - ① `HealthReport` 移除 `suggestions: Vec<String>` 字段；前端 `HealthCheck.svelte` 以 `$derived.by` 按 weak / reused_groups / stale 计数组装 i18n 文案（`health.sug_weak` / `sug_reused` / `sug_stale`，三项皆空用既有 `health.good`），四语言字典同加。
+  - ② `resolve_conflict` 全链加第三参数 `copy_suffix`（命令层 snake_case wire 键 `copy_suffix`）：前端 `stores/sync.svelte.ts` 传 `ui.t('conflict.copy_suffix')`（如「 (冲突副本)」/「 (สำเนาข้อขัดแย้ง)」），core KeepBoth 用其拼副本标题。**存量副本标题不动**（是数据，不是 UI）。
+  - ③ `CSV_TEMPLATE` 常量改 `csv_template(&TemplateTexts)` 函数：表头与转义示范结构留 core（契约不变），示例文本（`import.tpl_folder` / `tpl_login_name` / `tpl_login_notes` / `tpl_note_name` / `tpl_note_body`）由前端 i18n 传入；`TemplateTexts::new` 校验文本不得含 `"` / `\n` / `\r`（防结构性损坏；serde 反序列化绕过构造器，命令层重建强制校验）；`tpl_login_notes` 各语言**必须自带半角逗号**（引号转义示范的组成部份，zh-CN 字典为保证源头）。
+- **守门**：`tests/import_template.rs` 参数化重构——中文（逐字回归基线）+ 泰文两组文本各跑全量契约（0 跳过 / 表头 == KNOWN_COLUMNS / 不溢出 custom_fields / 无 BOM + 尾换行）；`template.rs` 单测锁引号/换行注入拒绝 + 泰文 UTF-8 渲染。`resolve_conflict` 9 处测试调用点补后缀参数（`" (copy)"`）。core 34 个测试组全绿（236 例），clippy 0 告警（`ptr_arg` 一处顺手修），fmt 过；前端三门绿（vitest 364 / svelte-check 0 错 / CSS 契约 PASS）。
+- **注意**：D-112 需两端同版本升级（`resolve_conflict` 前后端签名联动）；旧版本前端调用新后端会因缺 `copy_suffix` 参数报 invalid args。

@@ -32,8 +32,8 @@ pub struct HealthReport {
     pub reused_groups: Vec<Vec<String>>,
     /// 超期未改条目 ID。
     pub stale: Vec<String>,
-    /// 整改建议（可执行文案）。
-    pub suggestions: Vec<String>,
+    // D-112：`suggestions` 文案字段已移除——core 只出数据不出文案，整改建议由
+    // 前端按 weak / reused_groups / stale 计数 + i18n 字典自行组装（四语言跟随 UI）。
 }
 
 /// 执行体检。
@@ -94,31 +94,8 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
     penalties += (stale.len() as u32) * 60 / total;
     let total_score = 100u32.saturating_sub(penalties.min(100));
 
-    let mut suggestions: Vec<String> = Vec::new();
-    if !weak.is_empty() {
-        suggestions.push(format!(
-            "有 {} 条条目使用弱口令，建议改为 12 位以上的混合字符密码。",
-            weak.len()
-        ));
-    }
-    if !reused.is_empty() {
-        // D-99：按组数措辞——「6 条重复」可能是一组 6 条共用，也可能是 3 组各 2 条。
-        suggestions.push(format!(
-            "有 {} 组条目重复使用同一密码（共 {} 条），建议为每站设置独立密码。",
-            reused_groups.len(),
-            reused.len()
-        ));
-    }
-    if !stale.is_empty() {
-        suggestions.push(format!(
-            "有 {} 条条目超过 {} 天未更换密码，建议定期轮换。",
-            stale.len(),
-            cfg.stale_days
-        ));
-    }
-    if suggestions.is_empty() {
-        suggestions.push("密码健康状况良好，继续保持。".to_string());
-    }
+    // D-112：不再在 core 生成用户文案（原中文硬编码建议已移除），
+    // 前端依据 weak / reused_groups / stale 计数渲染本地化建议。
 
     HealthReport {
         total_score,
@@ -127,7 +104,6 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
         reused,
         reused_groups,
         stale,
-        suggestions,
     }
 }
 

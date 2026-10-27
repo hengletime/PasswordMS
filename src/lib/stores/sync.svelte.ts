@@ -273,7 +273,8 @@ class SyncStore {
       return false;
     }
     try {
-      await api.sync.resolveConflict(conflictId, choice);
+      // D-112：KeepBoth 副本标题后缀按当前 UI 语言传入（core 不硬编码文案）。
+      await api.sync.resolveConflict(conflictId, choice, ui.t('conflict.copy_suffix'));
       await this.loadConflicts();
       return true;
     } catch (err) {

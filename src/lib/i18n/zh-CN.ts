@@ -257,6 +257,13 @@ export const zhCN = {
     merged_folders: '合并同名分组 {n} 个',
     download_template: '下载 CSV 模板',
     template_saved: '模板已保存',
+    // D-112：导入模板的本地化示例文本（结构在 core，文案随 UI 语言）。
+    // tpl_login_notes 必须自带半角逗号（引号转义示范的组成部份），翻译时勿删。
+    tpl_folder: '示例分组',
+    tpl_login_name: '示例登录条目',
+    tpl_login_notes: '备注里可以有半角逗号, 但整段必须用英文双引号包住',
+    tpl_note_name: '示例安全笔记',
+    tpl_note_body: '笔记正文写在这里',
   },
   health: {
     title: '密码体检',
@@ -269,6 +276,10 @@ export const zhCN = {
     stale: '超期未改',
     suggestions: '建议',
     good: '密码健康状况良好。',
+    // D-112：整改建议由前端按计数组装（core 不再出文案）。
+    sug_weak: '有 {n} 条条目使用弱口令，建议改为 12 位以上的混合字符密码。',
+    sug_reused: '有 {groups} 组条目重复使用同一密码（共 {n} 条），建议为每站设置独立密码。',
+    sug_stale: '有 {n} 条条目超过 {days} 天未更换密码，建议定期轮换。',
   },
   trash: {
     title: '回收站',
@@ -439,6 +450,8 @@ export const zhCN = {
     local_title: '本机标题',
     remote_title: '远端标题',
     detected_at: '发现于',
+    // D-112：KeepBoth 副本标题后缀（保留前导空格）。
+    copy_suffix: ' (冲突副本)',
   },
   // D-63：法律条款弹窗（免责声明 / 用户协议）的标题与按钮文案；
   // 正文不从 i18n 取，见 src/lib/legal-content.ts（逐条实质内容 + 统一 updated）。

@@ -152,7 +152,16 @@
           defaultPath: 'passwordms-import-template.csv',
           filters: [{ name: 'CSV', extensions: ['csv'] }],
         }),
-      write: (dest: string): Promise<void> => api.importer.saveTemplate(dest),
+      // D-112：示例文本按当前 UI 语言从 i18n 取值（core 只出结构）。
+      // login_notes 文案必须自带半角逗号（引号转义示范，zh-CN 字典为保证源头）。
+      write: (dest: string): Promise<void> =>
+        api.importer.saveTemplate(dest, {
+          folder: ui.t('import.tpl_folder'),
+          login_name: ui.t('import.tpl_login_name'),
+          login_notes: ui.t('import.tpl_login_notes'),
+          note_name: ui.t('import.tpl_note_name'),
+          note_body: ui.t('import.tpl_note_body'),
+        }),
     });
     if (outcome.kind === 'saved') {
       ui.toast('success', 'import.template_saved');

@@ -174,7 +174,17 @@ export interface HealthReport {
   /** 重复使用按密码分组（D-99）：每组 = 共用同一密码的条目 ID 列表。 */
   reused_groups: string[][];
   stale: string[];
-  suggestions: string[];
+  // D-112：suggestions 文案字段已移除——core 只出数据，前端按计数 + i18n 组装建议。
+}
+
+/** D-112：导入 CSV 模板的本地化示例文本（前端从 i18n 取值后传入）。 */
+export interface TemplateTexts {
+  folder: string;
+  login_name: string;
+  /** 必须含至少一个半角逗号（引号转义示范的组成部份）。 */
+  login_notes: string;
+  note_name: string;
+  note_body: string;
 }
 
 /** TOTP 验证码。 */

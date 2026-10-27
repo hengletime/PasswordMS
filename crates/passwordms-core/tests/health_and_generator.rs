@@ -136,7 +136,7 @@ fn health_detects_weak_reused_and_stale() {
     );
     assert!(report.stale.contains(&"f".to_string()));
     assert!(report.total_score <= 100);
-    assert!(!report.suggestions.is_empty());
+    // D-112：建议文案移出 core（前端 i18n 组装），core 只保证数据完备。
 }
 
 /// D-99 回归：多组重复必须按组分列（3+2 形态）——分组信息丢失则 UI 无从区分。
@@ -170,8 +170,7 @@ fn health_reports_reused_groups_separately() {
     flat.dedup();
     assert_eq!(flat, report.reused);
     assert_eq!(report.reused.len(), 5);
-    // 建议按组数措辞。
-    assert!(report.suggestions.iter().any(|s| s.contains("2 组")));
+    // D-112：按组措辞的文案由前端组装，core 只保证分组数据正确（上方已断言）。
 }
 
 #[test]

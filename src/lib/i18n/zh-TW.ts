@@ -238,6 +238,13 @@ export const zhTW = {
     merged_folders: '合併同名群組 {n} 個',
     download_template: '下載 CSV 範本',
     template_saved: '範本已儲存',
+    // D-112：導入範本的本地化示例文本（結構在 core，文案隨 UI 語言）。
+    // tpl_login_notes 必須自帶半角逗號（引號轉義示範的組成部份），翻譯時勿刪。
+    tpl_folder: '示範分組',
+    tpl_login_name: '示範登錄條目',
+    tpl_login_notes: '備註裡可以有半角逗號, 但整段必須用英文雙引號包住',
+    tpl_note_name: '示範安全筆記',
+    tpl_note_body: '筆記正文寫在這裡',
   },
   health: {
     title: '密碼健檢',
@@ -250,6 +257,10 @@ export const zhTW = {
     stale: '逾期未更換',
     suggestions: '建議',
     good: '密碼健康狀況良好。',
+    // D-112：整改建議由前端按計數組裝（core 不再出文案）。
+    sug_weak: '有 {n} 條條目使用弱口令，建議改為 12 位以上的混合字元密碼。',
+    sug_reused: '有 {groups} 組條目重複使用同一密碼（共 {n} 條），建議為每站設定獨立密碼。',
+    sug_stale: '有 {n} 條條目超過 {days} 天未更換密碼，建議定期輪換。',
   },
   trash: {
     title: '資源回收筒',
@@ -392,6 +403,8 @@ export const zhTW = {
     local_title: '本機標題',
     remote_title: '遠端標題',
     detected_at: '發現於',
+    // D-112：KeepBoth 副本標題後綴（保留前導空格）。
+    copy_suffix: ' (衝突副本)',
   },
   legal: {
     disclaimer_title: '免責聲明',

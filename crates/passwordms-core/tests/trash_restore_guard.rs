@@ -143,7 +143,7 @@ fn conflict_take_remote_deleted_skips_duplicate_trash_entry() {
     let _resets = s
         .repo_mut()
         .unwrap()
-        .resolve_conflict(&conflict_id, ConflictChoice::TakeRemote)
+        .resolve_conflict(&conflict_id, ConflictChoice::TakeRemote, " (copy)")
         .unwrap();
 
     // 关键断言：不产生第二条重复回收站条目。
@@ -186,7 +186,7 @@ fn conflict_take_remote_deleted_still_soft_deletes_live_item() {
     let _resets = s
         .repo_mut()
         .unwrap()
-        .resolve_conflict(&conflict_id, ConflictChoice::TakeRemote)
+        .resolve_conflict(&conflict_id, ConflictChoice::TakeRemote, " (copy)")
         .unwrap();
 
     assert!(s.repo().unwrap().get_item_opt(&item.item_id).is_none());

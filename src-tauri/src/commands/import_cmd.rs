@@ -92,18 +92,31 @@ pub fn import_apply(
     Ok(ImportResultDto::from(result))
 }
 
-/// D-72：把内置 CSV 模板写到用户选定位置（Android `content://` / 桌面路径）。
+/// D-72：把 CSV 模板写到用户选定位置（Android `content://` / 桌面路径）。
 ///
-/// 内容固定为 `passwordms_core::import::template::CSV_TEMPLATE`（模板与解析器的
-/// 一致性由 `tests/import_template.rs` 守着）。与附件导出同一个模式：
-/// 桌面 `std::fs::write`，Android 走 provider fd 的 `"wt"` 写入。
+/// D-112：示例文本（`texts`）由前端按当前 UI 语言从 i18n 字典取值传入，
+/// core 只保留表头与转义示范等结构（契约由 core `tests/import_template.rs` 守着）。
+/// 与附件导出同一个模式：桌面 `std::fs::write`，Android 走 provider fd 的 `"wt"` 写入。
 #[tauri::command(rename_all = "snake_case")]
-pub fn save_import_template(app: tauri::AppHandle, dest_path: String) -> IpcResult<()> {
+pub fn save_import_template(
+    app: tauri::AppHandle,
+    dest_path: String,
+    texts: passwordms_core::import::template::TemplateTexts,
+) -> IpcResult<()> {
     // 桌面目标不使用 `app`；显式忽略避免 unused 告警。
     #[cfg(not(target_os = "android"))]
     let _ = &app;
 
-    let template = passwordms_core::import::template::CSV_TEMPLATE;
+    // serde 反序列化不走 `TemplateTexts::new`，这里重建以强制执行
+    // 「文本不得含引号/换行」校验（防前端缺陷产出结构性损坏的模板）。
+    let texts = passwordms_core::import::template::TemplateTexts::new(
+        texts.folder,
+        texts.login_name,
+        texts.login_notes,
+        texts.note_name,
+        texts.note_body,
+    )?;
+    let template = passwordms_core::import::template::csv_template(&texts);
 
     #[cfg(target_os = "android")]
     if dest_path.starts_with("content://") {
