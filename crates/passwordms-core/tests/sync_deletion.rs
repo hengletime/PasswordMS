@@ -330,7 +330,9 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     let (_h2, _j2) = run_resync(&host_vault, server2, &mut joiner_session, &host_id);
     {
         let hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
-        assert_eq!(hs.repo().unwrap().get_item(&item_id).unwrap().rev, 2);
+        // D-111：KeepLocal 抬升 rev 制造胜出版本（max(local 2, remote 1) + 1 = 3），
+        // 传播后 joiner 复活为同一 rev——两端收敛一致。
+        assert_eq!(hs.repo().unwrap().get_item(&item_id).unwrap().rev, 3);
         assert_eq!(
             joiner_session
                 .repo()
@@ -338,8 +340,8 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
                 .get_item(&item_id)
                 .unwrap()
                 .rev,
-            2,
-            "「保留本机」→ 两端复活收敛"
+            3,
+            "「保留本机」→ 胜出版本传播，两端复活收敛（D-111）"
         );
     }
     let _ = std::fs::remove_dir_all(&dir);

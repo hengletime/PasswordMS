@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use passwordms_core::model::conflict::ConflictChoice;
 use passwordms_core::model::item::{Item, ItemKind, LoginData};
-use passwordms_core::model::sync_state::DeviceSyncState;
+use passwordms_core::model::sync_state::{BaseRev, DeviceSyncState};
 use passwordms_core::session::Session;
 use passwordms_core::store::repository::{folder_hash, item_hash, ItemDraft};
 use passwordms_core::sync::merge;
@@ -235,11 +235,23 @@ fn resolve_all_take_remote(side: &mut Side) {
 
 fn resolve_all_keep_local(side: &mut Side) {
     for cid in side.unresolved_conflicts() {
-        side.session
+        let resets = side
+            .session
             .repo_mut()
             .expect("repo")
             .resolve_conflict(&cid, ConflictChoice::KeepLocal)
             .expect("resolve_conflict");
+        // D-111：base 推进清单应用到本测试持有的 per-peer 内存 state（与命令层
+        // sync_cmd 同构——rev 抬升天然高于发送水位，无水位回落项）。
+        for r in resets {
+            side.state.base.insert(
+                r.record_id.clone(),
+                BaseRev {
+                    rev: r.new_rev,
+                    hash: r.new_hash,
+                },
+            );
+        }
     }
 }
 
@@ -474,8 +486,11 @@ fn take_remote_resets_watermark_so_future_edits_reach_peer() {
     );
 }
 
-/// 双端 KeepLocal：仲裁产物不重写元数据、水位挡住重发 → 第 2 轮零交换零冲突。
-/// （语义注记：双方都想保留自己的版本属用户意志对立，两端内容各自保留、不再互扰。）
+/// 双端 KeepLocal（D-111 新语义）：「保留本机」= 本机版本胜出并传播。
+///
+/// 旧实现（条目原样不动）两端被水位/base 双重卡死：胜出版本发不出去、对端同 rev
+/// 静默 skip → 两端永久不一致、也不再报冲突（主人实测）。新实现各自抬 rev 落地
+/// 胜出版本，交换后 LWW 按 updated_at 确定性收敛（后仲裁者胜），零冲突。
 #[test]
 fn keep_local_both_sides_settle_in_round_two() {
     let vault_a = temp_vault("ka");
@@ -507,8 +522,6 @@ fn keep_local_both_sides_settle_in_round_two() {
     };
     let first = pull(&mut b, &mut a);
     assert!(first.is_empty(), "首次推送不得产生冲突：{first:?}");
-    // 回程空交换：让 A 的 base 建立（真实链路双向同步天然如此；否则 A 无基准，
-    // detect_conflict 无基准不冲突 → A 静默 skip，测不出双改）。
     let back = pull(&mut a, &mut b);
     assert!(back.is_empty(), "回程空交换不得产生冲突：{back:?}");
 
@@ -521,11 +534,167 @@ fn keep_local_both_sides_settle_in_round_two() {
     resolve_all_keep_local(&mut a);
     resolve_all_keep_local(&mut b);
 
-    // 第 2 轮：零冲突（KeepLocal 不重写条目，发送水位挡住重发）。
+    // 第 2 轮：胜出版本互换，LWW 确定性收敛（b 后仲裁 updated_at 更新 → b 胜），
+    // 不产生新冲突。
     let (b_c2, a_c2) = exchange(&mut a, &mut b);
     assert_eq!((a_c2, b_c2), (0, 0), "KeepLocal 仲裁后不得重生冲突");
 
-    // 各自保留本端版本。
-    assert_eq!(a.item_title(&item_id), "edited-on-A");
+    // 两端收敛一致（后仲裁者的版本胜出），且业务 hash 相同。
+    assert_eq!(
+        a.item_title(&item_id),
+        "edited-on-B",
+        "双 KeepLocal 下后仲裁者胜（LWW updated_at）"
+    );
     assert_eq!(b.item_title(&item_id), "edited-on-B");
+    assert_eq!(
+        item_hash(&a.item(&item_id)).expect("hash a"),
+        item_hash(&b.item(&item_id)).expect("hash b"),
+        "双 KeepLocal 后两端必须收敛一致"
+    );
+
+    // 第 3 轮：零交换零冲突（收敛后流量归零）。
+    let (b_c3, a_c3) = exchange(&mut a, &mut b);
+    assert_eq!((a_c3, b_c3), (0, 0));
+}
+
+/// D-111 主守门（主人实测场景）：仅一端仲裁 KeepLocal，另一端冲突挂着不动。
+///
+/// A KeepLocal → 胜出版本（rev 抬升）传播到 B：B 的 LWW 应用它，且 B 挂着的
+/// 旧冲突（快照已过时）**自动过期**——否则用户在 B 仲裁旧快照会把条目打回旧版。
+#[test]
+fn keep_local_propagates_winner_and_expires_peer_conflict() {
+    let vault_a = temp_vault("la");
+    let vault_b = temp_vault("lb");
+    let mut a = Side::create(&vault_a, PWD_A, "device-A");
+    let mut b = Side::create(&vault_b, PWD_B, "device-B");
+    let host_vk = a.session.repo().expect("repo").vault_key().clone();
+    b.session
+        .adopt_vault_key(&host_vk)
+        .expect("adopt_vault_key");
+
+    let item_id = {
+        let repo = a.session.repo_mut().expect("repo");
+        repo.create_item(ItemDraft {
+            kind: ItemKind::Login(LoginData {
+                title: "site".to_string(),
+                url: None,
+                username: Some("user".to_string()),
+                password: Some("pw".to_string()),
+                notes: None,
+                totp_secret: None,
+                custom_fields: Vec::new(),
+            }),
+            folder_id: None,
+            favorite: false,
+        })
+        .expect("create_item")
+        .item_id
+    };
+    let first = pull(&mut b, &mut a);
+    assert!(first.is_empty(), "{first:?}");
+    let back = pull(&mut a, &mut b);
+    assert!(back.is_empty(), "{back:?}");
+
+    a.update_title(&item_id, "edited-on-A");
+    b.update_title(&item_id, "edited-on-B");
+    let (b_c1, a_c1) = exchange(&mut a, &mut b);
+    assert_eq!((a_c1, b_c1), (1, 1));
+
+    // 仅 A 仲裁「保留本机」（主人流程：电脑仲裁，手机端冲突挂着）。
+    resolve_all_keep_local(&mut a);
+    assert_eq!(b.unresolved_conflicts().len(), 1, "B 的冲突仍挂着");
+
+    // 交换：A 的胜出版本（rev3）到达 B → B LWW 应用 + 挂起冲突自动过期。
+    let (b_c2, a_c2) = exchange(&mut a, &mut b);
+    assert_eq!((a_c2, b_c2), (0, 0), "胜出版本传播不得产生新冲突");
+    assert_eq!(
+        b.unresolved_conflicts().len(),
+        0,
+        "B 收到胜出版本后，挂着的过时冲突必须自动过期"
+    );
+    assert_eq!(b.item_title(&item_id), "edited-on-A", "B 收敛到 A 版本");
+
+    // 回程：B 与 A 已一致（同 rev 同内容），零交换零冲突。
+    let (b_c3, a_c3) = exchange(&mut a, &mut b);
+    assert_eq!((a_c3, b_c3), (0, 0));
+    assert_eq!(
+        item_hash(&a.item(&item_id)).expect("hash a"),
+        item_hash(&b.item(&item_id)).expect("hash b"),
+        "单端 KeepLocal 后两端必须收敛一致"
+    );
+    assert_eq!(a.item(&item_id).rev, b.item(&item_id).rev, "两端 rev 一致");
+}
+
+/// D-111：删除冲突「保留本机」（对端删除、本机保留修改）→ 对端复活为本机版本。
+///
+/// 旧语义同样卡死：本机条目 rev 不变已发过、对端墓碑判定压住复活 → 一端删一端留。
+/// 新语义抬 rev 传播后，对端墓碑判定失效（D-56 复活路径），全网收敛到保留版本。
+#[test]
+fn keep_local_on_deletion_conflict_revives_on_peer() {
+    let vault_a = temp_vault("da");
+    let vault_b = temp_vault("db");
+    let mut a = Side::create(&vault_a, PWD_A, "device-A");
+    let mut b = Side::create(&vault_b, PWD_B, "device-B");
+    let host_vk = a.session.repo().expect("repo").vault_key().clone();
+    b.session
+        .adopt_vault_key(&host_vk)
+        .expect("adopt_vault_key");
+
+    let item_id = {
+        let repo = a.session.repo_mut().expect("repo");
+        repo.create_item(ItemDraft {
+            kind: ItemKind::Login(LoginData {
+                title: "site".to_string(),
+                url: None,
+                username: Some("user".to_string()),
+                password: Some("pw".to_string()),
+                notes: None,
+                totp_secret: None,
+                custom_fields: Vec::new(),
+            }),
+            folder_id: None,
+            favorite: false,
+        })
+        .expect("create_item")
+        .item_id
+    };
+    let first = pull(&mut b, &mut a);
+    assert!(first.is_empty(), "{first:?}");
+    let back = pull(&mut a, &mut b);
+    assert!(back.is_empty(), "{back:?}");
+
+    // A 删除（墓碑 rev2）；B 编辑（live rev2）。
+    {
+        let repo = a.session.repo_mut().expect("repo");
+        repo.delete_item(&item_id, false).expect("delete_item");
+    }
+    b.update_title(&item_id, "edited-on-B");
+
+    // 交换：B 收到墓碑 → 删除冲突（remote_deleted）；A 收到 B 的 live rev2 →
+    // 墓碑判定压制（rev 相同）→ skip。
+    let to_b = pull(&mut b, &mut a);
+    assert_eq!(to_b.len(), 1, "B 应产生删除冲突");
+    let to_a = pull(&mut a, &mut b);
+    assert!(to_a.is_empty(), "A 的墓碑应压制 B 的同 rev live：{to_a:?}");
+
+    // B 仲裁「保留本机」→ 抬 rev3 落地并传播。
+    resolve_all_keep_local(&mut b);
+
+    // A 收到 live rev3 > 墓碑 rev2 → 复活为 B 版本。
+    let to_a2 = pull(&mut a, &mut b);
+    assert!(to_a2.is_empty(), "复活不得产生冲突：{to_a2:?}");
+    assert_eq!(
+        a.item_title(&item_id),
+        "edited-on-B",
+        "A 必须复活为 B 的保留版本"
+    );
+    assert_eq!(
+        item_hash(&a.item(&item_id)).expect("hash a"),
+        item_hash(&b.item(&item_id)).expect("hash b"),
+        "删除冲突 KeepLocal 后两端必须收敛一致"
+    );
+
+    // 稳定轮：零交换零冲突。
+    let (b_c, a_c) = exchange(&mut a, &mut b);
+    assert_eq!((a_c, b_c), (0, 0));
 }

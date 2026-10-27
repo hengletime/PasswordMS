@@ -1811,6 +1811,8 @@ impl Repository {
     /// D-109：TakeRemote（非删除型）改为**原样落地**对方快照并返回水位回落清单——
     /// 调用方须对每个对端的 `DeviceSyncState.sent_watermark` 做
     /// `min(现值, new_rev)` 应用（见 [`WatermarkReset`]）。
+    /// D-111：KeepLocal 改为**抬 rev 落地本机胜出版本**并在 repo 内直接推进各对端
+    /// base——「保留本机」的语义是以本机为准收敛全网，而非两端各留一份永不一致。
     pub fn resolve_conflict(
         &mut self,
         conflict_id: &str,
@@ -1825,7 +1827,35 @@ impl Repository {
 
         match choice {
             ConflictChoice::KeepLocal => {
-                // 保留本机：丢弃远端快照。
+                // D-111：「保留本机」= 本机版本胜出并**传播到所有对端**。
+                // 旧实现条目原样不动：本机版本 rev 早已在发送水位线上（rev ≤ 水位
+                // 免重发，该版本此前已发过），对端永远收不到；且 rev 不高于对端 base
+                // （冲突发生时 base 已推进到远端 rev）→ 即使重发也会被「同 rev 已见」
+                // 静默 skip —— 两端永久不一致、也不再报冲突（主人实测）。
+                // 修法镜像 TakeRemote 的收敛思路：抬升 rev 制造「胜出版本」（业务内容
+                // 不变，仅元数据推进），rev 超过所有对端的水位与 base → 下一轮同步
+                // 自然重发；对端无本地修改 → LWW 接受 → 全网收敛到本机版本。删除型
+                // 冲突（对端删除、本机保留）同理：抬 rev 后对端墓碑判定失效，条目走
+                // D-56 复活路径恢复。双端都选「保留本机」（意图矛盾）→ 各自抬 rev 后
+                // LWW 按 updated_at 确定性收敛（后仲裁者胜）——比永久不一致可预期。
+                let mut winner = entry.local_snapshot.clone();
+                winner.rev = winner.rev.max(entry.remote_snapshot.rev) + 1;
+                winner.updated_at = now_ms();
+                winner.modified_by = self.device_id.clone();
+                let item_id = winner.item_id.clone();
+                let new_rev = winner.rev;
+                let winner_hash = item_hash(&winner)?;
+                // put_item_direct 自带 D-106 上限校验。
+                self.put_item_direct(winner)?;
+                // base 推进清单交调用方对每个对端应用（与 TakeRemote 的水位回落同
+                // 模式；base 不推进的话，双 KeepLocal 场景两端互为「同 rev 异内容」
+                // 且各自偏离陈旧 base，每轮同步重新报冲突）。rev 抬升天然高于所有
+                // 对端发送水位 → 导出免回落，重发自然发生。
+                resets.push(WatermarkReset {
+                    record_id: item_id,
+                    new_rev,
+                    new_hash: winner_hash,
+                });
             }
             ConflictChoice::TakeRemote => {
                 if entry.remote_deleted {
@@ -1856,6 +1886,7 @@ impl Repository {
                     let snapshot = entry.remote_snapshot.clone();
                     let landed_rev = snapshot.rev;
                     let item_id = snapshot.item_id.clone();
+                    let landed_hash = item_hash(&snapshot)?;
                     self.put_item_direct(snapshot)?;
                     // 水位回落清单交调用方应用：本端可能曾向某对端发出过比 landed_rev
                     // 更高的版本（仲裁前的本端修改已传播），条目 rev 回落后高挂的水位
@@ -1865,6 +1896,7 @@ impl Repository {
                     resets.push(WatermarkReset {
                         record_id: item_id,
                         new_rev: landed_rev,
+                        new_hash: landed_hash,
                     });
                 }
             }
@@ -1914,6 +1946,29 @@ impl Repository {
         )?;
         self.conflicts.insert(entry.conflict_id.clone(), entry);
         Ok(())
+    }
+
+    /// D-111：将某条目的**未解决冲突全部标记为已解决**（不落地任何快照）。
+    ///
+    /// 用途：本端收到并应用了该条目的**更新版本**（同步 LWW / 对端仲裁胜出版本
+    /// 传播）时，挂着的旧冲突快照已不代表现状——继续仲裁只会把过时版本写回去
+    /// （对端仲裁 TakeRemote 落地旧快照 → 打回旧 rev → 两端重新不一致）。
+    /// 新版本已覆盖条目本体，冲突以「事实解决」收口。返回过期条数。
+    pub fn expire_conflicts_for(&mut self, item_id: &str) -> CoreResult<usize> {
+        let ids: Vec<String> = self
+            .conflicts
+            .values()
+            .filter(|c| c.item_id == item_id && !c.resolved)
+            .map(|c| c.conflict_id.clone())
+            .collect();
+        for cid in &ids {
+            if let Some(entry) = self.conflicts.get_mut(cid) {
+                entry.resolved = true;
+                let bytes = serde_json::to_vec(entry)?;
+                self.write_record(RECORD_TYPE_CONFLICT, cid, 0, &bytes)?;
+            }
+        }
+        Ok(ids.len())
     }
 
     /// 直接落库（同步应用远端变更；不改写 rev 语义由调用方决定）。

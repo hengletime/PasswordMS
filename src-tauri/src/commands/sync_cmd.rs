@@ -319,8 +319,12 @@ pub fn resolve_conflict(
     let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     let resets = repo.resolve_conflict(&conflict_id, parsed)?;
-    // D-109：TakeRemote 原样落地后 rev 可能回落——对每个对端的发送水位做 min
-    // 回落，否则本端后续修改会被「rev ≤ 水位免重发」永久吞掉（对端收不到）。
+    // D-109/D-111：对每个对端应用仲裁的状态修正——
+    // ① 水位回落（TakeRemote）：落地 rev 回落后，min 回落防「rev ≤ 水位免重发」
+    //    永久吞掉本端后续修改；
+    // ② base 推进（KeepLocal，D-111）：胜出版本落地后各对端 base 推进到
+    //    {new_rev, new_hash}，否则双 KeepLocal 场景每轮重新报冲突（新形态振荡）；
+    //    TakeRemote 的 base 冲突时已推进为同值，insert 幂等无害。
     if !resets.is_empty() {
         for peer in repo.list_paired_devices() {
             let mut st = repo.sync_state(&peer.device_id);
@@ -331,6 +335,20 @@ pub fn resolve_conflict(
                         *wm = r.new_rev;
                         changed = true;
                     }
+                }
+                let needs_base = match st.base.get(&r.record_id) {
+                    Some(b) => b.rev != r.new_rev || b.hash != r.new_hash,
+                    None => true,
+                };
+                if needs_base {
+                    st.base.insert(
+                        r.record_id.clone(),
+                        passwordms_core::model::sync_state::BaseRev {
+                            rev: r.new_rev,
+                            hash: r.new_hash,
+                        },
+                    );
+                    changed = true;
                 }
             }
             if changed {

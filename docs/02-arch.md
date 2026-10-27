@@ -2334,3 +2334,25 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 **语义裁定（互采）**：双端都点「采用远端」时两端各持对方版本——这不是缺陷：该选项的意图就是「以对端为准」，双方意图各自达成；「双方都想保留自己的版本」请用 KeepLocal（两端各持己见、不再互扰）；需要同时保留两版用 KeepBoth（新副本）。
 
 守门：`tests/d109_conflict_hash.rs` 6 例——①item_hash 元数据无关性（业务内容敏感）②folder_hash 同口径③双端 TakeRemote 仲裁后 6 轮零新冲突 + 互采断言（**主守门，旧实现永不收敛**）④TakeRemote 水位回落后本端新修改可达对端⑤KeepLocal 双端第 2 轮零冲突⑥同 rev 双改导出不被回声消除吞掉。core 全量 231 例绿（225+6），clippy 0 告警，fmt 过。历史项 C3（item_hash 重构时机）随本缺陷提前落地了 hash 口径修复，S1（格式 v2）不变。
+
+#### 3.14.16 KeepLocal 传播语义修复（D-111，2026-10-27 晚）
+
+**症状**（主人实测）：冲突仲裁选「保留本机」确认后，对端不变；再同步两端两样、不报冲突，永久不一致。
+
+**根因（双重卡死）**：KeepLocal 旧实现条目原样不动——①本机版本 rev 早就在发送水位线上（该版本此前已发出，`rev ≤ 水位` 免重发），对端永远收不到胜出版本；②对端 base 在冲突发生时已推进到本机 rev——即使重发，对端 `detect_conflict` 判「远端 rev ≤ base.rev 未改」静默 skip。
+
+**修复**（镜像 D-109 TakeRemote 的收敛思路）：
+
+| 项 | 修复 |
+|---|---|
+| 胜出版本 | KeepLocal 改为抬 rev 落地：`rev = max(local, remote) + 1`，业务内容不变（仅元数据推进），`put_item_direct`（自带上限校验）——rev 超过所有对端水位与 base，下一轮同步自然重发 |
+| base 推进 | `WatermarkReset` 扩展 `new_hash` 字段（TakeRemote 填落地 hash / KeepLocal 填胜出 hash），命令层对每个对端 `base.insert({new_rev, new_hash})`——否则双 KeepLocal 场景两端互为「同 rev 异内容」且各自偏离陈旧 base，每轮重新报冲突（新形态振荡）。TakeRemote 的 base 冲突时已推进为同值，insert 幂等 |
+| 对端接受 | 对端无本地修改 → 单侧变更走 LWW 接受 → 全网收敛到胜出版本；删除型冲突（对端删除、本机保留）同理，抬 rev 后对端墓碑判定失效走 D-56 复活路径 |
+| 过时冲突过期 | 新增 `Repository::expire_conflicts_for(item_id)`：本端应用某条目的更新版本（LWW / 复活）时，挂着的旧冲突快照已不代表现状（继续仲裁只会把过时版本写回去）→ 自动标记 resolved（事实解决收口）。merge.rs 两处 put（LWW 应用、None 复活）接线 |
+| 双 KeepLocal | 两端意图矛盾时各自抬 rev，交换后 LWW 按 `updated_at` 确定性收敛（后仲裁者胜）——比永久不一致可预期 |
+
+**语义升级**：「保留本机」从「两端各持己见、永不一致」升级为「以本机为准，同步到对方」（与「采用远端」的互采语义对称互补）。
+
+**测试盲区教训**：测试环境 `Side.state` 是模拟同步会话的内存副本，repo 内直改 state（首次实现走的 `list_paired_devices` 遍历）对副本不可见且测试双端未注册配对（遍历空转）；正确模式是**与 TakeRemote 同构的返回值上交**——repo 层不持有权威副本，仲裁对状态的影响一律返回值上交、调用方应用。
+
+守门：`tests/d109_conflict_hash.rs` 扩至 8 例——⑦KeepLocal 传播胜出版本 + 对端挂起冲突自动过期 + 两端 rev/hash 收敛（主人实测场景）⑧删除冲突 KeepLocal 后对端复活为保留版本；KeepLocal 双端用例改断言 LWW 收敛（后仲裁者胜）。`sync_deletion.rs` case2 断言随新语义更新（rev 3）。core 全量 233 例绿（231+2），clippy 0 告警，fmt 过。前端零改动（IPC 命令面不变，`resolve_conflict` 签名不变）。

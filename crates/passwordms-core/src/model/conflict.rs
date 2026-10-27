@@ -32,14 +32,23 @@ pub enum ConflictChoice {
     KeepBoth,
 }
 
-/// D-109：仲裁产生的水位回落清单项。
+/// D-109/D-111：仲裁产生的同步状态修正清单项。
 ///
-/// TakeRemote **原样落地**对方快照后，落地 rev 可能低于本端曾向某对端发出过的
-/// 版本 rev——per-peer 的发送水位若高挂不落，本端后续修改会被「rev ≤ 水位免重发」
-/// 永久吞掉。调用方（命令层/同步会话层）须对**每个对端**的
-/// `DeviceSyncState.sent_watermark[record_id]` 做 `min(现值, new_rev)` 应用。
+/// per-peer 的 `DeviceSyncState` 归同步会话层持有（O2 三段式内存副本），repo 层
+/// 不持有权威副本，故仲裁对状态的影响以返回值上交，调用方（命令层/测试）对
+/// **每个对端**的 state 应用：
+///
+/// - **水位回落**（TakeRemote，D-109）：落地 rev 可能低于本端曾发出过的版本 rev，
+///   高挂的发送水位会把本端后续修改永久吞掉（rev ≤ 水位免重发）——
+///   `sent_watermark[record_id] = min(现值, new_rev)`。
+/// - **base 推进**（KeepLocal，D-111）：胜出版本 rev 抬升落地后，各对端 base 必须
+///   推进到 `{new_rev, new_hash}`——否则双 KeepLocal 场景下两端互为「同 rev 异
+///   内容」且各自偏离陈旧 base，每轮同步重新报冲突（新形态振荡）。
+///   TakeRemote 的 base 在冲突发生时已推进为落地版本（同值），insert 幂等无害。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WatermarkReset {
     pub record_id: String,
     pub new_rev: u64,
+    /// D-111：落地/胜出版本的业务内容摘要（base 推进用）。
+    pub new_hash: [u8; 32],
 }

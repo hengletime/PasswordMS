@@ -157,6 +157,11 @@ pub fn apply_changes(
                             || (remote.updated_at == local.updated_at && remote.rev > local.rev);
                         if take_remote {
                             repo.put_item_direct(remote.clone())?;
+                            // D-111：条目被更新版本覆盖后，挂着的旧冲突快照已过时
+                            // （继续仲裁只会把过时版本写回去）→ 事实解决收口。
+                            // report.conflicts 记录的是本轮新建冲突（本条未冲突才
+                            // 走到这），与过期对象不相交，无需回改报告。
+                            repo.expire_conflicts_for(&change.record_id)?;
                             report.applied += 1;
                         } else {
                             report.skipped += 1;
@@ -184,6 +189,9 @@ pub fn apply_changes(
                             // 旧回收站快照——否则旧快照与 live 新版本并存，用户「还原」
                             // 会用旧数据覆盖刚同步来的新版本并传播回对端（两端丢数据）。
                             repo.drop_trash_snapshots(&change.record_id)?;
+                            // D-111：复活同样令挂着的旧冲突快照过时（如对端仲裁
+                            // KeepLocal 的胜出版本传回），事实解决收口。
+                            repo.expire_conflicts_for(&change.record_id)?;
                             report.applied += 1;
                         }
                         state.base.insert(

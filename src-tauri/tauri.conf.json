@@ -43,7 +43,9 @@
       },
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "installerHooks": "./windows/installer-hooks.nsh"
+        "installerHooks": "./windows/installer-hooks.nsh",
+        "languages": ["English", "SimpChinese", "TradChinese", "Thai"],
+        "displayLanguageSelector": true
       }
     },
     "android": {
