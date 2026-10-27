@@ -2317,3 +2317,20 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 | 25 | 5.2-7 收尾 | 泰文用户协议 "(crash log)" 英文注音残留清除（D-104 已修 telemetry 误译的收尾） |
 
 守门：core `tests/d108_session_unlock.rs` 5 例（错误密码统一化 / NoVault / 截断与垃圾头部折叠 / 锁态复位 / 改密全流程，均真实走 Argon2）；url_safety/totp 内联单测 4 例；前端 `d107-update-check.test.ts`（版本比较/应答解析/节流 9 例）+ `d108-audit-guard.test.ts` 12 例（lock_session 全覆盖 / perform_lock 复用 / autolock 事件链路 / capabilities/CSP / 死代码删除 / DTO 收敛 / 合并提示 / 四语言键与披露句）。历史项 S1/C3/Q3 维持原结论（格式 v2 / item_hash 重构 / 环境 DLL）；3.4-4（S2 IPC 白名单）与 3.1-11（O4 上帝对象）维持设计取舍。
+
+#### 3.14.15 冲突仲裁死循环修复（D-109，2026-10-27，v1.2.23 后续）
+
+**实测现象**：LAN 同步双端同时修改同一条目 → 一端出现 3 个待仲裁冲突；仲裁「采用远端」后再同步，对端又出现同样 3 个；如此往复永不收敛。定位出**四层叠加缺陷**：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 1 | 仲裁产物必然互异 | `item_hash` 是**整 Item 结构 JSON 哈希**——`rev`/`updated_at`/`modified_by`（及本地统计 `use_count`/`last_used_at`）全部参与。仲裁「采用远端」重写这三项元数据 → 两端产物业务内容一致也 hash 异 → `detect_conflict` 每轮判「双改且内容不同」 | `item_hash`/`folder_hash` 改为**只哈希业务内容**（clone 后剥离 5 个元数据/统计字段再序列化）。`BaseRev.hash` 唯一消费点是墓碑判重（`== [0;32]`），口径变化对旧库完全兼容 |
+| 2 | 双端仲裁振荡 | 旧 TakeRemote 产物 `rev = max+1` + `updated_at = now`：双端各自仲裁后产物**永远互为「对方上一版」**（内容互换、差半拍），数学上不可收敛 | TakeRemote 改为**原样落地**对方快照（`put_item_direct`）——「采用远端」的语义就是接受对方版本；双端互采 = 各自获得想要的版本，内容此后不变，振荡自然消除。语义注记：互采后两端内容不同（各持对方版本）是该仲裁选项的准确含义，非数据丢失（原版本仍在冲突箱 resolved 快照中） |
+| 3 | 同 rev 双改单向丢改 | O1 回声消除（`note_received_changes`）无条件推发送水位：双端同时各自推进到**同 rev** 时，接收方把自己的独立修改误判为「对端已持有」，**本端修改永远发不出去**（冲突只在一侧出现、另一侧静默丢改）——正是「只有电脑端出现 3 个」的成因 | 回声消除前以 `apply_changes` 刚推进的 base 对照判同源：本端条目 rev 与 hash **均与 base 一致**才推水位；否则（独立修改）不推，本端版本照常导出 |
+| 4 | 无基准静默覆盖 / 陈旧变更 | base 仅在接收侧推进：发送方对自己已发出的版本无基准记录 → 下轮双改判定缺基准 → 无基准 LWW 把后改一端**静默覆盖**先改一端（Q3 禁止） | 新增 `merge::note_sent_base`（4 个交换点：client/resync 发起方段②、server/resync 响应方导出后）：发送成功即把 base 推进到已发出 rev（hash 取发出版本明文摘要，仅 `rev > base.rev` 时推进不倒退）。另 `detect_conflict` 无基准分支：同 rev 异内容直接判冲突（无基准下同 rev 异内容必为双端独立修改） |
+
+**水位回落配套**：TakeRemote 原样落地后条目 rev 可能低于本端曾发出的版本——高挂的发送水位会永久吞掉本端后续修改的导出。`resolve_conflict` 返回 `Vec<WatermarkReset>`（`model/conflict.rs`），命令层（`sync_cmd::resolve_conflict`）对每个对端 state 做 `min(水位, new_rev)` 应用；失败安全沿用「`save_sync_state` 不执行即随会话丢弃」语义。
+
+**语义裁定（互采）**：双端都点「采用远端」时两端各持对方版本——这不是缺陷：该选项的意图就是「以对端为准」，双方意图各自达成；「双方都想保留自己的版本」请用 KeepLocal（两端各持己见、不再互扰）；需要同时保留两版用 KeepBoth（新副本）。
+
+守门：`tests/d109_conflict_hash.rs` 6 例——①item_hash 元数据无关性（业务内容敏感）②folder_hash 同口径③双端 TakeRemote 仲裁后 6 轮零新冲突 + 互采断言（**主守门，旧实现永不收敛**）④TakeRemote 水位回落后本端新修改可达对端⑤KeepLocal 双端第 2 轮零冲突⑥同 rev 双改导出不被回声消除吞掉。core 全量 231 例绿（225+6），clippy 0 告警，fmt 过。历史项 C3（item_hash 重构时机）随本缺陷提前落地了 hash 口径修复，S1（格式 v2）不变。

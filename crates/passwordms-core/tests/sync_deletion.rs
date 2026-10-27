@@ -320,7 +320,8 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let cid = hs.repo().unwrap().list_conflicts()[0].conflict_id.clone();
-        hs.repo_mut()
+        let _resets = hs
+            .repo_mut()
             .unwrap()
             .resolve_conflict(&cid, ConflictChoice::KeepLocal)
             .unwrap();
@@ -370,7 +371,8 @@ fn case2_delete_modify_tug_goes_to_conflict_box_and_converges() {
     {
         let mut hs = Session::unlock(&host_vault, HOST_PWD).unwrap();
         let cid = hs.repo().unwrap().list_conflicts()[0].conflict_id.clone();
-        hs.repo_mut()
+        let _resets = hs
+            .repo_mut()
             .unwrap()
             .resolve_conflict(&cid, ConflictChoice::TakeRemote)
             .unwrap();

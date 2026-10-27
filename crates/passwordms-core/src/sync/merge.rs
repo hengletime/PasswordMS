@@ -22,13 +22,19 @@ pub struct MergeReport {
 
 /// 「双改」冲突探测：基准存在且两端 `rev` 均大于基准，且内容摘要不同。
 pub fn detect_conflict(local: &Item, remote: &Item, base: Option<&BaseRev>) -> CoreResult<bool> {
-    let base = match base {
-        Some(b) => b,
-        // 无基准：首次见到该条目，不构成冲突。
-        None => return Ok(false),
+    let (local_changed, remote_changed) = match base {
+        Some(b) => (local.rev > b.rev, remote.rev > b.rev),
+        // D-109：无基准（本端从未收过该对端的此记录）时，同 rev 异内容必为双端
+        // 独立修改——单侧修改的传播会随接收建立 base，不会停留在无基准态；同 id
+        // 同 rev 异内容不可能是单侧传播（传播版本单调同源）。此时若走无基准 LWW，
+        // 后改一端会静默覆盖先改一端（Q3 裁定禁止静默覆盖），故直接判冲突交 UI 仲裁。
+        None => {
+            if local.rev == remote.rev {
+                return Ok(item_hash(local)? != item_hash(remote)?);
+            }
+            return Ok(false);
+        }
     };
-    let local_changed = local.rev > base.rev;
-    let remote_changed = remote.rev > base.rev;
     if !(local_changed && remote_changed) {
         return Ok(false);
     }
@@ -280,16 +286,100 @@ pub fn note_sent_changes(state: &mut DeviceSyncState, changes: &[ChangeRecord]) 
     }
 }
 
-/// O1：接收侧水位推进——**回声消除**。
+/// O1：接收侧水位推进——**回声消除**（D-109 修订：base 对照判同源）。
 ///
-/// 对端主动发来的 live 变更本身即证明「对端已持有该 rev」，本端对它的回发水位
-/// 可同步推进：否则「刚从对端收到的条目」每轮都会被原样回发（全量导出时代的
-/// 固有回声流量，库越大越浪费）。墓碑无需此处理——`apply_changes` 收到删除时
-/// 已把 base 推进为墓碑标记（hash=0），导出侧 base 过滤天然消除回声。
+/// 对端发来的 live 变更若**本端当前版本就来自它**，回发必是原样冗余，回发水位
+/// 可同步推进。判据：`apply_changes` 刚把 base 推进为收到的变更（rev + 内容摘要），
+/// 本端条目 rev 与 hash **均与 base 一致** = 同源 → 推进；否则不推进。
+///
+/// D-109 之前无条件推进，在「双端同时各自推进到**同 rev**」（同 rev 双改）时误吞
+/// 本端版本的导出——本端 rev2 是独立修改、对端从未见过，却被回声消除当成
+/// 「对端已持有 rev2」，对端永远收不到本端修改（冲突只在一侧出现、另一侧静默丢改）。
+///
+/// 墓碑无需此处理——`apply_changes` 收到删除时已把 base 推进为墓碑标记（hash=0），
+/// 导出侧 base 过滤天然消除回声。
 ///
 /// 失败安全与 [`note_sent_changes`] 相同：仅随本轮交换成功（`save_sync_state`）落盘。
-pub fn note_received_changes(state: &mut DeviceSyncState, changes: &[ChangeRecord]) {
-    note_sent_changes(state, changes);
+pub fn note_received_changes(
+    repo: &Repository,
+    state: &mut DeviceSyncState,
+    changes: &[ChangeRecord],
+) {
+    for change in changes.iter().filter(|c| !c.deleted) {
+        let same_as_base = match change.record_type {
+            RECORD_TYPE_ITEM => repo
+                .get_item_opt(&change.record_id)
+                .zip(state.base.get(&change.record_id))
+                .map(|(local, base)| {
+                    local.rev == base.rev && item_hash(&local).ok() == Some(base.hash)
+                })
+                .unwrap_or(false),
+            RECORD_TYPE_FOLDER => repo
+                .get_folder_opt(&change.record_id)
+                .zip(state.base.get(&change.record_id))
+                .map(|(local, base)| {
+                    local.rev == base.rev && folder_hash(&local).ok() == Some(base.hash)
+                })
+                .unwrap_or(false),
+            _ => false,
+        };
+        if !same_as_base {
+            continue;
+        }
+        let entry = state
+            .sent_watermark
+            .entry(change.record_id.clone())
+            .or_insert(0);
+        if change.rev > *entry {
+            *entry = change.rev;
+        }
+    }
+}
+
+/// D-109：发送侧 base 推进。
+///
+/// 本端把 rev R **成功发出**给对端后，「对端至少持有 R」即成事实——本端对该对端的
+/// 共同基准应推进到 R（hash 取发出版本的明文摘要，与接收侧 base 同口径）。仅在
+/// `change.rev > 现有 base.rev` 时推进（不倒退）。
+///
+/// 旧实现 base 仅在接收侧推进：发送方对自己已发出的版本无基准记录，下轮双改判定
+/// 缺基准 → 无基准 LWW 会把后改一端**静默覆盖**先改一端（Q3 裁定禁止静默覆盖）。
+///
+/// 失败安全：与 [`note_sent_changes`] 同语义——在发送成功后的锁内段调用；同步中途
+/// 失败则 `save_sync_state` 不执行，base 推进随会话丢弃，下一轮重发（对端 merge 幂等）。
+pub fn note_sent_base(repo: &Repository, state: &mut DeviceSyncState, changes: &[ChangeRecord]) {
+    for change in changes.iter().filter(|c| !c.deleted) {
+        if state
+            .base
+            .get(&change.record_id)
+            .map(|b| b.rev >= change.rev)
+            .unwrap_or(false)
+        {
+            continue; // 已有更高基准，不倒退。
+        }
+        let base = match change.record_type {
+            RECORD_TYPE_ITEM => repo
+                .change_to_item(change)
+                .ok()
+                .and_then(|sent| item_hash(&sent).ok())
+                .map(|hash| BaseRev {
+                    rev: change.rev,
+                    hash,
+                }),
+            RECORD_TYPE_FOLDER => repo
+                .change_to_folder(change)
+                .ok()
+                .and_then(|sent| folder_hash(&sent).ok())
+                .map(|hash| BaseRev {
+                    rev: change.rev,
+                    hash,
+                }),
+            _ => None,
+        };
+        if let Some(base) = base {
+            state.base.insert(change.record_id.clone(), base);
+        }
+    }
 }
 
 /// 推进某条记录的同步基准。

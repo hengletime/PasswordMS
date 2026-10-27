@@ -11,7 +11,7 @@ pub mod sync_state;
 pub mod trash;
 pub mod vault;
 
-pub use conflict::{ConflictChoice, ConflictEntry};
+pub use conflict::{ConflictChoice, ConflictEntry, WatermarkReset};
 pub use folder::Folder;
 pub use item::{AttachmentData, CustomField, Item, ItemKind, LoginData, SecureNoteData};
 pub use sync_state::{BaseRev, DeviceSyncState, PairedDevice};

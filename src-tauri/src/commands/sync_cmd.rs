@@ -317,7 +317,27 @@ pub fn resolve_conflict(
         }
     };
     let mut session = state.lock_session().map_err(lock_err)?;
-    session.repo_mut()?.resolve_conflict(&conflict_id, parsed)?;
+    let repo = session.repo_mut()?;
+    let resets = repo.resolve_conflict(&conflict_id, parsed)?;
+    // D-109：TakeRemote 原样落地后 rev 可能回落——对每个对端的发送水位做 min
+    // 回落，否则本端后续修改会被「rev ≤ 水位免重发」永久吞掉（对端收不到）。
+    if !resets.is_empty() {
+        for peer in repo.list_paired_devices() {
+            let mut st = repo.sync_state(&peer.device_id);
+            let mut changed = false;
+            for r in &resets {
+                if let Some(wm) = st.sent_watermark.get_mut(&r.record_id) {
+                    if *wm > r.new_rev {
+                        *wm = r.new_rev;
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                repo.save_sync_state(st)?;
+            }
+        }
+    }
     Ok(())
 }
 

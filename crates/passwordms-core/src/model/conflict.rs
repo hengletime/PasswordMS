@@ -31,3 +31,15 @@ pub enum ConflictChoice {
     TakeRemote,
     KeepBoth,
 }
+
+/// D-109：仲裁产生的水位回落清单项。
+///
+/// TakeRemote **原样落地**对方快照后，落地 rev 可能低于本端曾向某对端发出过的
+/// 版本 rev——per-peer 的发送水位若高挂不落，本端后续修改会被「rev ≤ 水位免重发」
+/// 永久吞掉。调用方（命令层/同步会话层）须对**每个对端**的
+/// `DeviceSyncState.sent_watermark[record_id]` 做 `min(现值, new_rev)` 应用。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatermarkReset {
+    pub record_id: String,
+    pub new_rev: u64,
+}

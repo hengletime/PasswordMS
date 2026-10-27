@@ -18,7 +18,7 @@ use crate::constants::{
 use crate::crypto::keys::{self, VaultKey};
 use crate::crypto::{aead, rng};
 use crate::error::{CoreError, CoreResult};
-use crate::model::conflict::{ConflictChoice, ConflictEntry};
+use crate::model::conflict::{ConflictChoice, ConflictEntry, WatermarkReset};
 use crate::model::folder::Folder;
 use crate::model::item::{AttachmentMeta, Item, ItemKind};
 use crate::model::now_ms;
@@ -1807,16 +1807,21 @@ impl Repository {
     }
 
     /// 三选一仲裁。
+    ///
+    /// D-109：TakeRemote（非删除型）改为**原样落地**对方快照并返回水位回落清单——
+    /// 调用方须对每个对端的 `DeviceSyncState.sent_watermark` 做
+    /// `min(现值, new_rev)` 应用（见 [`WatermarkReset`]）。
     pub fn resolve_conflict(
         &mut self,
         conflict_id: &str,
         choice: ConflictChoice,
-    ) -> CoreResult<()> {
+    ) -> CoreResult<Vec<WatermarkReset>> {
         let entry = self
             .conflicts
             .get(conflict_id)
             .cloned()
             .ok_or(CoreError::ItemNotFound)?;
+        let mut resets: Vec<WatermarkReset> = Vec::new();
 
         match choice {
             ConflictChoice::KeepLocal => {
@@ -1842,20 +1847,25 @@ impl Repository {
                         }
                     }
                 } else {
-                    let mut remote = entry.remote_snapshot.clone();
-                    remote.rev = entry.local_snapshot.rev.max(remote.rev) + 1;
-                    remote.updated_at = now_ms();
-                    remote.modified_by = self.device_id.clone();
-                    // D-106（豆包审查 3.1-6）：与 put_item_direct 同款上限校验。
-                    let bytes = serde_json::to_vec(&remote)?;
-                    if bytes.len() > MAX_ITEM_PLAINTEXT_BYTES {
-                        return Err(CoreError::Validation(format!(
-                            "sync item_too_large: {} > {MAX_ITEM_PLAINTEXT_BYTES} bytes",
-                            bytes.len()
-                        )));
-                    }
-                    self.write_record(RECORD_TYPE_ITEM, &remote.item_id, 0, &bytes)?;
-                    self.items.insert(remote.item_id.clone(), remote);
+                    // D-109：**原样落地对方快照**——「采用远端」的语义就是接受对方的
+                    // 版本，不制造新版本。旧实现（rev = max+1 + updated_at = now +
+                    // modified_by = 本机）在双端各自仲裁时让产物永远互为「对方上一版」，
+                    // 每轮同步重新判冲突，形成不可收敛的振荡死循环（实测：仲裁后两端
+                    // 反复出现同一批冲突）。双端互采 = 各自获得想要的版本，意图即达成；
+                    // 内容此后不再变化，振荡自然消除。put_item_direct 自带 D-106 上限校验。
+                    let snapshot = entry.remote_snapshot.clone();
+                    let landed_rev = snapshot.rev;
+                    let item_id = snapshot.item_id.clone();
+                    self.put_item_direct(snapshot)?;
+                    // 水位回落清单交调用方应用：本端可能曾向某对端发出过比 landed_rev
+                    // 更高的版本（仲裁前的本端修改已传播），条目 rev 回落后高挂的水位
+                    // 会永久吞掉本端后续修改的导出（rev ≤ 水位 → 免重发）。per-peer
+                    // 的 DeviceSyncState 归同步会话层持有（O2 三段式内存副本），
+                    // repo 层不持有权威副本，故以返回值上交。
+                    resets.push(WatermarkReset {
+                        record_id: item_id,
+                        new_rev: landed_rev,
+                    });
                 }
             }
             ConflictChoice::KeepBoth => {
@@ -1891,7 +1901,7 @@ impl Repository {
         )?;
         self.conflicts.insert(updated.conflict_id.clone(), updated);
         self.persist_header()?;
-        Ok(())
+        Ok(resets)
     }
 
     /// 写入冲突箱（供同步合并使用）。
@@ -2753,13 +2763,34 @@ pub fn hash32(bytes: &[u8]) -> [u8; 32] {
 }
 
 /// 条目内容摘要（用于同步基准比对）。
+///
+/// D-109（冲突仲裁死循环根因）：**只哈希业务内容**——剥离同步元数据
+/// `rev` / `updated_at` / `modified_by` 与本地统计 `use_count` / `last_used_at`。
+///
+/// 仲裁「采用远端」会重写这三项元数据（`rev = max+1`、`updated_at = now`、
+/// `modified_by = 本机`）：旧口径（整结构 JSON）下两端产物**业务内容一致也必 hash 异**，
+/// `detect_conflict` 每轮判「双改且内容不同」→ 冲突无限重生（rev 交替抬升永不收敛）。
+/// `use_count` / `last_used_at` 是两端各自独立累计的本地统计（复制计数），同样不表达
+/// 用户内容，一并剥离——否则双端仲裁产物会多震荡数轮才收敛。
+///
+/// 兼容性：`BaseRev.hash` 的唯一消费点是墓碑判重（`== [0;32]`，见 merge.rs / repository.rs），
+/// 不读回旧值比较；`detect_conflict` 双侧 hash 均由**同一端同一版本现算**，跨版本无影响。
 pub fn item_hash(item: &Item) -> CoreResult<[u8; 32]> {
-    Ok(hash32(&serde_json::to_vec(item)?))
+    let mut probe = item.clone();
+    probe.rev = 0;
+    probe.updated_at = 0;
+    probe.modified_by.clear();
+    probe.use_count = 0;
+    probe.last_used_at = None;
+    Ok(hash32(&serde_json::to_vec(&probe)?))
 }
 
-/// 分组内容摘要（用于同步基准比对）。
+/// 分组内容摘要（用于同步基准比对）。剥离同步元数据，口径同 [`item_hash`]（D-109）。
 pub fn folder_hash(folder: &Folder) -> CoreResult<[u8; 32]> {
-    Ok(hash32(&serde_json::to_vec(folder)?))
+    let mut probe = folder.clone();
+    probe.rev = 0;
+    probe.updated_at = 0;
+    Ok(hash32(&serde_json::to_vec(&probe)?))
 }
 
 /// 模糊匹配：标题 / 用户名 / 网址（F-08）。

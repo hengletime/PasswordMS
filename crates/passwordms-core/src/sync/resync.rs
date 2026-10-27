@@ -406,15 +406,19 @@ pub fn resync_with_peer_access(
             .map_err(|e| stage_io(e, "reply_recv"))?;
 
     // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并收到的变更。
+    let sent_flat: Vec<crate::sync::protocol::ChangeRecord> =
+        prep.pages.iter().flatten().cloned().collect();
     let mut merged: Option<CoreResult<(usize, Vec<String>)>> = None;
     access.with_repo(Box::new(|repo| {
         if repo.device_id().as_bytes() != client_id.as_bytes() {
             // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
             return Err(CoreError::SyncAborted);
         }
+        // D-109：发送侧 base 推进——本端已成功发出的版本，对端至少持有。
+        merge::note_sent_base(repo, &mut state, &sent_flat);
         let rep = merge::apply_changes(repo, &mut state, &reply_changes)?;
         // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
-        merge::note_received_changes(&mut state, &reply_changes);
+        merge::note_received_changes(repo, &mut state, &reply_changes);
         merged = Some(Ok((rep.applied, rep.conflicts.clone())));
         Ok(())
     }))?;
@@ -726,9 +730,14 @@ impl ResyncServer {
             let mut st = repo.sync_state(&hello.client_id);
             let rep = merge::apply_changes(repo, &mut st, &push_changes)?;
             // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位推进。
-            merge::note_received_changes(&mut st, &push_changes);
+            merge::note_received_changes(repo, &mut st, &push_changes);
             let changes = repo.export_changes(&st);
             let pgs = paging::paginate(changes)?;
+            // D-109：发送侧 base 推进——即将回发的版本对端即将持有（本交换内送达；
+            // 失败路径 save_sync_state 不执行，base 随会话丢弃）。
+            let sent_flat: Vec<crate::sync::protocol::ChangeRecord> =
+                pgs.iter().flatten().cloned().collect();
+            merge::note_sent_base(repo, &mut st, &sent_flat);
             for page in &pgs {
                 merge::note_sent_tombstones(&mut st, page);
                 merge::note_sent_changes(&mut st, page);

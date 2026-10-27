@@ -380,9 +380,14 @@ impl SyncServer {
             let mut st = repo.sync_state(&joiner_id);
             let rep = merge::apply_changes(repo, &mut st, &push_changes)?;
             // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位推进。
-            merge::note_received_changes(&mut st, &push_changes);
+            merge::note_received_changes(repo, &mut st, &push_changes);
             let changes = repo.export_changes(&st);
             let pgs = paging::paginate(changes)?;
+            // D-109：发送侧 base 推进——即将回发的版本对端即将持有（本交换内送达；
+            // 失败路径 save_sync_state 不执行，base 随会话丢弃）。
+            let sent_flat: Vec<crate::sync::protocol::ChangeRecord> =
+                pgs.iter().flatten().cloned().collect();
+            merge::note_sent_base(repo, &mut st, &sent_flat);
             for page in &pgs {
                 merge::note_sent_tombstones(&mut st, page);
                 merge::note_sent_changes(&mut st, page);

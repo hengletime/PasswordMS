@@ -140,7 +140,8 @@ fn conflict_take_remote_deleted_skips_duplicate_trash_entry() {
         })
         .unwrap();
 
-    s.repo_mut()
+    let _resets = s
+        .repo_mut()
         .unwrap()
         .resolve_conflict(&conflict_id, ConflictChoice::TakeRemote)
         .unwrap();
@@ -182,7 +183,8 @@ fn conflict_take_remote_deleted_still_soft_deletes_live_item() {
         })
         .unwrap();
 
-    s.repo_mut()
+    let _resets = s
+        .repo_mut()
         .unwrap()
         .resolve_conflict(&conflict_id, ConflictChoice::TakeRemote)
         .unwrap();

@@ -669,7 +669,8 @@ fn gc_orphan_blobs_reclaims_blob_of_resolved_conflict() {
 
     assert!(repo.has_blob(&att), "构造前提：仲裁前 blob 帧还在库里");
 
-    repo.resolve_conflict(&conflict_id, ConflictChoice::KeepLocal)
+    let _resets = repo
+        .resolve_conflict(&conflict_id, ConflictChoice::KeepLocal)
         .unwrap();
     // 仲裁后盘上 resolved=true；活条目仍不含该附件（KeepLocal 不复活远端快照）。
     assert!(
@@ -712,7 +713,8 @@ fn compact_reclaims_blob_of_resolved_conflict() {
     let stats_before = repo.compaction_stats().unwrap();
     let before_bytes = repo.file_size().unwrap();
 
-    repo.resolve_conflict(&conflict_id, ConflictChoice::KeepLocal)
+    let _resets = repo
+        .resolve_conflict(&conflict_id, ConflictChoice::KeepLocal)
         .unwrap();
 
     // 副作用是预期的、不是 bug：仲裁后这条 blob 计入 reclaimable_bytes。
@@ -771,7 +773,8 @@ fn resolve_conflict_keep_both_keeps_inherited_blob_alive() {
     let live = repo.get_item(&item_id).unwrap();
     let conflict_id = add_conflict_get_id(repo, &item_id, live, remote_snapshot);
 
-    repo.resolve_conflict(&conflict_id, ConflictChoice::KeepBoth)
+    let _resets = repo
+        .resolve_conflict(&conflict_id, ConflictChoice::KeepBoth)
         .unwrap();
 
     // 副本条目（新 item_id）确实继承了该附件 —— 这是本用例的前提，必须先钉住。
