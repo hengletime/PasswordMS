@@ -10,14 +10,15 @@
 //
 // 本项目没法在本机跑真浏览器（没有 jsdom / playwright），
 // 所以这里守的是**可判定的结构事实**：
-//   1. 哪些行标了 `is-info` / `is-actions`（标注错了，窄屏一定错）；
+//   1. 哪些行标了 `is-info` / `is-actions` / `is-check`（标注错了，窄屏一定错）；
 //   2. 覆盖规则**在同一个 `@media (max-width: 767px)` 块内**、且**位于 `.set-row` 之后**
 //      （不许新开第二个 `@media`，否则层叠关系会被搅乱）；
-//   3. 桌面（≥768px）**没有任何** `.set-row.is-info` / `.set-row.is-actions` 规则
-//      ⇒ 桌面逐像素不变（媒体查询外的样式与改造前完全一致）。
+//   3. 桌面（≥768px）**没有任何** `.set-row.is-info` / `.set-row.is-actions` /
+//      `.set-row.is-check` 规则 ⇒ 桌面逐像素不变（媒体查询外的样式与改造前完全一致）。
 //
 // 层叠为什么成立：`.set-row.is-info` 特异度 (0,2,0) > `.set-row` (0,1,0)，
 // 即便将来有人调换两条规则的顺序也仍然生效；源码顺序是第二道保险。
+// D-110（v2.34）新增第三种行类型 is-check：复选框行窄屏也必须保持横排。
 
 import { describe, expect, it } from 'vitest';
 
@@ -106,18 +107,27 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(actionRows).toHaveLength(2);
   });
 
+  it('复选框行共 3 条 is-check（D-110：自动同步 / 启动同步 / 更新检查）', () => {
+    // 计数 0 → 3 是 **D-110 的有意变更**（主人手机实测）：窄屏堆叠把复选框
+    // 堆到文字下一行——复选框行是第三种行类型，必须像 is-info / is-actions
+    // 一样登记标记、在窄屏媒体块里覆盖回横排。
+    const checkRows = SRC.match(/class="set-row is-check"/g) ?? [];
+    expect(checkRows).toHaveLength(3);
+  });
+
   it('别的行一个都不许标 is-*：控件行必须继续走窄屏堆叠', () => {
     // 全文件 `class="set-row"`（裸）的行数 = 总 set-row 行数 - 带标记的行数。
     const plainRows = SRC.match(/class="set-row"/g) ?? [];
     const totalRows = SRC.match(/class="set-row[ "]/g) ?? [];
-    // 主题/语言/自动锁定/剪贴板/两个体检阈值/两个同步开关/导出密码/三个改密码 = 12 条裸行。
+    // 主题/语言/自动锁定/剪贴板/两个体检阈值/导出密码/三个改密码 = 10 条裸行（D-110 起
+    // 两个同步开关移入 is-check，不再是裸行）。
     // 这里不写死具体条数（将来加控件行会合法变动），只断言「裸行是多数、且标记行
-    // 共 7 条（5 条 is-info + 2 条 is-actions，D-76 起 / D-107 起 +1 条下载行）」。
+    // 共 10 条（5 条 is-info + 2 条 is-actions + 3 条 is-check，D-76 / D-107 / D-110 起）」。
     expect(plainRows.length).toBeGreaterThanOrEqual(8);
-    expect(plainRows.length + 7).toBe(totalRows.length);
+    expect(plainRows.length + 10).toBe(totalRows.length);
     // 白色名单外不许出现别的 `is-*` 变体（例如 `is-buttons` 这种手滑写法）。
     const anyVariant = SRC.match(/class="set-row is-[a-z-]+"/g) ?? [];
-    expect(anyVariant).toHaveLength(7);
+    expect(anyVariant).toHaveLength(10);
   });
 
   it('覆盖规则在同一个移动端媒体块内，且都在一刀切 `.set-row` 之后（层叠顺序）', () => {
@@ -128,11 +138,14 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     const infoAt = block.indexOf('.set-row.is-info {');
     const infoMetaAt = block.indexOf('.set-row.is-info .pms-meta {');
     const actionsAt = block.indexOf('.set-row.is-actions {');
+    const checkAt = block.indexOf('.set-row.is-check {');
 
     expect(plainRuleAt).toBeGreaterThanOrEqual(0);
     expect(infoAt).toBeGreaterThan(plainRuleAt);
     expect(infoMetaAt).toBeGreaterThan(infoAt);
     expect(actionsAt).toBeGreaterThan(plainRuleAt);
+    // D-110：is-check 覆盖同样必须在同一块内、位于一刀切规则之后。
+    expect(checkAt).toBeGreaterThan(plainRuleAt);
   });
 
   it('信息行：窄屏改回 row + 两端对齐 + 值右对齐可收缩（不是继续堆叠）', () => {
@@ -158,13 +171,25 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(actionsRule).not.toContain('stretch');
   });
 
-  it('桌面（≥768px）一个像素都不许变：媒体块外没有任何 is-info / is-actions 规则', () => {
+  it('复选框行（D-110）：窄屏改回 row + 两端对齐（文字左 / 复选框右，同桌面）', () => {
+    const block = extractMobileMediaBlock(SRC) ?? '';
+    const checkRule = block.slice(block.indexOf('.set-row.is-check {'));
+    expect(checkRule).toContain('flex-direction: row');
+    expect(checkRule).toContain('justify-content: space-between');
+    expect(checkRule).toContain('align-items: center');
+    // 复选框不许被 stretch 拉宽，也不许再被堆叠。
+    expect(checkRule).not.toContain('stretch');
+    expect(checkRule).not.toContain('column');
+  });
+
+  it('桌面（≥768px）一个像素都不许变：媒体块外没有任何 is-info / is-actions / is-check 规则', () => {
     const block = extractMobileMediaBlock(SRC) ?? '';
     // 先剥注释再判：markup 里的说明会写出选择器本身（例如「两行都走 `.set-row.is-info`」），
     // 直接扫全文会把**注释**当成规则（同一类假红，见下面 `:has(` 那条）。
     const outside = stripComments(SRC.replace(block, ''));
     expect(outside).not.toContain('.set-row.is-info');
     expect(outside).not.toContain('.set-row.is-actions');
+    expect(outside).not.toContain('.set-row.is-check');
     // 桌面仍然是原始的 `space-between` 横排（这条一直没被改过）。
     expect(outside).toContain('justify-content: space-between');
   });

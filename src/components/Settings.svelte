@@ -455,11 +455,12 @@
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_sync')}</h3>
-    <div class="set-row">
+    <!-- D-110：复选框行标 `.is-check`——窄屏堆叠只适用含控件的行，复选框行必须登记行类型覆盖回来。 -->
+    <div class="set-row is-check">
       <span class="set-label">{ui.t('settings.auto_sync')}</span>
       <label class="pms-check"><input type="checkbox" bind:checked={draft.auto_sync} /></label>
     </div>
-    <div class="set-row">
+    <div class="set-row is-check">
       <span class="set-label">{ui.t('settings.sync_on_start')}</span>
       <label class="pms-check"><input type="checkbox" bind:checked={draft.sync_on_start} /></label>
     </div>
@@ -621,7 +622,7 @@
       <span class="pms-meta">MIT License</span>
     </div>
     <!-- D-107：更新检查（自动检查默认关 + 手动按钮；只提醒不下载，去 Releases 手动获取）。 -->
-    <div class="set-row">
+    <div class="set-row is-check">
       <span class="set-label">{ui.t('settings.update_auto')}</span>
       <label class="pms-check">
         <input type="checkbox" checked={updateEnabled} onchange={(e) => void onUpdateCheckToggle(e)} />
@@ -818,7 +819,7 @@
   }
   /* 移动端：每行由「label 左 / 控件右」改为上下堆叠，控件占满整宽，避免 160px 固定宽控件 + 长文案溢出。
      ⚠️ 下面 `.set-row` 的堆叠**只适用于含控件的行**（`.set-ctl` / 输入 / 分段控件）。
-     纯信息行必须加 `.is-info`、按钮行必须加 `.is-actions` 在下方覆盖回来（同层叠靠源码顺序取胜）。 */
+     纯信息行必须加 `.is-info`、按钮行必须加 `.is-actions`、复选框行必须加 `.is-check`（D-110）在下方覆盖回来（同层叠靠源码顺序取胜）。 */
   @media (max-width: 767px) {
     .set {
       padding: 0.9rem;
@@ -853,6 +854,15 @@
       align-items: center;
       justify-content: flex-start;
       gap: 0.5rem;
+    }
+    /* D-110：复选框行（自动同步 / 启动同步 / 更新检查）——窄屏保持「文字左 / 复选框右」。
+       不覆盖的话复选框被 column 堆到文字下一行，孤零零一个方块（主人手机实测）。
+       桌面端基础 .set-row 已是横排，无需桌面规则。 */
+    .set-row.is-check {
+      flex-direction: row;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
     }
   }
 </style>
