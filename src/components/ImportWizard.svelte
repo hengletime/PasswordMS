@@ -67,8 +67,11 @@
       mapped = mapping.mapped;
       customFields = mapping.customFields;
     } catch {
+      // D-108（豆包审查 3.5-9）：表头读取失败不再静默重置——用户会看到「字段映射
+      // 空」但不知道为什么。显式提示（预览流程仍可继续，doPreview 会再次完整读文件）。
       mapped = [];
       customFields = [];
+      ui.toast('error', 'import.header_read_failed');
     }
   }
 

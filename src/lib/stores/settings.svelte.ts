@@ -32,13 +32,21 @@ class SettingsStore {
   value = $state<VaultSettings>(defaultSettings());
   /** 是否加载中。 */
   busy = $state(false);
+  /**
+   * 静默保存进行中（D-108 豆包审查 3.5-8）：原实现复用 `busy`——生成器滑块
+   * 触发的 `saveQuiet` 会让绑定 `disabled={busy}` 的按钮偶发置灰。独立标志互不干扰。
+   */
+  quietBusy = $state(false);
 
-  /** 加载。 */
-  async load(): Promise<void> {
+  /** 加载。`silent = true` 时失败不弹 toast 而是上抛（D-108 3.5-10 合并提示用）。 */
+  async load(silent = false): Promise<void> {
     this.busy = true;
     try {
       this.value = await api.settings.get();
     } catch (err) {
+      if (silent) {
+        throw err;
+      }
       ui.toast('error', toAppError(err).messageKey);
     } finally {
       this.busy = false;
@@ -65,14 +73,14 @@ class SettingsStore {
    * 避免拖滑块 / 点符号芯片时被连续的成功/失败提示刷屏。失败不提示，下一次变更会再次尝试。
    */
   async saveQuiet(next: VaultSettings): Promise<boolean> {
-    this.busy = true;
+    this.quietBusy = true;
     try {
       this.value = await api.settings.update(next);
       return true;
     } catch {
       return false;
     } finally {
-      this.busy = false;
+      this.quietBusy = false;
     }
   }
 

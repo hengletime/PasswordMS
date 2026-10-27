@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use passwordms_core::import::ImportPreview;
@@ -50,6 +50,14 @@ pub struct AppState {
     /// `DeviceSyncState`（seq/base/水位），产生序号竞争与重复导出。用本标志
     /// 串行化：compare_exchange 抢不到的一侧快速失败（`ERR_SYNC_BUSY`）。
     pub sync_busy: AtomicBool,
+    /// **D-108（豆包审查 3.4-6）**：最近一次用户活动的 Unix 毫秒时间戳。
+    ///
+    /// auto-lock 此前完全由前端 JS 定时器驱动——WebView 后台/休眠时节流暂停计时，
+    /// 保险库保持解锁态。Rust 兜底线程（[`spawn_auto_lock_worker`]）以本时间戳为
+    /// 闲置基准：任何触碰会话的 IPC 经 [`AppState::lock_session`] 刷新它，
+    /// 不走会话锁的用户命令（复制 / 生成器 / TOTP 等）显式调 [`AppState::touch_activity`]。
+    /// **worker 自身的轮询不刷新它**（否则永不闲置）。
+    pub last_activity_ms: AtomicI64,
 }
 
 impl AppState {
@@ -63,7 +71,23 @@ impl AppState {
             pending_imports: Mutex::new(HashMap::new()),
             clipboard: Mutex::new(None),
             sync_busy: AtomicBool::new(false),
+            last_activity_ms: AtomicI64::new(now_ms()),
         }
+    }
+
+    /// 记录一次用户活动（auto-lock 闲置基准，D-108 3.4-6）。
+    pub fn touch_activity(&self) {
+        self.last_activity_ms.store(now_ms(), Ordering::SeqCst);
+    }
+
+    /// **触碰会话锁**：刷新用户活动时间戳后取锁。
+    ///
+    /// D-108（3.4-6）：全部「触碰保险库会话」的 IPC 命令统一改走本方法，
+    /// auto-lock 兜底线程据此判断闲置。返回值语义与 `session.lock()` 完全一致，
+    /// 锁中毒仍由调用点 `map_err(lock_err)?` 处理。
+    pub fn lock_session(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Session>> {
+        self.touch_activity();
+        self.session.lock()
     }
 }
 
@@ -169,13 +193,6 @@ pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
         // "为什么换网后自动发现没生效"。
         append_log(app, "[discovery] udp bind failed, auto-discovery disabled");
     }
-    if fell_back {
-        let _ = std::fs::write(&port_file, port.to_string());
-        append_log(
-            app,
-            &format!("[resync] saved port unavailable, rebound to {port} (peers must re-pair)"),
-        );
-    }
 
     let stop = state.resync_stop.clone();
     // D-106：stop 提升到状态层——上一轮 lock() 已把它置 true，重启监听前必须复位。
@@ -187,6 +204,16 @@ pub fn ensure_resync_listener(app: &tauri::AppHandle) -> IpcResult<u16> {
             return Ok(handle.server.port());
         }
         *guard = Some(ResyncHandle { server });
+    }
+    // D-108（豆包审查 3.4-10）：端口文件**在本 server 确认被采纳后**才落盘——
+    // 原实现先写文件再进第二锁段，竞态败者会把自己的（已丢弃）端口写进文件，
+    // 下一轮启动优先绑一个没人监听的端口。
+    if fell_back {
+        let _ = std::fs::write(&port_file, port.to_string());
+        append_log(
+            app,
+            &format!("[resync] saved port unavailable, rebound to {port} (peers must re-pair)"),
+        );
     }
     spawn_resync_worker(app.clone(), stop);
     Ok(port)
@@ -374,4 +401,49 @@ impl passwordms_core::sync::access::RepoAccess for SessionAccess<'_> {
         let repo = session.repo_mut()?;
         job(repo)
     }
+}
+
+/// **D-108（豆包审查 3.4-6）**：auto-lock 的 Rust 兜底线程。
+///
+/// 此前自动锁定完全由前端 JS 定时器驱动——WebView 进入后台 / 休眠 / 被节流时
+/// 计时暂停，保险库保持解锁态（安全模型里唯一只有前端守的环节）。本 worker 每
+/// 15 秒醒来一次：会话解锁中且「距 [`AppState::last_activity_ms`] 已达档位」即执行
+/// 与 `lock` 命令**同一套**锁定级联（[`crate::commands::vault_cmd::perform_lock`]），
+/// 并 emit `autolock://locked` 让前端复位到锁屏。
+///
+/// 纪律：
+/// - 判定段的 session 锁只读 `is_unlocked` + 档位，毫秒级；锁定级联**全程锁外**
+///   （`perform_lock` 内部自取锁），与锁序约定（resync → session）无冲突；
+/// - worker 轮询**不得**刷新 `last_activity_ms`（不走 `lock_session`）；
+/// - 15s 轮询粒度 → 实际锁定时点最多滞后档位 15 秒（偏安全侧，可接受）。
+pub fn spawn_auto_lock_worker(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        let Some(state) = app.try_state::<AppState>() else {
+            break; // 应用退出中
+        };
+        // 判定段：未解锁直接跳过；解锁则顺带读档位（D-61：头部明文字段）。
+        let (unlocked, minutes) = match state.session.lock() {
+            Ok(s) => (
+                s.is_unlocked(),
+                s.repo().map(|r| r.auto_lock_minutes()).unwrap_or(0),
+            ),
+            Err(_) => continue, // 锁中毒：本轮放弃（业务路径会留痕）
+        };
+        if !unlocked || minutes == 0 {
+            continue;
+        }
+        let idle_ms = now_ms() - state.last_activity_ms.load(Ordering::SeqCst);
+        if idle_ms < i64::from(minutes) * 60_000 {
+            continue;
+        }
+        // 锁外执行完整锁定级联 + 通知前端。
+        if crate::commands::vault_cmd::perform_lock(&app).is_ok() {
+            append_log(
+                &app,
+                &format!("[autolock] idle {idle_ms}ms >= {minutes}min, locked by backend fallback"),
+            );
+            let _ = tauri::Emitter::emit(&app, "autolock://locked", "idle");
+        }
+    });
 }

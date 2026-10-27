@@ -7,7 +7,7 @@
 //! - 唯一调用点 `sync_start_pairing` 必然先 `session.repo()?` 解锁，VK 必在。
 //!
 //! 文件格式：
-//! - **新格式**：`IDENTITY_MAGIC(9B) ‖ nonce(24B) ‖ ct(48B = 32B 私钥 + 16B tag)`，
+//! - **新格式**：`IDENTITY_MAGIC(10B) ‖ nonce(24B) ‖ ct(48B = 32B 私钥 + 16B tag)`，
 //!   AAD 绑 [`crate::constants::AAD_IDENTITY`]；
 //! - **旧格式**：Base64(裸 32B 私钥)（无魔数）。读取时识别出旧格式后**立即改写为
 //!   新格式**（兼容迁移，老库无感知；迁移在下一次配对操作时自动发生）。
@@ -20,7 +20,8 @@ use crate::constants::{AAD_IDENTITY, AEAD_NONCE_LEN, IDENTITY_MAGIC, KEY_LEN, WR
 use crate::crypto::{aead, rng};
 use crate::error::{CoreError, CoreResult};
 
-/// 新格式文件总长度：magic(9) + nonce(24) + ct(48) = 81 字节。
+/// 新格式文件总长度：magic(10) + nonce(24) + ct(48) = 82 字节。
+/// （D-108 豆包审查 3.3-2：原注释误写 81——magic `PMSIDENT1\0` 是 10 字节。）
 pub const IDENTITY_FILE_LEN: usize = IDENTITY_MAGIC.len() + AEAD_NONCE_LEN + WRAPPED_KEY_CT_LEN;
 
 /// 封装：私钥用 VK 包裹，产出新格式文件字节（随机 nonce，AAD 绑 `b"identity"`）。

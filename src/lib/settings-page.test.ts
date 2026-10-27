@@ -10,9 +10,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { loadSettingsPageSide, type SettingsPageSideDeps } from './settings-page';
 import type { CompactionStatsDto, VaultFileInfoDto } from '../types';
 
-/** 库文件信息的样例值（路径形如 Windows 真机返回）。 */
+/** 库文件信息的样例值（D-108 起后端只回传文件名，不再暴露绝对路径）。 */
 const FILE_INFO: VaultFileInfoDto = {
-  path: 'C:\\Users\\owner\\AppData\\Roaming\\PasswordMS\\passwordms.vault',
+  file_name: 'passwordms.vault',
   size_bytes: 4096,
 };
 

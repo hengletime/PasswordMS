@@ -16,6 +16,8 @@ pub mod codes {
     pub const ERR_WEAK_MASTER_PASSWORD: &str = "ERR_WEAK_MASTER_PASSWORD";
     pub const ERR_NOT_UNLOCKED: &str = "ERR_NOT_UNLOCKED";
     pub const ERR_ITEM_NOT_FOUND: &str = "ERR_ITEM_NOT_FOUND";
+    /// 【D-108 新增】附件在父条目内不存在（豆包审查 3.1-10）。
+    pub const ERR_ATTACHMENT_NOT_FOUND: &str = "ERR_ATTACHMENT_NOT_FOUND";
     pub const ERR_FOLDER_NOT_FOUND: &str = "ERR_FOLDER_NOT_FOUND";
     pub const ERR_FOLDER_NAME_INVALID: &str = "ERR_FOLDER_NAME_INVALID";
     pub const ERR_VALIDATION: &str = "ERR_VALIDATION";
@@ -31,6 +33,8 @@ pub mod codes {
     pub const ERR_REPLAY_DETECTED: &str = "ERR_REPLAY_DETECTED";
     pub const ERR_FINGERPRINT_MISMATCH: &str = "ERR_FINGERPRINT_MISMATCH";
     pub const ERR_SYNC_ABORTED: &str = "ERR_SYNC_ABORTED";
+    /// 【D-108 新增】同步互斥（豆包审查 3.4-7：原由 sync_cmd 硬编码构造）。
+    pub const ERR_SYNC_BUSY: &str = "ERR_SYNC_BUSY";
     pub const ERR_CONFLICT_EXISTS: &str = "ERR_CONFLICT_EXISTS";
     /// 【D-53 新增】附件条目存在但本地无密文 blob（未同步）。
     pub const ERR_BLOB_MISSING: &str = "ERR_BLOB_MISSING";
@@ -68,6 +72,11 @@ pub enum CoreError {
     NotUnlocked,
     #[error("item not found")]
     ItemNotFound,
+    /// 【D-108 新增】附件在父条目内不存在（remove_attachment / export_attachment
+    /// 的附件定位失败）。原实现借用 `ItemNotFound`，用户与日志都分不清
+    /// 「条目没了」还是「附件没了」（豆包审查 3.1-10）。
+    #[error("attachment not found")]
+    AttachmentNotFound,
     #[error("folder not found")]
     FolderNotFound,
     #[error("invalid folder name")]
@@ -101,6 +110,10 @@ pub enum CoreError {
     FingerprintMismatch,
     #[error("sync aborted")]
     SyncAborted,
+    /// 【D-108 新增】同一时刻已有一场同步在途（O2 互斥）。原由 `sync_cmd`
+    /// 硬编码构造 `ERR_SYNC_BUSY`（豆包审查 3.4-7：缺少编译期约束、手工同步点）。
+    #[error("another sync is already in flight")]
+    SyncBusy,
     #[error("unresolved conflict exists")]
     ConflictExists,
     /// 【D-53】附件条目存在但本地无密文 blob（未同步），导出/查看时触发。
@@ -138,6 +151,7 @@ impl CoreError {
             CoreError::WeakMasterPassword => codes::ERR_WEAK_MASTER_PASSWORD,
             CoreError::NotUnlocked => codes::ERR_NOT_UNLOCKED,
             CoreError::ItemNotFound => codes::ERR_ITEM_NOT_FOUND,
+            CoreError::AttachmentNotFound => codes::ERR_ATTACHMENT_NOT_FOUND,
             CoreError::FolderNotFound => codes::ERR_FOLDER_NOT_FOUND,
             CoreError::FolderNameInvalid => codes::ERR_FOLDER_NAME_INVALID,
             CoreError::Validation(_) => codes::ERR_VALIDATION,
@@ -154,6 +168,7 @@ impl CoreError {
             CoreError::ReplayDetected => codes::ERR_REPLAY_DETECTED,
             CoreError::FingerprintMismatch => codes::ERR_FINGERPRINT_MISMATCH,
             CoreError::SyncAborted => codes::ERR_SYNC_ABORTED,
+            CoreError::SyncBusy => codes::ERR_SYNC_BUSY,
             CoreError::ConflictExists => codes::ERR_CONFLICT_EXISTS,
             CoreError::BlobMissing => codes::ERR_BLOB_MISSING,
             CoreError::BlobIncomplete => codes::ERR_BLOB_INCOMPLETE,
@@ -175,6 +190,7 @@ impl CoreError {
             CoreError::WeakMasterPassword => "err.weak_password",
             CoreError::NotUnlocked => "err.not_unlocked",
             CoreError::ItemNotFound => "err.item_not_found",
+            CoreError::AttachmentNotFound => "err.attachment_not_found",
             CoreError::FolderNotFound => "err.folder_not_found",
             CoreError::FolderNameInvalid => "err.folder_name",
             CoreError::Validation(_) => "err.validation",
@@ -191,6 +207,7 @@ impl CoreError {
             CoreError::ReplayDetected => "err.replay",
             CoreError::FingerprintMismatch => "err.fingerprint",
             CoreError::SyncAborted => "err.sync_aborted",
+            CoreError::SyncBusy => "err.sync_busy",
             CoreError::ConflictExists => "err.conflict",
             CoreError::BlobMissing => "err.blob_missing",
             CoreError::BlobIncomplete => "err.blob_incomplete",

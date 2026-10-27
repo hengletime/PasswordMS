@@ -14,7 +14,7 @@ pub fn health_check(
     state: tauri::State<'_, AppState>,
     config: Option<HealthConfigDto>,
 ) -> IpcResult<HealthReportDto> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     let cfg: HealthConfig = config.unwrap_or_else(|| repo.settings().health);
     let items = repo.list_items(None, false, None);

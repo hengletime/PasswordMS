@@ -28,7 +28,7 @@ pub fn sync_start_pairing(
 ) -> IpcResult<PairingDto> {
     // 必须处于解锁态；同时取出 VK（身份私钥的包裹密钥，D-96）。
     let (host_id, host_vk) = {
-        let session = state.session.lock().map_err(lock_err)?;
+        let session = state.lock_session().map_err(lock_err)?;
         let repo = session.repo()?;
         (repo.device_id().to_string(), repo.vault_key()[..].to_vec())
     };
@@ -41,7 +41,7 @@ pub fn sync_start_pairing(
     *state.pairing.lock().map_err(lock_err)? = None;
 
     let host_name = host_display_name(&host_id);
-    let port = random_port();
+    let port = random_port()?;
     let server = SyncServer::start(port, host_id, host_name, identity, sync_port, now_ms())?;
     // D-69：会话码（= `sha256(host_eph 公钥)` 前 8 字节 hex）。
     // **不是**设备指纹：它绑的是本次握手的临时密钥，手机端由 `Accept.host_pub` 算出同一个值，
@@ -113,7 +113,7 @@ fn sync_join_impl(
 
     // ── 锁内段①（O2，毫秒级）：本端设备身份。
     let (device_id, device_name) = {
-        let session = state.session.lock().map_err(lock_err)?;
+        let session = state.lock_session().map_err(lock_err)?;
         let id = session.repo()?.device_id().to_string();
         let name = host_display_name(&id);
         (id, name)
@@ -136,7 +136,7 @@ fn sync_join_impl(
     //    故补「本机当前 VK == 对端 VK」豁免：相等 = 同一逻辑库（安全跳过）；
     //    不等 = 真正的异组保险库（仍拒绝，U1/U2 红线不破）。
     {
-        let mut session = state.session.lock().map_err(lock_err)?;
+        let mut session = state.lock_session().map_err(lock_err)?;
         let already_paired = {
             let repo = session.repo()?;
             repo.list_paired_devices()
@@ -169,16 +169,10 @@ fn sync_join_impl(
     })
 }
 
-/// F-09 Host：确认配对（本实现的握手在轮询线程内自动完成，此处为契约占位）。
-#[tauri::command(rename_all = "snake_case")]
-pub fn sync_accept_pair(_session_id: String) -> IpcResult<()> {
-    Ok(())
-}
-
 /// F-09 列出已配对设备。
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_paired_devices(state: tauri::State<'_, AppState>) -> IpcResult<Vec<DeviceDto>> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     Ok(session
         .repo()?
         .list_paired_devices()
@@ -190,7 +184,7 @@ pub fn list_paired_devices(state: tauri::State<'_, AppState>) -> IpcResult<Vec<D
 /// O-07 解除配对（废弃共享密钥）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn unpair(state: tauri::State<'_, AppState>, device_id: String) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     session.repo_mut()?.remove_paired_device(&device_id)?;
     Ok(())
 }
@@ -207,7 +201,7 @@ pub fn rename_paired_device(
     device_id: String,
     name: String,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     session
         .repo_mut()?
         .rename_paired_device(&device_id, &name)?;
@@ -236,11 +230,9 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return Err(IpcError {
-                code: "ERR_SYNC_BUSY".to_string(),
-                message_key: "err.sync_busy".to_string(),
-                record_count: None,
-            });
+            // D-108（豆包审查 3.4-7）：`SyncBusy` 入 core 错误码表（编译期约束），
+            // 不再在命令层手工拼 `ERR_SYNC_BUSY`。
+            return Err(IpcError::from(passwordms_core::CoreError::SyncBusy));
         }
         let run = || -> IpcResult<SyncResultDto> {
             // O2：三段式——锁内段仅在「读写库的瞬间」短暂持有 session 锁，
@@ -277,7 +269,7 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
 /// F-09 同步状态查询。
 #[tauri::command(rename_all = "snake_case")]
 pub fn sync_status(state: tauri::State<'_, AppState>) -> IpcResult<SyncStatusDto> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     let devices = repo.list_paired_devices();
     let last_sync_at = devices.iter().filter_map(|d| d.last_sync_at).max();
@@ -298,7 +290,7 @@ pub fn sync_status(state: tauri::State<'_, AppState>) -> IpcResult<SyncStatusDto
 /// 列出未仲裁冲突。
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_conflicts(state: tauri::State<'_, AppState>) -> IpcResult<Vec<ConflictDto>> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     Ok(session
         .repo()?
         .list_conflicts()
@@ -324,7 +316,7 @@ pub fn resolve_conflict(
             )))
         }
     };
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     session.repo_mut()?.resolve_conflict(&conflict_id, parsed)?;
     Ok(())
 }
@@ -354,15 +346,35 @@ fn host_display_name(device_id: &str) -> String {
 }
 
 /// 在协议端口范围内选取随机端口。
-fn random_port() -> u16 {
+///
+/// D-108（豆包审查 3.4-13）：RNG 失败不再退化到固定端口 49152——可预测端口
+/// 让同网段的恶意进程可以抢先占位/预测监听点；失败就该让配对显式报错。
+fn random_port() -> IpcResult<u16> {
     let span = (SYNC_PORT_MAX - SYNC_PORT_MIN) as u32 + 1;
-    match rng::random_bytes(4) {
-        Ok(bytes) => {
-            let v = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-            SYNC_PORT_MIN + (v % span) as u16
+    let bytes = rng::random_bytes(4)?;
+    let v = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    Ok(SYNC_PORT_MIN + (v % span) as u16)
+}
+
+/// 清空当前配对会话（worker 收场路径共用）。
+///
+/// D-108（豆包审查 3.4-9）：原实现 `if let Ok(mut g) = ...` 中毒即静默跳过——
+/// `SyncServer` 无人清理变成僵尸监听（端口持续接受连接）。改为 `into_inner()`
+/// 兜底照常清空并留痕。
+fn clear_pairing_state(app: &tauri::AppHandle, reason: &str) {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    // match 以分号结尾：让 lock() 的临时值在 state drop 之前释放（E0597，同 state.rs 口径）。
+    match state.pairing.lock() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => {
+            *poisoned.into_inner() = None;
+            crate::state::append_log(
+                app,
+                &format!("[pairing] clear state poisoned ({reason}); cleared via into_inner"),
+            );
         }
-        Err(_) => SYNC_PORT_MIN,
-    }
+    };
 }
 
 /// 后台轮询线程：非阻塞等待 Joiner 连接，处理一次配对 + 同步后退出。
@@ -458,9 +470,7 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                         result.applied
                     ),
                 );
-                if let Ok(mut g) = state.pairing.lock() {
-                    *g = None;
-                }
+                clear_pairing_state(&app, "session completed");
                 // D-44：通知前端会话已结束，收回二维码（否则"二维码还挂着但会话已死"）。
                 let _ = tauri::Emitter::emit(&app, "pairing://ended", "completed");
                 break;
@@ -469,9 +479,21 @@ fn spawn_pairing_worker(app: tauri::AppHandle) {
                 // 诊断留痕：CoreError 的 Debug 只有错误码（Io 额外带 stage|kind），无隐私载荷。落盘到数据目录 passwordms.log。
                 eprintln!("[pairing] host session aborted: {e:?}");
                 crate::state::append_log(&app, &format!("[pairing] host session aborted: {e:?}"));
-                if let Ok(mut g) = state.pairing.lock() {
-                    *g = None;
+                // D-108（历史 S6）：错令牌 / 重放等**连接级**失败不作废配对会话——
+                // REJECT 已由 server.rs 发给对端，二维码与核对码保持有效，正确用户
+                // 无须重新生成。原实现收任意 Err 即清会话 + break，一次错令牌连接
+                // 就逼用户重开二维码。
+                if matches!(
+                    e,
+                    passwordms_core::CoreError::PairTokenInvalid
+                        | passwordms_core::CoreError::PairTokenExpired
+                        | passwordms_core::CoreError::PairTokenUsed
+                        | passwordms_core::CoreError::FingerprintMismatch
+                ) {
+                    crate::state::append_log(&app, "[pairing] rejected a peer; session kept");
+                    continue;
                 }
+                clear_pairing_state(&app, "session aborted");
                 let _ = tauri::Emitter::emit(&app, "pairing://ended", "aborted");
                 break;
             }

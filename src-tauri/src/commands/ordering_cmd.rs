@@ -11,7 +11,7 @@ use crate::state::AppState;
 /// 记录一次条目使用（复制动作埋点；60 秒节流，窗口内调用为零开销 no-op）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn record_item_usage(state: tauri::State<'_, AppState>, item_id: String) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.record_item_usage(&item_id)?;
     Ok(())
@@ -24,7 +24,7 @@ pub fn set_item_pin(
     item_id: String,
     pinned: bool,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.set_item_pin(&item_id, pinned)?;
     Ok(())
@@ -36,7 +36,7 @@ pub fn reorder_pinned_items(
     state: tauri::State<'_, AppState>,
     ordered_ids: Vec<String>,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.reorder_pinned_items(&ordered_ids)?;
     Ok(())
@@ -49,7 +49,7 @@ pub fn set_folder_pin(
     folder_id: String,
     pinned: bool,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.set_folder_pin(&folder_id, pinned)?;
     Ok(())
@@ -61,7 +61,7 @@ pub fn reorder_pinned_folders(
     state: tauri::State<'_, AppState>,
     ordered_ids: Vec<String>,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.reorder_pinned_folders(&ordered_ids)?;
     Ok(())
@@ -74,7 +74,7 @@ pub fn move_item_to_folder(
     item_id: String,
     folder_id: Option<String>,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.move_item_to_folder(&item_id, folder_id)?;
     Ok(())

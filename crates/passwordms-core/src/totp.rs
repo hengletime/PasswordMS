@@ -63,7 +63,11 @@ pub fn code_at(secret_base32: &str, unix_secs: u64) -> CoreResult<String> {
 }
 
 /// 解码 Base32 密钥（容错大小写、空格与填充）。
+///
+/// D-108（豆包审查 3.2-4）：解码后强制最小 10 字节（RFC 6238 建议 ≥160 bit）。
+/// `"A"` 这类弱密钥此前可被接受，生成的 6 位口令可被秒级枚举——形同虚设。
 fn decode_secret(secret: &str) -> CoreResult<Vec<u8>> {
+    const MIN_SECRET_BYTES: usize = 10;
     let normalized: String = secret
         .chars()
         .filter(|c| !c.is_whitespace() && *c != '=')
@@ -72,6 +76,23 @@ fn decode_secret(secret: &str) -> CoreResult<Vec<u8>> {
     if normalized.is_empty() {
         return Err(CoreError::Validation("totp_secret_empty".to_string()));
     }
-    base32::decode(Alphabet::Rfc4648 { padding: false }, &normalized)
-        .ok_or_else(|| CoreError::Validation("totp_secret_invalid".to_string()))
+    let key = base32::decode(Alphabet::Rfc4648 { padding: false }, &normalized)
+        .ok_or_else(|| CoreError::Validation("totp_secret_invalid".to_string()))?;
+    if key.len() < MIN_SECRET_BYTES {
+        return Err(CoreError::Validation("totp_secret_too_short".to_string()));
+    }
+    Ok(key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_too_short_secret() {
+        // D-108（3.2-4）：≥10 字节（16 个 base32 字符）才放行。
+        assert!(code_at("A", 59).is_err());
+        assert!(code_at("AAAAAAAAAAAAAA", 59).is_err()); // 10 字符 ≈ 6 字节
+        assert!(code_at("JBSWY3DPEHPK3PXP", 59).is_ok()); // 15 字符 = 9.375B→解码 10B
+    }
 }

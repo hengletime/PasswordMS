@@ -136,6 +136,8 @@ impl Session {
             return Err(CoreError::NoVault);
         }
         // 仅读取头部（KDF 参数 / 盐）。此处把 `Container::open` 的失败折叠为统一错误码。
+        // D-108（豆包审查 3.2-8）：容器**保留到解锁结束**传给 `Repository::open_with_container`，
+        // 消除「两次 open 同一文件」的 TOCTOU 窗口（文件被替换时错误码逃逸统一化）。
         let container = match Container::open(path) {
             Ok(c) => c,
             // NoVault 原样返回（裁定见上）。
@@ -156,7 +158,6 @@ impl Session {
                 header.wrapped_vault_key.clone(),
             )
         };
-        drop(container);
 
         // D-106（豆包审查 3.2-1）：KDF 参数校验失败（本地篡改头，超限被夹取拒绝）
         // 发生在 Argon2 **之前**——原样上抛会毫秒级返回 ERR_VALIDATION，绕开
@@ -182,7 +183,8 @@ impl Session {
             Ok(id) => id,
             Err(_) => return Err(CoreError::UnlockFailed),
         };
-        let mut repo = match Repository::open(path, vault_key, device_id) {
+        // D-108（3.2-8）：复用头部阶段打开的容器，二次 open 不再发生。
+        let mut repo = match Repository::open_with_container(container, vault_key, device_id) {
             Ok(r) => r,
             Err(_) => return Err(CoreError::UnlockFailed),
         };
@@ -333,7 +335,12 @@ impl Session {
 /// 目的（A-05 / D-10）：结构性损坏（magic / version / header_len / JSON 反序列化 / 读截断）
 /// 原本会在 KDF **之前**毫秒级返回，而正常失败要跑满 Argon2id(m=64MiB,t=3)（本机数秒级）。
 /// 即使错误码已统一，耗时仍差上千倍 → 依旧可区分。故这里先用 [`KdfParams::default()`]
+/// 用 [`KdfParams::default()`]
 /// （与 [`Session::create`] 写入的默认参数一致）派生一次 MK 并**丢弃结果**。
+///
+/// D-108（豆包审查 3.2-2）备注：当前 create 硬编码默认参数，此处按默认参数 burn
+/// 与真实路径等价；**若未来开放自定义 KDF 强度**，本函数必须改为「头部能读出参数
+/// 就按头部参数 burn」，否则耗时均衡在自定义参数用户上失真（侧信道重新出现）。
 ///
 /// 返回值是 [`zeroize::Zeroizing`]，`drop` 时自动清零；再用 [`std::hint::black_box`]
 /// 确保该计算不会被编译器优化掉。**这是刻意的等价消耗，不是冗余代码。**
@@ -348,7 +355,12 @@ fn burn_unlock_kdf(master_password: &str) {
 }
 
 /// 设备稳定 ID：存放于与保险库同目录的 `<name>.device` 文件。
+///
+/// D-108（豆包审查 3.2-7）：创建用 `create_new(true)`——原实现 `exists()` 检查后
+/// `fs::write`，并发解锁时存在无害写竞争（两个线程各写一个随机 UUID，后写胜，
+/// 结果等价但语义含糊）。`create_new` 失败（已被他人创建）则回读既有内容。
 fn load_or_create_device_id(vault_path: &Path) -> CoreResult<String> {
+    use std::io::Write;
     let device_path = vault_path.with_extension("device");
     if device_path.exists() {
         let raw = std::fs::read_to_string(&device_path)?;
@@ -358,6 +370,27 @@ fn load_or_create_device_id(vault_path: &Path) -> CoreResult<String> {
         }
     }
     let id = uuid::Uuid::new_v4().to_string();
-    std::fs::write(&device_path, id.as_bytes())?;
-    Ok(id)
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&device_path)
+    {
+        Ok(mut f) => {
+            f.write_all(id.as_bytes())?;
+            Ok(id)
+        }
+        // 已存在（并发对手先建 / exists 后被建）：回读既有 ID；文件存在但为空
+        // （历史残留）则照旧写入新 ID。
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            let raw = std::fs::read_to_string(&device_path)?;
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                std::fs::write(&device_path, id.as_bytes())?;
+                Ok(id)
+            } else {
+                Ok(trimmed.to_string())
+            }
+        }
+        Err(e) => Err(e.into()),
+    }
 }

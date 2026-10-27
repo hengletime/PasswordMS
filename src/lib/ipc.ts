@@ -213,8 +213,8 @@ export const sync = {
   cancelPairing: (): Promise<void> => invoke<void>('sync_cancel_pairing'),
   join: (qrPayload: string): Promise<PairResultDto> =>
     invoke<PairResultDto>('sync_join', { qr_payload: qrPayload }),
-  acceptPair: (sessionId: string): Promise<void> =>
-    invoke<void>('sync_accept_pair', { session_id: sessionId }),
+  // D-108（豆包审查 3.5-7）：`acceptPair`（sync_accept_pair）前后端均为占位死代码
+  // （本实现握手在轮询线程内自动完成），两侧一并删除。
   listDevices: (): Promise<DeviceDto[]> => invoke<DeviceDto[]>('list_paired_devices'),
   unpair: (deviceId: string): Promise<void> => invoke<void>('unpair', { device_id: deviceId }),
   // D-66：重命名已配对设备（本地昵称，不参与同步）。

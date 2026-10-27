@@ -66,13 +66,33 @@
   // 解锁后加载数据（会话状态由 App 驱动）。
   $effect((): void => {
     if (!session.status.locked) {
-      void vault.load();
-      void settings.load();
-      void sync.loadStatus();
-      void sync.loadDevices();
-      void sync.loadConflicts();
+      void loadAfterUnlock();
     }
   });
+
+  /**
+   * D-108（豆包审查 3.5-10）：解锁后五路并行加载失败不再各自弹 toast 堆叠——
+   * 全部走静默模式 + `allSettled`，任一失败立即整组重试一次（解锁瞬间的 IPC
+   * 抖动多为瞬态），仍失败才合并弹一条提示。
+   */
+  async function loadAfterUnlock(): Promise<void> {
+    const run = (): Promise<PromiseSettledResult<unknown>[]> =>
+      Promise.allSettled([
+        vault.load(true),
+        settings.load(true),
+        sync.loadStatus(true),
+        sync.loadDevices(true),
+        sync.loadConflicts(true),
+      ]);
+    let results = await run();
+    if (results.every((r) => r.status === 'fulfilled')) {
+      return;
+    }
+    results = await run();
+    if (results.some((r) => r.status === 'rejected')) {
+      ui.toast('error', 'err.load_partial');
+    }
+  }
 
   // ===== D-61 自动锁定（A 案：闲置达档位即锁，无「从不」档）=====
   // 本组件只在 main 路由挂载（App.svelte 条件渲染）——锁定/切页即卸载，

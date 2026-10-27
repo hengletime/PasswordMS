@@ -2272,3 +2272,48 @@ graph TD
 **核实后不修项**：IPC 路径白名单（3.4-4 / 历史 S2：本地单用户威胁模型，前端被投毒属更大面失守，接受风险、报告已确认设计取舍）；Rust 侧 auto-lock 兜底线程（3.4-6：跨 session/事件层改动，另行排期）；错误码细化（3.1-10：新增 `AttachmentNotFound` 变体牵动 31 变体错误码表与四语言 messageKey 映射，P3 分批）；C3/S1/S6/Q3 历史遗留项维持 D-91 核对结论（C3 单测靠同时间戳掩盖属实，留待 item_hash 重构时一并处理；Q3 为 windres 缺 DLL 环境项）。
 
 守门：core `tests/d106_external_audit.rs` 3 例（还原悬空分组 / blob 帧超限拒收 / 同步条目超限拒收）。全量验证：core 215 例全绿（212+3）、前端 44 文件 341 例、clippy 0、fmt 过。
+
+#### 3.14.14 外部审查余项批 + 更新检查（D-107/D-108，2026-10-27，v1.2.23 待发布）
+
+D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项一并落地；同批新增 **D-107 更新提醒**（方案 B，主理人裁定）。
+
+**D-107 更新检查（方案 B：自动检查默认关 + 手动按钮，只提醒不下载）**
+
+| 项 | 实现 |
+|---|---|
+| 数据源 | GitHub Releases API `repos/hengletime/PasswordMS/releases/latest`，WebView `fetch` 直连（**零新增 Rust 依赖**——不加 HTTP crate，守住 §8.1 依赖上限与 10MB 体积门禁）；CSP `connect-src` 显式放行 `https://api.github.com` |
+| 隐私 | 单向 GET，不携带任何本机信息（连本机版本号都不发送）；自动检查**默认关闭**，关闭时零网络请求；四语言用户协议已补披露句 |
+| 节流 | 自动检查 24h 一次（localStorage 时间戳）；手动按钮不限次；失败静默（自动）/ 显式提示（手动） |
+| 语义 | 只提醒 + 跳转 Releases 页手动下载——不引入自动更新的签名/供应链复杂度 |
+
+**D-108 豆包余项（P2×1 + P3 批）**
+
+| # | 审查编号 | 修复 |
+|---|---|---|
+| 1 | 3.4-6 P2 | **auto-lock Rust 兜底**：`AppState.last_activity_ms` 活动时间戳；全部触碰会话的 IPC 经 `AppState::lock_session()` 统一刷新（52 处调用点），不走会话锁的用户命令（复制/生成器/TOTP/导入预览）显式 `touch_activity`；`spawn_auto_lock_worker` 每 15s 判定「解锁中 + 闲置达档位」即执行与 `lock` 命令**同一套**级联（抽出唯一实现 `perform_lock`）+ emit `autolock://locked`，前端 App.svelte 常驻监听复位 store 切锁屏。worker 轮询不刷新时间戳（否则永不闲置） |
+| 2 | 3.2-8 | `Repository::open_with_container`：unlock 复用头部阶段打开的容器，消除二次 open 的 TOCTOU 窗口（错误码逃逸统一化） |
+| 3 | 3.2-7 | `.device` 文件创建改 `create_new(true)`，并发解锁的写竞争消除（回读既有值） |
+| 4 | 3.2-3 | `url_safety` 补全判定只认 `://`——`mysite.com:8443`（host:port）不再误拒；scheme 白名单不变（`javascript:`/`file:`/`data:` 实测仍拒） |
+| 5 | 3.2-4 | TOTP 解码后强制 ≥10 字节（RFC 6238 建议 ≥160bit），`"A"` 类弱密钥拒绝 |
+| 6 | 3.2-5 | 健康检查「重复密码」判定改 trim + 去零宽字符的归一化键（`"pw"` vs `"pw "` 漏报）；弱口令判定仍用原串 |
+| 7 | 3.1-8 | 打开库 `folder_count` 与 `item_count` 同口径交叉核对 → open_warning |
+| 8 | 3.1-9 | `read_frames_with_tail`：尾部 <一帧头残料不再静默，计数字节进 open_warnings（与备份恢复路径同口径） |
+| 9 | 3.1-12 | `delete_folder` 语义定为快停：条目搬移失败即停、分组保留可整体重试；分组 tombstone 只在全量成功后发生 |
+| 10 | 3.1-13 | `empty_trash` 尽力而为：单条 purge 失败不中断，返回首个错误 |
+| 11 | 3.1-10 | 新增 `CoreError::AttachmentNotFound`（`ERR_ATTACHMENT_NOT_FOUND` / `err.attachment_not_found` 四语言）：`remove_attachment`/`export_attachment_bytes` 附件定位失败不再借用 ItemNotFound |
+| 12 | 3.4-7 | 新增 `CoreError::SyncBusy` 入错误码表（`ERR_SYNC_BUSY`），`sync_now` 不再手工拼错误 |
+| 13 | 3.4-8 | `vault_file_info` DTO 字段 `path` → `file_name`，只回传文件名不暴露绝对路径（types.ts/Settings.svelte 同步） |
+| 14 | 3.4-9 | 配对会话清理锁中毒 `into_inner()` 兜底 + 留痕（原静默跳过 → 僵尸监听） |
+| 15 | 3.4-10 | `resync.port` 端口文件在本 server 确认被采纳后才落盘（原先写后查，竞态败者写坏端口文件） |
+| 16 | 3.4-11 | capabilities 移除 `opener:default`（前端从不直接调 opener 插件，open_url 白名单链路是唯一出口）；`fs:default` 保留（ImportWizard `readTextFile` 依赖，收窄需真机回归，列为后续项） |
+| 17 | 3.4-12 | CSP 补 `object-src 'none'; base-uri 'none'; form-action 'none'` |
+| 18 | 3.4-13 | `random_port` RNG 失败直接报错（原退化到可预测的 49152） |
+| 19 | 历史 S6 | 配对 worker 收到错令牌/过期/已用/指纹不符不再作废会话（REJECT 已由 server 发出，二维码保留，正确用户无须重扫） |
+| 20 | 3.5-7 | 前后端占位死命令 `sync_accept_pair` 双侧删除（命令面 59 → 58） |
+| 21 | 3.5-8 | `settings.saveQuiet` 独立 `quietBusy` 标志（原复用 busy 会误灰按钮） |
+| 22 | 3.5-9 | 导入向导 CSV 表头读取失败 toast（原静默重置） |
+| 23 | 3.5-10 | 解锁后五路加载改 silent + `allSettled`，失败立即整组重试一次，仍失败合并一条 `err.load_partial`（原 toast 堆叠） |
+| 24 | 3.2-2 / 3.3-2 / 3.3-3 / 3.3-4 | 注释与实现一致性：burn-KDF 未来参数警示、identity 文件长度注释 81→82、import apply 按引用遍历（只克隆落库条目，万条导入峰值内存减半）、discovery 模块文档说明「协议多 tag / 请求侧单 tag」 |
+| 25 | 5.2-7 收尾 | 泰文用户协议 "(crash log)" 英文注音残留清除（D-104 已修 telemetry 误译的收尾） |
+
+守门：core `tests/d108_session_unlock.rs` 5 例（错误密码统一化 / NoVault / 截断与垃圾头部折叠 / 锁态复位 / 改密全流程，均真实走 Argon2）；url_safety/totp 内联单测 4 例；前端 `d107-update-check.test.ts`（版本比较/应答解析/节流 9 例）+ `d108-audit-guard.test.ts` 12 例（lock_session 全覆盖 / perform_lock 复用 / autolock 事件链路 / capabilities/CSP / 死代码删除 / DTO 收敛 / 合并提示 / 四语言键与披露句）。历史项 S1/C3/Q3 维持原结论（格式 v2 / item_hash 重构 / 环境 DLL）；3.4-4（S2 IPC 白名单）与 3.1-11（O4 上帝对象）维持设计取舍。

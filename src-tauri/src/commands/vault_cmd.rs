@@ -21,7 +21,7 @@ pub fn create_vault(
 ) -> IpcResult<StatusDto> {
     let path = vault_path(&app)?;
     let session = Session::create(&path, &master_password, strength_confirmed)?;
-    *state.session.lock().map_err(lock_err)? = session;
+    *state.lock_session().map_err(lock_err)? = session;
     // 解锁即启动持久重同步监听（D-11）。
     let _ = ensure_resync_listener(&app)?;
     Ok(StatusDto {
@@ -44,7 +44,7 @@ pub fn unlock(
     for warning in session.maintenance_warnings() {
         crate::state::append_log(&app, &format!("[maintenance] {warning}"));
     }
-    *state.session.lock().map_err(lock_err)? = session;
+    *state.lock_session().map_err(lock_err)? = session;
     // 解锁即启动持久重同步监听（D-11）。
     let _ = ensure_resync_listener(&app)?;
     Ok(StatusDto {
@@ -55,17 +55,25 @@ pub fn unlock(
 
 /// F-02 锁定并清零敏感内存。
 #[tauri::command(rename_all = "snake_case")]
-pub fn lock(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> IpcResult<()> {
+pub fn lock(app: tauri::AppHandle) -> IpcResult<()> {
+    perform_lock(&app)
+}
+
+/// 锁定级联的**唯一实现**（D-108 3.4-6：`lock` 命令与 auto-lock 兜底 worker 共用，
+/// 保证两条入口的清理动作永不漂移）。
+pub fn perform_lock(app: &tauri::AppHandle) -> IpcResult<()> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
     {
         // 先释放 session 锁，避免与重同步工作线程（resync → session）形成锁序倒置。
-        let mut session = state.session.lock().map_err(lock_err)?;
+        let mut session = state.lock_session().map_err(lock_err)?;
         session.lock();
     }
     // A-03 + §3.3「锁定兼容」：锁定即清掉本应用写入的剪贴板内容。
     // 必须在丢弃记忆值之前执行——若先置 None，30 秒倒计时到点时会因记忆值缺失
     // 而静默不清理，密码将永久残留在系统剪贴板。
     // 用户若已把剪贴板换成别的内容，clear_owned_clipboard 会正确保持不动。
-    let _ = crate::commands::system_cmd::clear_owned_clipboard(&app, state.inner());
+    let _ = crate::commands::system_cmd::clear_owned_clipboard(app, state.inner());
     // A-04：导入预览缓存持有完整条目明文，锁定须先擦后清。
     // 顺序不能颠倒——clear() 直接 drop 值，不会覆写明文缓冲。
     // D-106（豆包审查 3.4-1）：锁中毒不得跳过清理（A-04 旁路）——
@@ -84,13 +92,13 @@ pub fn lock(app: tauri::AppHandle, state: tauri::State<'_, AppState>) -> IpcResu
             }
             guard.clear();
             crate::state::append_log(
-                &app,
+                app,
                 "[lock] pending_imports mutex poisoned; wiped via into_inner",
             );
         }
     }
     // 锁定后停止重同步监听，避免持有明文上下文。
-    stop_resync_listener(&app);
+    stop_resync_listener(app);
     Ok(())
 }
 
@@ -101,7 +109,7 @@ pub fn change_master_password(
     old_password: String,
     new_password: String,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     session.change_master_password(&old_password, &new_password)?;
     Ok(())
 }
@@ -113,7 +121,7 @@ pub fn export_vault(
     dest_path: String,
     master_password: String,
 ) -> IpcResult<()> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     repo.export_vault(Path::new(&dest_path), &master_password)?;
     Ok(())
@@ -138,7 +146,7 @@ pub fn restore_backup(
     state: tauri::State<'_, AppState>,
     source_path: String,
 ) -> IpcResult<()> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     if session.is_unlocked() {
         return Err(CoreError::Validation("vault_is_unlocked".to_string()).into());
     }
@@ -168,7 +176,7 @@ pub fn restore_backup(
 /// D-61 读取自动锁定档位（分钟；`Vault.auto_lock_minutes` 明文头部字段）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn get_auto_lock(state: tauri::State<'_, AppState>) -> IpcResult<u16> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     Ok(repo.auto_lock_minutes())
 }
@@ -176,7 +184,7 @@ pub fn get_auto_lock(state: tauri::State<'_, AppState>) -> IpcResult<u16> {
 /// D-61 设置自动锁定档位（仅接受 1/5/15，非法值 `ERR_VALIDATION`；幂等）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn set_auto_lock(state: tauri::State<'_, AppState>, minutes: u16) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.set_auto_lock_minutes(minutes)?;
     Ok(())

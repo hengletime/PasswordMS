@@ -101,7 +101,9 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     const infoRows = SRC.match(/class="set-row is-info"/g) ?? [];
     const actionRows = SRC.match(/class="set-row is-actions"/g) ?? [];
     expect(infoRows).toHaveLength(5);
-    expect(actionRows).toHaveLength(1);
+    // 计数 1 → 2 是 **D-107 的有意变更**：「关于」卡片新增更新检查区块，
+    // 「前往下载」按钮行同样是按钮行，窄屏必须横向排布（避开窄屏堆叠）。
+    expect(actionRows).toHaveLength(2);
   });
 
   it('别的行一个都不许标 is-*：控件行必须继续走窄屏堆叠', () => {
@@ -109,13 +111,13 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     const plainRows = SRC.match(/class="set-row"/g) ?? [];
     const totalRows = SRC.match(/class="set-row[ "]/g) ?? [];
     // 主题/语言/自动锁定/剪贴板/两个体检阈值/两个同步开关/导出密码/三个改密码 = 12 条裸行。
-    // 这里不写死 12（将来加控件行会合法变动），只断言「裸行是多数、且标记行只有 6 条
-    // （5 条 is-info + 1 条 is-actions，D-76 起）」。
+    // 这里不写死具体条数（将来加控件行会合法变动），只断言「裸行是多数、且标记行
+    // 共 7 条（5 条 is-info + 2 条 is-actions，D-76 起 / D-107 起 +1 条下载行）」。
     expect(plainRows.length).toBeGreaterThanOrEqual(8);
-    expect(plainRows.length + 6).toBe(totalRows.length);
+    expect(plainRows.length + 7).toBe(totalRows.length);
     // 白色名单外不许出现别的 `is-*` 变体（例如 `is-buttons` 这种手滑写法）。
     const anyVariant = SRC.match(/class="set-row is-[a-z-]+"/g) ?? [];
-    expect(anyVariant).toHaveLength(6);
+    expect(anyVariant).toHaveLength(7);
   });
 
   it('覆盖规则在同一个移动端媒体块内，且都在一刀切 `.set-row` 之后（层叠顺序）', () => {

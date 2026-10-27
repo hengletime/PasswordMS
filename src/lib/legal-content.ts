@@ -150,7 +150,7 @@ const TERMS_ZH: LegalDoc = {
       heading: '数据与隐私',
       paragraphs: [
         '你的全部数据仅保存在本机保险库文件以及你主动配对的设备上；软件不联网上传任何数据，作者无法访问你的保险库内容。',
-        '软件不收集遥测、崩溃日志或使用统计。你与作者之间不存在任何数据受托关系；数据的备份与保管责任由你自行承担。',
+        '软件不收集遥测、崩溃日志或使用统计。你与作者之间不存在任何数据受托关系；数据的备份与保管责任由你自行承担。「自动检查更新」（默认关闭）开启时，应用会在检查更新时向 GitHub 查询最新版本号；该请求不携带任何用户数据，关闭时不发起任何网络请求。',
       ],
     },
     {
@@ -210,7 +210,7 @@ const TERMS_EN: LegalDoc = {
       heading: 'Data and privacy',
       paragraphs: [
         'All of your data lives only in the local vault file and on the devices you explicitly paired. The software uploads nothing, and the author cannot access your vault contents.',
-        'The software collects no telemetry, crash logs, or usage statistics. There is no data-fiduciary relationship between you and the author; backing up and safeguarding your data is your responsibility.',
+        'The software collects no telemetry, crash logs, or usage statistics. There is no data-fiduciary relationship between you and the author; backing up and safeguarding your data is your responsibility. When "Check for updates automatically" (off by default) is enabled, the app queries GitHub for the latest version number; that request carries no user data, and no network request is made while the option is off.',
       ],
     },
     {
@@ -370,7 +370,7 @@ const TERMS_ZHTW: LegalDoc = {
       heading: '資料與隱私',
       paragraphs: [
         '你的全部資料僅保存在本機保險庫檔案以及你主動配對的裝置上；軟體不連線上傳任何資料，作者無法存取你的保險庫內容。',
-        '軟體不蒐集遙測、當機日誌或使用統計。你與作者之間不存在任何資料信託關係；資料的備份與保管責任由你自行承擔。',
+        '軟體不蒐集遙測、當機日誌或使用統計。你與作者之間不存在任何資料信託關係；資料的備份與保管責任由你自行承擔。「自動檢查更新」（預設關閉）開啟時，應用程式會在檢查更新時向 GitHub 查詢最新版本號；該請求不攜帶任何使用者資料，關閉時不發起任何網路請求。',
       ],
     },
     {
@@ -430,7 +430,7 @@ const TERMS_TH: LegalDoc = {
       heading: 'ข้อมูลและความเป็นส่วนตัว',
       paragraphs: [
         'ข้อมูลทั้งหมดของคุณถูกเก็บเฉพาะในไฟล์ตู้เซฟบนเครื่องและอุปกรณ์ที่คุณจับคู่เองเท่านั้น ซอฟต์แวร์ไม่อัปโหลดข้อมูลใด ๆ ผ่านอินเทอร์เน็ต และผู้สร้างไม่สามารถเข้าถึงเนื้อหาในตู้เซฟของคุณได้',
-        'ซอฟต์แวร์ไม่เก็บข้อมูลเทเลเมทรี บันทึกข้อขัดข้อง (crash log) หรือสถิติการใช้งาน ไม่มีความสัมพันธ์แบบผู้รับมอบข้อมูลระหว่างคุณกับผู้สร้าง การสำรองและดูแลรักษาข้อมูลเป็นความรับผิดชอบของคุณเอง',
+        'ซอฟต์แวร์ไม่เก็บข้อมูลเทเลเมทรี บันทึกข้อขัดข้อง หรือสถิติการใช้งาน ไม่มีความสัมพันธ์แบบผู้รับมอบข้อมูลระหว่างคุณกับผู้สร้าง การสำรองและดูแลรักษาข้อมูลเป็นความรับผิดชอบของคุณเอง เมื่อเปิดใช้ "ตรวจสอบการอัปเดตอัตโนมัติ" (ปิดตามค่าเริ่มต้น) แอปจะสอบถามหมายเลขเวอร์ชันล่าสุดจาก GitHub ระหว่างการตรวจสอบ โดยคำขอนั้นไม่มีข้อมูลผู้ใช้ใด ๆ และจะไม่มีการร้องขอเครือข่ายขณะปิดตัวเลือกนี้',
       ],
     },
     {

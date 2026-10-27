@@ -29,7 +29,7 @@ import type { CompactionStatsDto, VaultFileInfoDto } from '../types';
 
 /** 四块旁路数据源（由组件注入真实 IPC，测试注入替身）。 */
 export interface SettingsPageSideDeps {
-  /** 库文件路径与大小（`api.system.vaultFileInfo`）。 */
+  /** 库文件名与大小（`api.system.vaultFileInfo`；D-108 起后端只回传文件名）。 */
   loadVaultFileInfo: () => Promise<VaultFileInfoDto>;
   /** 自动锁定档位（分钟，`api.vault.getAutoLock`，D-61）。 */
   loadAutoLock: () => Promise<number>;

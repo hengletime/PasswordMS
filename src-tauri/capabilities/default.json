@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "PasswordMS 默认能力集：对话框 / 剪贴板 / 打开外部 URL / 受限文件访问",
+  "description": "PasswordMS 默认能力集：对话框 / 剪贴板 / 受限文件访问",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -9,7 +9,6 @@
     "clipboard-manager:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
-    "opener:default",
     "fs:default",
     "core:window:allow-set-theme",
     "core:window:allow-minimize",

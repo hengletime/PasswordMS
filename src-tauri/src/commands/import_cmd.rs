@@ -24,6 +24,9 @@ pub fn import_preview(
     #[cfg(not(target_os = "android"))]
     let _ = &app;
 
+    // D-108（3.4-6）：导入向导是用户活动（本命令不走会话锁，需显式触点）。
+    state.touch_activity();
+
     let fmt = ImportFormat::parse(&format)?;
 
     #[cfg(target_os = "android")]
@@ -83,7 +86,7 @@ pub fn import_apply(
             ))
         })?;
 
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     let result = import::apply(&preview, repo)?;
     Ok(ImportResultDto::from(result))

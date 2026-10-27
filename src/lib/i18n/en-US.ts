@@ -226,6 +226,7 @@ export const enUS: Messages = {
     section_title: 'Attachments',
   },
   import: {
+    header_read_failed: 'Failed to read the CSV header: field mapping left empty; preview will re-read the file.',
     title: 'Import',
     // D-73: "Choose export file" read as "pick a file exported by this app"
     // (this app exports an encrypted .vault backup, which never enters through here).
@@ -363,6 +364,14 @@ export const enUS: Messages = {
     about_homepage: 'Homepage',
     about_disclaimer: 'Disclaimer',
     about_terms: 'Terms of Use',
+    update_auto: 'Check for updates automatically',
+    update_auto_hint: 'When off, no network request is made. When on, the app queries GitHub at most once a day for the latest version; no user data is sent.',
+    update_check_now: 'Check for updates',
+    update_checking: 'Checking…',
+    update_uptodate: 'You are on the latest version',
+    update_available: 'New version available: v{version}',
+    update_failed: 'Check failed. Please try again later.',
+    update_download: 'Get the new version',
     saved: 'Settings saved',
   },
   sync: {
@@ -461,6 +470,7 @@ export const enUS: Messages = {
     totp_invalid_detail: 'Invalid TOTP secret — edit this item to fix it.',
     attachment_too_large: 'Attachment exceeds the size limit.',
     attachment_limit: 'Attachment limit reached (16).',
+    attachment_not_found: 'Attachment not found (it may have been removed).',
     vault_capacity: 'Vault capacity is full.',
     unsafe_url: 'This URL is unsafe and was blocked.',
     import_parse:
@@ -474,6 +484,7 @@ export const enUS: Messages = {
     fingerprint: 'Fingerprint verification failed; sync aborted.',
     sync_aborted: 'Sync was aborted.',
     sync_busy: 'A sync is already in progress; please try again shortly.',
+    load_partial: 'Some data failed to load. Please retry, or lock and unlock again.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',
     restore_conflict: 'Cannot restore: a newer version of this item already exists (caused by multi-device sync). Handle it in the item list or the Conflicts tab.',

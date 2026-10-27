@@ -56,8 +56,11 @@ pub fn check(items: &[Item], cfg: &HealthConfig, now_ms: i64) -> HealthReport {
                 weak.push(item.item_id.clone());
             }
             if !password.is_empty() {
+                // D-108（豆包审查 3.2-5）：重复判定用「trim + 去零宽字符」后的归一化
+                // 键——`"pw"` 与 `"pw "`（多打个空格）本质是同一个密码，精确字节
+                // 比较会漏报。弱口令判定仍用原串（首尾空格也是口令强度的一部分）。
                 password_users
-                    .entry(password.to_string())
+                    .entry(duplicate_key(password))
                     .or_default()
                     .push(item.item_id.clone());
             }
@@ -141,6 +144,16 @@ fn is_weak(password: &str, weak_max_len: u8) -> bool {
         + has_digit(password) as u8
         + has_symbol(password) as u8
         <= 1
+}
+
+/// 重复判定的归一化键（D-108 审查 3.2-5）：trim + 去零宽字符。
+/// 只影响「重复使用」分组，不改动任何存储的明文。
+fn duplicate_key(password: &str) -> String {
+    password
+        .trim()
+        .chars()
+        .filter(|c| !matches!(c, '\u{200b}' | '\u{200c}' | '\u{200d}' | '\u{feff}'))
+        .collect()
 }
 
 fn has_lower(s: &str) -> bool {

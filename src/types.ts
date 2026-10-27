@@ -261,9 +261,9 @@ export interface SyncStatusDto {
   device_count: number;
 }
 
-/** 保险库文件信息。 */
+/** 保险库文件信息（D-108：后端只回传文件名，不暴露绝对路径）。 */
 export interface VaultFileInfoDto {
-  path: string;
+  file_name: string;
   size_bytes: number;
 }
 

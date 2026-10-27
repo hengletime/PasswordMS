@@ -195,12 +195,16 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
 
     let mut imported_items = 0usize;
     let mut duplicate_skipped = 0usize;
-    for mut item in preview.items.clone() {
+    // D-108（豆包审查 3.3-3）：不再整体 `preview.items.clone()`（万条导入峰值内存
+    // 约双倍）——按引用遍历，**只对真正要落库的条目**逐个克隆（重复项零克隆）。
+    // `apply` 签名保持 `&ImportPreview`：上层与测试存在同一预览多次 apply 的用法。
+    for item in &preview.items {
         let key = (item.kind.title().to_string(), item.kind.type_name());
         if existing_keys.contains(&key) {
             duplicate_skipped += 1;
             continue;
         }
+        let mut item = item.clone();
         // 预览内的 folder_id 指向预览自建分组；合并命中的重定向到现有分组。
         if let Some(fid) = item.folder_id.take() {
             item.folder_id = Some(folder_map.get(&fid).cloned().unwrap_or(fid));

@@ -268,7 +268,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（#531 起为 59/59）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（D-108 起为 58/58）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
@@ -278,8 +278,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // 死数字是有意的：新增命令时必须来改这两个数，等于强制作者看一眼这条不变量。
     // #531：53 → 59（record_item_usage / set_item_pin / reorder_pinned_items /
     // set_folder_pin / reorder_pinned_folders / move_item_to_folder）。
-    // 后端未落地前这里会红（total 仍是 53）—— 约定的红，kodouma 落地后复跑须绿。
-    expect(total).toBe(59);
-    expect(withAttr).toBe(59);
+    // D-108（豆包审查 3.5-7）：删除前后端占位死命令 sync_accept_pair，59 → 58。
+    expect(total).toBe(58);
+    expect(withAttr).toBe(58);
   });
 });

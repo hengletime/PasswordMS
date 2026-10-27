@@ -197,6 +197,19 @@ impl Repository {
     /// 打开已有库并解密全部记录。
     pub fn open(path: &Path, vault_key: VaultKey, device_id: String) -> CoreResult<Self> {
         let container = Container::open(path)?;
+        Self::open_with_container(container, vault_key, device_id)
+    }
+
+    /// 用**已打开的容器**构建仓储并解密全部记录。
+    ///
+    /// D-108（豆包审查 3.2-8）：`Session::unlock` 此前先用 `Container::open` 读头部、
+    /// 校验通过后再调 [`Self::open`] 二次打开同一文件——两次 open 之间存在毫秒级
+    /// TOCTOU 窗口，文件被替换时错误码逃逸 A-05 统一化。复用第一次的容器后窗口消失。
+    pub fn open_with_container(
+        container: Container,
+        vault_key: VaultKey,
+        device_id: String,
+    ) -> CoreResult<Self> {
         let mut repo = Self {
             container,
             vault_key,
@@ -223,6 +236,15 @@ impl Repository {
         if header_count != actual_count {
             repo.open_warnings.push(format!(
                 "header_item_count_mismatch: header={header_count}, actual={actual_count}"
+            ));
+        }
+        // D-108（豆包审查 3.1-8）：folder_count 同样交叉核对——头部计数与实际扫描
+        // 不一致只产生警告（帧密文才是真相源），与 item_count 同口径。
+        let header_folders = repo.container.header().folder_count;
+        let actual_folders = repo.folders.len() as u32;
+        if header_folders != actual_folders {
+            repo.open_warnings.push(format!(
+                "header_folder_count_mismatch: header={header_folders}, actual={actual_folders}"
             ));
         }
         Ok(repo)
@@ -308,7 +330,14 @@ impl Repository {
         self.devices.clear();
         self.sync_states.clear();
 
-        let frames = self.container.read_frames()?;
+        // D-108（豆包审查 3.1-9）：尾部残料（<一帧头，写入中途掉电/备份截断的
+        // 典型残留）不再静默——留痕进 open_warnings，与备份恢复路径的严格校验同口径。
+        let (frames, trailing_bytes) = self.container.read_frames_with_tail()?;
+        if trailing_bytes > 0 {
+            self.open_warnings.push(format!(
+                "trailing_partial_frame: {trailing_bytes} bytes ignored"
+            ));
+        }
         for (offset, frame) in frames {
             let idx = self.slots.len();
             if frame.is_blob() {
@@ -680,6 +709,12 @@ impl Repository {
             .cloned()
             .collect();
 
+        // D-108（豆包审查 3.1-12）：条目搬移逐条落盘、无回滚。语义定为**尽力而为 + 快停**：
+        // 任何一条搬移失败立即停止并返回错误，**分组原样保留**（可整体重试）；
+        // 已搬移的条目处于合法状态（未分组 / 回收站），重试时重复搬移无副作用。
+        // 分组删除动作（tombstone）只在全部条目处理成功后发生——原实现的半完成态
+        // 「分组已删、部分条目还挂着悬空 folder_id」从根上不再出现。
+        let mut first_err: Option<CoreError> = None;
         match strategy {
             FolderDeleteStrategy::ToUngrouped => {
                 for mut item in affected {
@@ -687,20 +722,26 @@ impl Repository {
                     item.rev += 1;
                     item.updated_at = now_ms();
                     item.modified_by = self.device_id.clone();
-                    self.write_record(
-                        RECORD_TYPE_ITEM,
-                        &item.item_id,
-                        0,
-                        &serde_json::to_vec(&item)?,
-                    )?;
+                    let payload = serde_json::to_vec(&item)?;
+                    if let Err(e) = self.write_record(RECORD_TYPE_ITEM, &item.item_id, 0, &payload)
+                    {
+                        first_err.get_or_insert(e);
+                        break;
+                    }
                     self.items.insert(item.item_id.clone(), item);
                 }
             }
             FolderDeleteStrategy::ToTrash => {
                 for item in affected {
-                    self.move_item_to_trash(&item)?;
+                    if let Err(e) = self.move_item_to_trash(&item) {
+                        first_err.get_or_insert(e);
+                        break;
+                    }
                 }
             }
+        }
+        if let Some(e) = first_err {
+            return Err(e);
         }
 
         self.tombstone(RECORD_TYPE_FOLDER, folder_id)?;
@@ -1277,7 +1318,9 @@ impl Repository {
         item.attachments
             .retain(|a| a.attachment_id != attachment_id);
         if item.attachments.len() == before {
-            return Err(CoreError::ItemNotFound);
+            // D-108（豆包审查 3.1-10）：附件定位失败原借用 ItemNotFound，与
+            // 「条目不存在」不可区分；改用精确变体。
+            return Err(CoreError::AttachmentNotFound);
         }
         item.rev += 1;
         item.updated_at = now_ms();
@@ -1319,7 +1362,7 @@ impl Repository {
     /// 取附件明文**字节**（D-71：`content://` 导出用，照 `add_attachment_bytes` 的既有范式）。
     ///
     /// 校验顺序与错误码与 `export_attachment` 的路径版**逐条一致**（两条入口共用本实现）：
-    /// 父条目存在（`ItemNotFound`）→ 附件在父条目内（`ItemNotFound`）→
+    /// 父条目存在（`ItemNotFound`）→ 附件在父条目内（`AttachmentNotFound`，D-108 3.1-10）→
     /// blob 已同步到本机（`BlobMissing`）→ 解密读取。
     pub fn export_attachment_bytes(
         &self,
@@ -1331,7 +1374,7 @@ impl Repository {
             .attachments
             .iter()
             .find(|a| a.attachment_id == attachment_id)
-            .ok_or(CoreError::ItemNotFound)?;
+            .ok_or(CoreError::AttachmentNotFound)?;
         if !self.has_blob(&meta.attachment_id) {
             return Err(CoreError::BlobMissing);
         }
@@ -1671,12 +1714,22 @@ impl Repository {
     }
 
     /// 清空回收站。
+    ///
+    /// D-108（豆包审查 3.1-13）：单条 purge 失败不再中断循环——已 purge 的条目
+    /// 不可恢复、剩下的继续尝试（尽力而为），最后返回**首个**错误；返回 `Ok`
+    /// 当且仅当全部清空成功。调用方弹错时回收站里剩余的就是没能清掉的。
     pub fn empty_trash(&mut self) -> CoreResult<()> {
         let ids: Vec<String> = self.trash.keys().cloned().collect();
+        let mut first_err: Option<CoreError> = None;
         for id in ids {
-            self.purge_item(&id)?;
+            if let Err(e) = self.purge_item(&id) {
+                first_err.get_or_insert(e);
+            }
         }
-        Ok(())
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     /// 【D-91】清除某条目的全部回收站快照（同步复活成功后调用）。

@@ -21,6 +21,12 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState::new())
+        // D-108（3.4-6）：auto-lock 的 Rust 兜底线程——WebView 后台节流时前端
+        // 定时器停摆，闲置锁定由后端按 last_activity_ms 仲裁。
+        .setup(|app| {
+            crate::state::spawn_auto_lock_worker(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // system
             commands::system_cmd::get_status,
@@ -82,7 +88,6 @@ pub fn run() {
             commands::sync_cmd::sync_start_pairing,
             commands::sync_cmd::sync_cancel_pairing,
             commands::sync_cmd::sync_join,
-            commands::sync_cmd::sync_accept_pair,
             commands::sync_cmd::list_paired_devices,
             commands::sync_cmd::rename_paired_device,
             commands::sync_cmd::unpair,

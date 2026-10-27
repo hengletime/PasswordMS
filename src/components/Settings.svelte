@@ -19,6 +19,16 @@
   import { sync } from '../lib/stores/sync.svelte';
   import { theme } from '../lib/stores/theme.svelte';
   import { ui } from '../lib/stores/ui.svelte';
+  import {
+    UPDATE_RELEASES_URL,
+    fetchLatestVersion,
+    isAutoCheckEnabled,
+    markAutoChecked,
+    setAutoCheckEnabled,
+    shouldAutoCheck,
+    storedLatest,
+    type UpdateCheckStorage,
+  } from '../lib/update-check';
   import { runVaultExport } from '../lib/vault-export';
   import { isSafeUrl } from '../lib/url-safety';
   import type { CompactionStatsDto, VaultFileInfoDto, VaultSettings } from '../types';
@@ -90,6 +100,93 @@
       ui.toast('error', toAppError(err).messageKey);
     }
   }
+
+  // ===== D-107：更新检查（方案 B：自动检查默认关 + 手动按钮；只提醒不下载） =====
+
+  /** localStorage 抽象（测试可替换；运行环境恒为浏览器 WebView）。 */
+  function updateStorage(): UpdateCheckStorage {
+    return window.localStorage;
+  }
+
+  let updateEnabled = $state(false);
+  /** idle / checking / uptodate / available / failed。 */
+  let updateState = $state<'idle' | 'checking' | 'uptodate' | 'available' | 'failed'>('idle');
+  /** 查到的新版本号（available 时显示）。 */
+  let updateLatest = $state<string | null>(null);
+  /** 防重入。刻意用**非响应式**变量：$effect 会追踪同步读取的 $state，
+   * 在 effect 里读 `updateState` 再写它会形成自依赖（Svelte 5 会报自环）。 */
+  let checkInFlight = false;
+
+  /** 检查一次并把结果写进 UI 状态；自动检查成功与否都记节流时间戳。 */
+  async function runUpdateCheck(auto: boolean): Promise<void> {
+    if (checkInFlight || appVersion === null) {
+      return;
+    }
+    checkInFlight = true;
+    updateState = 'checking';
+    const result = await fetchLatestVersion(window.fetch.bind(window), appVersion);
+    if (auto) {
+      markAutoChecked(updateStorage(), result?.hasUpdate ? result.latestVersion : null);
+    }
+    if (result === null) {
+      // 手动检查失败才显式提示；自动检查静默（GitHub 不可达不该打扰用户）。
+      updateState = auto ? 'idle' : 'failed';
+    } else if (result.hasUpdate) {
+      updateLatest = result.latestVersion;
+      updateState = 'available';
+    } else {
+      updateLatest = null;
+      updateState = 'uptodate';
+    }
+    checkInFlight = false;
+  }
+
+  /** 开关切换：开启后立即做一次（若节流窗口已开）；关闭清掉残留提示。 */
+  async function onUpdateCheckToggle(event: Event): Promise<void> {
+    const enabled = (event.target as HTMLInputElement).checked;
+    setAutoCheckEnabled(updateStorage(), enabled);
+    updateEnabled = enabled;
+    if (enabled) {
+      if (shouldAutoCheck(updateStorage())) {
+        await runUpdateCheck(true);
+      }
+    } else {
+      updateLatest = null;
+      updateState = 'idle';
+    }
+  }
+
+  /** 手动「检查更新」按钮。 */
+  async function onUpdateCheckNow(): Promise<void> {
+    await runUpdateCheck(false);
+  }
+
+  /** 跳转 Releases 下载页（open_url 白名单链路，与项目主页同路）。 */
+  async function openReleases(): Promise<void> {
+    if (!isSafeUrl(UPDATE_RELEASES_URL)) {
+      ui.toast('error', 'err.unsafe_url');
+      return;
+    }
+    try {
+      await api.system.openUrl(UPDATE_RELEASES_URL);
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  // 进入设置页：同步开关显示 + 若自动检查开启且过节流窗口则静默查一次；
+  // 上次自动检查查到过新版本的话，直接把提示摆出来（不必等下次检查）。
+  $effect((): void => {
+    updateEnabled = isAutoCheckEnabled(updateStorage());
+    const cached = storedLatest(updateStorage());
+    if (cached !== null && appVersion !== null) {
+      updateLatest = cached;
+      updateState = 'available';
+    }
+    if (shouldAutoCheck(updateStorage())) {
+      void runUpdateCheck(true);
+    }
+  });
   // D-61：自动锁定档位真持久化（`Vault.auto_lock_minutes` 明文头部）——
   // 初始化读 IPC（get_auto_lock），换档即写（set_auto_lock）；失败回滚 select 显示值。
   let autoLockMinutes = $state<number>(AUTO_LOCK_OPTIONS[1] ?? 5);
@@ -448,7 +545,7 @@
          读不到时显示「读取失败」而不是留空（空状态 = 静默兜底，把失败伪装成「本来就没有」）。 -->
     <p class="pms-meta">{ui.t('settings.vault_file_hint')}</p>
     {#if fileInfo}
-      <p class="pms-meta set-mono">{fileInfo.path}</p>
+      <p class="pms-meta set-mono">{fileInfo.file_name}</p>
       <p class="pms-meta">
         {ui.t('settings.size')}: {formatBytes(fileInfo.size_bytes)}
       </p>
@@ -523,7 +620,40 @@
       <span class="set-label">{ui.t('settings.about_license')}</span>
       <span class="pms-meta">MIT License</span>
     </div>
+    <!-- D-107：更新检查（自动检查默认关 + 手动按钮；只提醒不下载，去 Releases 手动获取）。 -->
+    <div class="set-row">
+      <span class="set-label">{ui.t('settings.update_auto')}</span>
+      <label class="pms-check">
+        <input type="checkbox" checked={updateEnabled} onchange={(e) => void onUpdateCheckToggle(e)} />
+      </label>
+    </div>
+    <p class="pms-meta set-update-hint">{ui.t('settings.update_auto_hint')}</p>
+    {#if updateState === 'available'}
+      <p class="pms-alert is-warning">
+        <Icon name="alert" size={16} />
+        <span>{ui.t('settings.update_available', { version: updateLatest ?? '' })}</span>
+      </p>
+      <div class="set-row is-actions">
+        <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openReleases()}>
+          <Icon name="external" size={14} />{ui.t('settings.update_download')}
+        </button>
+      </div>
+    {:else if updateState === 'checking'}
+      <p class="pms-meta">{ui.t('settings.update_checking')}</p>
+    {:else if updateState === 'uptodate'}
+      <p class="pms-meta">{ui.t('settings.update_uptodate')}</p>
+    {:else if updateState === 'failed'}
+      <p class="pms-hint">{ui.t('settings.update_failed')}</p>
+    {/if}
     <div class="set-row is-actions">
+      <button
+        class="pms-btn is-ghost is-sm"
+        type="button"
+        disabled={updateState === 'checking' || appVersion === null}
+        onclick={() => void onUpdateCheckNow()}
+      >
+        <Icon name="sync" size={14} />{ui.t('settings.update_check_now')}
+      </button>
       <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openHomepage()}>
         <Icon name="external" size={14} />{ui.t('settings.about_homepage')}
       </button>
@@ -655,6 +785,10 @@
   }
   .set-card .pms-alert {
     margin: 0 0 0.75rem;
+  }
+  /* D-107：更新自动检查的说明行（小字提示，紧跟开关行）。 */
+  .set-update-hint {
+    margin: 0.1rem 0 0.4rem;
   }
   /* D-76：压缩确认块的「标签 / 数值」两列 + 三条提示。只做布局 ——
      字号与颜色一律继承 `.set-label` / `.pms-meta` / `.pms-hint`（§5.7.4 的同一纪律：

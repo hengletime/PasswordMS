@@ -14,7 +14,7 @@ pub fn list_items(
     favorite_only: Option<bool>,
     query: Option<String>,
 ) -> IpcResult<Vec<ItemDto>> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     Ok(repo.list_items(
         folder_id.as_deref(),
@@ -26,7 +26,7 @@ pub fn list_items(
 /// 取单条。
 #[tauri::command(rename_all = "snake_case")]
 pub fn get_item(state: tauri::State<'_, AppState>, item_id: String) -> IpcResult<ItemDto> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     Ok(repo.get_item(&item_id)?)
 }
@@ -34,7 +34,7 @@ pub fn get_item(state: tauri::State<'_, AppState>, item_id: String) -> IpcResult
 /// 新建条目。
 #[tauri::command(rename_all = "snake_case")]
 pub fn create_item(state: tauri::State<'_, AppState>, draft: ItemDraftDto) -> IpcResult<ItemDto> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     Ok(repo.create_item(to_draft(draft))?)
 }
@@ -46,7 +46,7 @@ pub fn update_item(
     item_id: String,
     draft: ItemDraftDto,
 ) -> IpcResult<ItemDto> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     Ok(repo.update_item(&item_id, to_draft(draft))?)
 }
@@ -58,7 +58,7 @@ pub fn delete_item(
     item_id: String,
     permanent: bool,
 ) -> IpcResult<()> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     repo.delete_item(&item_id, permanent)?;
     Ok(())
@@ -71,7 +71,7 @@ pub fn toggle_favorite(
     item_id: String,
     favorite: bool,
 ) -> IpcResult<ItemDto> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     Ok(repo.toggle_favorite(&item_id, favorite)?)
 }

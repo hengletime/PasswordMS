@@ -60,12 +60,12 @@ pub fn add_attachment(
         // 先在锁外把字节读出来：ContentProvider 读取可能慢，不占会话锁。
         let data = content_uri::read_to_bytes(&app, &source_path)?;
         let name = filename_from_source(&source_path);
-        let mut session = state.session.lock().map_err(lock_err)?;
+        let mut session = state.lock_session().map_err(lock_err)?;
         let repo = session.repo_mut()?;
         return Ok(repo.add_attachment_bytes(&item_id, &name, &data)?);
     }
 
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     Ok(repo.add_attachment(&item_id, Path::new(&source_path), &title)?)
 }
@@ -77,7 +77,7 @@ pub fn remove_attachment(
     item_id: String,
     attachment_id: String,
 ) -> IpcResult<ItemDto> {
-    let mut session = state.session.lock().map_err(lock_err)?;
+    let mut session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo_mut()?;
     Ok(repo.remove_attachment(&item_id, &attachment_id)?)
 }
@@ -105,14 +105,14 @@ pub fn export_attachment(
     if dest_path.starts_with("content://") {
         // 取字节在锁内完成，块结束即释放会话锁——写 provider 可能慢，不持锁做 I/O。
         let data = {
-            let session = state.session.lock().map_err(lock_err)?;
+            let session = state.lock_session().map_err(lock_err)?;
             let repo = session.repo()?;
             repo.export_attachment_bytes(&item_id, &attachment_id)?
         };
         return content_uri::write_bytes(&app, &dest_path, &data);
     }
 
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     repo.export_attachment(&item_id, &attachment_id, Path::new(&dest_path))?;
     Ok(())
@@ -124,7 +124,7 @@ pub fn attachment_blob_ready(
     state: tauri::State<'_, AppState>,
     attachment_id: String,
 ) -> IpcResult<bool> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     Ok(repo.has_blob(&attachment_id))
 }

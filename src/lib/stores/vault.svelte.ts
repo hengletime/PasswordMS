@@ -41,8 +41,13 @@ class VaultStore {
     return this.items.find((i): boolean => i.item_id === this.selectedItemId) ?? null;
   }
 
-  /** 加载（条目 + 分组）。 */
-  async load(): Promise<void> {
+  /**
+   * 加载（条目 + 分组）。
+   *
+   * `silent = true` 时失败不弹 toast 而是上抛——D-108（豆包审查 3.5-10）：
+   * 解锁后五路并行加载失败时由 MainLayout 合并为一条提示，避免 toast 堆叠。
+   */
+  async load(silent = false): Promise<void> {
     const seq = ++this.loadSeq;
     this.busy = true;
     try {
@@ -63,6 +68,9 @@ class VaultStore {
     } catch (err) {
       // 过期请求的失败同样不打扰当前视图（toast 属于最新一次交互）。
       if (seq === this.loadSeq) {
+        if (silent) {
+          throw err;
+        }
         ui.toast('error', toAppError(err).messageKey);
       }
     } finally {

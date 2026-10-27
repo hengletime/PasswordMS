@@ -178,22 +178,38 @@ impl Container {
 
     /// 读取全部帧（含墓碑），返回 `(offset, frame)`。
     pub fn read_frames(&self) -> CoreResult<Vec<(u64, Frame)>> {
+        Ok(self.read_frames_with_tail()?.0)
+    }
+
+    /// 读取全部帧（含墓碑），并报告**无法成帧的尾部残料字节数**。
+    ///
+    /// D-108（豆包审查 3.1-9）：原 `read_frames` 对尾部不足一帧头的残料
+    /// （`< FRAME_HEADER_LEN`，典型成因：写入中途掉电 / 备份截断）静默容忍——
+    /// 打开路径上与「文件本来就这么长」无从区分。备份恢复路径的
+    /// `verify_frame_stream` 早已严格校验，本方法把同样的检查带给正常打开：
+    /// 残料字节数 > 0 时由调用方（`rebuild_index` → open_warnings）留痕，不阻断解锁。
+    pub fn read_frames_with_tail(&self) -> CoreResult<(Vec<(u64, Frame)>, usize)> {
         let data = fs::read(&self.path)?;
         let start = self.record_start() as usize;
         let mut out = Vec::new();
-        if data.len() <= start {
-            return Ok(out);
-        }
-        let mut cursor = start;
-        while cursor + FRAME_HEADER_LEN <= data.len() {
-            let (frame, consumed) = Frame::decode(&data[cursor..])?;
-            out.push((cursor as u64, frame));
-            cursor += consumed;
-            if consumed == 0 {
-                break;
+        let mut trailing = 0usize;
+        if data.len() > start {
+            let mut cursor = start;
+            while cursor + FRAME_HEADER_LEN <= data.len() {
+                let (frame, consumed) = Frame::decode(&data[cursor..])?;
+                out.push((cursor as u64, frame));
+                cursor += consumed;
+                if consumed == 0 {
+                    // 帧头可读但解码器拒绝消费：剩余全部按残料计。
+                    trailing = data.len() - cursor;
+                    break;
+                }
+            }
+            if cursor + FRAME_HEADER_LEN > data.len() && cursor < data.len() {
+                trailing = data.len() - cursor;
             }
         }
-        Ok(out)
+        Ok((out, trailing))
     }
 
     /// 尾部追加一帧，返回其偏移。

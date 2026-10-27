@@ -493,7 +493,7 @@ fn compact_keeps_blob_referenced_by_conflict_snapshot() {
     add_conflict(repo, &item.item_id, live.clone(), remote_snapshot);
 
     assert!(repo.has_blob(&att_a), "构造前提：A 的 blob 帧此刻还在库里");
-    let hash_before = hash32(&*repo.read_blob(&att_a).unwrap());
+    let hash_before = hash32(&repo.read_blob(&att_a).unwrap());
 
     repo.compact().unwrap();
 
@@ -502,7 +502,7 @@ fn compact_keeps_blob_referenced_by_conflict_snapshot() {
         "冲突快照引用的附件被压缩删掉了 —— 用户一仲裁就会 BlobMissing"
     );
     assert_eq!(
-        hash32(&*repo.read_blob(&att_a).unwrap()),
+        hash32(&repo.read_blob(&att_a).unwrap()),
         hash_before,
         "保活下来的附件字节必须与压缩前逐字节一致"
     );

@@ -18,7 +18,7 @@ pub fn get_status(
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<StatusDto> {
     let path = vault_path(&app)?;
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     Ok(StatusDto {
         has_vault: Session::has_vault(&path),
         locked: !session.is_unlocked(),
@@ -41,6 +41,8 @@ pub fn copy_secret(
     text: String,
     ttl_secs: u16,
 ) -> IpcResult<()> {
+    // D-108（3.4-6）：复制是用户活动（本命令不走会话锁，需显式触点）。
+    state.touch_activity();
     // D-106（豆包审查 3.4-5）：兜底清理按用户配置的 TTL 睡眠——原实现丢弃参数
     // 恒等 30s，用户配 60s 时密码在第二次粘贴前被提前清掉（违背配置预期）。
     app.clipboard()
@@ -124,17 +126,23 @@ pub fn open_url(app: tauri::AppHandle, url: String) -> IpcResult<()> {
 }
 
 /// 保险库文件信息（P-10 展示）。
+///
+/// D-108（豆包审查 3.4-8）：只回传**文件名**——绝对路径对用户无增量价值
+/// （路径结构由应用决定、不可配置），却把本机目录结构暴露给前端 JS。
 #[tauri::command(rename_all = "snake_case")]
 pub fn vault_file_info(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<VaultFileInfoDto> {
     let path = vault_path(&app)?;
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     let size_bytes = repo.file_size().map_err(IpcError::from)?;
     Ok(VaultFileInfoDto {
-        path: path.to_string_lossy().to_string(),
+        file_name: path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "passwordms.vault".to_string()),
         size_bytes,
     })
 }
@@ -146,7 +154,7 @@ pub fn vault_file_info(
 /// + 解密少量墓碑帧取 rev），不必 `spawn_blocking`。
 #[tauri::command(rename_all = "snake_case")]
 pub fn vault_compaction_stats(state: tauri::State<'_, AppState>) -> IpcResult<CompactionStatsDto> {
-    let session = state.session.lock().map_err(lock_err)?;
+    let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     let stats = repo.compaction_stats().map_err(IpcError::from)?;
     Ok(CompactionStatsDto::from(stats))
@@ -166,7 +174,7 @@ pub async fn compact_vault(app: tauri::AppHandle) -> IpcResult<CompactionResultD
     let app_log = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
-        let mut session = state.session.lock().map_err(lock_err)?;
+        let mut session = state.lock_session().map_err(lock_err)?;
         let repo = session.repo_mut()?;
         let outcome = repo.compact().map_err(IpcError::from)?;
         Ok(CompactionResultDto::from(outcome))

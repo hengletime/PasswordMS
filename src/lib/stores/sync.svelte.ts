@@ -151,25 +151,32 @@ class SyncStore {
   }
 
   /** 加载设备列表。 */
-  async loadDevices(): Promise<void> {
+  /** `silent = true` 时失败上抛不弹 toast（D-108 3.5-10 合并提示用）。 */
+  async loadDevices(silent = false): Promise<void> {
     try {
       this.devices = await api.sync.listDevices();
     } catch (err) {
+      if (silent) {
+        throw err;
+      }
       ui.toast('error', toAppError(err).messageKey);
     }
   }
 
   /** 加载同步状态。 */
-  async loadStatus(): Promise<void> {
+  async loadStatus(silent = false): Promise<void> {
     try {
       this.status = await api.sync.status();
     } catch (err) {
+      if (silent) {
+        throw err;
+      }
       ui.toast('error', toAppError(err).messageKey);
     }
   }
 
   /** 加载冲突。 */
-  async loadConflicts(): Promise<void> {
+  async loadConflicts(silent = false): Promise<void> {
     try {
       this.conflicts = await api.sync.listConflicts();
       // 为新出现的冲突初始化未选择状态。
@@ -179,6 +186,9 @@ class SyncStore {
       }
       this.choices = next;
     } catch (err) {
+      if (silent) {
+        throw err;
+      }
       ui.toast('error', toAppError(err).messageKey);
     }
   }

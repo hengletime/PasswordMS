@@ -282,9 +282,13 @@ pub struct SyncStatusDto {
 }
 
 /// 保险库文件信息 DTO。
+///
+/// D-108（豆包审查 3.4-8）：原字段 `path` 回传**绝对路径**给前端 JS——
+/// 文件名足以让用户辨认（`passwordms.vault`，路径结构本就由应用决定、不可配置），
+/// 无谓扩大信息面。字段同步更名 `file_name`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultFileInfoDto {
-    pub path: String,
+    pub file_name: String,
     pub size_bytes: u64,
 }
 

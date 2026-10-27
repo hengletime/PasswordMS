@@ -224,6 +224,8 @@ export const zhCN = {
     section_title: '附件',
   },
   import: {
+    // D-108（豆包审查 3.5-9）：CSV 表头读取失败不再静默重置。
+    header_read_failed: 'CSV 表头读取失败：字段映射已留空，预览时将重新读取文件。',
     title: '导入',
     // D-73：原「选择导出文件」被主人读成「选本应用导出的文件」（本应用导出的是 .vault
     // 加密备份，根本不从这个入口导）→ 改成动作方向明确的措辞。
@@ -317,7 +319,7 @@ export const zhCN = {
     size: '大小',
     // D-73：标题必须自带解释。主人原话「保险库文件是什么作用？没有看到文件啊？」——
     // 一句「为什么你会关心这个文件」比一个路径有用得多（备份/换机就是复制它）。
-    vault_file_hint: '本机全部条目都加密保存在这一个文件里；备份或换机就是复制它，路径见下。',
+    vault_file_hint: '本机全部条目都加密保存在这一个文件里；备份或换机就是复制它，文件名见下。',
     // D-73：读不到时**不能留空**（空 = 静默兜底，把失败伪装成「本来就没有」）。
     vault_file_failed: '读取失败：未能取得库文件路径与大小（条目本身不受影响）。',
 
@@ -358,6 +360,15 @@ export const zhCN = {
     about_homepage: '项目主页',
     about_disclaimer: '免责声明',
     about_terms: '用户协议',
+    // D-107：更新检查（方案 B：默认关 + 手动按钮）。
+    update_auto: '自动检查更新',
+    update_auto_hint: '关闭时不发起任何网络请求。开启后每天最多向 GitHub 查询一次最新版本，不含任何用户数据。',
+    update_check_now: '检查更新',
+    update_checking: '正在检查…',
+    update_uptodate: '已是最新版本',
+    update_available: '发现新版本 v{version}',
+    update_failed: '检查失败，请稍后重试。',
+    update_download: '前往下载',
     saved: '设置已保存',
   },
   sync: {
@@ -456,6 +467,7 @@ export const zhCN = {
     totp_invalid_detail: '动态口令密钥无效，请编辑条目修正。',
     attachment_too_large: '附件超过大小上限。',
     attachment_limit: '附件数量已达上限（16）。',
+    attachment_not_found: '附件不存在（可能已被删除）。',
     vault_capacity: '保险库容量已满。',
     unsafe_url: '该网址不安全，已阻止打开。',
     import_parse: '导入文件解析失败：请确认是未加密的 Bitwarden 导出（JSON / CSV）且内容完整。',
@@ -468,6 +480,8 @@ export const zhCN = {
     fingerprint: '设备指纹校验失败，已中止同步。',
     sync_aborted: '同步已中止。',
     sync_busy: '已有同步在进行中，请稍后再试。',
+    // D-108（豆包审查 3.5-10）：解锁后五路加载失败的合并提示（重试一次后仍失败才弹）。
+    load_partial: '部分数据加载失败，请重试或重新锁定后再试。',
     conflict: '存在未处理的冲突。',
     vk_adopt_requires_empty: '本机保险库非空，无法直接采用对端密钥。',
     restore_conflict: '无法还原：该条目已存在新版本（多设备同步所致），请在条目列表或冲突箱中处理。',

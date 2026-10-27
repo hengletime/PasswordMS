@@ -211,7 +211,9 @@ describe('D-76 §6.11.7 判据 4/5：成功重拉、失败不改数字', () => {
     expect(callAt).toBeGreaterThan(-1);
     expect(reloadAt, '压缩成功后必须 reload，否则卡片还是旧大小').toBeGreaterThan(callAt);
     // 被重拉的两个字段由 reloadSideData 负责写回。
-    const reloader = SRC_CODE.slice(SRC_CODE.indexOf('async function reloadSideData'), SRC_CODE.indexOf('$effect('));
+    // D-107 起文件里有两个 $effect：终点必须找 reloadSideData **之后**的第一个。
+    const startAt = SRC_CODE.indexOf('async function reloadSideData');
+    const reloader = SRC_CODE.slice(startAt, SRC_CODE.indexOf('$effect(', startAt));
     expect(reloader).toContain('fileInfo = side.fileInfo;');
     expect(reloader).toContain('compactionStats = side.compactionStats;');
   });
@@ -250,10 +252,9 @@ describe('D-76 竞态：压缩期间不许重拉旁路数据', () => {
   // **不失败、也不超时，会一直挂住**。D-73 的逐块失败隔离救不了「挂住」——
   // 它不是失败。触发路径：压缩中离开设置页再回来 → `$effect` 重跑 `reloadSideData()`。
   it('reloadSideData 开头短路（且短路在读 IPC 之前）', () => {
-    const reloader = SRC_CODE.slice(
-      SRC_CODE.indexOf('async function reloadSideData'),
-      SRC_CODE.indexOf('$effect('),
-    );
+    // D-107 起文件里有两个 $effect：终点必须找 reloadSideData **之后**的第一个。
+    const startAt = SRC_CODE.indexOf('async function reloadSideData');
+    const reloader = SRC_CODE.slice(startAt, SRC_CODE.indexOf('$effect(', startAt));
     const guardAt = reloader.indexOf('if (!force && compacting)');
     const callAt = reloader.indexOf('loadSettingsPageSide(');
     // 正向锚点：短路必须真的存在。`!force` 写在前面，强制调用才不会被自己的守卫拦掉。
