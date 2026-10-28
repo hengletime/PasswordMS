@@ -177,9 +177,30 @@ pub fn biometric_unlock(
     // 建会话用的也是这份头部，中间没有「文件被替换」的窗口。
     let container = Container::open(&path)?;
     let store = SealStore::new(&path);
-    let vault_key = {
-        let target = SealTarget::from_header(container.header());
-        biometric::unlock(&store, &sealer, &target)?
+    let target = SealTarget::from_header(container.header());
+    let vault_key = match biometric::unlock(&store, &sealer, &target) {
+        Ok(vk) => vk,
+        // D-119：平台密钥**永久**失效（Android 新增/删除指纹、恢复出厂清掉 Keystore 条目）
+        // 时，封印文件本身是完好的——`inspect` 的三道校验（`mac_check` / `wkv_check` /
+        // `bind`）全对，它只是再也解不开了。
+        //
+        // 墓碑由 `biometric::unlock` 自己写（那层才知道 `rec` 长什么样），这里补最后一手：
+        // 把平台侧的残余钥匙删干净。**不删 `biometric.json`**——删了状态就退化成
+        // 「从未开启」，用户看不到「为什么失效」，也找不到「去系统设置看看」的入口。
+        //
+        // 判定用 [`biometric::is_platform_revoked`]：只有平台**明确**说密钥永久失效才动，
+        // `Tampered` 与改密/换 VK 都不在此列（理由见那个函数的注释）。
+        Err(err) => {
+            if biometric::is_platform_revoked(&err) {
+                let bind = biometric::bind_of(&target);
+                crate::platform::purge_platform_key(&sealer, &bind);
+                append_log(
+                    &app,
+                    "[biometric] platform key invalidated by enrollment change; tombstoned",
+                );
+            }
+            return Err(err.into());
+        }
     };
     let session = Session::unlock_with_opened_container(&path, container, vault_key)?;
     for warning in session.maintenance_warnings() {

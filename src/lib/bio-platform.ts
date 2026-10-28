@@ -37,3 +37,28 @@ export function bioTextSuffix(platform: BioPlatform): '' | '_android' {
 export function bioShouldOfferSettings(availability: string): boolean {
   return availability === 'not_present' || availability === 'not_configured';
 }
+
+/**
+ * 把后端的错误文案 key 按平台改写（D-120）。
+ *
+ * 只有**含平台名词**的那几条需要改写，搬清单而不是搬规则——清单外的句子一定与平台
+ * 无关，宁可漏改（看得见、能补）也不要给每条错误都造两个同义键（翻译漂移、维护翻倍）。
+ *
+ * 目前清单里两条：
+ * - `err.bio_invalidated_enrollment`：Windows 说「Windows Hello 配置已变更」，安卓说
+ *   「设备的指纹 / 人脸记录已变更」——照搬 Windows 版就是 D-116 的翻版；
+ * - `err.biometric_canceled`：在设置页开启时按「取消」，这句话会**就地显示**在输入框
+ *   下方（不是静默），所以它同样看得见。
+ *
+ * 后端不做这件事：key 由 `passwordms_core::error` 生成，core 层不知道自己在哪个平台；
+ * 平台身份 DTO 里已经有了，前端改写是零额外状态的。
+ */
+const PLATFORM_NOUN_KEYS: readonly string[] = [
+  'err.bio_invalidated_enrollment',
+  'err.biometric_canceled',
+];
+
+export function localizeBioMessageKey(key: string, platform: BioPlatform): string {
+  if (platform !== 'android') return key;
+  return PLATFORM_NOUN_KEYS.includes(key) ? `${key}_android` : key;
+}

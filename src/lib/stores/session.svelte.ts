@@ -4,6 +4,7 @@ import type { StatusDto } from '../../types';
 import type { BiometricStatusDto } from '../../types';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
+import { bioPlatformOf, localizeBioMessageKey } from '../bio-platform';
 import { ui } from './ui.svelte';
 
 /** 会话 store。 */
@@ -123,16 +124,18 @@ class SessionStore {
       return true;
     } catch (err) {
       const appErr = toAppError(err);
+      // D-120：失效原因里的平台名词要跟着平台走（安卓不认「Windows Hello」）。
+      const messageKey = localizeBioMessageKey(appErr.messageKey, bioPlatformOf(this.biometric));
       switch (appErr.code) {
         case ErrorCode.ERR_BIOMETRIC_CANCELED:
         case ErrorCode.ERR_VALIDATION:
           break;
         case ErrorCode.ERR_BIOMETRIC_INVALIDATED:
-          ui.toast('error', appErr.messageKey);
+          ui.toast('error', messageKey);
           await this.refreshBiometric();
           break;
         default:
-          ui.toast('error', appErr.messageKey);
+          ui.toast('error', messageKey);
           break;
       }
       return false;

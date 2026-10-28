@@ -572,11 +572,13 @@ export const zhCN = {
     // 否则用户无法判断是「取消了一次」还是「该重新开启」。
     biometric_unavailable: '本机当前无法使用快速解锁，请用主密码解锁。',
     biometric_canceled: '已取消 Windows Hello 验证。',
+    biometric_canceled_android: '已取消指纹 / 人脸验证。',
     biometric_invalidated: '快速解锁已失效，请用主密码解锁后在设置中重新开启。',
     need_master_password: '这次解锁无法校验保险库密钥，请输入主密码解锁。',
     bio_invalidated_password: '主密码已修改，快速解锁已失效，请重新开启。',
     bio_invalidated_vault_key: '保险库密钥已更换（配对加入），快速解锁已失效，请重新开启。',
     bio_invalidated_enrollment: 'Windows Hello 配置已变更，快速解锁已失效，请重新开启。',
+    bio_invalidated_enrollment_android: '设备的指纹 / 人脸记录已变更，快速解锁已失效，请重新开启。',
     bio_invalidated_tampered: '快速解锁配置被篡改或损坏，已失效，请重新开启。',
     io: '文件读写出错。',
     network_timeout: '网络响应超时：请确认两台设备在同一局域网、对方仍停在配对等待页，然后重试。',

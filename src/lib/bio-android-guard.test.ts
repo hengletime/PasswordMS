@@ -16,6 +16,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import { localizeBioMessageKey } from './bio-platform';
+
 const modules = import.meta.glob(
   [
     '../components/Settings.svelte',
@@ -26,6 +28,8 @@ const modules = import.meta.glob(
     '../../src-tauri/src/platform/mod.rs',
     '../../src-tauri/src/platform/android_keystore.rs',
     '../../src-tauri/src/lib.rs',
+    '../../crates/passwordms-core/src/biometric.rs',
+    './stores/session.svelte.ts',
     './i18n/*.ts',
   ],
   { query: '?raw', import: 'default', eager: true },
@@ -40,6 +44,9 @@ const libRs = modules['../../src-tauri/src/lib.rs'] ?? '';
 
 const kotlinRaw =
   Object.entries(modules).find(([k]) => k.endsWith('/BiometricPlugin.kt'))?.[1] ?? '';
+
+const coreBio = modules['../../crates/passwordms-core/src/biometric.rs'] ?? '';
+const sessionStore = modules['./stores/session.svelte.ts'] ?? '';
 
 const zh = modules['./i18n/zh-CN.ts'] ?? '';
 const zhTw = modules['./i18n/zh-TW.ts'] ?? '';
@@ -256,5 +263,140 @@ describe('§23 对话框文案四语言齐全（系统语言跟随，与应用�
         expect(content, `${path} 缺少 ${key}`).toContain(`name="${key}"`);
       }
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D-119 / D-120：主人 2026-10-28 真机实测暴露的两条
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('D-119 平台密钥永久失效必须当场作废封印', () => {
+  it('core 只认 EnrollmentChanged 可撤销', () => {
+    expect(coreBio).toContain('pub fn is_platform_revoked');
+    const at = coreBio.indexOf('pub fn is_platform_revoked');
+    const rest = coreBio.slice(at);
+    const body = codeOnly(rest.slice(0, rest.indexOf('\n}\n') + 3));
+    expect(body).toContain('InvalidatedReason::BiometricEnrollmentChanged');
+    // 反向：其余三种理由一次都不许进判据——判成可撤销 = 删掉一条还能用的封印。
+    for (const bad of ['Tampered', 'MasterPasswordChanged', 'VaultKeyChanged']) {
+      expect(body, `${bad} 不该触发撤销`).not.toContain(bad);
+    }
+  });
+
+  it('解锁失败时清平台钥匙并照原错误上报，且**不删**封印文件（墓碑留痕）', () => {
+    const at = cmds.indexOf('pub fn biometric_unlock');
+    expect(at).toBeGreaterThan(-1);
+    const body = cmds.slice(at);
+    const iCheck = body.indexOf('is_platform_revoked(&err)');
+    const iPure = body.indexOf('purge_platform_key(&sealer, &bind)');
+    const iErr = body.indexOf('return Err(err.into())');
+    for (const [name, i] of [
+      ['is_platform_revoked', iCheck],
+      ['purge_platform_key', iPure],
+      ['return Err', iErr],
+    ] as const) {
+      expect(i, `biometric_unlock 里找不到 ${name}——D-119 的收尾断了`).toBeGreaterThan(-1);
+    }
+    expect(iCheck).toBeLessThan(iPure);
+    // 撤销之后仍然要把原因报上去（静默成功会让用户以为解锁成功）。
+    expect(iErr).toBeGreaterThan(iCheck);
+    expect(body).toContain('[biometric] platform key invalidated');
+    // 反向：**不许**删文件。删了状态就退化成 Absent，「刚刚失效」与「从未开启」分不开，
+    // 设置页既看不到原因、也没有 D-121 那个入口的触发条件。
+    expect(body).not.toContain('store.remove()');
+    // 墓碑由 core 写（命令层拿不到 rec）。
+    expect(coreBio).toContain('invalidated: Some(InvalidatedMarker');
+  });
+});
+
+describe('D-120 失效 / 取消文案跟着平台取词', () => {
+  it('改写函数：android 加后缀，其余平台原样返回', () => {
+    expect(localizeBioMessageKey('err.bio_invalidated_enrollment', 'android')).toBe(
+      'err.bio_invalidated_enrollment_android',
+    );
+    expect(localizeBioMessageKey('err.biometric_canceled', 'android')).toBe(
+      'err.biometric_canceled_android',
+    );
+    // Windows 自己就是那套名词，不该被改写。
+    expect(localizeBioMessageKey('err.bio_invalidated_enrollment', 'windows')).toBe(
+      'err.bio_invalidated_enrollment',
+    );
+    // 与平台无关的句子不进清单——多一套同义键只会让翻译漂移。
+    expect(localizeBioMessageKey('err.bio_invalidated_password', 'android')).toBe(
+      'err.bio_invalidated_password',
+    );
+    expect(localizeBioMessageKey('err.bio_invalidated_tampered', 'android')).toBe(
+      'err.bio_invalidated_tampered',
+    );
+  });
+
+  it('锁屏与设置页都走改写，不许直接吐后端的 messageKey', () => {
+    expect(sessionStore).toContain('localizeBioMessageKey(appErr.messageKey');
+    // 只看快速解锁那一段：主密码解锁的 catch 用的是同一句 toast，不该被这条断言牵连。
+    const at = sessionStore.indexOf('async unlockWithBiometric');
+    expect(at).toBeGreaterThan(-1);
+    const body = sessionStore.slice(at, sessionStore.indexOf('\n  }', at));
+    expect(body).not.toContain("ui.toast('error', appErr.messageKey)");
+    expect(settings).toContain('localizeBioMessageKey(toAppError(err).messageKey, bioPlatform)');
+  });
+
+  it('四语言两套键齐全（缺键时 ui.t 会把 key 本身画到屏幕上）', () => {
+    for (const [name, dict] of [
+      ['zh-CN', zh],
+      ['zh-TW', zhTw],
+      ['en-US', en],
+      ['th', th],
+    ] as const) {
+      for (const key of [
+        'bio_invalidated_enrollment:',
+        'bio_invalidated_enrollment_android:',
+        'biometric_canceled:',
+        'biometric_canceled_android:',
+      ]) {
+        expect(dict, `${name} 缺少 ${key}`).toContain(key);
+      }
+    }
+  });
+
+  it('android 变体里不出现 Windows Hello', () => {
+    for (const [name, dict] of [
+      ['zh-CN', zh],
+      ['zh-TW', zhTw],
+      ['en-US', en],
+      ['th', th],
+    ] as const) {
+      for (const key of ['bio_invalidated_enrollment_android:', 'biometric_canceled_android:']) {
+        const at = dict.indexOf(key);
+        const line = dict.slice(at, dict.indexOf('\n', at));
+        expect(line, `${name} 的 ${key} 里还有 Windows Hello`).not.toContain('Windows Hello');
+      }
+    }
+  });
+});
+
+describe('D-121（B 案）系统生物识别设置入口的显示条件', () => {
+  it('判据独立于「平台不可用」——失效可能发生在平台完全可用的时候', () => {
+    const at = settings.indexOf('const bioSealBroken');
+    expect(at, '缺少 bioSealBroken').toBeGreaterThan(-1);
+    const sealLine = settings.slice(at, settings.indexOf('\n', at));
+    expect(sealLine).toContain("'stale'");
+    expect(sealLine).toContain("'corrupt'");
+
+    const at2 = settings.indexOf('const bioShowSettingsEntry');
+    expect(at2, '缺少 bioShowSettingsEntry').toBeGreaterThan(-1);
+    const line = settings.slice(at2, settings.indexOf('\n', at2));
+    // 两个条件缺一不可：平台不可用（去开通）**或**封印已失效（去看看指纹）。
+    expect(line).toContain('!bioAvailable');
+    expect(line).toContain('bioSealBroken');
+  });
+
+  it('按钮由独立判据渲染，不再嵌在「平台不可用」块里', () => {
+    const iCond = settings.indexOf('{#if bioShowSettingsEntry}');
+    const iBtn = settings.indexOf('bio_open_settings${bioSuffix}');
+    expect(iCond, '缺少 {#if bioShowSettingsEntry} 块').toBeGreaterThan(-1);
+    expect(iBtn).toBeGreaterThan(iCond);
+    // 判据与按钮之间不许出现 {/if}——那说明按钮落进的是别的块（旧写法就是这么埋的）。
+    expect(settings.slice(iCond, iBtn)).not.toContain('{/if}');
+    // 正常态（available + ready）两个条件都为假 ⇒ 不渲染，不打扰。
   });
 });

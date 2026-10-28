@@ -1242,3 +1242,188 @@ Rust 侧改调 `"openSettings"`，并在调用点写明「这里是函数名字�
 ### 25.4 教训
 
 跨语言边界上的**字符串标识符**不受类型系统保护，两边各自「看起来对」是最危险的组合。只要一处用字符串点名另一处的符号，就必须有一条测试同时读**两边的源码**去比对字面值——这类 bug 用任何单侧测试都抓不到。
+
+## 26. D-119：平台密钥永久失效后状态不收敛，永远停在「已开启」（主人真机，2026-10-28）
+
+### 26.1 现象
+
+主人在真机上新增一枚指纹，回到 App 点「用指纹 / 人脸解锁」，弹出「…配置已变更，快速解锁已失效，请重新开启。」用主密码登录后进设置，**快速解锁仍显示「已开启」，按钮是「关闭快速解锁」**——没有「重新开启」可点。
+
+### 26.2 根因
+
+封印文件 `biometric.json` 的存活判定只看三样东西，全在**文件里**：
+
+| 校验 | 依据 | 指纹变更后 |
+|---|---|---|
+| `mac_check` | `verify_mac`（主密码派生） | 不变 |
+| `wkv_check` | `wrapped_vault_key`（VK） | 不变 |
+| `bind` | 上述三项的哈希 | 不变 |
+
+所以 `SealStore::inspect()` 依然返回 `SealState::Ready`。而**平台侧那把密钥的生死根本不在这个文件里**——Android 的 `setInvalidatedByBiometricEnrollment(true)` 让 Keystore 在新增指纹时把密钥废掉，这件事只有真正调 `cipher.init` 时才知道。
+
+`biometric_unlock` 原来的写法是：
+
+```rust
+let vault_key = biometric::unlock(&store, &sealer, &target)?;   // 失效就 ? 走人
+```
+
+错误照实上报了，**但什么都不清理**。于是两个后果同时发生：
+
+1. 设置页 `bioEnabled = (state === 'ready')` 为真 → 渲染「已开启」+「关闭」，**「开启」按钮不存在**；
+2. 锁屏 `canBiometricUnlock` 同样为真 → 按钮继续显示，点了继续失败。
+
+更要紧的是第 1 条：D-117 修的是「**重新开启**时旧废钥匙占着别名 ⇒ 换不了锁」，而 UI 上根本没有「重新开启」这个动作可点——**修复代码不可达**。这是两个缺陷叠在一起才暴露出来的：单看 D-117 的代码是对的，单看状态机也是自洽的，只有放在真机时序里才露馅。
+
+### 26.3 修法：墓碑，不是删除
+
+第一版修法是「失败就 `store.remove()` 把 `biometric.json` 删掉」——**错的**。删掉之后状态退化成 `Absent`，而 `Absent` 分不清两件事：「从来没开过」和「开过、刚刚废了」。设置页只能说「未开启」，主人想知道的「为什么失效」又丢了；更要紧的是 §28 那个「去系统设置看看」的入口按 B 案只在**失效**时显示，状态一归 `Absent` 就再也没有触发条件。
+
+改成**墓碑**：记录留着，盖一个失效戳。
+
+```rust
+// core：unlock 里 unseal 返回 Invalidated 时就地盖戳（它才拿得到 rec）
+Err(e @ SealError::Invalidated) => {
+    let dead = SealRecord {
+        invalidated: Some(InvalidatedMarker { at: now_ms(),
+            reason: InvalidatedReason::BiometricEnrollmentChanged }),
+        ..rec.clone()
+    };
+    let _ = store.save(&dead);          // 写失败不覆盖主错误
+    return Err(e.into());
+}
+```
+
+```rust
+// 命令层：只补最后一手——把平台侧残余钥匙删干净
+Err(err) => {
+    if biometric::is_platform_revoked(&err) {
+        let bind = biometric::bind_of(&target);
+        crate::platform::purge_platform_key(&sealer, &bind);
+        append_log(&app, "[biometric] platform key invalidated ...; tombstoned");
+    }
+    return Err(err.into());              // 用户仍要知道为什么
+}
+```
+
+`inspect` 的判定顺序插在 `wkv_check` 之后、`Ready` 之前：
+
+| # | 判定 | 结论 |
+|---|---|---|
+| 5 | `mac_check` 不符 | `Stale(MasterPasswordChanged)` |
+| 6 | `wkv_check` 不符 | `Stale(VaultKeyChanged)` |
+| **7** | **墓碑有戳** | **`Stale(那个原因)`** |
+| 8 | 其余 | `Ready` |
+
+墓碑排在改密/换 VK 之后：那两个是用户自己刚做的事、说了更有用；「钥匙被平台废了」是更早的既成事实。
+
+效果（主人真机应当看到的）：
+
+| 位置 | 修复前 | 修复后 |
+|---|---|---|
+| 锁屏按钮 | 一直在，点了必失败 | 消失（`state ≠ ready`） |
+| 设置页状态行 | 「已开启」 | 「设备的指纹 / 人脸记录已变更，快速解锁已失效」 |
+| 设置页按钮 | 只有「关闭」 | 「开启快速解锁」+「打开系统生物识别设置」 |
+| 数据 | — | 密钥与记录都在，不丢任何东西 |
+
+`invalidated` 字段带 `#[serde(default, skip_serializing_if = "Option::is_none")]`：旧版本写的文件读进来是 `None`，不需要迁移。
+
+### 26.4 为什么另外三种失效不盖戳、不动手
+
+| 理由 | 不动的理由 |
+|---|---|
+| `Tampered` | 可能是文件被人改过——替攻击者完成破坏；也可能只是适配器缺陷，留着才有证据 |
+| `MasterPasswordChanged` | `inspect` 本来就报 `Stale`，设置页照常显示原因，不需要额外标记 |
+| `VaultKeyChanged` | 同上（配对换 VK） |
+
+代价不对称：判成「该盖戳」而错盖，用户看到的是一个假失效并被迫重开；判成「不该盖」只是状态没更新——但那是可见、可解释、可自愈的。
+
+### 26.5 守门
+
+- core 单测 `only_platform_revocation_is_revocable`：四种理由 + 两类非失效错误全部钉住；
+- core 单测 `tombstone_turns_ready_into_stale_and_keeps_the_file`：`Ready` → 盖戳 → `Stale(EnrollmentChanged)` → 文件**仍在** → `remove()` 后才 `Absent`；
+- 源码契约（`bio-android-guard.test.ts`）：`is_platform_revoked` 的函数体里不许出现 `Tampered` / `MasterPasswordChanged` / `VaultKeyChanged`；命令层**不许**出现 `store.remove()`（删了就看不见原因）；core 里必须有 `invalidated: Some(InvalidatedMarker`。
+
+## 27. D-120：安卓上的失效 / 取消文案还在说「Windows Hello」（主人真机，2026-10-28）
+
+### 27.1 根因
+
+§23 做平台取词时，只给**设置卡片**和**锁屏按钮**加了 `_android` 后缀，漏了 `err` 段：
+
+```ts
+err.bio_invalidated_enrollment: 'Windows Hello 配置已变更，快速解锁已失效，请重新开启。'
+err.biometric_canceled:        '已取消 Windows Hello 验证。'
+```
+
+后端给的 `message_key` 是平台无关的（它由 `passwordms_core::error` 生成，core 层不知道自己在哪个平台），前端拿到就直接 `ui.t(key)` 了。于是 Android 上看到的是 D-116 的翻版：**手机屏幕上出现了「Windows Hello」五个字**。
+
+`err.biometric_canceled` 同样可见：设置页开启快速解锁时按「取消」，这句话会**就地显示在主密码输入框下方**（D-115 定的规矩），不是一闪而过的 toast。
+
+### 27.2 修法：清单驱动，不做万能规则
+
+`src/lib/bio-platform.ts` 新增：
+
+```ts
+const PLATFORM_NOUN_KEYS = ['err.bio_invalidated_enrollment', 'err.biometric_canceled'];
+export function localizeBioMessageKey(key, platform) {
+  return platform === 'android' && PLATFORM_NOUN_KEYS.includes(key) ? `${key}_android` : key;
+}
+```
+
+- 锁屏（`session.unlockWithBiometric`）与设置页（`submitEnableBiometric`）两处都过这个函数；
+- 四语言补 `bio_invalidated_enrollment_android` 与 `biometric_canceled_android`；
+- `_password` / `_vault_key` / `_tampered` 三条说的都是保险库自身的事，两个平台一字不差——**不给它们造同义键**，那是翻译漂移的源头。
+
+### 27.3 为什么不由后端做
+
+后端确实知道平台（DTO 里有 `platform`），但 `message_key` 是在 core 层按错误码生成的，让它反过来依赖平台名会把纯逻辑层弄脏；而前端已经持有平台身份，改写是零额外状态的。
+
+### 27.4 守门
+
+`bio-android-guard.test.ts` 新增四例：改写函数行为（android 加后缀 / windows 原样 / 无关句不改写）、两处调用点都过改写、四语言两套键齐全（缺键会让 `ui.t` 把 key 本身画到屏幕上）、android 变体里不许再出现「Windows Hello」。
+
+## 28. D-121：系统生物识别设置入口的显示条件（B 案，2026-10-28 主人拍板）
+
+D-118 修好了命令名，但主人**找不到那个按钮**。原因不是修错了，是**渲染条件太窄**：
+
+```svelte
+{#if bio && !bioAvailable}                        <!-- 只有平台不可用时才进这个块 -->
+  {#if bioShouldOfferSettings(bio.availability)}  <!-- not_present / not_configured -->
+    <button>…system biometric settings…</button>
+```
+
+真机指纹正常可用（`availability = available`）⇒ 整块不渲染 ⇒ 按钮不存在。
+
+### 28.1 三案与结论
+
+| 案 | 行为 | 结论 |
+|---|---|---|
+| A | 常驻（任何时候都能去管理系统指纹） | 更省事，但正常态每开一次设置就被劝去系统设置，属于噪音 |
+| **B** | **只在「平台不可用」或「封印已失效」时显示** | **主人选定** |
+| C | 维持现状 | 验收时得先删光指纹才能触发，不现实 |
+
+### 28.2 实现要点（这条最容易做漏）
+
+B 案的第一个陷阱：**失效恰好可以发生在平台完全可用的时候**——指纹变更废的是 Keystore 里那把钥匙，`availability` 照样是 `available`。所以判据**不能**再嵌在外层 `{#if bio && !bioAvailable}` 里，必须提出来：
+
+```ts
+const bioSealBroken = $derived(bio?.state === 'stale' || bio?.state === 'corrupt');
+const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealBroken));
+```
+
+第二个陷阱：D-119 如果按第一版「删文件」修，状态就成 `Absent`，`bioSealBroken` 恒假 ⇒ **B 案永远不触发**。这也是墓碑方案（§26.3）的直接动因。
+
+### 28.3 各状态下的可见性（验收对照）
+
+| `state` / `availability` | 状态行 | 「开启快速解锁」 | 「打开系统生物识别设置」 |
+|---|---|---|---|
+| `ready` / `available` | 已开启（日期） | —（显示「关闭」） | **不显示** |
+| `stale` / `available`（指纹变更后） | 记录已变更，已失效 | 显示 | **显示** |
+| `ready` / `not_configured` | 已开启但当前不可用 | —（显示「关闭」） | **显示** |
+| `absent` / `not_configured` | 未开启 | 置灰 | **显示** |
+| `absent` / `available`（从未开启） | 未开启 | 显示 | **不显示** |
+
+### 28.4 守门
+
+`bio-android-guard.test.ts` 两例：`bioShowSettingsEntry` 判据必须同时含 `!bioAvailable` 与 `bioSealBroken`；按钮必须紧跟在 `{#if bioShowSettingsEntry}` 之后、中间不许出现 `{/if}`（落进别的块就是旧写法）。
+
+**已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，该例立刻变红（1 failed / 28 passed），还原后 29 全绿。

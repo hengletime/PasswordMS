@@ -48,7 +48,8 @@ describe('D-115 主密码错就是「主密码错」', () => {
     expect(body).not.toBe('');
     // 不允许再退回 toast：用户的眼睛在输入框上。
     expect(body).not.toContain('toast(\'error\'');
-    expect(body).toContain('bioErrorKey = toAppError(err).messageKey');
+    // D-120 起这句还要按平台取词，但「就地显示」的意图不变——仍然不许退回 toast。
+    expect(body).toContain('bioErrorKey = localizeBioMessageKey(toAppError(err).messageKey');
     // 输入框下方要有 role="alert" 的一行。
     expect(settings).toMatch(/\{#if bioErrorKey !== ''\}[\s\S]{0,400}role="alert"/);
     // 改输入即清（避免「上一次错了」与「这一次在输」同屏）。

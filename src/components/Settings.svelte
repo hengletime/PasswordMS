@@ -11,7 +11,7 @@
   import Modal from './common/Modal.svelte';
   import Spinner from './common/Spinner.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
-  import { bioPlatformOf, bioShouldOfferSettings, bioTextSuffix } from '../lib/bio-platform';
+  import { bioPlatformOf, bioShouldOfferSettings, bioTextSuffix, localizeBioMessageKey } from '../lib/bio-platform';
   import { toAppError } from '../lib/errors';
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
@@ -78,6 +78,18 @@
    * 否则用户看到的是自相矛盾的两句话。
    */
   const bioDegraded = $derived(bioEnabled && bio !== null && !bioAvailable);
+  /**
+   * D-121（B 案）：系统生物识别设置入口的显示条件。
+   *
+   * 只在「有事可做」时出现：平台不可用（该去开通），或封印已失效（D-119 的墓碑，
+   * 说明系统里的指纹 / 人脸记录变过了）。一切正常时不打扰。
+   *
+   * **必须用独立判据，不能再嵌在 `!bioAvailable` 里**：指纹变更导致的失效恰好发生在
+   * `availability = available` 的时候（平台好好的，只是那把钥匙废了），
+   * 嵌进去就永远走不到——主人真机找不到这个按钮正是这个原因。
+   */
+  const bioSealBroken = $derived(bio?.state === 'stale' || bio?.state === 'corrupt');
+  const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealBroken));
   /**
    * §23：平台名词与平台专属文案的后缀。
    *
@@ -354,7 +366,8 @@
     } catch (err) {
       // D-115：主密码错（ERR_WRONG_MASTER_PASSWORD）/ 平台不可用 / 空库（ERR_VALIDATION）
       // 全部**就地**显示在输入框下——用户的眼睛在输入框上，不在右下角。
-      bioErrorKey = toAppError(err).messageKey;
+      // D-120：取消验证这类含平台名词的句子要按平台取词（安卓不认「Windows Hello」）。
+      bioErrorKey = localizeBioMessageKey(toAppError(err).messageKey, bioPlatform);
     } finally {
       bioBusy = false;
     }
@@ -681,15 +694,22 @@
            §23：Android 走同一套逻辑，只是文案与目标页面换成系统生物识别设置。 -->
       {#if bioShouldOfferSettings(bio.availability)}
         <p class="pms-hint">{ui.t(`settings.bio_avail_hint${bioSuffix}`)}</p>
-        <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openSignInOptions()}>
-          {ui.t(`settings.bio_open_settings${bioSuffix}`)}
-        </button>
       {/if}
-      {#if bioDegraded}
-        <!-- D-115：状态行写着「已开启」而这里说「用不了」，必须解释清楚为什么，
-             以及「要彻底撤销该怎么做」——否则用户会以为关掉 Hello 就等于撤销。 -->
-        <p class="pms-hint">{ui.t(`settings.bio_degraded_hint${bioSuffix}`)}</p>
-      {/if}
+    {/if}
+    <!-- D-121（B 案）：入口只在**有事可做**时出现——平台不可用（去开通），或封印已失效
+         （去看看系统里增删了哪些指纹）。一切正常时不打扰：那不是问题现场。
+         按钮单独提到两个信息块之外，因为「失效」这次可能发生在平台完全可用的时候
+         （D-119 的墓碑：`availability = available` 而 `state = stale`），
+         条件若还挂在 `!bioAvailable` 里就永远走不到——主人真机就是这么找不到它的。 -->
+    {#if bioShowSettingsEntry}
+      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openSignInOptions()}>
+        {ui.t(`settings.bio_open_settings${bioSuffix}`)}
+      </button>
+    {/if}
+    {#if bioDegraded}
+      <!-- D-115：状态行写着「已开启」而这里说「用不了」，必须解释清楚为什么，
+           以及「要彻底撤销该怎么做」——否则用户会以为关掉 Hello 就等于撤销。 -->
+      <p class="pms-hint">{ui.t(`settings.bio_degraded_hint${bioSuffix}`)}</p>
     {/if}
 
     {#if bioAsking}

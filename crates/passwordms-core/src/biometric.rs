@@ -160,7 +160,8 @@ impl From<SealError> for CoreError {
 }
 
 /// 失效原因（§10：让前端能给出可排查的文案，而不是笼统一句「已关闭」）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum InvalidatedReason {
     /// 主密码已变更（`verify_mac` 变了 ⇒ 绑定熵不符）。
     MasterPasswordChanged,
@@ -202,6 +203,24 @@ pub struct SealRecord {
     pub mac_check: Vec<u8>,
     /// 创建时间（毫秒）。
     pub created_at: i64,
+    /// 墓碑：平台**宣告**本封印永久失效的时刻与原因（D-119）。
+    ///
+    /// `None` = 没被宣告过失效。这是「从未开启」与「开了但废了」之间**唯一**的区分——
+    /// 失效时若直接把 `biometric.json` 删掉，状态就退化成 `Absent`，设置页只能说
+    /// 「未开启」，用户既看不到原因，也找不到「去系统设置看看」的入口。
+    ///
+    /// 旧版本写的文件没有这个字段 ⇒ `None`，前向/后向兼容都不需要迁移。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invalidated: Option<InvalidatedMarker>,
+}
+
+/// 墓碑内容。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvalidatedMarker {
+    /// 判定失效的时刻（毫秒）。
+    pub at: i64,
+    /// 为什么失效。
+    pub reason: InvalidatedReason,
 }
 
 /// 手写 `Debug`：**不打 `sealed_vk` 密文**（L-4）——密文进日志/崩溃报告没有收益。
@@ -361,7 +380,11 @@ impl SealStore {
     /// 4. `vault_id` 与本库不同 → `Absent`（不是本库的封印，不报错）；
     /// 5. `mac_check` 不符 → `Stale(MasterPasswordChanged)`（改密必然连带 `wkv` 变，优先报它）；
     /// 6. `wkv_check` 不符 → `Stale(VaultKeyChanged)`（配对加入换过 VK）；
-    /// 7. 其余 → `Ready`。
+    /// 7. 墓碑里有失效宣告 → `Stale(那个原因)`（D-119：平台密钥已废，再怎么解也解不开）；
+    /// 8. 其余 → `Ready`。
+    ///
+    /// 墓碑排在改密/换 VK **之后**：那两个原因是用户自己造成的、更新鲜，说了更有用；
+    /// 而「密钥被平台废了」是更早的既成事实。
     pub fn inspect(&self, target: &SealTarget<'_>) -> CoreResult<SealState> {
         // 用 `take` 直接限量读：先 `metadata` 再 `fs::read` 中间文件长大了就绕过上限
         // （复审 L-7），而全量 `fs::read` 会把任意大文件吃进内存。
@@ -427,6 +450,11 @@ impl SealStore {
         }
         if rec.wkv_check != wkv_check_of(target) {
             return Ok(SealState::Stale(InvalidatedReason::VaultKeyChanged));
+        }
+        // D-119：墓碑优先于 `Ready`。走到这一行说明文件本身自洽，但平台那边早就不认了——
+        // 不认墓碑的话，`inspect` 会一直说「可用」，锁屏按钮就一直显示一个必然失败的按钮。
+        if let Some(marker) = rec.invalidated {
+            return Ok(SealState::Stale(marker.reason));
         }
         Ok(SealState::Ready(rec))
     }
@@ -516,9 +544,31 @@ pub fn enable(
         wkv_check: wkv_check_of(target).to_vec(),
         mac_check: mac_check_of(target).to_vec(),
         created_at: now_ms(),
+        // 新封的印没有被宣告过失效。
+        invalidated: None,
     };
     store.save(&rec)?;
     Ok(rec)
+}
+
+/// 「这条错误是否等于宣布平台密钥已死」（D-119）。
+///
+/// 只有平台**明确**说密钥永久失效（Android `KeyPermanentlyInvalidatedException` /
+/// Keystore 条目被清）才算。判定放在 core 而不是命令层：这是**语义**问题，不是平台
+/// 调用问题，而且它必须可单测。
+///
+/// 命令层拿到 `true` 时做两件事之一：删平台侧残余钥匙（`purge_platform_key`）。
+/// **删文件不在此列**——墓碑由 [`unlock`] 自己写，删了就分不清「从未开启」与「刚刚失效」。
+///
+/// 其余三种**不能**碰：
+/// - `Tampered`：可能是文件被改，动手等于替攻击者完成破坏。
+/// - `MasterPasswordChanged` / `VaultKeyChanged`：`SealStore::inspect` 会报 `Stale`，
+///   设置页本来就显示原因，不需要任何清理。
+pub fn is_platform_revoked(e: &CoreError) -> bool {
+    matches!(
+        e,
+        CoreError::BiometricInvalidated(InvalidatedReason::BiometricEnrollmentChanged)
+    )
 }
 
 /// 用封印解锁：返回 VK。
@@ -557,7 +607,24 @@ pub fn unlock(
         Ok(v) => v,
         Err(SealError::Canceled) => return Err(CoreError::BiometricCanceled),
         Err(SealError::Unavailable(_)) => return Err(CoreError::BiometricUnavailable),
-        Err(e @ SealError::Invalidated) => return Err(e.into()),
+        Err(e @ SealError::Invalidated) => {
+            // D-119：平台宣告密钥永久失效 ⇒ 就地留墓碑，**不删文件**。
+            //
+            // 删掉的话状态退化成 `Absent`，「从未开启」与「开了又废了」就分不开了：
+            // 设置页只能说「未开启」，用户既看不到原因、也没有「去系统设置看看」的入口。
+            //
+            // 写字失败**不覆盖**主错误：用户最需要知道的是「为什么失效」，状态没收敛
+            // 只是下次再点一次而已，不丢任何数据。
+            let dead = SealRecord {
+                invalidated: Some(InvalidatedMarker {
+                    at: now_ms(),
+                    reason: InvalidatedReason::BiometricEnrollmentChanged,
+                }),
+                ..rec.clone()
+            };
+            let _ = store.save(&dead);
+            return Err(e.into());
+        }
         // 绑定串对得上却解不开 ⇒ 密文被篡改/损坏。
         Err(SealError::Platform(_)) => {
             return Err(CoreError::BiometricInvalidated(InvalidatedReason::Tampered))
@@ -574,6 +641,85 @@ pub fn unlock(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// D-119：只有「平台密钥永久失效」才允许命令层撤销封印。
+    ///
+    /// 这条判定的代价不对称——判错成 true 会删掉一条**还能用**的封印，用户下次只能输主密码；
+    /// 判错成 false 只是状态显示不对（就是主人这次踩到的）。所以四条都要钉住。
+    #[test]
+    fn only_platform_revocation_is_revocable() {
+        assert!(is_platform_revoked(&CoreError::BiometricInvalidated(
+            InvalidatedReason::BiometricEnrollmentChanged
+        )));
+        for reason in [
+            InvalidatedReason::MasterPasswordChanged,
+            InvalidatedReason::VaultKeyChanged,
+            InvalidatedReason::Tampered,
+        ] {
+            assert!(
+                !is_platform_revoked(&CoreError::BiometricInvalidated(reason)),
+                "{reason:?} 不该触发撤销：改密/换 VK 由 inspect 报 Stale，篡改可能是攻击痕迹"
+            );
+        }
+        // 非失效类的错误当然更不能删东西。
+        assert!(!is_platform_revoked(&CoreError::BiometricUnavailable));
+        assert!(!is_platform_revoked(&CoreError::BiometricCanceled));
+    }
+
+    /// D-119：墓碑让 `inspect` 报 `Stale`，且**不删文件**。
+    ///
+    /// 这条测的是「失效之后状态还看得见」——删掉文件的话 `inspect` 会返回 `Absent`，
+    /// 设置页只能说「未开启」，用户看不到原因（D-121 B 案的入口也就没有触发条件）。
+    #[test]
+    fn tombstone_turns_ready_into_stale_and_keeps_the_file() {
+        let dir = std::env::temp_dir().join(format!("pms-bio-tomb-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault = dir.join("vault.pms");
+        let store = SealStore::new(&vault);
+
+        let mac = [5u8; 32];
+        let wkv = WrappedKey {
+            nonce: vec![1u8; 12],
+            ct: vec![2u8; 48],
+        };
+        let t = target("vault-tomb", &mac, &wkv);
+        let rec = SealRecord {
+            version: SEAL_VERSION,
+            vault_id: "vault-tomb".to_string(),
+            platform: Subtype::WindowsDpapiUser.platform(),
+            platform_subtype: Subtype::WindowsDpapiUser,
+            sealed_vk: vec![0xAB; 64],
+            wkv_check: wkv_check_of(&t).to_vec(),
+            mac_check: mac_check_of(&t).to_vec(),
+            created_at: now_ms(),
+            invalidated: None,
+        };
+        store.save(&rec).unwrap();
+        assert!(matches!(store.inspect(&t).unwrap(), SealState::Ready(_)));
+
+        // 打墓碑（`unlock` 在平台宣告失效时做的就是这件事）。
+        let dead = SealRecord {
+            invalidated: Some(InvalidatedMarker {
+                at: now_ms(),
+                reason: InvalidatedReason::BiometricEnrollmentChanged,
+            }),
+            ..rec.clone()
+        };
+        store.save(&dead).unwrap();
+
+        assert_eq!(
+            store.inspect(&t).unwrap(),
+            SealState::Stale(InvalidatedReason::BiometricEnrollmentChanged),
+            "墓碑必须让状态变成 Stale（而不是 Absent）"
+        );
+        assert!(store.path().exists(), "墓碑是改文件，不是删文件");
+
+        // 撤销（用户主动关闭）才是真删。
+        store.remove().unwrap();
+        assert_eq!(store.inspect(&t).unwrap(), SealState::Absent);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn target<'a>(vault_id: &'a str, mac: &'a [u8], wkv: &'a WrappedKey) -> SealTarget<'a> {
         SealTarget {
