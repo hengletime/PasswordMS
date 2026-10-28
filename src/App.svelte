@@ -8,6 +8,7 @@
   import ConfirmDialog from './components/common/ConfirmDialog.svelte';
   import Toast from './components/common/Toast.svelte';
   import { AUTOLOCK_LOCKED_EVENT } from './lib/auto-lock-event';
+  import { APP_RESUMED_EVENT, hasTauriHost, shouldRefreshOnResume } from './lib/app-resume';
   import { session } from './lib/stores/session.svelte';
   import { settings } from './lib/stores/settings.svelte';
   import { sync } from './lib/stores/sync.svelte';
@@ -17,6 +18,7 @@
   onMount((): void => {
     void init();
     registerAutoLockListener();
+    registerResumeListener();
   });
 
   /**
@@ -34,6 +36,27 @@
       settings.reset();
       sync.reset();
       ui.setRoute('lock');
+    });
+  }
+
+  /**
+   * D-123：宿主回到前台时重查快速解锁状态（移动端唯一可靠的时机）。
+   *
+   * 安卓从系统设置切回来时 WebView 的 `document` 从未失焦，设置页挂的 `focus` 监听
+   * 不会触发，所以这件事只能由 Rust 的 `RunEvent::Resumed` 通知。
+   *
+   * 注册在根组件而不是设置页：锁屏按钮的可见性也依赖这份状态，用户在系统设置里
+   * 加了指纹再回来，锁屏那个按钮就该立刻能用/立刻消失，跟他停在哪个页面无关。
+   */
+  function registerResumeListener(): void {
+    if (!hasTauriHost()) {
+      return;
+    }
+    void listen(APP_RESUMED_EVENT, () => {
+      if (!shouldRefreshOnResume({ busy: session.busy, route: ui.route })) {
+        return;
+      }
+      void session.refreshBiometric();
     });
   }
 

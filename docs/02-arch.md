@@ -2493,3 +2493,38 @@ Tauri 的 `run_command` 经 `run_on_android_context` 把 JNI 调用**投递到�
 **撤销/失效的边界**：`minSdk 24`，API 30+ 用 `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`（auth-per-use + 限强生物识别），24–29 退 `setUserAuthenticationValidityDurationSeconds(-1)`；两档都设 `setInvalidatedByBiometricEnrollment(true)`。**不关掉它**——那正是 Android 唯一能告给我们、Windows 侧至今拿不到的失效信号（§21.4 候选 C 的等价物）。
 
 守门：`src/lib/bio-android-guard.test.ts` 21 例 + `platform/keystore_rules.rs` 5 例（纯逻辑抽到平台无关模块，桌面 `cargo test` 就能验；`android_keystore.rs` 整文件被 `cfg(target_os="android")` 门控，写在里面的测试在桌面永远跑不到）。适配器测试 8 → **13**。
+
+### 3.14.24 D-123：`RunEvent::Resumed` 驱动回前台重查（2026-10-28）
+
+**问题**：设置页本来就挂了 `window.addEventListener('focus', …)` 去重查快速解锁状态（D-114）。它在 Windows 上成立——窗口真的丢焦点（切到系统设置）又拿回来。**Android 不成立**：Activity 进后台再回前台时，WebView 里的 `document` 从未失去焦点，`focus` 事件不触发，`refreshBiometric()` 不跑，卡片停在旧值。
+
+**修法**：移动端的生命周期只有宿主知道，所以在事件循环回调里加一个分支：
+
+```rust
+app.run(|app_handle, event| match event {
+    tauri::RunEvent::Exit => { /* D-96 剪贴板兜底 */ }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    tauri::RunEvent::Resumed => {
+        use tauri::Emitter;
+        let _ = app_handle.emit(APP_RESUMED_EVENT, ());
+    }
+    _ => {}
+});
+```
+
+四条实现约束：
+
+| 约束 | 原因 |
+|---|---|
+| 分支必须 `#[cfg(any(target_os = "android", target_os = "ios"))]` | `RunEvent::Resumed` 在上游是 `#[cfg(mobile)]`（tauri 2.12.3 `app.rs`），桌面目标不加 cfg 直接编译失败 |
+| 用 `match` 而不是两个 `if let` | `RunEvent` 是 `#[non_exhaustive]` 的非 `Copy` 枚举，`match` 一次写清、也不需要为移动端分支另拼语句 |
+| 事件名走常量 `APP_RESUMED_EVENT` | 与前端 `src/lib/app-resume.ts` 是**跨语言字面值**，手写字符串就失去逐字比对保护（D-118 同类坑） |
+| 前端注册在**根组件**而非设置页 | 锁屏按钮的可见性同样依赖这份状态；用户在系统设置里加了指纹回来，锁屏那个按钮就该立刻变 |
+
+**上游行为**：Android 的 **首次 `onResume` 会被忽略**（Tauri 为对齐 iOS 语义刻意如此），所以启动时不会多出一次刷新；之后每次从系统设置/其它 Activity 回来都会收到。
+
+**前端**：`registerResumeListener()` 在 `App.svelte` 的 `onMount` 里注册，`hasTauriHost()` 判据保证 Node 测试环境不调 `listen()`；收到事件后过一遍纯函数 `shouldRefreshOnResume({ busy, route })`——正在解锁/正在开关（`busy`）时不插一脚，还在「创建保险库」向导（没有库）时不发噪音查询，其余情况 `session.refreshBiometric()`。
+
+**真正修好的场景**：①设备还没录指纹/人脸（`not_configured`）→ 去系统设置录完 → 回来卡片立刻可用；②把指纹全删了 → 回来立刻显示降级。这两件正是「去系统设置」这段引导所指向的事，之前只靠重启或重进设置页才能看到变化。
+
+守门：`bio-android-guard.test.ts` 新增 4 例（事件名逐字一致 + cfg 门 + emit 用常量 + 前端注册与判据行为），**已做变异验证**：把 Rust 侧字面量改成 `app://resume` → 立刻 1 failed。

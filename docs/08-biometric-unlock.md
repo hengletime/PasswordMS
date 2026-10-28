@@ -1497,3 +1497,70 @@ $effect(() => {
 6. 安卓提示**不许承诺「自动重查」**（§28.2.1）——同样做过变异验证。
 
 **已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，第 1 例立刻变红，还原后全绿。
+
+## 29. D-123：把「切回来会重新检测」做成真的（2026-10-28 主人拍板）
+
+### 29.1 为什么上一版删了那句话
+
+§28.2.1 记录过一次删句：`bio_manage_hint_android` 结尾的「完成后切回本窗口会自动重新检测」在真机上不成立。当时的查证结论是——**代码有，但只在 Windows 生效**：
+
+```ts
+// Settings.svelte：Windows 上完全成立，Android 上永不触发
+window.addEventListener('focus', () => { void session.refreshBiometric(); });
+```
+
+Android 是 Activity 进后台再回前台，WebView 里的 `document` **从未失去焦点**，`focus` 不触发 ⇒ 状态停在旧值。删句是对的：做不到就别承诺。
+
+### 29.2 怎么把它做成真的
+
+移动端的生命周期只有宿主知道，所以由 Rust 在事件循环回调里发通知：
+
+```rust
+#[cfg(any(target_os = "android", target_os = "ios"))]
+tauri::RunEvent::Resumed => {
+    use tauri::Emitter;
+    let _ = app_handle.emit(APP_RESUMED_EVENT, ());
+}
+```
+
+前端 `App.svelte` 常驻监听（不是设置页监听——**锁屏按钮的可见性也依赖这份状态**，用户在系统设置里录了指纹回来，锁屏那个按钮就该立刻能用）：
+
+```ts
+listen(APP_RESUMED_EVENT, () => {
+  if (!shouldRefreshOnResume({ busy: session.busy, route: ui.route })) return;
+  void session.refreshBiometric();
+});
+```
+
+**两个「不刷」的例外**（纯函数 `shouldRefreshOnResume`，可单测）：
+
+| 情形 | 为什么不刷 |
+|---|---|
+| `busy`（正在解锁 / 正在开关快速解锁） | 重查会把按钮状态与进行中的操作打架 |
+| `route === 'create'`（还没建库） | `biometric_status` 必然失败，重查纯噪音 |
+
+### 29.3 上游的一个细节
+
+`RunEvent::Resumed` 在上游是 `#[cfg(mobile)]`，而且文档写明 **Android 的首次 `onResume()` 会被忽略**（Tauri 为对齐 iOS 而刻意如此）。所以启动时不会多出一次刷新，只有真正「从别处切回来」才触发——正是我们要的语义。
+
+### 29.4 真正被修好的两个场景
+
+| 场景 | 修复前 | 修复后 |
+|---|---|---|
+| 还没录指纹/人脸 → 去系统设置录完 → 切回 | 卡片仍是「未检测到」，要重进设置页甚至重启 | 立刻变成可用 |
+| 把指纹全删了 → 切回 | 卡片仍写「已开启」 | 立刻显示降级 |
+
+### 29.5 守门与变异验证
+
+`bio-android-guard.test.ts` 新增 4 例：
+
+1. **事件名两侧逐字一致**——Rust 的 `APP_RESUMED_EVENT` 与 TS 的 `APP_RESUMED_EVENT` 必须相等，且等于运行时导入值（D-118 的教训：跨语言字面值对不上不报错，只静默失效）；
+2. Resumed 分支必须带 `target_os = "android"` / `"ios"` 的 cfg 门，且 emit 用的是常量而非手写字符串；
+3. 前端在根组件注册、`hasTauriHost()` 兜住 Node 测试环境、走 `session.refreshBiometric()` 而不另造 IPC；
+4. `shouldRefreshOnResume` 四个组合的行为。
+
+**变异验证**：把 Rust 侧字面量改成 `app://resume`（少一个 d）→ `1 failed / 37 passed`，还原后 38 全绿。
+
+### 29.6 那句文案要不要写回去
+
+**待主人拍板**。现在承诺已经成立，把句子加回去是合理的；但文案改动按规矩要你点头。加回去需要同时放宽守卫测试里的禁词（§28.2.1 那六条），不是一行的事。

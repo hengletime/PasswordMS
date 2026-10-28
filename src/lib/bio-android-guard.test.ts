@@ -17,9 +17,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { localizeBioMessageKey } from './bio-platform';
+import { APP_RESUMED_EVENT, shouldRefreshOnResume } from './app-resume';
 
 const modules = import.meta.glob(
   [
+    '../App.svelte',
     '../components/Settings.svelte',
     '../components/LockScreen.svelte',
     '../../src-tauri/gen/android/app/src/main/java/com/passwordms/app/BiometricPlugin.kt',
@@ -29,11 +31,15 @@ const modules = import.meta.glob(
     '../../src-tauri/src/platform/android_keystore.rs',
     '../../src-tauri/src/lib.rs',
     '../../crates/passwordms-core/src/biometric.rs',
+    './app-resume.ts',
     './stores/session.svelte.ts',
     './i18n/*.ts',
   ],
   { query: '?raw', import: 'default', eager: true },
 ) as Record<string, string>;
+
+const appSvelte = modules['../App.svelte'] ?? '';
+const appResumeSrc = modules['./app-resume.ts'] ?? '';
 
 const settings = modules['../components/Settings.svelte'] ?? '';
 const lockScreen = modules['../components/LockScreen.svelte'] ?? '';
@@ -493,5 +499,84 @@ describe('D-122 安卓撤掉跳转按钮，改为纯文案（主人 2026-10-28 �
         expect(line, `${name} 的安卓提示又在承诺自动重查了：${word}`).not.toContain(word);
       }
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D-123：回前台重查——把上一轮删掉的那句承诺做成真的
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('D-123 宿主回前台（RunEvent::Resumed）驱动状态重查', () => {
+  /** 取 `marker` 之后第一对引号里的内容（刻意不用正则，免得反斜杠在传递中被吞）。 */
+  function quotedAfter(src: string, marker: string): string | null {
+    const at = src.indexOf(marker);
+    if (at < 0) return null;
+    const dq = src.indexOf('"', at);
+    const sq = src.indexOf("'", at);
+    let start = -1;
+    let quote = '';
+    if (dq >= 0 && (sq < 0 || dq < sq)) {
+      start = dq;
+      quote = '"';
+    } else if (sq >= 0) {
+      start = sq;
+      quote = "'";
+    }
+    if (start < 0) return null;
+    const end = src.indexOf(quote, start + 1);
+    if (end < 0) return null;
+    return src.slice(start + 1, end);
+  }
+
+  it('事件名两侧逐字一致（跨语言字面值，写错不报错只静默失效）', () => {
+    const rust = quotedAfter(libRs, 'APP_RESUMED_EVENT:');
+    expect(rust, 'lib.rs 里找不到 APP_RESUMED_EVENT 常量').not.toBeNull();
+    const ts = quotedAfter(appResumeSrc, 'APP_RESUMED_EVENT =');
+    expect(ts, 'app-resume.ts 里找不到 APP_RESUMED_EVENT 常量').not.toBeNull();
+    expect(rust).toBe(ts);
+    // 运行时导入的那份值也必须一致（防止有人改了字面量却漏改常量导出）。
+    expect(APP_RESUMED_EVENT).toBe(ts);
+  });
+
+  it('Rust 在 Resumed 分支里发事件，且该分支只编进移动端', () => {
+    const code = codeOnly(libRs);
+    const iResumed = code.indexOf('RunEvent::Resumed');
+    expect(iResumed, 'lib.rs 没有处理 RunEvent::Resumed').toBeGreaterThan(-1);
+
+    // 变体只在移动端存在；桌面目标不加 cfg 会直接编译失败（这条是那条编译期约束的护栏）。
+    const before = code.slice(0, iResumed);
+    const lastCfg = before.lastIndexOf('#[cfg(');
+    expect(lastCfg, 'Resumed 分支前面没有 cfg 门').toBeGreaterThan(-1);
+    const cfgLine = before.slice(lastCfg, before.indexOf(']', lastCfg) + 1);
+    expect(cfgLine).toContain('target_os = "android"');
+    expect(cfgLine).toContain('target_os = "ios"');
+
+    // 必须 emit 那个常量，而不是手写字符串——手写就失去了上面的逐字比对保护。
+    const arm = code.slice(iResumed, code.indexOf('_ => {}', iResumed));
+    expect(arm).toContain('emit(APP_RESUMED_EVENT');
+    expect(arm).not.toContain('"app://resumed"');
+    expect(arm, 'emit 需要 Emitter trait').toContain('use tauri::Emitter');
+  });
+
+  it('前端在根组件注册监听（锁屏按钮也靠它），并只在 Tauri 宿主里注册', () => {
+    const code = codeOnly(appSvelte);
+    expect(code).toContain('registerResumeListener()');
+    expect(code).toContain('listen(APP_RESUMED_EVENT');
+    // 无宿主时 listen() 会抛错；Node 测试环境必须跳过。
+    expect(code).toContain('hasTauriHost()');
+    // 重查走 store 的既有入口，不许自己再造一条 IPC。
+    expect(code).toContain('session.refreshBiometric()');
+    expect(code, 'App.svelte 不许直接调 biometric_status').not.toContain('biometricStatus');
+    // busy 时不插一脚：否则会把进行中的解锁/开关状态搅乱。
+    expect(code).toContain('shouldRefreshOnResume(');
+  });
+
+  it('该不该重查：busy / 创建向导两个例外', () => {
+    expect(shouldRefreshOnResume({ busy: false, route: 'lock' })).toBe(true);
+    expect(shouldRefreshOnResume({ busy: false, route: 'main' })).toBe(true);
+    // 正在解锁或正在开关快速解锁——重查会把按钮状态与进行中的操作打架。
+    expect(shouldRefreshOnResume({ busy: true, route: 'lock' })).toBe(false);
+    // 还没建库，`biometric_status` 必然失败，重查纯噪音。
+    expect(shouldRefreshOnResume({ busy: false, route: 'create' })).toBe(false);
   });
 });

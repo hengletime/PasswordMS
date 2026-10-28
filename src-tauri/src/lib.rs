@@ -21,6 +21,17 @@ use tauri::Manager as _;
 #[cfg(target_os = "android")]
 pub struct BiometricHandle(pub tauri::plugin::PluginHandle<tauri::Wry>);
 
+/// 「宿主把我叫回前台了」的事件名（D-123）。
+///
+/// 只在移动端有意义：桌面窗口真的丢焦点又拿回来时，前端自己的 `focus` 事件就够了；
+/// 而安卓从系统设置切回来时 WebView 里的 `document` 从未失焦，`focus` 不会触发，
+/// 只有 `RunEvent::Resumed` 知道这件事。
+///
+/// **与 `src/lib/app-resume.ts` 的 `APP_RESUMED_EVENT` 是跨语言字面值**：两边写成
+/// 不一样也不会有任何报错，只会静默失效（D-118 就是同一类）。守卫测试逐字比对。
+#[cfg(any(target_os = "android", target_os = "ios"))]
+pub const APP_RESUMED_EVENT: &str = "app://resumed";
+
 /// 快速解锁的 Kotlin 插件（Android 专用；其它平台是个空壳，`setup` 里什么都不注册）。
 ///
 /// 为什么必须走 Tauri 插件机制：Rust 要调 Kotlin 只有两条路——直连 JNI（得自己管
@@ -149,8 +160,8 @@ pub fn run() {
     // 在事件循环结束时同步触发，是最后一个清理窗口。
     match result {
         Ok(app) => {
-            app.run(|app_handle, event| {
-                if let tauri::RunEvent::Exit = event {
+            app.run(|app_handle, event| match event {
+                tauri::RunEvent::Exit => {
                     if let Some(state) = app_handle.try_state::<AppState>() {
                         // 刻意走 `system_cmd::` 短路径而非 `commands::system_cmd::` 全路径：
                         // ipc-contract 契约测试以 `commands::<module>::<fn>` 提取
@@ -159,6 +170,20 @@ pub fn run() {
                         let _ = system_cmd::clear_owned_clipboard(app_handle, state.inner());
                     }
                 }
+                // 【D-123】回前台通知：安卓/iOS 从系统设置切回来时，WebView 里的
+                // `document` **从未失去焦点**，前端挂的 `window.addEventListener('focus', …)`
+                // 不会触发 ⇒ 快速解锁状态停在旧值（真机上表现为「去设置了，回来没变化」）。
+                // 移动端的生命周期由宿主掌控，`RunEvent::Resumed` 是唯一可靠的「我回来了」。
+                //
+                // 这个变体只在移动端存在，桌面目标必须 cfg 掉，否则编译报「没有这个变体」。
+                // 事件名与前端 `src/lib/app-resume.ts` 的 `APP_RESUMED_EVENT` 是**跨语言
+                // 字面值**（D-118 的教训：对不上不会报错，只会静默失效），由守卫测试逐字比对。
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                tauri::RunEvent::Resumed => {
+                    use tauri::Emitter;
+                    let _ = app_handle.emit(APP_RESUMED_EVENT, ());
+                }
+                _ => {}
             });
         }
         // 不使用 unwrap/expect：启动失败时打印并退出。
