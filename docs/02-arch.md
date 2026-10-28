@@ -2370,3 +2370,21 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
   - ③ `CSV_TEMPLATE` 常量改 `csv_template(&TemplateTexts)` 函数：表头与转义示范结构留 core（契约不变），示例文本（`import.tpl_folder` / `tpl_login_name` / `tpl_login_notes` / `tpl_note_name` / `tpl_note_body`）由前端 i18n 传入；`TemplateTexts::new` 校验文本不得含 `"` / `\n` / `\r`（防结构性损坏；serde 反序列化绕过构造器，命令层重建强制校验）；`tpl_login_notes` 各语言**必须自带半角逗号**（引号转义示范的组成部份，zh-CN 字典为保证源头）。
 - **守门**：`tests/import_template.rs` 参数化重构——中文（逐字回归基线）+ 泰文两组文本各跑全量契约（0 跳过 / 表头 == KNOWN_COLUMNS / 不溢出 custom_fields / 无 BOM + 尾换行）；`template.rs` 单测锁引号/换行注入拒绝 + 泰文 UTF-8 渲染。`resolve_conflict` 9 处测试调用点补后缀参数（`" (copy)"`）。core 34 个测试组全绿（236 例），clippy 0 告警（`ptr_arg` 一处顺手修），fmt 过；前端三门绿（vitest 364 / svelte-check 0 错 / CSS 契约 PASS）。
 - **注意**：D-112 需两端同版本升级（`resolve_conflict` 前后端签名联动）；旧版本前端调用新后端会因缺 `copy_suffix` 参数报 invalid args。
+
+#### 3.14.18 生物识别快速解锁 P1（core 旁路密封）+ D-113 审计整改（2026-10-28）
+
+- **功能定位**：1.3.0 首个功能。**旁路密封**——不改密码学模型，把**同一个 VK** 用平台密钥设施另存一份到独立文件 `biometric.json`（不进容器、不进同步）。主密码链路、容器格式、同步协议、条目格式**零改动**；删掉该文件即回到只认主密码。
+- **绑定熵**（`S5` 安全性质的全部依据）：
+  `bind = SHA-256("passwordms/v1/biometric" ‖ 0x00 ‖ vault_id ‖ 0x00 ‖ verify_mac ‖ 0x00 ‖ len(nonce) ‖ nonce ‖ len(ct) ‖ ct)`，其中 `nonce/ct` 取自 `header.wrapped_vault_key`。平台侧把它当 DPAPI `pOptionalEntropy` / AES-GCM `AAD`。
+  **必须含 `wrapped_vault_key`**：`verify_mac` 只随主密码变，而 `adopt_vault_key`（配对加入）**换 VK 不换 `verify_mac`**；只用前者会让封印在配对后仍判「可用」却封着旧 VK（D-113 的根因）。
+- **状态机**：`SealState` 四态 `Absent / Corrupt / Ready / Stale(InvalidatedReason)`；`InvalidatedReason` 四值 `MasterPasswordChanged / VaultKeyChanged / BiometricEnrollmentChanged / Tampered`。分类靠两个域分离的 8 字节校验 `mac_check`（只覆盖 `verify_mac`）与 `wkv_check`（只覆盖 `wrapped_vault_key`）——先判 mac 再判 wkv，保证「改密」优先于「换 VK」。
+- **会话形状**：`Unlocked.kek` → `Option<Kek>`（生物路径无 KEK，不跑 Argon2）。新增 `Session::unlock_with_vault_key()`、`has_kek()`，两条路径共用 `finish_unlock()`；密码路径仍 `.map_err(|_| UnlockFailed)` 保住 A-05，生物路径错误**不折叠**。
+- **空库一律拒绝**（`NeedMasterPassword`）：空库没有任何活帧可解密，`rebuild_index` 对错 VK 是空操作 ⇒ VK 对不对无从检验。实测修复前一个全 `0xAB` 的假 VK 能「成功」打开刚建的空库。
+- **D-113 BLOCKER（已实测复现并修复）**：`adopt_vault_key` 换 VK → 旧 bind 不变 → `inspect` 仍 `Ready` → 解封交出**旧 VK** → 空库接受 → 用户新建条目用错密钥加密 → 主密码解锁时 `rebuild_index` 撞上这些帧 → `?` 失败 ⇒ **整库永久不可解锁**。复现输出：`after_adopt_inspect=Ready / unlock_succeeded old_vk=true / write_with_stale_vk=OK / password_unlock_after=FAILED ERR_UNLOCK_FAILED`。修复 = 上述 bind 纳入 `wrapped_vault_key` + 空库拒绝两条，缺一不可。
+- **如实告知的降级（审计 H-1/H-2）**：
+  ① Windows 侧开启后，保险库保护下限从「主密码」降到「Windows 账户口令」——拿到磁盘副本**且**知道账户口令者可离机解出 VK、完全绕过 Argon2（DPAPI 用户主密钥在 `%APPDATA%\Microsoft\Protect\<SID>\`，只是被口令派生的密钥加密）。Android Keystore 在 TEE，无此问题。
+  ② 「改主密码即失效」只对**应用层**成立：`change_master_password` 只重包裹不轮换 VK，旧 `biometric.json` + 旧头部仍能解出**当前** VK。**撤销的唯一动作是删除 `biometric.json`**。
+- **平台强度不对称**：Android Keystore `AUTH_BIOMETRIC_STRONG` + `InvalidatedByBiometricEnrollment` 是硬绑定（新增指纹即永久失效，PIN 顶替不了）；Windows `UserConsentVerifier` 不暴露认证方式（PIN 也算），DPAPI 只绑用户登录态 ⇒ 文案只能叫「Windows Hello 快速解锁」。
+- **守门**：`tests/biometric_wrap.rs` **27 例**（含真跑 `change_master_password` / 真跑 `adopt_vault_key` / 空库拒绝 / 损坏 / 超限 / 跨平台 / 适配器短 VK）+ `biometric.rs` 2 单测（bind 三项输入各自生效、两个校验域分离）。core **35 组 / 265 例全绿**，clippy 0（仅 D-33 windres 提示），fmt 过；前端零改动（P1 不接 UI），vitest 364 / svelte-check 0 错 / CSS 契约 PASS。
+- **P2/P3 硬约束**：①适配器必须真把 `bind` 用作 entropy/AAD（Mock 会掩盖这一点，须补适配器级 `bind1 封 → bind2 解必须失败`）；②`adopt_vault_key` / `change_master_password` 成功后命令层必须 `store.remove()`；③`DeviceBusy`/RDP/未配置**绝不**映射成 `Invalidated`（会引导删封印）；④`CRYPTPROTECT_UI_FORBIDDEN`、禁用 `CRYPTPROTECT_LOCAL_MACHINE`；⑤`CryptUnprotectData` 的 `LocalAlloc` 缓冲拷完必须 `SecureZeroMemory` + `LocalFree`；⑥IPC 返回 DTO 不得含 VK 或其派生值。
+- **文档**：方案全文 `docs/08-biometric-unlock.md`（§18 为审计逐条处置）；延后项 `docs/03-impl.md §13.10`。

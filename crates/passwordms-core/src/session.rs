@@ -198,12 +198,25 @@ impl Session {
     ///
     /// **错误不折叠**：此路径不存在「密码错 vs 数据损坏」的时序侧信道（A-05 的前提不成立），
     /// 把 IO / 内部错误说成 `UnlockFailed` 只会误导排查（`docs/08` §10）。
+    ///
+    /// **D-113（审计 B-1）**：**一帧都解不开时一律拒绝**（`NeedMasterPassword`）。没有任何帧
+    /// 被 AEAD 证实过 ⇒ 本函数拿到的 VK 对不对**无从检验**。已实测：修复前一个全 `0xAB` 的假 VK
+    /// 能「成功」打开刚建的空库，之后用户新建的条目全部用错密钥加密，主密码再也解不开。
+    /// 空库本身也没有「免密看一眼」的价值，拒绝无损失（P2 需在 UI 上不给空库显示开启入口）。
     pub fn unlock_with_vault_key(path: &Path, vault_key: VaultKey) -> CoreResult<Self> {
         if !path.exists() {
             return Err(CoreError::NoVault);
         }
         let container = Container::open(path)?;
-        Self::finish_unlock(path, container, vault_key, None)
+        let session = Self::finish_unlock(path, container, vault_key, None)?;
+        // 判据用「本次实际解密成功的帧数」而不是业务记录数——它才是「VK 已被 AEAD 证实
+        // 属于本库」的直接证据（复审 L-1）：记录数会被启动维护 `purge_expired_trash` 改变，
+        // 也会把「条目删净但仍有设备/同步状态帧」的库误判成空库。
+        if session.repo()?.decrypted_frames() == 0 {
+            // 会话在 `Drop` 时级联清零，此处直接返回错误即可。
+            return Err(CoreError::NeedMasterPassword);
+        }
+        Ok(session)
     }
 
     /// 解锁收尾（主密码路径与生物路径共用）：设备 ID、仓储打开、启动前三项维护。
@@ -330,6 +343,12 @@ impl Session {
             SessionState::Unlocked(u) => u,
             SessionState::Locked => return Err(CoreError::NotUnlocked),
         };
+        // 生物识别解锁的会话没有 KEK（`docs/08` §4.4）：配对加入需要它才能用本地 KEK
+        // 重包裹对端 VK。这里明确要求主密码，而不是 panic 或静默降级。
+        //
+        // D-113（审计 L-1）：判定顺序必须「先 KEK、后空库」——反过来会让「生物会话 + 非空库」
+        // 收到 `VkAdoptRequiresEmpty`，前端据此引导「请新建空库」而不是「请输入主密码」。
+        let kek = unlocked.kek.as_ref().ok_or(CoreError::NeedMasterPassword)?;
         let count = unlocked.repo.record_count();
         if count != 0 {
             return Err(CoreError::VkAdoptRequiresEmpty {
@@ -337,9 +356,6 @@ impl Session {
             });
         }
         let header = unlocked.repo.header().clone();
-        // 生物识别解锁的会话没有 KEK（`docs/08` §4.4）：配对加入需要它才能用本地 KEK
-        // 重包裹对端 VK。这里明确要求主密码，而不是 panic 或静默降级。
-        let kek = unlocked.kek.as_ref().ok_or(CoreError::NeedMasterPassword)?;
         let wrapped = keys::wrap_vault_key(kek, host_vk)?;
         unlocked
             .repo

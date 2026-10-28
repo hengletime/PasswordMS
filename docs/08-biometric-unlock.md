@@ -124,24 +124,49 @@ VK（32B 随机，数据加密之根）──AEAD(KEK)──▶ wrapped_vault_ke
 密封时把一段**绑定串**作为平台加密的附加输入：
 
 ```
-bind = SHA-256( "passwordms/v1/biometric" ‖ vault_id ‖ header.verify_mac )
+bind = SHA-256( "passwordms/v1/biometric" ‖ 0x00
+                ‖ len(vault_id)   ‖ vault_id
+                ‖ len(verify_mac) ‖ header.verify_mac
+                ‖ len(nonce)      ‖ wkv.nonce
+                ‖ len(ct)         ‖ wkv.ct )
 ```
+
+其中 `wkv = header.wrapped_vault_key`（VK 在 KEK 下的包裹，**公开字段**）。**四个字段全部长度前缀**
+（u32 BE），不靠分隔符——`vault_id` 与 `verify_mac` 若只用 `0x00` 分隔，`vault_id="a\0b"` 与
+`vault_id="a" + verify_mac="b\0"+M` 会编码成同一 preimage（复审 L-3）。虽然要利用它得先能任意改写
+容器头（那时封印已在攻击者手里），但一处消歧胜过留个例外给后人误用。
 
 | 平台 | 承载方式 | 效果 |
 |---|---|---|
 | Android | `Cipher.updateAAD(bind)`（AES-GCM 附加认证数据） | AAD 不符 → `AEADBadTagException` |
 | Windows | `CryptProtectData` 的 **`pOptionalEntropy`** | entropy 不符 → `ERROR_INVALID_DATA` |
 
-**由此自动获得三个性质**（不需要任何额外协调代码）：
+**为什么必须含 `wrapped_vault_key`（D-113 / 审计 B-1）**：只用 `vault_id + verify_mac` 时，
+`Session::adopt_vault_key()`（配对加入）会**换掉 VK 却保留原 `verify_mac`** ⇒ bind 不变 ⇒ 封印仍判
+「可用」，而里面封的是**换 VK 之前那个 VK**。空库没有任何活帧可解密，错 VK 也能「成功」打开，
+用户在其上新建的条目全部用错密钥加密 ⇒ **整库永久打不开**（已实测复现：`after_adopt_inspect = Ready`
+→ 写入成功 → 主密码解锁 `ERR_UNLOCK_FAILED`）。`wrapped_vault_key` 在 VK 变**或** KEK 变时必然变，
+且不含任何 secret，unlock 时能从头部直接算出——所以它同时覆盖「改主密码」与「换 VK」两种失效。
+
+**由此自动获得四个性质**（不需要任何额外协调代码）：
 
 | 事件 | 结果 |
 |---|---|
-| 用户改主密码（`verify_mac` 变） | 旁路**立即解不开** ⇒ 提示「主密码已变更，请重新开启快速解锁」 |
+| 用户改主密码（`verify_mac` 变，`wrapped_vault_key` 也变） | 旁路**立即解不开** ⇒ 提示「主密码已变更，请重新开启快速解锁」 |
+| 配对加入换 VK（`wrapped_vault_key` 变，`verify_mac` 不变） | 解不开 ⇒ 提示「保险库密钥已更新，请重新开启快速解锁」（D-113） |
 | 旁路文件被复制到另一个保险库（`vault_id` 不同） | 解不开 ⇒ 拒绝 |
 | 密文被篡改 | AEAD/DPAPI 校验失败 ⇒ 拒绝 |
 
-> 说明：`change_master_password` 成功后再**主动删除** `biometric.json`（双保险：主动清理 + 被动失效），
-> 这样用户不会看到「明明刚改过密码却弹一个奇怪的解密失败」。
+> **⚠️ 已知限制（必须如实告知，审计 H-2）**：`change_master_password` **只重包裹 VK、不轮换 VK**，
+> 所以上面的「解不开」是**应用层拒绝使用**，不是密码学撤销。攻击者手里若有改密**之前**的
+> `biometric.json` + 当时的头部（`verify_mac` 是公开字段），仍能算出旧 bind、解出那个**从未变过**的
+> VK，进而解开改密之后的新数据。因此：
+> - **撤销快速解锁的唯一动作是删除 `biometric.json`**（`SealStore::remove()`），改主密码不算；
+> - 「怀疑旁路泄露」的正确处置顺序是：先关闭快速解锁（删文件），再考虑改主密码；
+> - VK 轮换（改密时重写全库密文）登记为 1.3.x 评估项。
+>
+> `change_master_password` 成功后仍应**主动调用** `SealStore::remove()`（P2 命令层），
+> 让用户看到的是干净的「已关闭」而不是一条「解密失败」的错误提示。
 
 ### 4.4 解锁链路（生物路径）
 
@@ -287,7 +312,8 @@ Android 侧不新增 Rust 依赖（Kotlin 插件 + JNI 桥）。
 
 | # | 攻击者能力 | 结果 | 结论 |
 |---|---|---|---|
-| T1 | 拿到磁盘/备份副本（无设备、无登录态） | 旁路密文无法解密（DPAPI 用户域密钥不在磁盘 / Keystore 在 TEE） | ✅ 与现状同强度 |
+| T1 | 拿到磁盘/备份副本（无设备、**且不知道 Windows 账户口令**） | DPAPI 用户域主密钥虽然在磁盘上（`%APPDATA%\Microsoft\Protect\<SID>\`），但它被账户口令派生的密钥加密 ⇒ 解不开；Android Keystore 密钥在 TEE | ✅ 与现状同强度（前提是账户口令本身未被攻破） |
+| **T1b** | 拿到磁盘副本 **+ 知道 Windows 账户口令** | DPAPI 主密钥可离机解开 ⇒ 解出 `sealed_vk` 里的 VK ⇒ **完全绕过 Argon2(64MiB×3) 与主密码** | ⚠️ **已知降级（D-113 修正，原 §7 此处判断有误）**：Windows 用户开启快速解锁后，保险库的保护下限从「主密码」降到「Windows 账户口令」。口令复用的现实概率不低。这正是 TPM2 密封要补救的缺口，也是它该排 1.3.x 的真正理由 |
 | T2 | 拿到设备 + 知道锁屏密码（Windows） | 可调 DPAPI 解密 ⇒ 绕过 Hello | ⚠️ **已知降级**，靠开启时告知 + 建议强锁屏密码缓解 |
 | T3 | 拿到设备 + 知道锁屏密码（Android） | 仍需通过 BiometricPrompt（密钥要求每次生物认证） | ✅ 无降级 |
 | T4 | 恶意程序以本用户身份运行（Windows） | 可调 DPAPI ⇒ 绕过 Hello | ⚠️ 与 T2 同源；但该程序在内存中本就能抓已解锁会话，增量风险有限 |
@@ -319,23 +345,39 @@ Android 侧不新增 Rust 依赖（Kotlin 插件 + JNI 桥）。
 
 ## 9. 守门测试清单（实现阶段必须全绿）
 
-**A. core 层（平台无关，mock sealer，任何机器可跑）** — `tests/biometric_wrap.rs`（**已落地，13 例全绿**）
+**A. core 层（平台无关，mock sealer，任何机器可跑）** — `tests/biometric_wrap.rs`（**已落地，27 例全绿**）
 
 | # | 用例（测试函数名） | 守的是什么 |
 |---|---|---|
 | 1 | `seal_record_roundtrip`：编解码 round-trip + 解封取回 VK | 结构稳定 |
 | 2 | `foreign_vault_seal_is_absent`：`vault_id` 不匹配 → 当「未开启」 | 跨库复用（且不误报错误） |
-| 3 | `master_password_change_invalidates_seal`：`verify_mac` 变 → `Stale(MasterPasswordChanged)` | **改主密码自动失效**（本方案核心性质） |
-| 4 | `tampered_ciphertext_is_classified_as_tampered`：改密文一字节 → 判篡改（且不误判为改密） | 完整性 + 失效原因可区分 |
-| 5 | `unknown_version_is_absent`：版本号越界 → 当「未开启」，不 panic | 畸形输入 |
-| 6 | `unknown_subtype_is_absent`：`platform_subtype` 未识别 → 当「未开启」 | 前向兼容（旧版本读新 blob） |
-| 7 | `re_enable_replaces_and_leaves_no_tmp`：重复开启 → 只留新密文、**无 tmp 残留** | 幂等 |
-| 8 | `failed_enable_keeps_previous_seal`：开启失败 → 既有封印**字节不变**且仍可用 | 失败不动旧文件（§4.7） |
-| 9 | `password_unlock_is_unaffected_without_seal`：无旁路文件时主密码解锁照旧 | 回归（老用户零影响） |
-| 10 | `sealed_session_needs_master_password_for_adoption`：`kek=None` + `has_kek()=false` → `NeedMasterPassword` | 会话形状变更（§4.6） |
-| 11 | `canceled_prompt_is_reported_as_canceled`：取消 → `ERR_BIOMETRIC_CANCELED`（**非** `UNLOCK_FAILED`） | 静默降级可判别 |
-| 12 | `platform_invalidation_maps_to_enrollment_change`：平台密钥失效 → `..._enrollment` 文案 | 指纹变更可区分 |
-| 13 | `unavailable_platform_is_not_treated_as_invalidated`：平台不可用 → 不可用错误，且**拒绝开启** | 不误判失效、不产「当场用不了」的死封印 |
+| 3 | `master_password_change_invalidates_seal`：`verify_mac` 变 → `Stale(MasterPasswordChanged)` | 改主密码失效（合成头部，锁绑定熵语义） |
+| 4 | `real_password_change_invalidates_seal`：**真跑** `Session::change_master_password` → 封印失效 | 「改密必失效」的端到端断言（D-113：原用例只用合成常量，从没跑过真改密） |
+| 5 | `adoption_invalidates_seal`：**真跑** `adopt_vault_key` → `Stale(VaultKeyChanged)` + 解封被拒 | **审计 B-1 的直接回归守门**：防「封印交出旧 VK 把库锁死」 |
+| 6 | `tampered_ciphertext_is_classified_as_tampered`：改密文一字节 → 判篡改（且不误判为改密） | 完整性 + 失效原因可区分 |
+| 7 | `unknown_version_is_absent`：版本号越界 → 当「未开启」，不 panic | 畸形输入 |
+| 8 | `unknown_subtype_is_absent`：`platform_subtype` 未识别 → 当「未开启」 | 前向兼容（旧版本读新 blob） |
+| 9 | `corrupt_json_is_corrupt_not_absent`：JSON 坏掉 → `Corrupt`（**不是** `Absent`） | 损坏与「从未开启」可区分（审计 M-3） |
+| 10 | `oversized_seal_file_is_corrupt`：文件超 `SEAL_MAX_BYTES` → `Corrupt`，不整份读入 | 内存放大 / DoS（审计 M-4） |
+| 11 | `cross_platform_subtype_is_unavailable`：封印属别的平台 → `ERR_BIOMETRIC_UNAVAILABLE`（**不是**「已损坏」） | 跨平台拷目录时别误导用户去删封印（审计 M-1） |
+| 12 | `re_enable_replaces_and_leaves_no_tmp`：重复开启 → 只留新密文、**无 tmp 残留** | 幂等 |
+| 13 | `failed_enable_keeps_previous_seal`：开启失败 → 既有封印**字节不变**且仍可用 | 失败不动旧文件（§4.7） |
+| 14 | `password_unlock_is_unaffected_without_seal`：无旁路文件时主密码解锁照旧 | 回归（老用户零影响） |
+| 15 | `sealed_session_needs_master_password_for_adoption`：生物会话 + **非空库** → `NeedMasterPassword`（不是「需要空库」） | 会话形状变更 + 判定顺序（审计 L-1） |
+| 16 | `empty_vault_biometric_unlock_requires_master_password`：空库 + 任意 VK → 必须要求主密码 | **B-1 的底层成因**：空库无帧可解，VK 对错无从检验，故一律拒绝 |
+| 17 | `canceled_prompt_is_reported_as_canceled`：取消 → `ERR_BIOMETRIC_CANCELED`（**非** `UNLOCK_FAILED`） | 静默降级可判别 |
+| 18 | `platform_invalidation_maps_to_enrollment_change`：平台密钥失效 → `..._enrollment` 文案 | 指纹变更可区分 |
+| 19 | `unavailable_platform_is_not_treated_as_invalidated`：平台不可用 → 不可用错误，且**拒绝开启** | 不误判失效、不产「当场用不了」的死封印 |
+| 20 | `short_vk_from_adapter_is_rejected`：适配器返回 5 字节「VK」→ 判篡改 | 适配器缺陷不得变成「用短密钥开工」 |
+| 21 | `wrong_vk_cannot_open_nonempty_vault`：非空库 + 错 VK → **必须失败**，且主密码仍能打开全部数据 | **B-1 防线的另一半**。修复前它只靠 `rebuild_index` 的 AEAD 隐含，`?` 一旦被改成 `continue` 就复发且其余用例全绿（复审 M-2） |
+| 22 | `forged_checks_with_stale_ciphertext_is_tampered`：伪造两个 check + 塞入旧 bind 下的密文 → `inspect` 判 Ready、`unlock` 必须判篡改 | **把「check 通过 ≠ VK 对」固化成测试**（此前只有文字论证） |
+| 23 | `seal_length_boundaries_are_corrupt`：`sealed_vk` 长 31 / 32 / 47 / 1025 → 全部 `Corrupt` | 长度白名单两端 + **32 = 明文 VK 长度必须被拒**（复审 L-5） |
+| 24 | `contradictory_platform_fields_is_corrupt`：`platform=android` 但 `platform_subtype=windows-*` → `Corrupt` | 自相矛盾 = 被改坏，不是「未开启」 |
+| 25 | `missing_fields_is_corrupt`：缺 `version` / 缺 `platform_subtype` / `version` 类型错 / 空对象 `{}` → 全部 `Corrupt` | 字段缺失不得伪装成「从未开启」（复审 L-4） |
+| 26 | `unavailable_platform_takes_priority_over_corrupt`：文件损坏 + 平台未配置 → 报 `ERR_BIOMETRIC_UNAVAILABLE` | 更基础的原因不许被「文件损坏」抢走（约束 9） |
+| 27 | `enable_rejects_short_ciphertext`：适配器输出 32 字节（= 明文长度）→ 拒绝落盘，且不留文件 | **防明文 VK 落盘**（复审 L-5 的本体） |
+
+> 另在 `biometric.rs` 内有两个单测：`bind_changes_with_every_input`（改 `verify_mac` / 换 `wrapped_vault_key` / 换 `vault_id` 都必须改变 bind）、`checks_are_short_and_domain_separated`（`mac_check` 与 `wkv_check` 域分离且各只覆盖自己的输入）。
 
 **B. 平台 e2e（真机，进 `07-e2e-checklist.md`）**
 
@@ -357,17 +399,22 @@ Android 侧不新增 Rust 依赖（Kotlin 插件 + JNI 桥）。
 
 ## 10. 错误码与 i18n
 
-| 场景 | 建议错误码 / key | 前端表现 |
+| 场景 | 错误码 / key（`message_key()`） | 前端表现 |
 |---|---|---|
-| 平台不可用/未配置 | `ERR_BIOMETRIC_UNAVAILABLE` | 设置页开关禁用 + 原因文案；解锁页不渲染按钮 |
-| 用户取消 | `ERR_BIOMETRIC_CANCELED` | **静默**回密码框 |
-| 密文失效 · 主密码已变更 | `ERR_BIOMETRIC_INVALIDATED` + `InvalidatedReason::MasterPasswordChanged` | 提示「主密码已变更，快速解锁已关闭」+ 删旁路 + 开关置关 |
-| 密文失效 · 生物特征有变更 | 同上 + `BiometricEnrollmentChanged` | 提示「生物特征有变更，已关闭快速解锁」 |
-| 密文失效 · 密文被篡改 | 同上 + `Tampered` | 提示「快速解锁配置损坏，已关闭」+ **保留 tmp** 供排查 |
-| 生物态需主密码 | `ERR_NEED_MASTER_PASSWORD` | 引导输入密码（配对入口） |
+| 平台不可用 / 未配置 / **封印属别的平台** | `ERR_BIOMETRIC_UNAVAILABLE` → `err.biometric_unavailable` | 设置页开关禁用 + 原因文案；解锁页不渲染按钮。**不得**据此删除封印（审计 M-1） |
+| 用户取消 | `ERR_BIOMETRIC_CANCELED` → `err.biometric_canceled` | **静默**回密码框（不弹红条） |
+| 失效 · 主密码已变更 | `ERR_BIOMETRIC_INVALIDATED` + `MasterPasswordChanged` → `err.bio_invalidated_password` | 提示「主密码已变更，快速解锁已关闭」+ 删旁路 + 开关置关 |
+| 失效 · **保险库密钥已更换**（配对加入） | 同上 + `VaultKeyChanged` → `err.bio_invalidated_vault_key` | 提示「保险库密钥已更新，请用主密码解锁后重新开启」。**D-113 新增**；不删也行（已不可用），但建议删 |
+| 失效 · 生物特征有变更 | 同上 + `BiometricEnrollmentChanged` → `err.bio_invalidated_enrollment` | 提示「生物特征有变更，已关闭快速解锁」 |
+| 失效 · 密文被篡改 / **封印结构损坏** | 同上 + `Tampered` → `err.bio_invalidated_tampered` | 提示「快速解锁配置损坏，已关闭」；**保留原始 `biometric.json` 不动**供排查（tmp 只在写侧产生，读侧没有，见审计 I-2） |
+| 生物态需主密码（含**空库**） | `ERR_NEED_MASTER_PASSWORD` → `err.need_master_password` | 引导输入密码（配对入口 / 空库首次使用） |
+
+> `SealState` 四态（`Absent` / `Corrupt` / `Ready` / `Stale(reason)`）让设置页能区分「从未开启」
+> 与「配置损坏」，不必把两者混成一句「未开启」（审计 M-3）。
 
 i18n 新增键（按 D-102，**四语言同加**）：`unlock.bio_button` / `settings.bio_title` / `settings.bio_on` /
-`settings.bio_off` / `bio.enable_hint`（Windows 含锁屏强度说明）/ `bio.invalidated` / `bio.unavailable` / `bio.canceled`（可空文案）。
+`settings.bio_off` / `bio.enable_hint`（Windows 含锁屏强度说明）/ `bio.invalidated` / `bio.unavailable` / `bio.canceled`（可空文案）/
+`err.bio_invalidated_password`（已有）/ `err.bio_invalidated_vault_key`（**D-113 新增**）/ `err.bio_invalidated_enrollment` / `err.bio_invalidated_tampered` / `err.need_master_password`。
 
 ---
 
@@ -375,7 +422,7 @@ i18n 新增键（按 D-102，**四语言同加**）：`unlock.bio_button` / `set
 
 | 批 | 内容 | 交付门 |
 |---|---|---|
-| **P1** ✅ **已完成（2026-10-28）** | core：`biometric.rs` + `trait VaultSealer` + §9-A 全 13 例 + `kek: Option<Kek>` 改造 + 原子写（复用 `container.rs` 范式） | core **251 例全绿**（含新增 13 集成 + 2 单测）、clippy 0、fmt 过；前端零改动 ✅ |
+| **P1** ✅ **已完成（2026-10-28，含 D-113 整改）** | core：`biometric.rs` + `trait VaultSealer` + §9-A 全 **27** 例 + `kek: Option<Kek>` 改造 + 原子写（复用 `container.rs` 范式）+ 审计整改（§18） | core **265 例全绿**（27 集成 + 2 单测）、clippy 0、fmt 过；前端零改动 ✅ |
 | **P2** | Windows adapter + 四个命令 + 设置页/解锁页 + i18n 四语言 + 三处「主密码不可丢失」文案触点 + 失效原因细分文案 | 前端三门绿；`npx tauri build` 出包；Win 真机 e2e 1-3 |
 | **P3** | Android 插件（Kotlin + 桥）+ 移动端 UI + `canAuthenticate(BIOMETRIC_STRONG)` 预检 | `build-android.sh` 双门过；Android 真机 e2e 4-6 |
 | **P4** | 文档融合（01-security-req 新节 / 02-arch §3.14.18 / 06-ui §6.24 / 07-e2e 新增）+ 两端全量回归 | 四文档同改 + e2e 8 项全勾 + v1.3.0 出包 |
@@ -483,20 +530,25 @@ i18n 新增键（按 D-102，**四语言同加**）：`unlock.bio_button` / `set
 | `crates/passwordms-core/src/session.rs` | 改 | `Unlocked.kek` → `Option<Kek>`；新增 `unlock_with_vault_key()`（生物入口）、`has_kek()`；抽出两条路径共用的 `finish_unlock()`；`adopt_vault_key()` 无 KEK 时返回 `NeedMasterPassword` |
 | `crates/passwordms-core/src/error.rs` | 改 | 新增 4 个错误码 + 4 个变体（失效原因细分三套文案） |
 | `crates/passwordms-core/src/lib.rs` | 改 | 注册 `pub mod biometric` |
-| `crates/passwordms-core/tests/biometric_wrap.rs` | **新增** | 13 例守门（§9-A） |
+| `crates/passwordms-core/tests/biometric_wrap.rs` | **新增** | 20 例守门（§9-A；D-113 后从 13 扩到 20） |
 
 ### 17.2 对外 API（P2/P3 直接接线）
 
 ```rust
-// 开启（命令层须先用主密码校验身份，再取已解锁会话的 vk / 头部字段）
-enable(&store, &sealer, &header.vault_id, &header.verify_mac, &vk[..]) -> CoreResult<SealRecord>
+// D-113 起：三个入口统一吃「封印身份」这一个结构体，杜绝把 A 库头部和 B 库容器拼在一起
+let target = SealTarget::from_header(repo.header());   // vault_id + verify_mac + wrapped_vault_key
+
+// 开启（命令层须先用主密码校验身份；vk 必须是当前会话的 repo.vault_key()，类型即 &VaultKey）
+enable(&store, &sealer, &target, &vk) -> CoreResult<SealRecord>
 // 解锁
-unlock(&store, &sealer, &header.vault_id, &header.verify_mac) -> CoreResult<VaultKey>
+unlock(&store, &sealer, &target) -> CoreResult<VaultKey>
 // 状态（设置页/解锁页渲染用）
-store.inspect(&vault_id, &verify_mac) -> CoreResult<SealState>   // Absent / Ready / Stale(reason)
-store.remove()                                                  // 关闭开关（幂等）
-sealer.availability()                                           // 每次现查，别缓存
+store.inspect(&target) -> CoreResult<SealState>   // Absent / Corrupt / Ready / Stale(reason)
+store.remove()                                    // 关闭开关（幂等）——**这是撤销的唯一动作**
+sealer.availability()                             // 每次现查，别缓存
 ```
+
+`SealStore::new(&vault_path)` 取**保险库文件路径**（清单落在同目录），与 `Repository::path()` 同口径。
 
 平台适配器只需实现 `VaultSealer` 的 4 个方法（`availability` / `subtype` / `seal` / `unseal`），
 把平台异常映射到 `SealError` 即可——**core 不感知任何平台 API**。
@@ -512,7 +564,7 @@ sealer.availability()                                           // 每次现查�
 
 ### 17.4 验证数据（实测）
 
-- `cargo test -p passwordms-core`：**35 组 / 251 例全绿，0 失败**（新增 13 集成 + 2 单测）
+- `cargo test -p passwordms-core`：**35 组 / 265 例全绿，0 失败**（D-113 首轮 20 集成 → 复审后 27 集成 + 2 单测；P1 首版为 13 + 2）
 - `cargo clippy --all --all-targets`：0 告警（仅 D-33 windres 兜底提示）
 - `cargo fmt --all`：已跑
 - 本机偶发 `rustc` 崩 `0xc0000005`，重跑即过——与代码无关，遇到先重跑再排查
@@ -524,3 +576,125 @@ sealer.availability()                                           // 每次现查�
 3. Android 插件：Keystore 生成 + `BiometricPrompt` 绑 `CryptoObject`，异常映射 `SealError::Invalidated`；
 4. 前端：解锁页按钮、设置页开关、i18n 四语言（含本次新增 4 个 `err.*` 与 §10 的 8 个 UI 键）；
 5. `change_master_password` 成功后**主动** `store.remove()`（双保险之一，另一重是绑定熵被动失效）。
+
+---
+
+## 18. 安全官独立审计与 D-113 整改（2026-10-28）
+
+> 审计对象：提交 `c0b5d9a`（P1 core 层）。方式：只读静态审计（结论均带行号）+ 复跑 `biometric_wrap`。
+> 判定：**需先修复再进入 P2** —— 1 BLOCKER / 3 HIGH / 4 MEDIUM / 5 LOW。
+
+### 18.1 BLOCKER（已修复，且已动态复现）
+
+**B-1：封印不绑定 VK 本体 ⇒ 配对加入后产生「Ready 但 VK 已过期」的活封印 ⇒ 可写入无法再打开的帧 ⇒ 整库永久不可解锁。**
+
+| 步骤 | 事实 |
+|---|---|
+| 1 | `adopt_vault_key` 换 VK，但沿用**未变的** `verify_mac` |
+| 2 | 旧 `bind` 只由 `vault_id + verify_mac` 决定 ⇒ 不变 ⇒ `inspect` 返回 `Ready` |
+| 3 | 封印里封的是**配对前**那个 VK |
+| 4 | `unlock` 解封后只校验长度，**从不校验「这个 VK 属于本库」** |
+| 5 | 空库零活帧 ⇒ `rebuild_index` 是空操作 ⇒ 错 VK 也「打开成功」 |
+| 6 | 用户新建条目 ⇒ 用过期 VK 加密 |
+| 7 | 主密码解锁 ⇒ `rebuild_index` 撞上第 6 步的帧 ⇒ `?` 直接失败 ⇒ **整库打不开** |
+
+**动态复现输出**（临时探针，跑完即删；探针本身未入库）：
+
+```
+after_enable          = Ready
+vk_changed = true,  verify_mac_changed = false
+after_adopt_inspect   = Ready                     ← 应为 Stale
+unlock_succeeded old_vk=true                      ← 交回过期 VK
+stale_vk_opens_vault  = YES
+write_with_stale_vk   = OK
+password_unlock_after = FAILED ERR_UNLOCK_FAILED  ← 砖
+```
+
+**修复（两处，缺一不可）**：
+
+1. **`bind` 纳入 `header.wrapped_vault_key`**（§4.3）：VK 变或 KEK 变它必然变，且不含 secret、unlock 时算得出。配合 `mac_check` / `wkv_check` 两个域分离的 8 字节校验，把「改主密码」与「换 VK」分成两条不同文案。
+2. **空库生物路径一律拒绝**（`Session::unlock_with_vault_key` → `NeedMasterPassword`）：空库没有帧可解密，VK 对错**无从检验**；而空库本身也没有「免密看一眼」的价值，拒绝零损失。
+
+> 被否决的两个替代方案（留档防重提）：
+> - **在封印里存 `vk_check = H(bind ‖ VK)`** —— 无效。它比对的是「解出的 VK」与「同一文件里按同一 VK 算的值」，
+>   两者天生自洽，`adopt` 之后封印会**忠实地**交还当年封进去的旧 VK，校验照样通过。
+> - **在容器头部加 `vk_tag`** —— 有效但代价大：要动 `VaultHeader` 结构，波及 create / update_header / 备份恢复 / 老库兼容。
+>   它只额外挡住「攻击者能调平台 sealer 封一个自己知道的 VK」，而这类攻击者（T4）本就能读内存拿 VK，增量近乎为零。**登记为 1.3.x 可选加固**。
+
+### 18.2 HIGH（已处理）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| H-1 | §7 的 T1 结论错误：说「DPAPI 用户域密钥不在磁盘」。它在磁盘上，只是被账户口令派生的密钥加密 | §7 已拆出 **T1b**：拿到磁盘副本 **+ 知道 Windows 账户口令** ⇒ 绕过 Argon2 与主密码 ⇒ ⚠️ 已知降级。P2 开启文案按平台分叉（`bio.enable_hint`） |
+| H-2 | 「改主密码 = 旁路失效」只对**应用层**成立：VK 不轮换，旧封印仍能解出**当前** VK | §4.3 已写明「删除 `biometric.json` 才是撤销动作，改密不算」，并给出「怀疑泄露」的正确处置顺序；VK 轮换登记 1.3.x |
+| H-3 | 13 例守的是「函数返回什么」，不是「安全性质是否还成立」：无错 VK 用例、无配对用例、改密用例只用合成常量 | §9-A 扩到 **20 例**，新增真跑 `change_master_password`、真跑 `adopt_vault_key`、空库拒绝、长度白名单、跨平台、损坏、超限 |
+
+### 18.3 MEDIUM / LOW（已修 / 登记）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| M-1 | `unlock` 不校验 `platform_subtype` 与本机 sealer 是否一致 ⇒ 跨平台拷目录被判「配置损坏」，若按文案删封印就是误删 | 已修：不符 → `ERR_BIOMETRIC_UNAVAILABLE`（本机不可用，**不是**损坏）。守门 #11 |
+| M-2 | `enable` 收 `&[u8]`，任何 32 字节都能被封；且不验证「当场能解」 | 已修签名 → `&VaultKey`（类型即约束）。**不做**往返校验：Android 上会多弹一次生物认证。改为 P2 适配器级硬性测试（§17.5） |
+| M-3 | `inspect` 把「结构损坏」与「从未开启」折叠成 `Absent` ⇒ 「配置损坏」文案做不出来 | 已修：新增 `SealState::Corrupt`，并先探 `Value` 把「未知子类型」（前向兼容 → `Absent`）与「真坏」分开 |
+| M-4 | 清单读取无大小上限 | 已修：`SEAL_MAX_BYTES = 4096` + `sealed_vk` 长度白名单；`save` 侧同限 |
+| L-1 | `SealStore` 以目录为键、保险库以文件路径为键 | 已修：`SealStore::new(&vault_path)` |
+| L-1b | `adopt_vault_key` 先判「库非空」后判「无 KEK」⇒ 生物会话点击配对提示「需要空库」 | 已修：顺序对调。守门 #15 |
+| L-2 | `save` / `remove` 无并发保护 | **P2 约束**：命令层必须串行化生物相关命令 |
+| L-4 | `SealRecord` 派生 `Debug` 会打出密文 | 已修：手写 `Debug`，只打长度与子类型 |
+| L-5 | bind 输入由调用方拆散传入 ⇒ 可能拼错库 | 已修：统一为 `SealTarget` |
+| I-1 | 测试文件头注释写「10 例」 | 已修（现为 20 例） |
+| I-2 | §10 说「Tampered → 保留 tmp」，但 tmp 是写侧产物 | 已修：改为「保留原始 `biometric.json` 不动」 |
+| I-3 | 审计未复核 clippy | 已在本轮补跑：0 告警（仅 D-33 windres 提示） |
+
+### 18.4 审计核实「没问题」的结论（留档，避免重复讨论）
+
+- `bind_check` / `mac_check` / `wkv_check` 都**不是预言机**：输入全是**明文头部**字段，攻击者自己就能算；伪造它们最多让**分类**出错，不会让 `unseal` 成功——平台侧 AAD/entropy 才是唯一裁判。
+- `vault_id` 是 `Uuid::new_v4()`（122 位 CSPRNG），不可预测；跨库防护的真正落点是平台 entropy/AAD。
+- 原子写的失败路径正确：`seal` 失败不写盘、`save` 失败旧文件逐字节不动、成功无 tmp 残留；**tmp 里只有平台密文 + 公开校验值，没有明文 VK**。
+- 密钥材料生命周期干净：`VaultSealer::unseal` 在 trait 上就强制返回 `Zeroizing<Vec<u8>>`；`unlock` 内 `raw` 出作用域即清零、`vk` 是 `Zeroizing<[u8;32]>`；`biometric.rs` 无 `Debug`/日志泄露；`CoreError` 的手写 `Debug` 只打错误码。
+- `Option<Kek>` 改造无回归：全仓 `kek` 消费点只有 `adopt_vault_key` 一处，且是 `ok_or(NeedMasterPassword)`，无 `unwrap` / 无静默跳过。
+- 生物路径「错误不折叠」合理：A-05 的时序前提在生物路径不成立；泄露的信息本地攻击者本就能自行推断。
+- core 从不自动删除封印（只有显式 `remove()`）：符合「不因瞬时不可用毁封印」。
+- `SEAL_BIND_PREFIX` 与既有 `AAD_VAULT_KEY` / `HKDF_INFO_KEK` / `AAD_VERIFY` 域分离充分，拼接处有 `0x00` 与长度前缀，无歧义。
+
+### 18.5 加固后的 P2 硬约束（新增 3 条，与 §17.5 并列）
+
+1. **适配器必须真的把 `bind` 用作 DPAPI `pOptionalEntropy` / GCM `AAD`**——core 的 20 例用的是 `MockSealer`，适配器若忽略 `bind`，core 测试**依然全绿**而失效模型当场归零。P2 必须补一条适配器级测试：`bind1 封 → bind2 解必须失败`。
+2. **`adopt_vault_key` / `change_master_password` 成功后，命令层必须 `store.remove()`**——core 的 `Session` 不持有 `SealStore`，做不到；这是「撤销」的唯一落点。
+3. **`DeviceBusy` / RDP / 未配置 绝不可映射成 `SealError::Invalidated`**——那会触发「生物特征有变更」文案并引导删封印。
+
+### 18.6 复审（对整改的二次审计，2026-10-28）
+
+> 判定：**可进入 P2**。B-1 在代码层面确实堵死，且是根因级而非补丁——没有路径能「换 VK 而 `wrapped_vault_key` 不变」。
+> 无 BLOCKER / HIGH；提出 1 MEDIUM + 7 LOW，全部在本次收掉（守门 20 → 27 例，core 258 → 265 例）。
+
+#### 已被修复的复审意见
+
+| # | 复审意见 | 处置 |
+|---|---|---|
+| M-1 | `inspect` 的 `version` 判定写在 `from_value` **之后** ⇒ 未来任何改了形状的新格式会先解析失败被归「损坏」，「未知版本 → 未开启」的契约永远走不到 | 已修：先探 `Value` 取 `version` 再反序列化。**同时把 `SEAL_VERSION` 提到 2**——本次 `bind_check` → `mac_check`+`wkv_check` 是破坏性形状变更，留 1 是自欺 |
+| M-2 | **「错 VK + 非空库必须失败」没有任何用例守着**（原 20 例里 #16 只用空库、#15 只用对 VK），全靠 `rebuild_index` 的 AEAD 隐含 | 已修：守门 #21。并注明风险——有人把 `open_frame(&frame)?` 的 `?` 改成 `continue`，B-1 立刻复发而其余用例全绿 |
+| L-1 | 空库判据 `record_count()==0` 求值在 `finish_unlock` 的三项维护**之后**，而 `purge_expired_trash` 会减少记录 ⇒ 「只剩过期回收站条目」的库会误拒一个**已被证实**的 VK | 已修：`Repository` 新增 `decrypted_frames`（`rebuild_index` 里每成功 `open_frame` 一次 +1），判据改为「一帧都没解开过」。它比业务记录数更贴近要证的事，也救回「条目删净但仍有设备/同步状态帧」的库 |
+| L-3 | `vault_id` / `verify_mac` 仍靠 `0x00` 分隔且无长度校验 ⇒ 存在同 preimage 构造（无攻击路径，但留了例外） | 已修：四个字段全部长度前缀（§4.3 公式已改） |
+| L-4 | `{}` / `null` / 缺字段被判 `Absent`（该是 `Corrupt`）；且三个 subtype 字面量是 `Subtype` serde rename 的**第二处真相**，加变体必漏且漏了静默降级 | 已修：缺失/非字符串 → `Corrupt`；子类型改用 `serde_json::from_value::<Subtype>`，字面量列表删除 |
+| L-5 | `SEAL_VK_MIN_LEN = 32` 正好等于明文 VK 长度 ⇒ **适配器若把明文 VK 原样返回，`enable` 会收下并落盘**（明文密钥落盘） | 已修：下限提到 **48**（32 明文 + 16 GCM tag），DPAPI 输出远大于此；mock 的 tag 也从 8 字节改 16 字节以守住同一个下界。守门 #23 / #27 |
+| L-7 | `metadata()` 判大小后再 `fs::read` 全量读，中间文件长大就绕过上限 | 已修：`File::open` + `take(SEAL_MAX_BYTES + 1)` 直接限量读 |
+
+#### 复审提出但**本次不做**（登记）
+
+| # | 意见 | 理由与去处 |
+|---|---|---|
+| L-2 | `enable` 无空库前置 ⇒ 在新建空库上开启会造出「`inspect`=Ready、`unlock` 必 `NeedMasterPassword`」的死封印 | **P2 UI 约束**：空库不显示开启入口。core 侧若要根治需 `enable` 拿到 `Repository`（取决于 L-6 是否做） |
+| L-6 | `enable` 的 `target` 与 `vk` 是两独立入参，仍可「A 库头 + B 库 VK」 | P2 接线时改 `enable(store, sealer, repo: &Repository)`。P1 无调用方，保持最小 API 面 |
+| — | **完全解**：容器头部加 `vk_tag = HMAC(VK, …)`，`create`/改密/adopt 三处写入，`#[serde(default)]` 兼容老库 ⇒ 空库也能验 VK、可放行生物解锁 | 1.3.x。需动 `VaultHeader`（波及 create / update_header / 备份恢复 / 老库），且只多挡「能调平台 sealer 的 T4」（其本就能读内存拿 VK） |
+| — | `biometric.json` 是固定文件名，同目录放两个保险库会互相覆盖 | 当前单一数据目录 + 单库，登记 |
+| — | `inspect` 与 `Session::unlock_with_vault_key` 各独立读盘一次（`SealTarget` 与容器未绑定） | 今天不可利用（错 VK 会被 REBUILD/帧数闸挡住），P2 建议让命令层只 `Container::open` 一次并交给接受已打开容器的入口 |
+
+#### 复审的措辞纠正（已采纳）
+
+原 §18.1 写「两条修复缺一不可」，复审指出这对**报告的那条链**不准确——任一条单独都能堵住它。正确的理由应写**两者防的泛化不同**：
+
+- **fix 1（bind 纳入 wkv）**让封印**自我失效**，覆盖所有现在与将来的换 VK 路径；
+- **fix 2（一帧未解即拒绝）**把「VK 无从检验」这一**类**从「静默砖库」变成「显式要求主密码」。
+
+即：缺 fix 1，失效靠约定（靠每个未来调用方记得删封印）；缺 fix 2，只要有任何未来代码让 `wkv` 语义变化，砖库就复发。**两者都不可删**，但理由是覆盖面而非单条链路。

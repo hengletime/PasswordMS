@@ -166,6 +166,13 @@ pub struct Repository {
     /// core 无日志设施，由命令层（`vault_cmd::unlock`）取走写入文件日志，
     /// 与 `Session::unlock` 的 `maintenance_warnings` 同通道。
     open_warnings: Vec<String>,
+    /// 【D-113】本次 `rebuild_index` **实际解密成功**的帧数。
+    ///
+    /// 它是「这个 VK 确实属于本库」的**密码学证据**：每解密一帧都过 AEAD（AAD 含
+    /// `record_type`/`record_id`），错 VK 必失败。比 [`Repository::record_count`] 更贴近
+    /// 要证明的事——后者会被启动维护（`purge_expired_trash`）改变，也会漏掉
+    /// 「条目删净但仍有设备/同步状态帧」的库。
+    decrypted_frames: usize,
 }
 
 impl Repository {
@@ -191,6 +198,7 @@ impl Repository {
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
             open_warnings: Vec::new(),
+            decrypted_frames: 0,
         })
     }
 
@@ -224,6 +232,7 @@ impl Repository {
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
             open_warnings: Vec::new(),
+            decrypted_frames: 0,
         };
         repo.rebuild_index()?;
         // 【D-96】头部计数交叉核对：`item_count`（persist_header 维护的活条目数）
@@ -329,6 +338,7 @@ impl Repository {
         self.conflicts.clear();
         self.devices.clear();
         self.sync_states.clear();
+        self.decrypted_frames = 0;
 
         // D-108（豆包审查 3.1-9）：尾部残料（<一帧头，写入中途掉电/备份截断的
         // 典型残留）不再静默——留痕进 open_warnings，与备份恢复路径的严格校验同口径。
@@ -354,6 +364,8 @@ impl Repository {
 
             // 解密并按记录类型归位。
             let pt = self.open_frame(&frame)?;
+            // 【D-113】走到这里说明这一帧的 AEAD 校验通过了 ⇒ VK 已被证实属于本库。
+            self.decrypted_frames += 1;
             match frame.record_type {
                 RECORD_TYPE_FOLDER => {
                     let folder: Folder = serde_json::from_slice(&pt)?;
@@ -2050,6 +2062,14 @@ impl Repository {
         self.items.len() + self.folders.len() + self.trash.len() + self.conflicts.len()
     }
 
+    /// 【D-113】本次打开时**实际解密成功**的帧数。
+    ///
+    /// `> 0` 等价于「当前 VK 已被 AEAD 证实属于本库」——生物路径据此判定能否放行
+    /// （`0` 表示无从验证，必须要求主密码）。它是**打开时**的快照，后续写入不影响。
+    pub fn decrypted_frames(&self) -> usize {
+        self.decrypted_frames
+    }
+
     // ===== 已配对设备与同步状态 =====
 
     /// 列出已配对设备。
@@ -2508,6 +2528,7 @@ impl Repository {
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
             open_warnings: Vec::new(),
+            decrypted_frames: 0,
         };
         // 逐帧解密归位：任何一帧解不开都会在这里暴露（这本身就是一次全量完整性校验）。
         fresh.rebuild_index()?;

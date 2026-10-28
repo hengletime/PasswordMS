@@ -249,6 +249,9 @@ impl CoreError {
                 crate::biometric::InvalidatedReason::MasterPasswordChanged => {
                     "err.bio_invalidated_password"
                 }
+                crate::biometric::InvalidatedReason::VaultKeyChanged => {
+                    "err.bio_invalidated_vault_key"
+                }
                 crate::biometric::InvalidatedReason::BiometricEnrollmentChanged => {
                     "err.bio_invalidated_enrollment"
                 }
