@@ -60,7 +60,9 @@ describe('D-114 改密回执不能只有一句「确定」', () => {
     // 用 `.pms-alert.is-success`（带底色的一条）而不是 `.pms-hint`（0.78rem 小字）。
     expect(settings).toMatch(/class="pms-alert is-success[^"]*"\s+role="status"/);
     // 三个输入框任一改动都要清掉上一条回执，避免「已修改」与「修改失败」同屏。
-    const clears = settings.match(/oninput=\{\(\) => \(pwdChanged = 'none'\)\}/g) ?? [];
+    // D-115 起失败回执也走同一处清理，故三个 `oninput` 统一调 `clearPwdReceipt`
+    // （它内部同时清 `pwdChanged` 与 `pwdErrorKey`）——计数仍是 3，语义比原来更强。
+    const clears = settings.match(/oninput=\{clearPwdReceipt\}/g) ?? [];
     expect(clears).toHaveLength(3);
   });
 });

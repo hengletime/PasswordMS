@@ -41,6 +41,8 @@ export const ErrorCode = {
   ERR_BIOMETRIC_CANCELED: 'ERR_BIOMETRIC_CANCELED',
   ERR_BIOMETRIC_INVALIDATED: 'ERR_BIOMETRIC_INVALIDATED',
   ERR_NEED_MASTER_PASSWORD: 'ERR_NEED_MASTER_PASSWORD',
+  /** D-115：已解锁会话内复核主密码失败（≠ 锁屏的 `ERR_UNLOCK_FAILED`）。 */
+  ERR_WRONG_MASTER_PASSWORD: 'ERR_WRONG_MASTER_PASSWORD',
   ERR_IO: 'ERR_IO',
   ERR_CRYPTO: 'ERR_CRYPTO',
   ERR_INTERNAL: 'ERR_INTERNAL',
@@ -87,6 +89,7 @@ const FALLBACK_MESSAGE_KEY: Record<string, string> = {
   [ErrorCode.ERR_BIOMETRIC_CANCELED]: 'err.biometric_canceled',
   [ErrorCode.ERR_BIOMETRIC_INVALIDATED]: 'err.biometric_invalidated',
   [ErrorCode.ERR_NEED_MASTER_PASSWORD]: 'err.need_master_password',
+  [ErrorCode.ERR_WRONG_MASTER_PASSWORD]: 'err.wrong_master_password',
   [ErrorCode.ERR_IO]: 'err.io',
   [ErrorCode.ERR_CRYPTO]: 'err.crypto',
   [ErrorCode.ERR_INTERNAL]: 'err.internal',

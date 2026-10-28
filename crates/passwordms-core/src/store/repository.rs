@@ -2552,17 +2552,22 @@ impl Repository {
     /// 导出保险库副本（需重新验证主密码，见 O-03）。
     pub fn export_vault(&self, dest_path: &Path, master_password: &str) -> CoreResult<()> {
         let header = self.container.header();
+        // 【D-115】失败一律 `WrongMasterPassword`：本方法只在已解锁会话里可达，
+        // 调用者已认证且手里就有库文件。「解锁失败，请重试」会让用户在导出卡片里
+        // 以为自己被锁在外面（同 `Session::verify_master_password` 的理由）。
         let mk =
-            crate::crypto::kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf)?;
+            crate::crypto::kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf)
+                .map_err(|_| CoreError::WrongMasterPassword)?;
         let kek = crate::crypto::kdf::derive_kek(&mk[..])?;
         let verify_key = crate::crypto::kdf::derive_verify_key(&mk[..])?;
-        // 复用统一解锁校验：任何失败都映射为同一错误。
+        // 复用统一解锁校验，但错误码换成已解锁会话专用的那个。
         crate::crypto::verify::unlock_check(
             &kek,
             &verify_key,
             &header.verify_mac,
             &header.wrapped_vault_key,
-        )?;
+        )
+        .map_err(|_| CoreError::WrongMasterPassword)?;
         std::fs::copy(self.container.path(), dest_path)?;
         Ok(())
     }

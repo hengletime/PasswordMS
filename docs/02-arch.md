@@ -2144,6 +2144,7 @@ graph TD
 | code | 含义 | 用户可见文案 key |
 |------|------|-----------------|
 | `ERR_UNLOCK_FAILED` | 解锁失败（**统一**，不区分密码错/数据损坏） | `err.unlock_failed` |
+| `ERR_WRONG_MASTER_PASSWORD` | **已解锁会话内**复核主密码失败（D-115：`verify_master_password` / `change_master_password` 旧密码 / `export_vault`）。与上一行**分工按调用位置**：本码只可能出现于已认证会话，故可以点名「主密码」 | `err.wrong_master_password` |
 | `ERR_NO_VAULT` | 本地无保险库 | `err.no_vault` |
 | `ERR_VAULT_EXISTS` | 保险库已存在 | `err.vault_exists` |
 | `ERR_WEAK_MASTER_PASSWORD` | 主密码过弱（< 8 位） | `err.weak_password` |
@@ -2237,7 +2238,7 @@ graph TD
 | **A-02** 改 1 条不重写全库 | §2.6 帧级原地更新 + 未变帧密文复用 | `container_roundtrip.rs` 字节差异断言 |
 | **A-03** 复制 30s 清空 | §9.3 常量 + `clipboard.ts`「仅清自有内容」 | 前端单测 + 手动 |
 | **A-04** 锁定后无残留明文 | §2.7 `Zeroizing` + `Session::Drop` | `zeroize_check.rs` + 会话复查 |
-| **A-05** 解锁失败提示统一 | §2.5 统一 `ERR_UNLOCK_FAILED` | `crypto_vectors.rs` 断言错误码一致 |
+| **A-05** 解锁失败提示统一 | §2.5 统一 `ERR_UNLOCK_FAILED`。**边界（D-115）**：该统一只约束**锁屏入口**（未认证调用者）；已解锁会话内的密码复核用 `ERR_WRONG_MASTER_PASSWORD`——调用者已认证且手里就有库文件，折叠成「解锁失败」只是把用户带偏 | `crypto_vectors.rs` 断言锁屏错误码一致；`biometric_session_api.rs` / `restore_backup.rs` 断言会话内错误码 |
 | **A-06** 一次性/过期令牌不可复用 | §3.3 `used`/`exp` + 校验 | `sync_replay.rs` |
 | **A-07** 未配对设备被拒 | §3.5 会话需 `sync_key` | `sync_replay.rs` |
 | **A-08** 重放载荷被拒 | §3.7 seq + 时间窗 + AAD | `sync_replay.rs` |
@@ -2417,3 +2418,47 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 守门：`src/lib/d114-feedback-guard.test.ts` 7 例（禁回退到 `common.ok` / 改密后必须重查 / `bioWasOn` 必须在改密前取 / 常驻结果条结构 / 三个 input 都要清回执 / `not_present` 文案禁再断言缺硬件 / 四语言 5 键齐全）。前端 vitest 371（364+7）/ svelte-check 0 错 / CSS 契约 PASS；core 270 例不变、clippy 0、fmt 过。
 
 附带修正：`--pms-success-soft` 在 4 个主题块（`:root` / 媒体查询暗色 / `data-theme='dark'` / `data-theme='light'`）**必须齐全**——CSS 契约脚本会逐键比对暗色两块的共有键，漏一个即 FAIL。
+
+### 3.14.21 D-115：错误密码文案与「已开启但不可用」的状态矛盾
+
+主人 v1.3.1 真机走查报两条，前一条是**错误码的分工错误**，后一条是**状态模型少一维**。
+
+**① 已解锁会话里的密码复核不该说「解锁失败」**
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 错误码 | `ERR_UNLOCK_FAILED` → `err.unlock_failed`「解锁失败，请重试。」 | `ERR_WRONG_MASTER_PASSWORD` → `err.wrong_master_password`「主密码错误，请重新输入。」 |
+| 覆盖点 | `Session::verify_master_password`、`Session::change_master_password`、`Repository::export_vault` | 同上三处全部改 |
+| 显示方式 | `ui.toast('error', …)`（右下角 3 秒） | 就地常驻：开启卡片显示在输入框下方（`role="alert"`）、改密卡片显示在底部结果条 |
+
+**A-05 的边界至此明确**（`§9.2` 错误码表与 A-05 行同步）：`ERR_UNLOCK_FAILED` 是**锁屏入口**（未认证调用者）的答案，要求「密码错 / 头部坏」不可区分；而这三个调用点都只在**已解锁会话**里可达——调用者已通过认证、手里就有容器文件（可自行离线逐条试），「密码对不对」对它不是新信息。继续折叠只会让用户在设置页里读到一句自己解释不通的话。
+
+**② `SealState::Ready` ≠ 平台现在可用**
+
+`biometric_status` 返回两个**独立**事实：`state`（`biometric.json` 结构完好 + bind 自洽）与 `availability`（平台现在能否弹 Hello）。Hello 被关掉时二者组合为 `ready + not_present`，旧 UI 状态行照 `state` 渲染「已开启（日期）」，与下方红字「未检测到可用的 Windows Hello」**同屏自相矛盾**（主人截图）。
+
+修法：前端派生第五种**显示态** `bioDegraded = ready && !available`，状态行改「已开启，但当前不可用（{date}）」（warning 色，`.bio-state.is-warn`），并补一句 `bio_degraded_hint` 说明「关闭期间一次也用不了 / 重新开通自动恢复 / 撤销请点关闭」。**后端 DTO 不变**（不加字段、不加枚举值），因为这是纯展示层的组合推导，不该在 wire 上多一份真相。
+
+**安全结论（回答主人提问「这里是否有安全风险」）**：无新增可利用面。
+
+- Hello 关闭期间 `biometric::unlock` **先查 `availability`** 即返回 `BiometricUnavailable`（`biometric.rs:527`），一次都进不去 —— 不存在「退回只靠 DPAPI」的窗口。
+- 闸门每次都重新验证，**不缓存**；重新开通 Hello 后能用，是因为 DPAPI 主密钥与 `bind` 都没变，封印本就完好，而不是绕过了什么。
+- 能开关 Hello 的人必须掌握该 Windows 账户凭据，而按 §7 T1b，DPAPI 用户域主密钥的磁盘副本正是被账户凭据派生的密钥加密 —— 该攻击者本来就能直接解开 `biometric.json`。**不是能力提升**。
+- 真实缺口是**检测**：Windows 侧没有 Android `KeyPermanentlyInvalidatedException` 那样的「生物特征集变更」信号，PIN 重置 / 重新录入不会让我们判 `Stale`。登记为 P3 候选（`KeyCredentialManager` NGC 绑定），见 `docs/08` §21.4。
+
+守门：`src/lib/d115-bio-state-guard.test.ts` 7 例；core `biometric_session_api.rs`（2 处断言改 `WrongMasterPassword`）、`d108_session_unlock.rs`（改密旧密码）、`restore_backup.rs` 新增 1 例（导出错密码 + 不落半个备份文件）。前端 vitest 371 → **378**，core 270 → **271**。
+
+### 3.14.22 D-116：`Availability` 拆出 `NotImplemented`（未实现 ≠ 不支持）
+
+安卓 v1.3.1 的设置页出现「Windows Hello 快速解锁 · 未开启 · 当前平台不支持」。根因是 **`Availability::Unsupported` 一词双义**：
+
+| 语义 | 谁产生 | 用户该看到什么 |
+|---|---|---|
+| 有适配器、但平台此刻做不了（WinRT 激活失败 / 系统被裁剪 / RDP 中断） | Windows 适配器 | **必须可见地**说清楚，否则等于藏故障 |
+| 本平台**根本没有适配器**（Android 的 Keystore 属 P3） | `UnsupportedSealer` | **整块不渲染**——为不存在的功能做广告是错的，理由也不成立 |
+
+修法：`Availability` 增加 `NotImplemented`；`UnsupportedSealer` 三个方法全部改报它；`availability_name()` 增加 `"not_implemented"`；前端在有该值时**整卡不渲染**（`bio === null` 同样不渲染）。
+
+影响面：`enable` / `unlock` 的判定是 `availability != Available`，两个变体的**行为完全相同**，因此这是纯分类/展示改动，密码学零风险。`Unsupported` 的 wire 值 `"unsupported"` **保持不变**（老分支仍能命中），只是文案改口径为「Windows Hello 组件在当前系统上无法调用」。
+
+守门：`src/lib/d116-platform-gate.test.ts` 4 例（含「禁止改成显示但置灰」的反向断言）。前端 vitest 378 → **382**。

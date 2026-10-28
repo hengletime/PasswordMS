@@ -63,7 +63,12 @@ fn seed_vault(tag: &str) -> (PathBuf, [u8; 32]) {
 
 // ───────────────────────── verify_master_password ─────────────────────────
 
-/// 正确主密码通过；错误主密码 → `UnlockFailed`（不泄露「密码错 vs 头部坏」）。
+/// 正确主密码通过；错误主密码 → `WrongMasterPassword`（D-115）。
+///
+/// 为什么这里**不该**是 `UnlockFailed`：A-05 的「不区分原因」是给**锁屏入口**定的，
+/// 防止未认证调用者拿错误码当探测器。本 API 只在已解锁会话里可用，调用者已认证、
+/// 且手里就有容器文件（可以自己离线试）——「密码对不对」不是它能拿到的额外信息，
+/// 而对用户来说「解锁失败，请重试」在设置页里完全说不通。
 #[test]
 fn verify_master_password_checks_the_password() {
     let path = vault_file("verify");
@@ -71,8 +76,8 @@ fn verify_master_password_checks_the_password() {
 
     session.verify_master_password(PW).expect("正确密码应通过");
     match session.verify_master_password(WRONG) {
-        Err(CoreError::UnlockFailed) => {}
-        other => panic!("错误密码应为 UnlockFailed，实际 {other:?}"),
+        Err(CoreError::WrongMasterPassword) => {}
+        other => panic!("错误密码应为 WrongMasterPassword，实际 {other:?}"),
     }
     // 校验不得改变会话状态：仍然解锁、仍然持有 KEK。
     assert!(session.is_unlocked());
@@ -107,8 +112,8 @@ fn verify_master_password_works_on_biometric_session() {
         .verify_master_password(PW)
         .expect("生物会话必须能校验主密码");
     match session.verify_master_password(WRONG) {
-        Err(CoreError::UnlockFailed) => {}
-        other => panic!("错误密码应为 UnlockFailed，实际 {other:?}"),
+        Err(CoreError::WrongMasterPassword) => {}
+        other => panic!("错误密码应为 WrongMasterPassword，实际 {other:?}"),
     }
 }
 

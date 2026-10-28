@@ -116,13 +116,14 @@ fn change_master_password_flow() {
     let path = dir.join("passwordms.vault");
     let mut session = Session::create(&path, PWD, true).unwrap();
 
-    // 旧密码错误 → UnlockFailed，密钥材料不变。
+    // 旧密码错误 → WrongMasterPassword（D-115：已解锁会话里不再回「解锁失败」），
+    // 密钥材料不变。
     let err = session
         .change_master_password("not-the-old-pw", PWD2)
         .unwrap_err();
     assert!(
-        matches!(err, CoreError::UnlockFailed),
-        "旧密码错误应报 UnlockFailed，实际 = {err:?}"
+        matches!(err, CoreError::WrongMasterPassword),
+        "旧密码错误应报 WrongMasterPassword，实际 = {err:?}"
     );
 
     // 正确改密 → 锁定后旧密码必败、新密码必成。

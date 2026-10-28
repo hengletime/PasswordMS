@@ -841,3 +841,148 @@ P2 出包后主人真机 e2e，第 1–4 步全过，报出三条体验问题。
 
 - **`bio_avail_disabled_by_policy` 不给「打开设置」按钮**：策略级禁用在企业管控场景下改不动，给了也是假出口。
 - **Android 侧的等价跳转**（系统生物识别设置页）随 P3 的 Keystore 适配器一起做。
+
+---
+
+## 21. D-115：真机走查第二轮（错误密码文案 + 「已开启但不可用」）
+
+主人 v1.3.1 装机后走查，报两条。第一条是**错误码分工错误**，第二条既是**状态显示的自我矛盾**，也是一个好问题：「我只把 Windows Hello 关了又打开，快速解锁就恢复了，这算安全风险吗？」
+
+### 21.1 错误主密码说成「解锁失败」
+
+`biometric_enable` 的主密码校验走 `Session::verify_master_password`，它把失败折叠成 `CoreError::UnlockFailed` ⇒ 前端 `err.unlock_failed`「解锁失败，请重试。」。人在**设置页**里，却被告知「解锁失败」，既没指出错在哪，也暗示了一件没发生的事（并没有被锁在门外）。
+
+根因是 **A-05 的适用范围被无意扩大了**：A-05 要求「解锁失败不区分密码错 / 数据损坏」，防的是**锁屏入口**被当作 oracle。而 `verify_master_password` 只在**已解锁会话**里可达——调用者已经认证过，手里还握着 VK 和容器文件（完全可自行离线逐条试密码）。对这样的调用者隐藏「密码对不对」，收益为零，代价是用户看不懂提示。
+
+修法：新增 `CoreError::WrongMasterPassword` / `ERR_WRONG_MASTER_PASSWORD` / `err.wrong_master_password`（四语言），**只**用于三个已解锁会话内的复核点：
+
+| 调用点 | 用途 |
+|---|---|
+| `Session::verify_master_password` | 开启快速解锁前证明知道主密码 |
+| `Session::change_master_password` | 改密时校验旧密码 |
+| `Repository::export_vault` | 导出加密副本时校验当前主密码 |
+
+**锁屏入口（`Session::unlock` / `unlock_with_opened_container`）完全不动**，仍是 `UnlockFailed` + burn-KDF 耗时均衡（`timing_sidechannel.rs` 守着）。
+
+显示位置也一并改：开启卡片显示在**输入框下方**（`role="alert"`，输入即清），改密卡片显示在底部结果条——D-114 定的「常驻回执」对**失败**同样成立，不能成功留 10 分钟、失败只闪 3 秒。
+
+### 21.2 「已开启」与「不可用」同屏打架
+
+`biometric_status` 返回两个独立事实：
+
+- `state = ready`：`biometric.json` 结构完好、`mac_check` / `wkv_check` 都自洽 ⇒ **封印本身没坏**；
+- `availability = not_present`：平台现在弹不出 Hello ⇒ **此刻用不了**。
+
+Hello 被关掉时两者同时成立，旧状态行只看 `state`，于是「已开启（2026/10/28）」与红字「未检测到可用的 Windows Hello」并排出现（主人截图就是这个组合）。
+
+修法：**前端派生第五种显示态**，不改 DTO：
+
+```
+bioDegraded = (state === 'ready') && (availability !== 'available')
+  → 状态行「已开启，但当前不可用（{date}）」＋ warning 色
+  → 追加 bio_degraded_hint：「关闭期间一次也用不了 / 重新开通自动恢复 /
+     已保存的配置不会被删除、不需要重输主密码 / 要彻底撤销请点『关闭』」
+```
+
+为什么不把它做成 core 的第五个 `SealState`：`SealState` 描述的是**文件**，`availability` 描述的是**平台**；把平台信息塞进文件状态会让同一份文件在不同时刻有不同 `state`，`inspect` 的纯函数性就没了（也就没法在锁屏/设置页之外复用）。二者本来就是两个维度，展示层组合即可。
+
+### 21.3 回答「关掉 Hello 再打开，快速解锁还能用，有风险吗？」
+
+**结论：没有新增可利用面。** 四条依据，都能在代码/文档里指到：
+
+1. **关闭期间根本进不去**：`biometric::unlock` 第一件事就是查 `availability`，非 `Available` 直接 `BiometricUnavailable`（`crates/passwordms-core/src/biometric.rs:527`）。不存在「Hello 关了，退化成只靠 DPAPI」这种降级窗口。
+2. **闸门不缓存、每次解锁都重新验**：能恢复不是「绕过了 Hello」，而是 Hello 回来了、闸门照常工作。封印本身（DPAPI 密文 + `bind`）从头到尾没变，所以「不需要重输主密码」是正确行为——它不是一条需要定期刷新授权的凭据，而是**一把锁**。
+3. **能开关 Hello 的人等于已掌握 Windows 账户凭据**，而按 §7 T1b，DPAPI 用户域主密钥的磁盘副本正是被账户凭据派生的密钥加密 —— 这个人本来就能直接解密 `biometric.json`，我们拦不住也不该假装拦得住。**不是能力提升。**
+4. **撤销的唯一动作是删除 `biometric.json`**（UI 上的「关闭」），这是 H-2 定的语义，与 Hello 配置无关。
+
+**真实的缺口是「检测」而不是「拦截」**：Windows 没有 Android `KeyPermanentlyInvalidatedException` 那样的信号，所以「PIN 被重置 / 生物特征被重新录入」这类事件我们判不出来（Android 侧会落到 `Stale(BiometricEnrollmentChanged)`）。这条不是本轮能补的，见 21.4。
+
+### 21.4 登记（未做，需要主人拍板）
+
+| 选项 | 做法 | 代价 / 风险 |
+|---|---|---|
+| **A（现行）** | 只修显示与文案，说清「Hello 变更不撤销 / 撤销靠关闭」 | 零密码学改动；用户需理解「撤销=关闭」 |
+| **B** | 记录开启时的 Hello 可用性，`available → not_present` 时降级为「需重输主密码才能恢复」 | 贴合「我关掉=撤销」直觉，但**安全收益接近零**（见 21.3-3），且临时性不可用（策略/驱动/远程会话）会逼用户重输 |
+| **C** | 用 `KeyCredentialManager`（NGC 密钥）做真绑定：PIN 重置 / 重新录入 ⇒ 取密钥失败 ⇒ 我们能判 `Stale` | Windows 侧首次拥有真信号；但**未打包 Win32 应用**调用 `RequestCreateAsync` 可能因无包标识失败，需先在真机做可行性探针；封印格式要再升版本；量级属 P3 |
+
+建议：本轮走 **A**，把 C 作为 P3（与 Android Keystore 适配器同批）先做可行性探针再定。
+
+### 21.5 守门与门禁（实测）
+
+| 门 | 结果 |
+|---|---|
+| `src/lib/d115-bio-state-guard.test.ts` | **7 例全绿**（错误码映射 / 就地提示 / 改密常驻 / 四语言 3 键 / 降级态判定顺序 / 文案含「撤销请点关闭」与「一次也用不了」/ `{date}` 占位） |
+| `cargo test -p passwordms-core` | **271 passed / 0 failed**（含新增 `export_with_wrong_password_reports_wrong_master_password`） |
+| `npm run test` | **378 passed**（371 + 7） |
+| `npm run check` | 0 error / 0 warning |
+| `check-css-contract.mjs` | PASS（0 FAIL / 6 WARN，与改造前同） |
+
+### 21.6 顺带修掉的一处同类问题
+
+`Repository::export_vault` 的密码错原本也是 `UnlockFailed`。主人没报，但它与 21.1 是**同一类**（已解锁会话内的复核），一并改。这是 D-51 那条「导出必须输入当前主密码」的收尾——那条只补了输入框，没补文案。
+
+---
+
+## 22. D-116：安卓上不该出现「Windows Hello 快速解锁」
+
+主人装了 **v1.3.1 的 APK**，设置页「快速解锁」卡片显示：
+
+> **Windows Hello 快速解锁** &nbsp; 未开启
+> 用 Windows Hello 代替每次输入主密码…
+> **当前平台不支持快速解锁。**
+> （手机其实有指纹和人脸解锁）
+
+两个缺陷叠在同一张卡片上，而且第二句的理由是**假的**。
+
+### 22.1 两个缺陷
+
+| # | 现象 | 根因 |
+|---|---|---|
+| 1 | 安卓上说「Windows Hello」 | 标题/说明/风险三处文案把 Windows 专属名词写死了；卡片在**所有平台**无条件渲染 |
+| 2 | 安卓上说「当前平台不支持」 | `UnsupportedSealer::availability()` 报 `Availability::Unsupported`，前端照实渲染 |
+
+第 2 条尤其成问题：**安卓不是「不支持」，是「我们还没做」**（Keystore 适配器属 P3）。把「尚未实现」说成「你的手机不行」，既误导又制造「本该有」的预期——而主人的手机指纹人脸都好好的。
+
+### 22.2 修法：把「没接」与「做不了」分开
+
+`Availability` 新增变体：
+
+```rust
+/// 当前平台不支持（有适配器，但平台此刻做不了：WinRT 激活失败 / 系统被裁剪）。
+Unsupported,
+/// **本平台没有适配器**（P3 未完成）。UI 应当整块不渲染。
+NotImplemented,
+```
+
+- `UnsupportedSealer`（非 Windows 占位）→ `Availability::NotImplemented`；
+- Windows 适配器的 `Err(_) => Unsupported` **保持不变**——那是真实故障，必须可见（否则等于把故障藏起来）；
+- `availability_name()` 新增 `not_implemented`；
+- 对 `enable` / `unlock` 的效果完全相同（两者都 ≠ `Available` 即拒绝），**只改分类与展示**，密码学零改动。
+
+前端：整张卡片包进 `{#if bio && bio.availability !== 'not_implemented'}`。`bio === null`（状态未读到/读失败）同样不渲染——**宁可晚一帧出现，也不谎报「未开启」**。注释里明确写了「**不要**改成显示但置灰，那是在为不存在的功能做广告」。
+
+`bio_avail_unsupported` 的文案同步改口径（四语言）：从「当前平台不支持快速解锁」改为「**Windows Hello 组件在当前系统上无法调用**，暂时不能使用快速解锁」——它现在只描述真实故障。
+
+### 22.3 为什么不是「显示 + 置灰 + 一句敬请期待」
+
+三个理由：
+
+1. **广告位**：置灰的入口会让用户反复回来找「什么时候能用」，这是产品承诺，不是信息；
+2. **无法自证**：真要显示，Android 侧文案必须换成「指纹/人脸」，而那是 P3 落地时才有的东西——现在写出来就是二次说谎；
+3. **一致性**：桌面端从未接过的功能（如 macOS 构建）也不该出现在设置页。
+
+### 22.4 P3 落地时这张卡片该长什么样（登记）
+
+- 标题/说明按平台取词：Windows =「Windows Hello 快速解锁」，Android =「指纹 / 人脸快速解锁」；
+- 风险说明重写（Android 侧的关键约束是 `AUTH_BIOMETRIC_STRONG` 硬绑定：新增指纹即永久失效，PIN 顶替不了），**不能**照搬 Windows 的「能拿到登录凭据者可绕过」；
+- 「打开系统设置」按钮指向系统生物识别设置页（`android.settings.BIOMETRIC_ENROLL`），同样走**无参数**命令；
+- 到那时 `NotImplemented` 自然消失（适配器存在即报真实可用性），前端那条 `{#if}` 不用改。
+
+### 22.5 守门与门禁
+
+| 门 | 结果 |
+|---|---|
+| `src/lib/d116-platform-gate.test.ts` | **4 例全绿**（`NotImplemented` 独立 / wire 值 `not_implemented` 且 `unsupported` 未被顺手改掉 / 卡片整块不渲染且禁止「置灰显示」写法 / 四语言 `bio_avail_unsupported` 不再声称「平台不支持」） |
+| `npm run test` | **382 passed**（378 + 4） |
+| `npm run check` / CSS 契约 | 0 错 0 警 / PASS（0 FAIL / 6 WARN） |
+| `cargo check -p passwordms-core -p passwordms --lib`（gnullvm） | 通过 |

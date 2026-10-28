@@ -321,6 +321,10 @@ export const zhCN = {
     bio_desc: '用 Windows Hello 代替每次输入主密码。密钥只在本机、本 Windows 账户下可用，不进入备份与同步。',
     bio_risk: '注意：能拿到本机 Windows 登录凭据的人可以绕过 Windows Hello。本功能的安全上限取决于该账户的锁屏强度。',
     bio_state_on: '已开启（{date}）',
+    // D-115：`state=ready` 只说明**封印文件**完好，不说明平台现在能用。Hello 被关掉时
+    // 两者会同时成立，旧文案只说「已开启」就与下面的红字自相矛盾（主人真机截图）。
+    bio_state_on_unavailable: '已开启，但当前不可用（{date}）',
+    bio_degraded_hint: 'Windows Hello 关闭或未开通期间，快速解锁一次也用不了。重新开通后会自动恢复——已保存的配置不会被删除，也不需要重输主密码；要彻底撤销请点「关闭」。',
     bio_state_off: '未开启',
     bio_state_corrupt: '配置已损坏，请关闭后重新开启。',
     bio_state_stale_password: '主密码已修改，快速解锁已失效。',
@@ -336,7 +340,10 @@ export const zhCN = {
     bio_open_settings: '打开 Windows 登录选项',
     bio_avail_disabled_by_policy: 'Windows Hello 已被系统策略禁用。',
     bio_avail_busy: 'Windows Hello 暂时被占用，请稍后重试。',
-    bio_avail_unsupported: '当前平台不支持快速解锁。',
+    // D-116：`unsupported` 现在只表示「有适配器、但平台此刻做不了」（如 Windows Hello 的
+    // 系统组件无法激活）。「本平台根本没接」已独立成 `not_implemented`，那种情况整卡不渲染，
+    // 所以这句不能再写成「当前平台不支持」——那是在为不存在的功能做解释。
+    bio_avail_unsupported: 'Windows Hello 组件在当前系统上无法调用，暂时不能使用快速解锁。',
     bio_enable: '开启',
     bio_disable: '关闭',
     bio_enable_hint: '开启前需输入主密码确认身份。',
@@ -500,6 +507,7 @@ export const zhCN = {
     startup_failed: '启动状态查询失败，请重试。',
     clipboard_clear_failed: '剪贴板自动清空失败，请手动清理。',
     unlock_failed: '解锁失败，请重试。',
+    wrong_master_password: '主密码错误，请重新输入。',
     no_vault: '未找到保险库。',
     vault_exists: '保险库已存在。',
     weak_password: '主密码强度不足。',

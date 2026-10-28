@@ -57,9 +57,26 @@
   /** 已点「开启」，正在等用户输入主密码（§4.5：开启必须证明知道主密码）。 */
   let bioAsking = $state(false);
   let bioPassword = $state('');
+  /**
+   * D-115：开启流程的失败文案，**就地**显示在输入框下方。
+   *
+   * 原先只 `ui.toast('error', …)`：主密码输错时 toast 在右下角，而用户的注意力在
+   * 输入框上；而且文案是 `err.unlock_failed`「解锁失败，请重试」——人在设置页里，
+   * 却被告知「解锁失败」，等于把「密码错了」翻译成一句听不懂的话。
+   */
+  let bioErrorKey = $state('');
   const bio = $derived(session.biometric);
   const bioAvailable = $derived(bio?.availability === 'available');
   const bioEnabled = $derived(bio?.state === 'ready');
+  /**
+   * D-115：**已开启但平台当前不可用**（封印完好、平台不可用）。
+   *
+   * `SealState::Ready` 只说明 `biometric.json` 结构完好且 bind 自洽，**不**说明
+   * Windows Hello 现在能用。两个事实可以同时成立（主人真机截图：状态「已开启」
+   * 配红字「未检测到可用的 Windows Hello」）。状态行必须如实反映这个组合，
+   * 否则用户看到的是自相矛盾的两句话。
+   */
+  const bioDegraded = $derived(bioEnabled && bio !== null && !bioAvailable);
   let oldPassword = $state('');
   // D-51：导出保险库需要单独输入当前主密码（后端 repo.export_vault 会用它做 unlock_check 后再 copy 库文件）。
   // 旧实现误用「修改主密码」卡片的 oldPassword，而导出卡片根本没有输入框 → 空密码必报「解锁失败，请重试。」
@@ -78,6 +95,8 @@
    * 「改密前是否开着」，才能如实说出它为什么没了。
    */
   let pwdChanged = $state<'none' | 'plain' | 'bio_off'>('none');
+  /** D-115：改密失败的就地回执（与成功回执同一套清除机制）。 */
+  let pwdErrorKey = $state('');
   let importOpen = $state(false);
   // D-63：「关于」分组 —— 版本号运行时读取（禁硬编码），失败显示「—」不阻塞页面。
   let appVersion = $state<string | null>(null);
@@ -293,12 +312,14 @@
   function startEnableBiometric(): void {
     bioAsking = true;
     bioPassword = '';
+    bioErrorKey = '';
   }
 
   /** 取消开启：收起输入框并清掉刚输入的主密码（不留在内存里）。 */
   function cancelEnableBiometric(): void {
     bioAsking = false;
     bioPassword = '';
+    bioErrorKey = '';
   }
 
   /**
@@ -311,6 +332,7 @@
       return;
     }
     bioBusy = true;
+    bioErrorKey = '';
     try {
       await api.vault.biometricEnable(bioPassword);
       bioPassword = '';
@@ -319,8 +341,9 @@
       // D-114：重新开启成功 → 上面那句「快速解锁已因此关闭」就不能再挂着（已经不成立了）。
       pwdChanged = 'none';
     } catch (err) {
-      // 主密码错（ERR_UNLOCK_FAILED）/ 平台不可用 / 空库（ERR_VALIDATION）都在这里出文案。
-      ui.toast('error', toAppError(err).messageKey);
+      // D-115：主密码错（ERR_WRONG_MASTER_PASSWORD）/ 平台不可用 / 空库（ERR_VALIDATION）
+      // 全部**就地**显示在输入框下——用户的眼睛在输入框上，不在右下角。
+      bioErrorKey = toAppError(err).messageKey;
     } finally {
       bioBusy = false;
     }
@@ -379,6 +402,7 @@
     // 改密**会**在后端删掉快速解锁封印（§18.5 约束 2）。先记下改密前是否开着，
     // 成功后才能如实告诉用户「它为什么没了」（D-114）。
     const bioWasOn = bioEnabled;
+    pwdErrorKey = '';
     try {
       await api.vault.changeMasterPassword(oldPassword, newPassword);
       oldPassword = '';
@@ -395,8 +419,17 @@
     } catch (err) {
       // 失败时清掉上一次的成功回执：否则「已修改」会和「修改失败」同时在屏幕上。
       pwdChanged = 'none';
-      ui.toast('error', toAppError(err).messageKey);
+      // D-115：失败回执同样**留在原地**。同一张卡片上「成功常驻、失败只闪 3 秒」
+      // 是自相矛盾的；而「旧密码输错」正是这条流程最常见的失败。
+      // 错误码由 core 的 `WrongMasterPassword` 给出，文案不再借用「解锁失败」。
+      pwdErrorKey = toAppError(err).messageKey;
     }
+  }
+
+  /** D-115：三个密码框任一改动 → 清掉上一条回执（成功与失败都清）。 */
+  function clearPwdReceipt(): void {
+    pwdChanged = 'none';
+    pwdErrorKey = '';
   }
 
   /**
@@ -582,14 +615,24 @@
 
   <!-- D-113 P2：快速解锁（Windows Hello）。
        独立卡片而不是塞进「安全」分组：它是**立即生效的动作**，不归底部「保存」按钮管；
-       混进安全卡片会让用户以为改完要按保存才生效。 -->
+       混进安全卡片会让用户以为改完要按保存才生效。
+
+       D-116：**本平台没有适配器时整块不渲染**。安卓 v1.3.1 曾显示
+       「Windows Hello 快速解锁 · 未开启 · 当前平台不支持」——把 Windows 专属名词搬到
+       安卓，还给一个 P3 才做的功能挂了块「不支持」的牌子（主人真机实测）。
+       `bio === null` 表示状态还没读到/读失败，同样不渲染：宁可晚一帧出现，也不谎报「未开启」。
+       **不要**把这条改成「显示但置灰」——那是在为不存在的功能做广告。 -->
+  {#if bio && bio.availability !== 'not_implemented'}
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_biometric')}</h3>
     <!-- 信息行用 `.set-row.is-info`（§6.10）：窄屏堆叠只针对控件行，信息行不能拆两行。 -->
     <div class="set-row is-info">
       <span class="set-label">{ui.t('settings.bio_title')}</span>
-      <span class="bio-state">
-        {#if bioEnabled}
+      <span class="bio-state" class:is-warn={bioDegraded}>
+        {#if bioDegraded}
+          <!-- D-115：封印完好但平台不可用时，只说「已开启」会与下面的红字打架。 -->
+          {ui.t('settings.bio_state_on_unavailable', { date: bioEnabledDate() })}
+        {:else if bioEnabled}
           {ui.t('settings.bio_state_on', { date: bioEnabledDate() })}
         {:else if bio?.state === 'corrupt'}
           {ui.t('settings.bio_state_corrupt')}
@@ -612,6 +655,11 @@
           {ui.t('settings.bio_open_settings')}
         </button>
       {/if}
+      {#if bioDegraded}
+        <!-- D-115：状态行写着「已开启」而这里说「用不了」，必须解释清楚为什么，
+             以及「要彻底撤销该怎么做」——否则用户会以为关掉 Hello 就等于撤销。 -->
+        <p class="pms-hint">{ui.t('settings.bio_degraded_hint')}</p>
+      {/if}
     {/if}
 
     {#if bioAsking}
@@ -625,8 +673,14 @@
           autocomplete="current-password"
           bind:value={bioPassword}
           disabled={bioBusy}
+          oninput={() => (bioErrorKey = '')}
         />
       </div>
+      {#if bioErrorKey !== ''}
+        <!-- D-115：就地显示。主密码输错时用户的眼睛在输入框上，不在右下角；
+             而且原来的文案是「解锁失败，请重试」——人在设置页里，这话听不懂。 -->
+        <p class="pms-hint is-danger" role="alert">{ui.t(bioErrorKey)}</p>
+      {/if}
       <div class="bio-actions">
         <button
           class="pms-btn is-primary is-sm"
@@ -657,6 +711,7 @@
       </button>
     {/if}
   </div>
+  {/if}
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_health')}</h3>
@@ -744,19 +799,27 @@
     <div class="set-row">
       <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
       <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password"
-        oninput={() => (pwdChanged = 'none')} />
+        oninput={clearPwdReceipt} />
     </div>
     <div class="set-row">
       <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
       <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password"
-        oninput={() => (pwdChanged = 'none')} />
+        oninput={clearPwdReceipt} />
     </div>
     <div class="set-row">
       <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
       <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password"
-        oninput={() => (pwdChanged = 'none')} />
+        oninput={clearPwdReceipt} />
     </div>
     <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
+    {#if pwdErrorKey !== ''}
+      <!-- D-115：失败同样是常驻回执。同一张卡片上「成功留 10 分钟、失败只闪 3 秒」
+           说不通，而「旧密码输错」正是这条流程最常见的失败。 -->
+      <p class="pms-alert is-danger pwd-result" role="alert">
+        <Icon name="alert" size={16} />
+        <span>{ui.t(pwdErrorKey)}</span>
+      </p>
+    {/if}
     {#if pwdChanged !== 'none'}
       <!-- D-114：结果留在原地。toast 三秒就消失，不能作为改密这种高危操作唯一的回执；
            `role="status"` 让读屏也念出来。`bio_off` 顺带解释了「快速解锁为什么没了」。 -->
@@ -990,6 +1053,10 @@
     text-align: right;
     font-size: 0.86rem;
     color: var(--pms-text);
+  }
+  /* D-115：已开启但平台当前不可用（`SealState::Ready` + `availability != available`）。 */
+  .bio-state.is-warn {
+    color: var(--pms-warning);
   }
   .bio-actions {
     display: flex;

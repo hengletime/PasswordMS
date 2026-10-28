@@ -217,6 +217,9 @@ fn availability_name(a: Availability) -> &'static str {
         Availability::DisabledByPolicy => "disabled_by_policy",
         Availability::Busy => "busy",
         Availability::Unsupported => "unsupported",
+        // D-116：本平台没有适配器（P3 未完成）。前端据此**整块不渲染**快速解锁卡片——
+        // 与 `unsupported`（有适配器但平台做不了，必须可见）严格区分。
+        Availability::NotImplemented => "not_implemented",
     }
 }
 

@@ -57,6 +57,12 @@ pub mod codes {
     pub const ERR_BIOMETRIC_INVALIDATED: &str = "ERR_BIOMETRIC_INVALIDATED";
     /// 【1.3.0 生物识别新增】该操作需要主密码（生物解锁会话不持有 KEK）。
     pub const ERR_NEED_MASTER_PASSWORD: &str = "ERR_NEED_MASTER_PASSWORD";
+    /// 【D-115 新增】已解锁会话内复核主密码失败（开启快速解锁 / 改主密码的旧密码）。
+    ///
+    /// 与 `ERR_UNLOCK_FAILED` **分工明确**：后者只属于锁屏入口（未认证调用者，A-05 不可区分），
+    /// 本码只属于已认证会话。两者混用会让已解锁的用户看到「解锁失败，请重试」——
+    /// 明明在设置页里，却被告知「解锁失败」（主人真机走查 D-115）。
+    pub const ERR_WRONG_MASTER_PASSWORD: &str = "ERR_WRONG_MASTER_PASSWORD";
     pub const ERR_IO: &str = "ERR_IO";
     pub const ERR_CRYPTO: &str = "ERR_CRYPTO";
     pub const ERR_INTERNAL: &str = "ERR_INTERNAL";
@@ -156,6 +162,16 @@ pub enum CoreError {
     /// 【1.3.0 生物识别】该操作需要主密码：生物解锁会话不持有 KEK。
     #[error("master password required for this operation")]
     NeedMasterPassword,
+    /// 【D-115 新增】已解锁会话内复核主密码失败。
+    ///
+    /// 与 [`CoreError::UnlockFailed`] 的差别**在于调用位置而非泄露多少**：
+    /// `UnlockFailed` 是锁屏入口（未认证调用者）的答案，A-05 要求它对「密码错 / 头部坏」
+    /// 不可区分；而本变体只可能由 [`crate::session::Session::verify_master_password`] 与
+    /// [`crate::session::Session::change_master_password`] 在**已解锁会话**里返回——
+    /// 调用者已经过认证、手里还握着 VK 与容器文件，密码对不对对其不构成任何新信息
+    /// （它本来就能离线逐条试）。这种场合继续回「解锁失败，请重试」纯属把用户带偏。
+    #[error("master password does not match")]
+    WrongMasterPassword,
     #[error("io error")]
     Io(String),
     #[error("crypto operation failed")]
@@ -202,6 +218,7 @@ impl CoreError {
             CoreError::BiometricCanceled => codes::ERR_BIOMETRIC_CANCELED,
             CoreError::BiometricInvalidated(_) => codes::ERR_BIOMETRIC_INVALIDATED,
             CoreError::NeedMasterPassword => codes::ERR_NEED_MASTER_PASSWORD,
+            CoreError::WrongMasterPassword => codes::ERR_WRONG_MASTER_PASSWORD,
             CoreError::Io(_) => codes::ERR_IO,
             CoreError::Crypto(_) => codes::ERR_CRYPTO,
             CoreError::Internal(_) => codes::ERR_INTERNAL,
@@ -258,6 +275,7 @@ impl CoreError {
                 crate::biometric::InvalidatedReason::Tampered => "err.bio_invalidated_tampered",
             },
             CoreError::NeedMasterPassword => "err.need_master_password",
+            CoreError::WrongMasterPassword => "err.wrong_master_password",
             // io::Error 有两类来源：本机文件读写、TCP 同步链路（transport 的 read/write 超时、
             // 对端拒绝/断开都走 From<std::io::Error>）。按 kind 细分文案——
             // 把「网络问题」从笼统的「文件读写错误」里拆出来，避免把用户排查方向带偏（D-40 跟进）。

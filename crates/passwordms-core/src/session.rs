@@ -3,7 +3,10 @@
 //! - **主密码不落盘**：仅在内存中派生 MK → KEK，随后 MK 立即被 `Zeroizing` 清零。
 //! - **锁定即清零（A-04）**：`lock()` 将 `Session` 置为 `Locked`，旧 `Unlocked` 立即 Drop，
 //!   级联清零 KEK / VK 及所有 `Zeroizing` 缓冲。
-//! - **统一报错（A-05）**：解锁失败一律 [`CoreError::UnlockFailed`]。
+//! - **统一报错（A-05）**：**锁屏入口**的解锁失败一律 [`CoreError::UnlockFailed`]。
+//!   已解锁会话内的密码复核（`verify_master_password` / `change_master_password`）
+//!   改用 [`CoreError::WrongMasterPassword`]：调用者已认证，「密码对不对」不是秘密，
+//!   继续回「解锁失败」只会误导用户（D-115）。
 
 use std::path::{Path, PathBuf};
 
@@ -319,8 +322,12 @@ impl Session {
 
         let header = unlocked.repo.header().clone();
 
-        // 校验旧密码：派生后尝试解包，任何失败统一为 UnlockFailed。
-        let mk_old = kdf::derive_master_key(old_password, &header.kdf_salt, &header.kdf)?;
+        // 【D-115】校验旧密码：失败一律 `WrongMasterPassword`，理由同
+        // `verify_master_password`（已解锁会话，不是锁屏入口）。
+        let mk_old = match kdf::derive_master_key(old_password, &header.kdf_salt, &header.kdf) {
+            Ok(mk) => mk,
+            Err(_) => return Err(CoreError::WrongMasterPassword),
+        };
         let kek_old = kdf::derive_kek(&mk_old[..])?;
         let verify_old = kdf::derive_verify_key(&mk_old[..])?;
         drop(mk_old);
@@ -329,11 +336,12 @@ impl Session {
             &verify_old,
             &header.verify_mac,
             &header.wrapped_vault_key,
-        )?;
+        )
+        .map_err(|_| CoreError::WrongMasterPassword)?;
 
         // 与当前会话 VK 常量时间比对，确保旧密码确为当前主密码。
         if !verify::constant_time_eq(&vk_check[..], &unlocked.repo.vault_key()[..]) {
-            return Err(CoreError::UnlockFailed);
+            return Err(CoreError::WrongMasterPassword);
         }
 
         // 用新密码重新派生 KEK，仅重包裹同一个 VK。
@@ -409,24 +417,27 @@ impl Session {
         let header = unlocked.repo.header();
         let mk = match kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf) {
             Ok(mk) => mk,
-            // 头部 KDF 参数被夹取拒绝等情况：与密码错同码，不泄露头部细节。
-            Err(_) => return Err(CoreError::UnlockFailed),
+            // KDF 参数被夹取拒绝：在**已解锁**会话里不可达（能打开库就说明头部合法），
+            // 故不单列错误码——留一个会说谎的兜底不如直接归到「密码不对」（D-115）。
+            Err(_) => return Err(CoreError::WrongMasterPassword),
         };
         let kek = kdf::derive_kek(&mk[..])?;
         let verify_key = kdf::derive_verify_key(&mk[..])?;
         drop(mk);
-        // `unlock_check` 会同时校验 verify_mac 并解包 VK；任何失败统一 UnlockFailed。
+        // 【D-115】失败一律 `WrongMasterPassword`（不再借用 `UnlockFailed`）：
+        // 这里不是锁屏入口，调用者已认证且持有 VK 与容器文件，「密码对不对」不是秘密；
+        // 回「解锁失败，请重试」只会让用户在设置页里一头雾水（主人真机走查）。
         let vk = verify::unlock_check(
             &kek,
             &verify_key,
             &header.verify_mac,
             &header.wrapped_vault_key,
         )
-        .map_err(|_| CoreError::UnlockFailed)?;
+        .map_err(|_| CoreError::WrongMasterPassword)?;
         // 再与会话当前 VK 常量时间比对：确保「这个密码」对应的就是「这个库当前的 VK」
         // （头部被替换成另一个库的头时，上面的校验也可能通过）。
         if !verify::constant_time_eq(&vk[..], &unlocked.repo.vault_key()[..]) {
-            return Err(CoreError::UnlockFailed);
+            return Err(CoreError::WrongMasterPassword);
         }
         Ok(())
     }

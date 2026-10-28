@@ -265,3 +265,30 @@ fn restore_rejects_backup_with_tiny_tail_fragment() {
     let _ = std::fs::remove_file(&vault_path);
     let _ = std::fs::remove_file(&backup_path);
 }
+
+/// ④【D-115】导出时主密码输错 → `WrongMasterPassword`，不是 `UnlockFailed`。
+///
+/// 语义分界：`UnlockFailed` 是**锁屏入口**的答案（A-05：不区分「密码错 / 头部坏」）；
+/// `export_vault` 只可能在**已解锁会话**里被调用，调用者已认证、手里就有库文件，
+/// 「密码对不对」不是它能多拿到的信息。继续回「解锁失败，请重试」会让用户
+/// 在导出卡片里以为自己被锁在门外（主人真机走查 D-115）。
+#[test]
+fn export_with_wrong_password_reports_wrong_master_password() {
+    let vault_path = tmp_path("export-wrong-pw");
+    let backup_path = tmp_path("export-wrong-pw-out");
+    let session = Session::create(&vault_path, MASTER, true).expect("create");
+
+    let err = session
+        .repo()
+        .expect("repo")
+        .export_vault(&backup_path, "not-the-master-pw")
+        .expect_err("错主密码必须失败");
+    assert!(
+        matches!(err, CoreError::WrongMasterPassword),
+        "期望 WrongMasterPassword，实际 {err:?}"
+    );
+    // 失败时不得落半个备份文件。
+    assert!(!backup_path.exists(), "校验失败时不得产出备份文件");
+
+    let _ = std::fs::remove_file(&vault_path);
+}

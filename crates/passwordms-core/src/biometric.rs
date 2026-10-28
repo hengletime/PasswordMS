@@ -119,6 +119,18 @@ pub enum Availability {
     Busy,
     /// 当前平台不支持（例如非 Windows/Android 构建）。
     Unsupported,
+    /// **本平台没有适配器**（P3 未完成，或构建目标根本没有生物识别设施）。
+    ///
+    /// 与 [`Availability::Unsupported`] 的区别是**该不该让用户看见**：
+    ///
+    /// - `Unsupported` = 有适配器、但平台此刻做不了（如 Windows Hello 的 WinRT 激活失败、
+    ///   系统被裁剪）。这种情况必须**可见地**说清楚，否则等于把故障藏起来；
+    /// - `NotImplemented` = 这个平台**压根没接**。UI 应当整块不渲染——给一个还不存在的
+    ///   功能挂上「当前平台不支持」的牌子，既制造了「本该有」的预期，又用了错误的理由
+    ///   （安卓上写「Windows Hello 未开启」纯属胡说，主人真机实测 D-116）。
+    ///
+    /// 两者对 `enable` / `unlock` 的效果相同（都 ≠ `Available` 即拒绝），区别只在分类与展示。
+    NotImplemented,
 }
 
 /// 平台适配层返回的错误（由适配器映射平台异常，core 再翻译成 [`CoreError`]）。
