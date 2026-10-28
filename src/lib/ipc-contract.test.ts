@@ -268,7 +268,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（D-108 起为 58/58）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（D-113 P2 起为 62/62）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
@@ -279,7 +279,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // #531：53 → 59（record_item_usage / set_item_pin / reorder_pinned_items /
     // set_folder_pin / reorder_pinned_folders / move_item_to_folder）。
     // D-108（豆包审查 3.5-7）：删除前后端占位死命令 sync_accept_pair，59 → 58。
-    expect(total).toBe(58);
-    expect(withAttr).toBe(58);
+    // D-113 P2（docs/08 生物识别）：+4（biometric_status / _enable / _disable / _unlock），58 → 62。
+    expect(total).toBe(62);
+    expect(withAttr).toBe(62);
   });
 });

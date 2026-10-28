@@ -2388,3 +2388,17 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 - **守门**：`tests/biometric_wrap.rs` **27 例**（含真跑 `change_master_password` / 真跑 `adopt_vault_key` / 空库拒绝 / 损坏 / 超限 / 跨平台 / 适配器短 VK）+ `biometric.rs` 2 单测（bind 三项输入各自生效、两个校验域分离）。core **35 组 / 265 例全绿**，clippy 0（仅 D-33 windres 提示），fmt 过；前端零改动（P1 不接 UI），vitest 364 / svelte-check 0 错 / CSS 契约 PASS。
 - **P2/P3 硬约束**：①适配器必须真把 `bind` 用作 entropy/AAD（Mock 会掩盖这一点，须补适配器级 `bind1 封 → bind2 解必须失败`）；②`adopt_vault_key` / `change_master_password` 成功后命令层必须 `store.remove()`；③`DeviceBusy`/RDP/未配置**绝不**映射成 `Invalidated`（会引导删封印）；④`CRYPTPROTECT_UI_FORBIDDEN`、禁用 `CRYPTPROTECT_LOCAL_MACHINE`；⑤`CryptUnprotectData` 的 `LocalAlloc` 缓冲拷完必须 `SecureZeroMemory` + `LocalFree`；⑥IPC 返回 DTO 不得含 VK 或其派生值。
 - **文档**：方案全文 `docs/08-biometric-unlock.md`（§18 为审计逐条处置）；延后项 `docs/03-impl.md §13.10`。
+
+### 3.14.19 生物识别 P2：Windows 适配器 + 命令层 + 前端（D-113，2026-10-28）
+
+- **适配器两段式**（`src-tauri/src/platform/`）：DPAPI 用户域加密（`bind` 作 `pOptionalEntropy`）+ `UserConsentVerifier` 在场闸门。平台部分全部关在 `cfg(windows)` 里；非 Windows 用 `UnsupportedSealer`（恒 `Unsupported`），**Android 可正常编译**，P3 再接 Keystore。`Cargo.toml` 只在 `cfg(windows)` 下打开 `windows` 特性（版本对齐既有依赖树的 0.62.2，**不引新包**）+ `windows-future`。
+- **WinRT 线程模型**：专用 STA 线程（`CoInitializeEx(APARTMENTTHREADED)`）+ `PeekMessage` 消息泵等完成回调；Tauri 命令线程不碰 WinRT。超时 / `DeviceBusy` / 未配置一律 `Unavailable`，**绝不** `Invalidated`。
+- **核心抽象**：`platform::PresenceGate`（`availability` + `request(reason)`）把「弹框」与「加解密」拆开——真机弹框无法自动化，而「`bind` 是否真的参与加密」只有适配器自己知道。于是测试可注入「永远通过」的闸门，对**真实 DPAPI** 断言「换 `bind` 必解不开」（§18.5 约束 1）。
+- **命令层 4 条**（`commands/biometric_cmd.rs`，全部 `rename_all="snake_case"`）：`biometric_status`（锁定态可调，只读）/ `biometric_enable`（解锁态 + **主密码** + 非空库）/ `biometric_disable`（幂等删除，撤销唯一动作）/ `biometric_unlock`（`Container::open` 只一次）。命令面 58 → **62**。
+- **会话层新增两个 API**（`session.rs`）：
+  ① `verify_master_password(&self, pw)` —— 开启快速解锁的「证明你知道主密码」，**不改变会话状态**，生物会话（`kek=None`）同样可用（只用到头部 + KDF）；
+  ② `unlock_with_opened_container(path, container, vk)` —— 与 `unlock_with_vault_key` 行为等价，差别只在复用调用方已打开的容器，消掉「算 `bind` 用旧头部、建会话用新头部」的 TOCTOU 窗口。
+- **撤销点前移到命令层**：`change_master_password` 与配对 `adopt_vault_key` 成功后都必须 `SealStore::remove()`——`Session` 刻意不持有 `SealStore`，core 侧无法完成（§18.5 约束 2）。
+- **并发**：`AppState::biometric_busy`（CAS）+ RAII `BiometricGuard`；抢不到的一侧返回 `ERR_VALIDATION`，前端静默（用户正在等前一次的 Hello 弹框）。
+- **守门**：适配器 7 例（真 DPAPI 往返 / **换熵必失败** / 输出长度落在 core 白名单 48..=1024 / 取消与不可用不弹框 / subtype / 结果映射）+ 会话级 5 例（`verify_master_password` 正确-错误-锁定态-生物会话；`unlock_with_opened_container` 与路径入口等价、空库仍拒、错 VK 仍拒）。core **270 例全绿**（265 + 5），适配器 **7 例全绿**，clippy 0，fmt 过；前端 vitest **364** / svelte-check 0 错 / CSS 契约 PASS。
+- **文档**：`docs/08-biometric-unlock.md §19`（P2 落地记录与十条约束落点表）、`docs/06-ui-design.md §6.24`（解锁页按钮 + 设置页卡片 + 行类型纪律）。

@@ -1,5 +1,6 @@
 //! Tauri 命令模块汇总（架构文档 §4.5）。
 
+pub mod biometric_cmd;
 pub mod folder_cmd;
 pub mod generator_cmd;
 pub mod health_cmd;

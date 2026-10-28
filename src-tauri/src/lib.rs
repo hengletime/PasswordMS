@@ -6,6 +6,7 @@ pub mod commands;
 mod content_uri;
 pub mod dto;
 pub mod error;
+pub mod platform;
 pub mod state;
 
 use crate::commands::system_cmd;
@@ -45,6 +46,11 @@ pub fn run() {
             commands::vault_cmd::restore_backup,
             commands::vault_cmd::get_auto_lock,
             commands::vault_cmd::set_auto_lock,
+            // biometric（D-113 / docs/08 P2）
+            commands::biometric_cmd::biometric_status,
+            commands::biometric_cmd::biometric_enable,
+            commands::biometric_cmd::biometric_disable,
+            commands::biometric_cmd::biometric_unlock,
             // item
             commands::item_cmd::list_items,
             commands::item_cmd::get_item,

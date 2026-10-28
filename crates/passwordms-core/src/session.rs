@@ -208,6 +208,22 @@ impl Session {
             return Err(CoreError::NoVault);
         }
         let container = Container::open(path)?;
+        Self::unlock_with_opened_container(path, container, vault_key)
+    }
+
+    /// 同 [`Session::unlock_with_vault_key`]，但复用**调用方已打开**的容器。
+    ///
+    /// P2（`docs/08` §18.5 约束 10）：命令层必须先 `Container::open` 一次，用**同一份头部**
+    /// 算 `bind`、查封印状态，再建会话。若本函数自己再 open 一次，两次之间文件可能被替换：
+    /// 封印是按「旧头部」解开的，会话却建在「新头部」上——这正是审计要求消掉的 TOCTOU 窗口。
+    ///
+    /// 判据与 [`Session::unlock_with_vault_key`] 完全一致（一帧都解不开就拒绝），
+    /// 因为两者最终都走 [`Session::finish_unlock`]。
+    pub fn unlock_with_opened_container(
+        path: &Path,
+        container: Container,
+        vault_key: VaultKey,
+    ) -> CoreResult<Self> {
         let session = Self::finish_unlock(path, container, vault_key, None)?;
         // 判据用「本次实际解密成功的帧数」而不是业务记录数——它才是「VK 已被 AEAD 证实
         // 属于本库」的直接证据（复审 L-1）：记录数会被启动维护 `purge_expired_trash` 改变，
@@ -373,6 +389,46 @@ impl Session {
             SessionState::Unlocked(u) => u.kek.is_some(),
             SessionState::Locked => false,
         }
+    }
+
+    /// 校验「这个主密码是不是当前库的主密码」，**不改变任何状态**。
+    ///
+    /// 用途（`docs/08` §4.5）：开启快速解锁必须重新输入主密码，防「解锁后离开座位，旁人
+    /// 顺手开启一条永久免密通道」。`enable` 需要的是「身份已核实」这一事实，而不是再解锁一次。
+    ///
+    /// 语义与 [`Session::change_master_password`] 的旧密码校验一致：
+    /// - 已锁定 → [`CoreError::NotUnlocked`]；
+    /// - 密码错 → [`CoreError::UnlockFailed`]（**不区分**「密码错」与「头部损坏」，A-05）；
+    /// - 生物识别会话（`kek = None`）**照样能校验**——它只用到头部与 KDF，不依赖会话 KEK。
+    ///   这一点很重要：用户可能是用 Hello 进来的，此时仍应被要求证明自己知道主密码。
+    pub fn verify_master_password(&self, master_password: &str) -> CoreResult<()> {
+        let unlocked = match &self.state {
+            SessionState::Unlocked(u) => u,
+            SessionState::Locked => return Err(CoreError::NotUnlocked),
+        };
+        let header = unlocked.repo.header();
+        let mk = match kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf) {
+            Ok(mk) => mk,
+            // 头部 KDF 参数被夹取拒绝等情况：与密码错同码，不泄露头部细节。
+            Err(_) => return Err(CoreError::UnlockFailed),
+        };
+        let kek = kdf::derive_kek(&mk[..])?;
+        let verify_key = kdf::derive_verify_key(&mk[..])?;
+        drop(mk);
+        // `unlock_check` 会同时校验 verify_mac 并解包 VK；任何失败统一 UnlockFailed。
+        let vk = verify::unlock_check(
+            &kek,
+            &verify_key,
+            &header.verify_mac,
+            &header.wrapped_vault_key,
+        )
+        .map_err(|_| CoreError::UnlockFailed)?;
+        // 再与会话当前 VK 常量时间比对：确保「这个密码」对应的就是「这个库当前的 VK」
+        // （头部被替换成另一个库的头时，上面的校验也可能通过）。
+        if !verify::constant_time_eq(&vk[..], &unlocked.repo.vault_key()[..]) {
+            return Err(CoreError::UnlockFailed);
+        }
+        Ok(())
     }
 
     /// 当前保险库文件路径（已解锁时）。

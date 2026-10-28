@@ -698,3 +698,94 @@ password_unlock_after = FAILED ERR_UNLOCK_FAILED  ← 砖
 - **fix 2（一帧未解即拒绝）**把「VK 无从检验」这一**类**从「静默砖库」变成「显式要求主密码」。
 
 即：缺 fix 1，失效靠约定（靠每个未来调用方记得删封印）；缺 fix 2，只要有任何未来代码让 `wkv` 语义变化，砖库就复发。**两者都不可删**，但理由是覆盖面而非单条链路。
+
+---
+
+## 19. P2 落地记录（2026-10-28 · Windows 适配器 + 命令层 + 前端）
+
+> 状态：**代码 + 守门全绿，待主人拍板文案与真机 e2e**。Android 适配器属 P3（当前非 Windows 构建恒 `Unsupported`，不影响编译与主密码解锁）。
+
+### 19.1 新增 / 改动文件
+
+| 文件 | 类型 | 内容 |
+|---|---|---|
+| `src-tauri/src/platform/mod.rs` | 新 | `PresenceGate` / `PresenceReason` / `PlatformSealer` 与 `platform_sealer()` 工厂 |
+| `src-tauri/src/platform/windows_dpapi.rs` | 新 | DPAPI 密封器 + Windows Hello 闸门 + 7 例适配器守门 |
+| `src-tauri/src/platform/unsupported.rs` | 新 | 非 Windows 占位实现（恒 `Unsupported`，保证 Android 可编译） |
+| `src-tauri/src/commands/biometric_cmd.rs` | 新 | 4 个命令（status / enable / disable / unlock） |
+| `src-tauri/src/dto.rs` | 改 | `BiometricStatusDto`（**不含任何密钥材料**） |
+| `src-tauri/src/state.rs` | 改 | `biometric_busy` + `BiometricGuard`（RAII 释放） |
+| `src-tauri/src/commands/vault_cmd.rs` | 改 | 改密成功后删封印（§18.5 约束 2） |
+| `src-tauri/src/commands/sync_cmd.rs` | 改 | 采纳对端 VK 后删封印（同上） |
+| `src-tauri/src/lib.rs` | 改 | 注册 4 命令 + `pub mod platform` |
+| `src-tauri/Cargo.toml` | 改 | `cfg(windows)` 下开 `windows` 特性 + `windows-future`（版本与既有依赖树对齐，**不引新包**） |
+| `crates/passwordms-core/src/session.rs` | 改 | `verify_master_password()` + `unlock_with_opened_container()` |
+| `crates/passwordms-core/tests/biometric_session_api.rs` | 新 | 5 例会话级守门 |
+| 前端 `ipc.ts` / `types.ts` / `errors.ts` / `stores/session.svelte.ts` / `LockScreen.svelte` / `Settings.svelte` / i18n ×4 | 改 | 见 §19.5 |
+
+### 19.2 Windows 适配器：为什么是「两段式」
+
+| 段 | 手段 | 挡住什么 |
+|---|---|---|
+| 加解密 | `CryptProtectData`（**用户域**，`bind` 作 `pOptionalEntropy`） | 换机 / 换 Windows 用户 / 其它账户直接读 `biometric.json` |
+| 在场闸门 | `UserConsentVerifier`（Windows Hello） | 本机解锁态被别人顺手点开 |
+
+**只用 `CRYPTPROTECT_UI_FORBIDDEN`，绝不加 `CRYPTPROTECT_LOCAL_MACHINE`**：后者会让同机任意账户可解，把「用户域」这个前提直接丢掉（§18.5 约束 4）。
+
+**输出缓冲处理**（§18.5 约束 5）：`take_blob()` 先 `copy_nonoverlapping` 拷出 → `slice::zeroize()` 覆写系统缓冲（volatile 写 + 编译器屏障，不会被「反正马上 free」优化掉）→ `LocalFree`。失败路径也走同一条——`CryptUnprotectData` 失败时同样可能已分配缓冲。
+
+**WinRT 线程模型**：`user32` 对话框 + WinRT 要求公寓初始化，且**不能**占用 Tauri 的命令线程。实现为专用 STA 线程（`CoInitializeEx(APARTMENTTHREADED)`）+ `PeekMessage` 消息泵等待完成回调，`rx.recv_timeout` 兜底。超时（可用性 20s / 在场的 120s）一律映射成 `Unavailable(Busy)`——**绝不**映射成 `Invalidated`（§18.5 约束 3），否则会引导用户删掉一条本来好用的封印。
+
+`RetriesExhausted`（连试多次不对）归 `Canceled` 而非失效；`DeviceBusy` 归 `Unavailable(Busy)`。两条都在 `retries_exhausted_is_canceled_not_invalidated` 里钉死。
+
+### 19.3 命令层（4 条）
+
+| 命令 | 前置 | 说明 |
+|---|---|---|
+| `biometric_status` | 锁定态可调 | 只读：平台可用性 + `SealState` 分类。用 `state.session.lock()` 而非 `lock_session()`——状态轮询不算用户活动，否则自动锁定被无限推后 |
+| `biometric_enable` | 解锁态 + **主密码** | 三步：`verify_master_password` → 空库拒绝 → `enable`。封印身份与 VK **都从同一个 `repo` 取**（约束 9） |
+| `biometric_disable` | 任意 | `SealStore::remove()`，幂等。**撤销的唯一动作** |
+| `biometric_unlock` | 锁定态 | `Container::open` **只一次** → 算 `bind` → 解封 → 把同一个容器交给 `unlock_with_opened_container`（约束 10） |
+
+DTO 只有 `availability` / `state` / `reason` / `enabled_at` 四个字段，**不含 VK、不含 `sealed_vk`、不含 `bind`**（约束 6）。
+
+### 19.4 §18.5 十条硬约束的落点
+
+| # | 约束 | 落点 |
+|---|---|---|
+| 1 | 适配器真用 `bind` 作 entropy + 适配器级守门 | `dpapi_protect/unprotect` 传 `Some(&entropy)`；`mismatched_entropy_cannot_unseal` 用**真 DPAPI** 验「换熵必失败」 |
+| 2 | 改密 / adopt 成功后删封印 | `vault_cmd::change_master_password`、`sync_cmd::sync_join_impl` |
+| 3 | `DeviceBusy`/RDP/未配置不得映射 `Invalidated` | `map_result` / `map_availability` + WinRT 激活失败 → `Unsupported` |
+| 4 | `UI_FORBIDDEN`、禁 `LOCAL_MACHINE` | `dpapi_protect/unprotect` 的 `dwflags` 常量（就地注释） |
+| 5 | 解出缓冲拷完清零 + `LocalFree` | `take_blob()` |
+| 6 | IPC DTO 不含 VK | `BiometricStatusDto` 四字段 |
+| 7 | 空库不给开启入口 | 前端 `bio_empty` 文案 + 后端 `record_count() == 0` 拒绝（带专用 message_key） |
+| 8 | 串行化生物命令 | `AppState::try_begin_biometric()` + `BiometricGuard`（CAS，抢不到返回 `ERR_VALIDATION`，前端静默） |
+| 9 | `enable` 不许拼 A 头 + B VK | `SealTarget::from_header(repo.header())` 与 `repo.vault_key()` 同源 |
+| 10 | 命令层只 `Container::open` 一次 | `Session::unlock_with_opened_container()` |
+
+### 19.5 前端
+
+- `LockScreen.svelte`：主按钮下方 ghost 按钮，**只在 `availability=available && state=ready` 时渲染**；失败提示按错误码分流（取消静默 / 失效弹原因并重查状态 / 需主密码给引导语）。
+- `Settings.svelte`：「快速解锁」独立卡片（位置在「安全」后），状态行标 `.set-row.is-info`，开启走**原地展开主密码输入框**而非 Modal，关闭走二次确认。
+- `errors.ts`：补 4 个错误码 + 8 个 `err.*` 兜底键。
+- i18n：新增 30 键 × 四语言（zh-CN / zh-TW / en-US / th），键以 zh-CN 为唯一事实来源。
+- 详情与文案口径见 `docs/06-ui-design.md` §6.24。
+
+### 19.6 验证数据（实测）
+
+| 门 | 结果 |
+|---|---|
+| `cargo test -p passwordms-core` | **270 passed / 0 failed**（35 组 + 新增 5 例会话级守门） |
+| `cargo test -p passwordms --lib --target x86_64-pc-windows-gnullvm` | **7 passed / 0 failed**（适配器；含真 DPAPI 熵断言） |
+| `cargo clippy --all-targets` | 0 告警（仅 D-33 windres 兜底提示），RC=0 |
+| `cargo fmt --all -- --check` | 无差异 |
+| `npm run test` | **364 passed** |
+| `npm run check` | 0 error / 0 warning |
+| `check-css-contract.mjs` | PASS（0 FAIL / 6 WARN，与改造前同） |
+
+### 19.7 未做 / 待办
+
+- **Windows 真机 e2e**：开启 → 锁屏 → Hello 解锁 → 改密后失效 → 关闭。本机自动化只能覆盖到 DPAPI + 映射层，Hello 弹框必须人点。
+- **Android 适配器（P3）**：Keystore + `BiometricPrompt` + `CryptoObject`，异常映射 `KeyPermanentlyInvalidatedException`。
+- **文案待拍板**：30 条新增文案已按「如实告知强度上限」口径写好，**等主人逐条确认后**再出包。

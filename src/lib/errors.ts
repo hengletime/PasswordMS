@@ -36,6 +36,11 @@ export const ErrorCode = {
   ERR_BLOB_MISSING: 'ERR_BLOB_MISSING',
   ERR_BLOB_INCOMPLETE: 'ERR_BLOB_INCOMPLETE',
   ERR_BLOB_CAPACITY: 'ERR_BLOB_CAPACITY',
+  /** 生物识别快速解锁（`docs/08` §10）：D-113 落地的四个错误码。 */
+  ERR_BIOMETRIC_UNAVAILABLE: 'ERR_BIOMETRIC_UNAVAILABLE',
+  ERR_BIOMETRIC_CANCELED: 'ERR_BIOMETRIC_CANCELED',
+  ERR_BIOMETRIC_INVALIDATED: 'ERR_BIOMETRIC_INVALIDATED',
+  ERR_NEED_MASTER_PASSWORD: 'ERR_NEED_MASTER_PASSWORD',
   ERR_IO: 'ERR_IO',
   ERR_CRYPTO: 'ERR_CRYPTO',
   ERR_INTERNAL: 'ERR_INTERNAL',
@@ -75,6 +80,13 @@ const FALLBACK_MESSAGE_KEY: Record<string, string> = {
   [ErrorCode.ERR_BLOB_MISSING]: 'err.blob_missing',
   [ErrorCode.ERR_BLOB_INCOMPLETE]: 'err.blob_incomplete',
   [ErrorCode.ERR_BLOB_CAPACITY]: 'err.blob_capacity',
+  // 注意：`ERR_BIOMETRIC_INVALIDATED` 的兜底只能给通用句——后端一定会带更精确的
+  // message_key（`err.bio_invalidated_password` / `_vault_key` / `_enrollment` / `_tampered`），
+  // 这里只在「后端没给」时才用得上。
+  [ErrorCode.ERR_BIOMETRIC_UNAVAILABLE]: 'err.biometric_unavailable',
+  [ErrorCode.ERR_BIOMETRIC_CANCELED]: 'err.biometric_canceled',
+  [ErrorCode.ERR_BIOMETRIC_INVALIDATED]: 'err.biometric_invalidated',
+  [ErrorCode.ERR_NEED_MASTER_PASSWORD]: 'err.need_master_password',
   [ErrorCode.ERR_IO]: 'err.io',
   [ErrorCode.ERR_CRYPTO]: 'err.crypto',
   [ErrorCode.ERR_INTERNAL]: 'err.internal',

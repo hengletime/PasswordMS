@@ -1,6 +1,7 @@
 // 会话状态（Svelte 5 runes）：锁定 / 解锁 / 创建。
 
 import type { StatusDto } from '../../types';
+import type { BiometricStatusDto } from '../../types';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
 import { ui } from './ui.svelte';
@@ -15,6 +16,13 @@ class SessionStore {
   unlockError = $state(false);
   /** D-106（豆包审查 3.5-5）：启动状态查询失败——不得伪装成「无库」误导向创建向导。 */
   statusError = $state(false);
+  /**
+   * 快速解锁状态（`docs/08` P2）。`null` = 尚未查询或查不到。
+   *
+   * 锁定态也可查询（后端只读容器头部 + `biometric.json`），解锁页据此决定显示什么。
+   * **查不到一律当不可用**——不能因为一个旁路文件读失败就让用户进不了主密码输入框。
+   */
+  biometric = $state<BiometricStatusDto | null>(null);
 
   /** 刷新状态。 */
   async refresh(): Promise<void> {
@@ -82,6 +90,51 @@ class SessionStore {
     } catch (err) {
       const appErr = toAppError(err);
       ui.toast('error', appErr.messageKey);
+      return false;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** 刷新快速解锁状态（解锁页显示前、设置页进入时、开启/关闭后各调一次）。 */
+  async refreshBiometric(): Promise<void> {
+    try {
+      this.biometric = await api.vault.biometricStatus();
+    } catch {
+      // 读不到就当没有：**不弹提示**。解锁页的可用性不该依赖这个旁路文件。
+      this.biometric = null;
+    }
+  }
+
+  /**
+   * 用快速解锁打开保险库。
+   *
+   * 失败分类**必须分开处理**（`docs/08` §10）：
+   * - 取消 → 什么都不弹（用户自己关的，弹一句等于责怪他）；
+   * - `ERR_VALIDATION`（`biometric_busy`）→ 静默，用户本来就在等前一次；
+   * - 已失效 → 弹具体原因 + **重查状态**（按钮要从「可用」变回「未开启」）；
+   * - 需要主密码 → 引导语，且刻意**不**设置 `unlockError`（那是密码错的黑话）。
+   */
+  async unlockWithBiometric(): Promise<boolean> {
+    this.busy = true;
+    this.unlockError = false;
+    try {
+      this.status = await api.vault.biometricUnlock();
+      return true;
+    } catch (err) {
+      const appErr = toAppError(err);
+      switch (appErr.code) {
+        case ErrorCode.ERR_BIOMETRIC_CANCELED:
+        case ErrorCode.ERR_VALIDATION:
+          break;
+        case ErrorCode.ERR_BIOMETRIC_INVALIDATED:
+          ui.toast('error', appErr.messageKey);
+          await this.refreshBiometric();
+          break;
+        default:
+          ui.toast('error', appErr.messageKey);
+          break;
+      }
       return false;
     } finally {
       this.busy = false;

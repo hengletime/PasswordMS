@@ -2,6 +2,7 @@
   // 解锁界面（PRD F-01）。解锁失败统一提示，不区分原因（A-05）。
   // 设计规范 §5.1：品牌区 + .pms-field（纵向）⇒ .pms-input-group（横向，眼睛固定右端）。
   import { open } from '@tauri-apps/plugin-dialog';
+  import { onMount } from 'svelte';
   import Icon from './common/Icon.svelte';
   import Logo from './common/Logo.svelte';
   import WindowControls from './common/WindowControls.svelte';
@@ -16,6 +17,33 @@
   let showPassword = $state(false);
   // D-55：备份恢复流程进行中（选文件 → 确认 → 替换库文件），期间禁止并发解锁/再次恢复。
   let restoring = $state(false);
+
+  /**
+   * 快速解锁按钮的显示条件（`docs/08` §4.5）。
+   *
+   * **只有 `ready` 才显示**：`stale` / `corrupt` / `absent` 一律不显示——失效的封印点了
+   * 也只会弹一句「已失效」，反而让用户以为按钮坏了。重新开启的入口在设置页（那里能看到
+   * 具体失效原因）。`availability !== 'available'` 同理（平台没配置 Hello 时按钮没有意义）。
+   */
+  const canBiometricUnlock = $derived(
+    session.biometric?.availability === 'available' && session.biometric?.state === 'ready',
+  );
+
+  onMount(() => {
+    // 锁定态可查（后端只读头部 + 旁路文件）；查不到时 store 会置 null，按钮自然不出现。
+    void session.refreshBiometric();
+  });
+
+  /** 用快速解锁进入主界面（失败提示由 store 按错误码分流，这里只管路由）。 */
+  async function unlockWithBiometric(): Promise<void> {
+    if (session.busy || restoring) {
+      return;
+    }
+    const ok = await session.unlockWithBiometric();
+    if (ok) {
+      ui.setRoute('main');
+    }
+  }
 
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -130,6 +158,24 @@
       </button>
     </form>
 
+    {#if canBiometricUnlock}
+      <!-- 快速解锁：只在「本机已开启且平台可用」时出现，位置紧贴主解锁按钮之下
+           （视觉上属于同一组入口，而不是和「创建新库」并列的次要动作）。 -->
+      <button
+        class="pms-btn is-ghost is-block lock-bio"
+        type="button"
+        disabled={session.busy || restoring}
+        onclick={() => void unlockWithBiometric()}
+      >
+        {#if session.busy}
+          <Spinner size={16} label={ui.t('lock.biometric_waiting')} />
+          {ui.t('lock.biometric_waiting')}
+        {:else}
+          <Icon name="unlock" size={15} />{ui.t('lock.biometric_unlock')}
+        {/if}
+      </button>
+    {/if}
+
     <button class="pms-btn is-ghost is-block lock-create" type="button" disabled={session.busy || restoring} onclick={() => ui.setRoute('create')}>
       {ui.t('lock.create_new')}
     </button>
@@ -181,6 +227,11 @@
   }
   .lock-create {
     margin-top: 0.5rem;
+  }
+  /* 快速解锁：与主解锁按钮同组（0.5rem），与下面的「创建 / 恢复」拉开距离。 */
+  .lock-bio {
+    margin-top: 0.5rem;
+    gap: 0.4rem;
   }
   /* D-55「从备份恢复」：与「创建新保险库」同构的 ghost 块按钮，紧随其后。 */
   .lock-restore {

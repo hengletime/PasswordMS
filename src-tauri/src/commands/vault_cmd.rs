@@ -111,6 +111,15 @@ pub fn change_master_password(
 ) -> IpcResult<()> {
     let mut session = state.lock_session().map_err(lock_err)?;
     session.change_master_password(&old_password, &new_password)?;
+    // D-113（`docs/08` §18.5 约束 2）：改密会让 `verify_mac` 变 ⇒ 现有生物识别封印**必然**
+    // 被判失效（core 的 `bind` 已覆盖，不会交出错误密钥）。但「改密即失效」只对应用层成立：
+    // 旧密文里的 VK 在密码学意义上仍然有效（§4.3 H-2）。真正撤销 = 删掉这条封印，
+    // 否则「已失效的密文」会长期躺在数据目录里。删除失败不阻断改密（改密本身已成功）。
+    let seal_path = session.repo()?.path();
+    if let Err(e) = passwordms_core::biometric::SealStore::new(&seal_path).remove() {
+        // 命令层无 AppHandle，走 eprintln（桌面 GUI 会丢弃，但 Android logcat 可见）。
+        eprintln!("[biometric] remove seal after password change failed: {e:?}");
+    }
     Ok(())
 }
 

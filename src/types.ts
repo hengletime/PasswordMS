@@ -9,6 +9,23 @@ export interface StatusDto {
   locked: boolean;
 }
 
+/**
+ * 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10）。
+ *
+ * 只带状态、不带密钥材料：`availability` 决定按钮显不显示/置不置灰，
+ * `state` 决定是「未开启」「已开启」还是「已失效」，`reason` 只在 `stale` 时有值。
+ */
+export interface BiometricStatusDto {
+  /** `available` / `not_configured` / `not_present` / `disabled_by_policy` / `busy` / `unsupported`。 */
+  availability: string;
+  /** `absent` / `corrupt` / `ready` / `stale`。 */
+  state: string;
+  /** `master_password_changed` / `vault_key_changed` / `enrollment_changed` / `tampered`。 */
+  reason?: string;
+  /** 封印创建时间（毫秒），仅 `ready` 时有值。 */
+  enabled_at?: number;
+}
+
 /** 自定义键值对。 */
 export interface CustomField {
   key: string;

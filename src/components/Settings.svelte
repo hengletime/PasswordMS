@@ -15,6 +15,7 @@
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
   import { loadSettingsPageSide } from '../lib/settings-page';
+  import { session } from '../lib/stores/session.svelte';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
   import { theme } from '../lib/stores/theme.svelte';
@@ -50,6 +51,15 @@
   let fileInfoFailed = $state(false);
   // D-73：档位读失败时显示的是兜底档，必须让用户知道（否则「5 分钟」看起来像真实设置）。
   let autoLockFailed = $state(false);
+  // D-113 P2：快速解锁（本机旁路密封）。状态**全部来自后端**（`biometric_status`），
+  // 不在前端维护第二份真相——开关是否生效只有 `biometric.json` 说了算。
+  let bioBusy = $state(false);
+  /** 已点「开启」，正在等用户输入主密码（§4.5：开启必须证明知道主密码）。 */
+  let bioAsking = $state(false);
+  let bioPassword = $state('');
+  const bio = $derived(session.biometric);
+  const bioAvailable = $derived(bio?.availability === 'available');
+  const bioEnabled = $derived(bio?.state === 'ready');
   let oldPassword = $state('');
   // D-51：导出保险库需要单独输入当前主密码（后端 repo.export_vault 会用它做 unlock_check 后再 copy 库文件）。
   // 旧实现误用「修改主密码」卡片的 oldPassword，而导出卡片根本没有输入框 → 空密码必报「解锁失败，请重试。」
@@ -230,6 +240,10 @@
     appVersion = side.version;
     compactionStats = side.compactionStats;
     compactionStatsFailed = side.compactionStatsFailed;
+    // D-113 P2：快速解锁状态与其它旁路数据同批刷新（只读 IPC；失败由 store 归一成
+    // 「不可用」并保持 `null`，不参与 `loadSettingsPageSide` 的失败隔离矩阵——
+    // 它坏了绝不该影响库文件信息/版本号的显示）。
+    void session.refreshBiometric();
   }
 
   $effect((): void => {
@@ -263,11 +277,74 @@
     }
   }
 
+  /** D-113 P2：点「开启」→ 展开主密码输入（§4.5：开启必须证明知道主密码）。 */
+  function startEnableBiometric(): void {
+    bioAsking = true;
+    bioPassword = '';
+  }
+
+  /** 取消开启：收起输入框并清掉刚输入的主密码（不留在内存里）。 */
+  function cancelEnableBiometric(): void {
+    bioAsking = false;
+    bioPassword = '';
+  }
+
+  /**
+   * 提交开启：`biometric_enable` 内部会校验主密码 + 空库 + 平台可用性，再弹 Windows Hello。
+   *
+   * 成功后**不做本地状态猜测**——直接重查后端状态，让「已开启（日期）」来自真实记录。
+   */
+  async function submitEnableBiometric(): Promise<void> {
+    if (bioBusy || bioPassword.length === 0) {
+      return;
+    }
+    bioBusy = true;
+    try {
+      await api.vault.biometricEnable(bioPassword);
+      bioPassword = '';
+      bioAsking = false;
+      await session.refreshBiometric();
+    } catch (err) {
+      // 主密码错（ERR_UNLOCK_FAILED）/ 平台不可用 / 空库（ERR_VALIDATION）都在这里出文案。
+      ui.toast('error', toAppError(err).messageKey);
+    } finally {
+      bioBusy = false;
+    }
+  }
+
+  /** 关闭快速解锁：确认后删除封印（这是撤销的唯一动作，§4.3 H-2）。 */
+  async function disableBiometric(): Promise<void> {
+    if (bioBusy) {
+      return;
+    }
+    const ok = await ui.confirm('settings.bio_disable', 'settings.bio_disable_confirm');
+    if (!ok) {
+      return;
+    }
+    bioBusy = true;
+    try {
+      await api.vault.biometricDisable();
+      await session.refreshBiometric();
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    } finally {
+      bioBusy = false;
+    }
+  }
+
+  /** 封印创建时间的本地短日期（`bio_state_on` 的 `{date}` 占位）。 */
+  function bioEnabledDate(): string {
+    const ms = bio?.enabled_at;
+    if (typeof ms !== 'number') {
+      return '—';
+    }
+    return new Date(ms).toLocaleDateString(ui.locale);
+  }
+
   /**
    * D-106（豆包审查 3.5-4）：剪贴板 TTL 钳制——HTML min/max 不阻止键入，
    * 0/负值会导致复制即清空、极大值会让密码长期残留剪贴板。
-   */
-  function clampClipboardTtl(raw: number): number {
+   */  function clampClipboardTtl(raw: number): number {
     const n = Math.floor(Number(raw));
     if (!Number.isFinite(n)) {
       return 30;
@@ -439,6 +516,76 @@
       <input id="set-ttl" class="pms-input set-ctl" type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs}
         onchange={() => { draft.clipboard_clear_secs = clampClipboardTtl(draft.clipboard_clear_secs); }} />
     </div>
+  </div>
+
+  <!-- D-113 P2：快速解锁（Windows Hello）。
+       独立卡片而不是塞进「安全」分组：它是**立即生效的动作**，不归底部「保存」按钮管；
+       混进安全卡片会让用户以为改完要按保存才生效。 -->
+  <div class="pms-card set-card">
+    <h3>{ui.t('settings.group_biometric')}</h3>
+    <!-- 信息行用 `.set-row.is-info`（§6.10）：窄屏堆叠只针对控件行，信息行不能拆两行。 -->
+    <div class="set-row is-info">
+      <span class="set-label">{ui.t('settings.bio_title')}</span>
+      <span class="bio-state">
+        {#if bioEnabled}
+          {ui.t('settings.bio_state_on', { date: bioEnabledDate() })}
+        {:else if bio?.state === 'corrupt'}
+          {ui.t('settings.bio_state_corrupt')}
+        {:else if bio?.state === 'stale' && bio.reason}
+          {ui.t(`settings.bio_state_stale_${bio.reason}`)}
+        {:else}
+          {ui.t('settings.bio_state_off')}
+        {/if}
+      </span>
+    </div>
+    <p class="pms-hint">{ui.t('settings.bio_desc')}</p>
+    <p class="pms-hint">{ui.t('settings.bio_risk')}</p>
+    {#if bio && !bioAvailable}
+      <p class="pms-hint is-danger">{ui.t(`settings.bio_avail_${bio.availability}`)}</p>
+    {/if}
+
+    {#if bioAsking}
+      <!-- 开启必须重新输入主密码（§4.5）：防「解锁后离开座位，旁人顺手开一条免密通道」。 -->
+      <div class="set-row">
+        <label class="set-label" for="set-bio-pw">{ui.t('settings.bio_enable_hint')}</label>
+        <input
+          id="set-bio-pw"
+          class="pms-input set-ctl"
+          type="password"
+          autocomplete="current-password"
+          bind:value={bioPassword}
+          disabled={bioBusy}
+        />
+      </div>
+      <div class="bio-actions">
+        <button
+          class="pms-btn is-primary is-sm"
+          type="button"
+          disabled={bioBusy || bioPassword.length === 0}
+          onclick={() => void submitEnableBiometric()}
+        >
+          {#if bioBusy}<Spinner size={14} label={ui.t('common.loading')} />{/if}
+          {ui.t('common.confirm')}
+        </button>
+        <button class="pms-btn is-sm" type="button" disabled={bioBusy} onclick={cancelEnableBiometric}>
+          {ui.t('common.cancel')}
+        </button>
+      </div>
+    {:else if bioEnabled}
+      <button class="pms-btn is-ghost is-sm" type="button" disabled={bioBusy} onclick={() => void disableBiometric()}>
+        {ui.t('settings.bio_disable')}
+      </button>
+    {:else}
+      <!-- 平台不可用时置灰（§18.5 约束 7 的 UI 半边）；后端还会再兜一次。 -->
+      <button
+        class="pms-btn is-ghost is-sm"
+        type="button"
+        disabled={bioBusy || !bioAvailable}
+        onclick={startEnableBiometric}
+      >
+        {ui.t('settings.bio_enable')}
+      </button>
+    {/if}
   </div>
 
   <div class="pms-card set-card">
@@ -753,6 +900,20 @@
   .set-ctl {
     width: 160px;
     flex: 0 0 auto;
+  }
+  /* D-113 P2：快速解锁状态文字（信息行右侧）。
+     刻意**不用** `.set-ctl`：那有 160px 固定宽，而「主密码已修改，快速解锁已失效。」这类
+     句子需要自然换行；再加 160px 会让它在窄屏挤成竖条。 */
+  .bio-state {
+    max-width: 62%;
+    text-align: right;
+    font-size: 0.86rem;
+    color: var(--pms-text);
+  }
+  .bio-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.6rem;
   }
   /* 分段控件：跟随系统 / 浅色 / 深色。 */
   .set-seg {

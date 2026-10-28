@@ -146,6 +146,17 @@ fn sync_join_impl(
         };
         if !already_paired {
             session.adopt_vault_key(joiner.host_vault_key())?;
+            // D-113（`docs/08` §18.5 约束 2）：采纳对端 VK 之后，现有的生物识别封印封的是
+            // **换 VK 之前那个 VK**。core 的 `bind` 已让它必然被判失效（不会交出错误密钥），
+            // 但一条「已失效」的封印留在盘上只会让用户困惑，且是多余的旧密钥密文。
+            // `Session` 不持有 `SealStore`（core 刻意不碰文件系统之外的旁路），故撤销点在此。
+            let seal_path = session.repo()?.path();
+            if let Err(e) = passwordms_core::biometric::SealStore::new(&seal_path).remove() {
+                crate::state::append_log(
+                    app,
+                    &format!("[biometric] remove seal after adopt failed: {e:?}"),
+                );
+            }
         }
         joiner.persist_host_device(session.repo_mut()?)?;
     }

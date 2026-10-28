@@ -50,6 +50,12 @@ pub struct AppState {
     /// `DeviceSyncState`（seq/base/水位），产生序号竞争与重复导出。用本标志
     /// 串行化：compare_exchange 抢不到的一侧快速失败（`ERR_SYNC_BUSY`）。
     pub sync_busy: AtomicBool,
+    /// **生物识别命令互斥**（`docs/08` §18.5 约束 8）。
+    ///
+    /// 生物识别命令会弹系统对话框（可能停留数十秒），期间若同一入口被连点两次，第二次
+    /// 会拿到上一次的封印状态、或在「解封成功但会话尚未装入」的窗口里重入。用 CAS 串行化：
+    /// 抢不到的一侧直接失败，前端静默忽略即可（用户本来就在等前一次）。
+    pub biometric_busy: AtomicBool,
     /// **D-108（豆包审查 3.4-6）**：最近一次用户活动的 Unix 毫秒时间戳。
     ///
     /// auto-lock 此前完全由前端 JS 定时器驱动——WebView 后台/休眠时节流暂停计时，
@@ -71,6 +77,7 @@ impl AppState {
             pending_imports: Mutex::new(HashMap::new()),
             clipboard: Mutex::new(None),
             sync_busy: AtomicBool::new(false),
+            biometric_busy: AtomicBool::new(false),
             last_activity_ms: AtomicI64::new(now_ms()),
         }
     }
@@ -88,6 +95,30 @@ impl AppState {
     pub fn lock_session(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Session>> {
         self.touch_activity();
         self.session.lock()
+    }
+
+    /// 抢占生物识别互斥位；返回 `None` 表示已有一次生物识别操作在进行中。
+    ///
+    /// 守卫在 `Drop` 时自动释放——包括「Hello 弹框中用户直接关掉应用」这类提前返回路径，
+    /// 不需要每个分支手写复位。
+    pub fn try_begin_biometric(&self) -> Option<BiometricGuard<'_>> {
+        self.biometric_busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .ok()
+            .map(|_| BiometricGuard {
+                flag: &self.biometric_busy,
+            })
+    }
+}
+
+/// [`AppState::try_begin_biometric`] 的 RAII 守卫。
+pub struct BiometricGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl Drop for BiometricGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
     }
 }
 

@@ -6,6 +6,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  BiometricStatusDto,
   CompactionResultDto,
   CompactionStatsDto,
   ConflictChoice,
@@ -66,6 +67,16 @@ export const vault = {
   // D-61：自动锁定档位读写（`Vault.auto_lock_minutes` 明文头部；仅 1/5/15 合法）。
   getAutoLock: (): Promise<number> => invoke<number>('get_auto_lock'),
   setAutoLock: (minutes: number): Promise<void> => invoke<void>('set_auto_lock', { minutes }),
+  // 生物识别快速解锁（`docs/08-biometric-unlock.md` §5）。
+  //
+  // `biometricStatus` 在**锁定态**即可调用（解锁页要靠它决定显不显示 Hello 按钮），
+  // 且返回体不含任何密钥材料——只有 availability / state / reason。
+  biometricStatus: (): Promise<BiometricStatusDto> =>
+    invoke<BiometricStatusDto>('biometric_status'),
+  biometricEnable: (masterPassword: string): Promise<BiometricStatusDto> =>
+    invoke<BiometricStatusDto>('biometric_enable', { master_password: masterPassword }),
+  biometricDisable: (): Promise<void> => invoke<void>('biometric_disable'),
+  biometricUnlock: (): Promise<StatusDto> => invoke<StatusDto>('biometric_unlock'),
   changeMasterPassword: (oldPassword: string, newPassword: string): Promise<void> =>
     invoke<void>('change_master_password', {
       old_password: oldPassword,
