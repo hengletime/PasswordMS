@@ -353,6 +353,9 @@ export const zhCN = {
     // WinRT 回报的正是 `DeviceNotPresent` —— 主人实测被这句话误导。文案改为只陈述
     // 「检测不到」+ 给出下一步，不再替系统断言「你没硬件」。
     bio_avail_not_configured: '本机尚未设置 {noun}。',
+    // D-125：只录了便捷级（Class 2，多半是 2D 人脸）。**不能说「尚未设置」**——
+    // 用户的人脸解锁明明一直在用。
+    bio_avail_weak_only: '本机只录入了「便捷级」生物识别（多半是 2D 人脸）：它能解开手机屏幕锁，但 Android 不允许这类凭据保护加密密钥，所以本功能用不了。请改用指纹。',
     bio_avail_not_present: '未检测到可用的 {noun}（多半是尚未设置，不一定缺少硬件）。',
     bio_avail_hint: '请到「设置 → 账户 → 登录选项」开通 Windows Hello（PIN 或指纹），完成后切回本窗口会自动重新检测。',
     // §23：Android 的设置路径完全不同，必须单独一句（不能只换名词）。

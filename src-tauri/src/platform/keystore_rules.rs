@@ -27,6 +27,9 @@ pub fn availability_from(status: &str) -> Availability {
     match status {
         "available" => Availability::Available,
         "not_configured" => Availability::NotConfigured,
+        // D-125：只录了便捷级（Class 2，多半是 2D 人脸）。**不是** `NotConfigured`：
+        // 那会让「人脸解锁明明能用」的用户读到「本机尚未设置指纹 / 人脸」。
+        "weak_only" => Availability::WeakOnly,
         "not_present" => Availability::NotPresent,
         "disabled_by_policy" => Availability::DisabledByPolicy,
         "busy" => Availability::Busy,
@@ -83,12 +86,21 @@ mod tests {
     }
 
     #[test]
+    fn weak_only_is_never_folded_into_not_configured() {
+        // D-125：只录了便捷级人脸时，Kotlin 上报 `weak_only`。若映射回 NotConfigured，
+        // 界面就会对一个人脸解锁用得好好的用户说「本机尚未设置指纹 / 人脸」。
+        assert_eq!(availability_from("weak_only"), Availability::WeakOnly);
+        assert_ne!(availability_from("weak_only"), Availability::NotConfigured);
+    }
+
+    #[test]
     fn not_implemented_is_not_produced_by_android() {
         // `NotImplemented` 的语义是「本平台没有适配器」，Android 有适配器，
         // 所以任何输入都不该映射到它——否则前端会把整张卡片藏起来。
         for s in [
             "available",
             "not_configured",
+            "weak_only",
             "not_present",
             "busy",
             "unsupported",

@@ -33,9 +33,17 @@ export function bioTextSuffix(platform: BioPlatform): '' | '_android' {
   return platform === 'android' ? '_android' : '';
 }
 
-/** 是否处在「平台还没配好、用户该去开通」的状态（§22.4 / D-114）。 */
+/**
+ * 是否处在「平台还没配好、用户该去开通」的状态（§22.4 / D-114）。
+ *
+ * `weak_only`（D-125：只录了便捷级人脸）也算「该去配一下」——该去补一枚指纹。
+ */
 export function bioShouldOfferSettings(availability: string): boolean {
-  return availability === 'not_present' || availability === 'not_configured';
+  return (
+    availability === 'not_present' ||
+    availability === 'not_configured' ||
+    availability === 'weak_only'
+  );
 }
 
 /**

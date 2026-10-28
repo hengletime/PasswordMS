@@ -78,6 +78,10 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
      *
      * `BIOMETRIC_ERROR_NONE_ENROLLED` 在这里是**准确**的——Android 会把「有硬件但没录指纹」
      * 老实报成 `NONE_ENROLLED`，不像 Windows 的 `DeviceNotPresent` 那样骗人（§20.1）。
+     *
+     * 但「没录」有两种，必须分开：**一档都没录** 与 **只录了便捷级（Class 2，多半是
+     * 2D 人脸）**。后者在 `BIOMETRIC_STRONG` 眼里同样是 `NONE_ENROLLED`，可用户手机上
+     * 人脸解锁用得好好的——一律说「本机尚未设置指纹 / 人脸」就是胡说（D-125）。
      */
     @Command
     fun availability(invoke: Invoke) {
@@ -248,11 +252,33 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
 
     // ------------------------------------------------------------------ 内部
 
+    /**
+     * 可用性判定（两段）。
+     *
+     * 1. 强档（Class 3）能用 → `available`；
+     * 2. 强档没录、但**便捷档（Class 2）**录了 → `weak_only`。
+     *
+     * 第 2 段是 D-125：便捷档多半是 2D 人脸，能解手机锁屏，但 Android 不允许它保护
+     * Keystore 密钥（本插件生成密钥时写死 `AUTH_BIOMETRIC_STRONG`，`setAllowedAuthenticators`
+     * 也只放 STRONG）——所以**照旧不许开启**，只是不再冤枉用户「没设置生物识别」。
+     * 把这一档并进 `not_configured`，界面就会对一个「人脸解锁一直是可用的」用户说
+     * 「本机尚未设置指纹 / 人脸」。
+     */
     private fun availabilityName(): String {
-        val code = BiometricManager.from(host)
-            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-        return when (code) {
-            BiometricManager.BIOMETRIC_SUCCESS -> "available"
+        val manager = BiometricManager.from(host)
+        val strong = manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+        if (strong == BiometricManager.BIOMETRIC_SUCCESS) {
+            return "available"
+        }
+        // 只有在「强档报没录」时才追问便捷档；硬件缺失/被策略禁用等情况原样上报，
+        // 不能让一次便捷档查询把真实故障掩盖成 weak_only。
+        if (strong == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED &&
+            manager.canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_WEAK) ==
+            BiometricManager.BIOMETRIC_SUCCESS
+        ) {
+            return "weak_only"
+        }
+        return when (strong) {
             BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> "not_configured"
             BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> "not_present"
             // 硬件在但此刻用不了（被占用 / 传感器脏污 / 临时故障）——不可当失效处理。

@@ -324,6 +324,8 @@ export const zhTW = {
     // D-114：`not_present` 不再替系統斷言「你沒有硬體」——Hello 從未設定時 WinRT 回報的
     // 正是 `DeviceNotPresent`。改成只陳述「偵測不到」＋給下一步。
     bio_avail_not_configured: '本機尚未設定 {noun}。',
+    // D-125：只錄了便捷級（Class 2，多半是 2D 人臉），不能說「尚未設定」。
+    bio_avail_weak_only: '本機只錄入了「便捷級」生物辨識（多半是 2D 人臉）：它能解開手機螢幕鎖，但 Android 不允許這類憑證保護加密金鑰，所以本功能用不了。請改用指紋。',
     bio_avail_not_present: '未偵測到可用的 {noun}（多半是尚未設定，不一定缺少硬體）。',
     bio_avail_hint: '請到「設定 → 帳戶 → 登入選項」開通 Windows Hello（PIN 或指紋），完成後切回本視窗會自動重新偵測。',
     bio_open_settings: '開啟 Windows 登入選項',

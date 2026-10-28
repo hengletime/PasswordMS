@@ -8,7 +8,7 @@
   import ConfirmDialog from './components/common/ConfirmDialog.svelte';
   import Toast from './components/common/Toast.svelte';
   import { AUTOLOCK_LOCKED_EVENT } from './lib/auto-lock-event';
-  import { APP_RESUMED_EVENT, hasTauriHost, shouldRefreshOnResume } from './lib/app-resume';
+  import { RESUME_EVENTS, createResumeGate, hasTauriHost, shouldRefreshOnResume } from './lib/app-resume';
   import { session } from './lib/stores/session.svelte';
   import { settings } from './lib/stores/settings.svelte';
   import { sync } from './lib/stores/sync.svelte';
@@ -40,24 +40,34 @@
   }
 
   /**
-   * D-123：宿主回到前台时重查快速解锁状态（移动端唯一可靠的时机）。
+   * D-123 / D-124：宿主回到前台时重查快速解锁状态（移动端唯一可靠的时机）。
    *
    * 安卓从系统设置切回来时 WebView 的 `document` 从未失焦，设置页挂的 `focus` 监听
-   * 不会触发，所以这件事只能由 Rust 的 `RunEvent::Resumed` 通知。
+   * 不会触发，所以这件事只能由宿主通知。
    *
    * 注册在根组件而不是设置页：锁屏按钮的可见性也依赖这份状态，用户在系统设置里
    * 加了指纹再回来，锁屏那个按钮就该立刻能用/立刻消失，跟他停在哪个页面无关。
+   *
+   * **两条链路都听**（D-124）：Rust 侧转发的 `app://resumed`，加上上游自己转发给 JS 的
+   * `tauri://resumed`。两条同源、互为兜底——D-123 只挂了一条，偏偏挂错在永不触发的
+   * 那一层（`RunEvent::Resumed` 在安卓上从不发出），整整一版功能是死的。
+   * 两条同时到达时由 `createResumeGate` 合并成一次查询。
    */
   function registerResumeListener(): void {
     if (!hasTauriHost()) {
       return;
     }
-    void listen(APP_RESUMED_EVENT, () => {
+    const gate = createResumeGate(async (): Promise<void> => {
       if (!shouldRefreshOnResume({ busy: session.busy, route: ui.route })) {
         return;
       }
-      void session.refreshBiometric();
+      await session.refreshBiometric();
     });
+    for (const name of RESUME_EVENTS) {
+      void listen(name, () => {
+        gate.trigger();
+      });
+    }
   }
 
   /**

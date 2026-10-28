@@ -1513,11 +1513,14 @@ Android 是 Activity 进后台再回前台，WebView 里的 `document` **从未�
 
 ### 29.2 怎么把它做成真的
 
-移动端的生命周期只有宿主知道，所以由 Rust 在事件循环回调里发通知：
+移动端的生命周期只有宿主知道，所以由 Rust 在事件循环回调里发通知。**注意层次**——`RunEvent::Resumed` 在这里是不存在的（它只在桌面 `StartCause::Poll` 里发），必须接**窗口事件**（这条代码是 §30 修正后的最终形态）：
 
 ```rust
 #[cfg(any(target_os = "android", target_os = "ios"))]
-tauri::RunEvent::Resumed => {
+tauri::RunEvent::WindowEvent {
+    event: tauri::WindowEvent::Resumed,
+    ..
+} => {
     use tauri::Emitter;
     let _ = app_handle.emit(APP_RESUMED_EVENT, ());
 }
@@ -1526,10 +1529,11 @@ tauri::RunEvent::Resumed => {
 前端 `App.svelte` 常驻监听（不是设置页监听——**锁屏按钮的可见性也依赖这份状态**，用户在系统设置里录了指纹回来，锁屏那个按钮就该立刻能用）：
 
 ```ts
-listen(APP_RESUMED_EVENT, () => {
+const gate = createResumeGate(async () => {
   if (!shouldRefreshOnResume({ busy: session.busy, route: ui.route })) return;
-  void session.refreshBiometric();
+  await session.refreshBiometric();
 });
+for (const name of RESUME_EVENTS) void listen(name, () => gate.trigger());
 ```
 
 **两个「不刷」的例外**（纯函数 `shouldRefreshOnResume`，可单测）：
@@ -1539,11 +1543,13 @@ listen(APP_RESUMED_EVENT, () => {
 | `busy`（正在解锁 / 正在开关快速解锁） | 重查会把按钮状态与进行中的操作打架 |
 | `route === 'create'`（还没建库） | `biometric_status` 必然失败，重查纯噪音 |
 
-### 29.3 上游的一个细节
+### 29.3 上游的一个细节（本节结论有误，以 §30 为准）
 
-`RunEvent::Resumed` 在上游是 `#[cfg(mobile)]`，而且文档写明 **Android 的首次 `onResume()` 会被忽略**（Tauri 为对齐 iOS 而刻意如此）。所以启动时不会多出一次刷新，只有真正「从别处切回来」才触发——正是我们要的语义。
+初版这里写的是「`RunEvent::Resumed` 在上游是 `#[cfg(mobile)]`，Android 首次 `onResume()` 会被忽略」。**前半句只是编译期事实，后半句与实现不符**——真正的实现里根本没有这个「首次忽略」的过滤器（只在 `WindowEvent` 的文档注释里写着），而且 `RunEvent::Resumed` 在移动端**一次都不会发**。以 §30 为准。
 
 ### 29.4 真正被修好的两个场景
+
+下表是**目标**，实际到 §30 才真的成立（29.2 初版接错了层，一版功能是死的）：
 
 | 场景 | 修复前 | 修复后 |
 |---|---|---|
@@ -1564,3 +1570,88 @@ listen(APP_RESUMED_EVENT, () => {
 ### 29.6 那句文案要不要写回去
 
 **待主人拍板**。现在承诺已经成立，把句子加回去是合理的；但文案改动按规矩要你点头。加回去需要同时放宽守卫测试里的禁词（§28.2.1 那六条），不是一行的事。
+
+## 30. D-124：接错了一层——`RunEvent::Resumed` 在安卓上从不触发（主人真机第二次，2026-10-28）
+
+### 30.1 现象
+
+主人按 §29 的指引走了一遍：设置页 → 去系统设置录一枚指纹 → 切回 App 并**停在设置页不动**。卡片纹丝不动，仍是「本机尚未设置 指纹 / 人脸。」和「已开启，但当前不可用」；**切到别的页面再回来、或者退出重进，才会刷新**。
+
+「进出页面会刷新」本身就是决定性证据：设置页 `onMount` 里有 `refreshBiometric()`，说明**查询链路是通的**；`focus` 不触发（§29.1 已查明）；那新加的那条宿主事件呢？——它压根没发出。
+
+### 30.2 根因：挂在永远不会执行的那一层
+
+D-123 写的是 `tauri::RunEvent::Resumed`。这个变体确实存在（`#[cfg(mobile)]`，所以移动端能编过、桌面端被 cfg 掉也不报错），**但移动端从来不发它**：
+
+- `tauri-runtime-wry` 全局只有 **一处** `callback(RunEvent::Resumed)`，条件是 `Event::NewEvents(StartCause::Poll)`——那是**桌面**事件循环「顺便醒来」的信号；
+- 安卓的生命周期由 tao 的 ndk-glue 从 `onResume` 送上来，落地成 `Event::WindowEvent { event: WindowEvent::Resumed }`；
+- tauri 把它转成 `RunEvent::WindowEvent { label, event }`，并顺手在 `manager/window.rs` 里给 JS 发一条 `tauri://resumed`。
+
+所以那条 `RunEvent::Resumed` 分支在安卓上是**死代码**：编译通过、单测全绿（字面量本身没错）、真机一次都不执行。
+
+### 30.3 修法：接到窗口事件，并且两条链路都听
+
+Rust 改接窗口事件（最终形态见 §29.2）。前端**同时**监听两条事件名：
+
+| 事件 | 谁发的 | 作用 |
+|---|---|---|
+| `app://resumed` | 我们自己的 match 分支 | 名字掌握在自己手里；可加日志、可拦（busy / create 时不刷） |
+| `tauri://resumed` | 上游 `manager/window.rs` | 不经过我们那段代码；我们哪天再把分支改坏，它还能托住 |
+
+两条同源、同一秒到达 → `createResumeGate()` 做**在途合并**：查询还没回来就再来一次，直接丢弃；回来了再触发就照常再查（真的两次切回前台，就该查两次，不做节流）。
+
+### 30.4 守门：必须咬住「层」，而不只是「字面量」
+
+D-123 的四条守门里有一条咬字面量（`app://resumed` 两侧一致），它全绿——因为错的不是名字，是**挂载点**。这一轮补的：
+
+1. `lib.rs` **不许**再出现 `RunEvent::Resumed`（负向断言，直接钉死死分支）；
+2. 必须出现 `WindowEvent::Resumed`，且其前 200 字符内必须有 `RunEvent::WindowEvent`（钉住「层」，不是随便哪个字符串）；
+3. cfg 门仍在（桌面目标编不过就说明有人把 cfg 删了）；
+4. `RESUME_EVENTS` 必须同时含两个事件名，且与运行时常量一致；
+5. `createResumeGate` 的在途合并行为（两连击只查一次、回来后可再查）。
+
+**变异验证**：把 `WindowEvent::Resumed` 改回 `RunEvent::Resumed` → 第 1、2 条同时变红；把 `tauri://resumed` 从 `RESUME_EVENTS` 里删掉 → 第 4 条变红。
+
+### 30.5 教训（流程层面的）
+
+上一轮我把「编译通过 + 38 例全绿」当成了「修好了」。但这个缺陷的两个面（**谁发**、**谁在听**）都在第三方库里，单测夹具触不到，唯一能验的是真机。以后凡是依赖宿主生命周期或第三方转发的功能，交付时必须能说清**这条信号在目标平台上的确切发射点（文件 + 函数级）**；说不清就别写进「已修复」。
+
+---
+
+## 31. D-125：手机人脸一直能用，App 却说「尚未设置指纹 / 人脸」（主人真机，2026-10-28）
+
+### 31.1 现象与解释
+
+主人看到卡片红字「本机尚未设置 指纹 / 人脸。」，随即反问：手机的人脸识别一直是可用的，这跟我们的方案不一致了吧？
+
+**不一致的不是方案，是文案。** 方案（§16 第 8 条 / §23）从一开始就写死：密钥用 `AUTH_BIOMETRIC_STRONG`（Android Class 3）保护，WEAK-only 设备**禁止开启**——Class 2 凭据解不开那把钥匙，放开只会造出「认证通过却解不开」的死封印。
+
+问题在于 Android 的取值把两件事捏成了同一个：
+
+| 真实情况 | `canAuthenticate(BIOMETRIC_STRONG)` | 旧映射 |
+|---|---|---|
+| 一档生物识别都没录 | `ERROR_NONE_ENROLLED` | `not_configured` |
+| 只录了**便捷级**（Class 2，多为 2D 人脸） | `ERROR_NONE_ENROLLED`（**同一个取值**） | `not_configured` |
+| 录了指纹（Class 3） | `SUCCESS` | `available` |
+
+于是「人脸解锁用得好好的」用户被归进「什么都没设」，读到那句最刺眼的「本机尚未设置」。
+
+### 31.2 改法
+
+Kotlin 判定改成两段：强档能用 → `available`；**强档报「没录」时**才追问便捷档，便捷档能用 → 新取值 `weak_only`；其它情况（无硬件 / 被策略禁用 / 硬件占用）原样上报，不允许被便捷档查询掩盖。
+
+新增 `Availability::WeakOnly`（core）+ `"weak_only"`（wire）+ 四语言 `settings.bio_avail_weak_only`：
+
+> 本机只录入了「便捷级」生物识别（多半是 2D 人脸）：它能解开手机屏幕锁，但 Android 不允许这类凭据保护加密密钥，所以本功能用不了。请改用指纹。
+
+**能力一点没放宽**：`weak_only` 仍 ≠ `available`，开关照旧置灰，后端 `enable` 照旧拒绝。改的只有「说什么」。
+
+### 31.3 守门
+
+1. Kotlin 里 `BIOMETRIC_WEAK` 必须出现在 `BIOMETRIC_STRONG` **之后**，且只在 `ERROR_NONE_ENROLLED` 上下文里被追问；
+2. 封印要求不许被顺手放宽：`KeyProperties.AUTH_BIOMETRIC_STRONG` 与 `setAllowedAuthenticators(…BIOMETRIC_STRONG)` 必须还在，`BIOMETRIC_WEAK` 全文件只出现一次；
+3. `Availability::WeakOnly` 与 `"weak_only"` 前后端都要有（少一处就退化成 `unsupported`，卡片变成「组件无法调用」——更糊涂）；
+4. 四语言都必须有该键，且**不许**出现「尚未设置 / not set up」这类词；
+5. `bioShouldOfferSettings('weak_only')` 为真（该去补一枚指纹）。
+
+**变异验证**：把 `weak_only` 从 `keystore_rules.rs` 的映射删掉 → Rust 单测 `weak_only_is_never_folded_into_not_configured` 变红；把 zh-CN 文案改回「本机尚未设置…」→ 第 4 条变红。

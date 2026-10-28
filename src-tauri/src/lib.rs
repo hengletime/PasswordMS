@@ -21,11 +21,11 @@ use tauri::Manager as _;
 #[cfg(target_os = "android")]
 pub struct BiometricHandle(pub tauri::plugin::PluginHandle<tauri::Wry>);
 
-/// 「宿主把我叫回前台了」的事件名（D-123）。
+/// 「宿主把我叫回前台了」的事件名（D-123 引入，D-124 修正触发源）。
 ///
 /// 只在移动端有意义：桌面窗口真的丢焦点又拿回来时，前端自己的 `focus` 事件就够了；
 /// 而安卓从系统设置切回来时 WebView 里的 `document` 从未失焦，`focus` 不会触发，
-/// 只有 `RunEvent::Resumed` 知道这件事。
+/// 只有宿主生命周期知道这件事。
 ///
 /// **与 `src/lib/app-resume.ts` 的 `APP_RESUMED_EVENT` 是跨语言字面值**：两边写成
 /// 不一样也不会有任何报错，只会静默失效（D-118 就是同一类）。守卫测试逐字比对。
@@ -170,16 +170,25 @@ pub fn run() {
                         let _ = system_cmd::clear_owned_clipboard(app_handle, state.inner());
                     }
                 }
-                // 【D-123】回前台通知：安卓/iOS 从系统设置切回来时，WebView 里的
-                // `document` **从未失去焦点**，前端挂的 `window.addEventListener('focus', …)`
-                // 不会触发 ⇒ 快速解锁状态停在旧值（真机上表现为「去设置了，回来没变化」）。
-                // 移动端的生命周期由宿主掌控，`RunEvent::Resumed` 是唯一可靠的「我回来了」。
+                // 【D-124】回前台通知（修正 D-123 接错的那一层）。
                 //
-                // 这个变体只在移动端存在，桌面目标必须 cfg 掉，否则编译报「没有这个变体」。
-                // 事件名与前端 `src/lib/app-resume.ts` 的 `APP_RESUMED_EVENT` 是**跨语言
-                // 字面值**（D-118 的教训：对不上不会报错，只会静默失效），由守卫测试逐字比对。
+                // D-123 接的是 `tauri::RunEvent::Resumed`，而那条**在安卓上从不触发**：
+                // `tauri-runtime-wry` 只在 `Event::NewEvents(StartCause::Poll)` 里发
+                // `RunEvent::Resumed`，那是桌面事件循环的路径；移动端的生命周期由 tao 的
+                // ndk-glue 从 `onResume` 送上来，落地形式是**窗口事件**
+                // `Event::WindowEvent { event: WindowEvent::Resumed }`，也就是下面这条。
+                //
+                // 上一版因此是一段永不执行的分支——真机表现「去系统设置录了指纹，切回来
+                // 卡片一点不变」（主人 2026-10-28 第二次实测）。上一版编译通过、单测全绿，
+                // 因为字面量本身是对的，错的是**挂在哪一层**：这类错误只有源码级守门能挡。
+                //
+                // 变体只在移动端存在（`#[cfg(mobile)]`），桌面目标必须 cfg 掉，
+                // 否则编译报「没有这个变体」。
                 #[cfg(any(target_os = "android", target_os = "ios"))]
-                tauri::RunEvent::Resumed => {
+                tauri::RunEvent::WindowEvent {
+                    event: tauri::WindowEvent::Resumed,
+                    ..
+                } => {
                     use tauri::Emitter;
                     let _ = app_handle.emit(APP_RESUMED_EVENT, ());
                 }

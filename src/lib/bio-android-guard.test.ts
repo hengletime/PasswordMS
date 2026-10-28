@@ -16,8 +16,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { localizeBioMessageKey } from './bio-platform';
-import { APP_RESUMED_EVENT, shouldRefreshOnResume } from './app-resume';
+import { bioShouldOfferSettings, localizeBioMessageKey } from './bio-platform';
+import { APP_RESUMED_EVENT, RESUME_EVENTS, TAURI_RESUMED_EVENT, createResumeGate, shouldRefreshOnResume } from './app-resume';
 
 const modules = import.meta.glob(
   [
@@ -503,10 +503,10 @@ describe('D-122 安卓撤掉跳转按钮，改为纯文案（主人 2026-10-28 �
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// D-123：回前台重查——把上一轮删掉的那句承诺做成真的
+// D-123 / D-124：回前台重查——把上一轮删掉的那句承诺做成真的
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('D-123 宿主回前台（RunEvent::Resumed）驱动状态重查', () => {
+describe('D-123 / D-124 宿主回前台驱动状态重查', () => {
   /** 取 `marker` 之后第一对引号里的内容（刻意不用正则，免得反斜杠在传递中被吞）。 */
   function quotedAfter(src: string, marker: string): string | null {
     const at = src.indexOf(marker);
@@ -538,13 +538,25 @@ describe('D-123 宿主回前台（RunEvent::Resumed）驱动状态重查', () =>
     expect(APP_RESUMED_EVENT).toBe(ts);
   });
 
-  it('Rust 在 Resumed 分支里发事件，且该分支只编进移动端', () => {
+  it('Rust 在**窗口** Resumed 分支里发事件，且该分支只编进移动端', () => {
     const code = codeOnly(libRs);
-    const iResumed = code.indexOf('RunEvent::Resumed');
-    expect(iResumed, 'lib.rs 没有处理 RunEvent::Resumed').toBeGreaterThan(-1);
+
+    // D-124：上版接的是 `tauri::RunEvent::Resumed`——**安卓上永不触发**：上游只在桌面
+    // 事件循环的 `StartEvent::Poll` 里发它。移动端生命周期从 ndk-glue 上来时是**窗口**
+    // 事件 `WindowEvent::Resumed`。挂错层不会编译失败、不会测试失败，只会静默不执行
+    // （真机：去系统设置录了指纹，切回来卡片一点不变）。所以这条守门必须咬住「层」。
+    expect(code, 'D-124：不许再接永不触发的 RunEvent::Resumed').not.toContain(
+      'RunEvent::Resumed',
+    );
+
+    const iWindow = code.indexOf('WindowEvent::Resumed');
+    expect(iWindow, 'lib.rs 没有处理 WindowEvent::Resumed').toBeGreaterThan(-1);
+    // 必须是 `RunEvent::WindowEvent { event: … }` 这个形状，不能只是某个字符串常量。
+    const head = code.slice(Math.max(0, iWindow - 200), iWindow);
+    expect(head, '没有走 RunEvent::WindowEvent 这一层').toContain('RunEvent::WindowEvent');
 
     // 变体只在移动端存在；桌面目标不加 cfg 会直接编译失败（这条是那条编译期约束的护栏）。
-    const before = code.slice(0, iResumed);
+    const before = code.slice(0, iWindow);
     const lastCfg = before.lastIndexOf('#[cfg(');
     expect(lastCfg, 'Resumed 分支前面没有 cfg 门').toBeGreaterThan(-1);
     const cfgLine = before.slice(lastCfg, before.indexOf(']', lastCfg) + 1);
@@ -552,16 +564,29 @@ describe('D-123 宿主回前台（RunEvent::Resumed）驱动状态重查', () =>
     expect(cfgLine).toContain('target_os = "ios"');
 
     // 必须 emit 那个常量，而不是手写字符串——手写就失去了上面的逐字比对保护。
-    const arm = code.slice(iResumed, code.indexOf('_ => {}', iResumed));
+    const arm = code.slice(iWindow, code.indexOf('_ => {}', iWindow));
     expect(arm).toContain('emit(APP_RESUMED_EVENT');
     expect(arm).not.toContain('"app://resumed"');
     expect(arm, 'emit 需要 Emitter trait').toContain('use tauri::Emitter');
   });
 
+  it('两条链路都听：我们的 app://resumed + 上游的 tauri://resumed', () => {
+    // D-124：只挂我们自己那条的风险刚被验证过一整版（挂了错层，全死）。
+    // 上游在 `manager/window.rs` 收到同一个窗口事件就会 `emit_to_window("tauri://resumed")`，
+    // 听它等于多一道与我们的 match 分支无关的保险。
+    expect(TAURI_RESUMED_EVENT).toBe('tauri://resumed');
+    expect(RESUME_EVENTS).toContain(APP_RESUMED_EVENT);
+    expect(RESUME_EVENTS).toContain(TAURI_RESUMED_EVENT);
+    // 运行时常量与源码字面量一致（防止改了导出却没改字面量）。
+    expect(appResumeSrc).toContain(`'${TAURI_RESUMED_EVENT}'`);
+  });
+
   it('前端在根组件注册监听（锁屏按钮也靠它），并只在 Tauri 宿主里注册', () => {
     const code = codeOnly(appSvelte);
     expect(code).toContain('registerResumeListener()');
-    expect(code).toContain('listen(APP_RESUMED_EVENT');
+    // 遍历 RESUME_EVENTS，而不是硬写一个事件名——硬写就只挂得住一条。
+    expect(code).toContain('for (const name of RESUME_EVENTS)');
+    expect(code).toContain('listen(name');
     // 无宿主时 listen() 会抛错；Node 测试环境必须跳过。
     expect(code).toContain('hasTauriHost()');
     // 重查走 store 的既有入口，不许自己再造一条 IPC。
@@ -569,6 +594,8 @@ describe('D-123 宿主回前台（RunEvent::Resumed）驱动状态重查', () =>
     expect(code, 'App.svelte 不许直接调 biometric_status').not.toContain('biometricStatus');
     // busy 时不插一脚：否则会把进行中的解锁/开关状态搅乱。
     expect(code).toContain('shouldRefreshOnResume(');
+    // 两条链路同秒到达 → 合并成一次查询，避免两次回复乱序盖值。
+    expect(code).toContain('createResumeGate(');
   });
 
   it('该不该重查：busy / 创建向导两个例外', () => {
@@ -578,5 +605,96 @@ describe('D-123 宿主回前台（RunEvent::Resumed）驱动状态重查', () =>
     expect(shouldRefreshOnResume({ busy: true, route: 'lock' })).toBe(false);
     // 还没建库，`biometric_status` 必然失败，重查纯噪音。
     expect(shouldRefreshOnResume({ busy: false, route: 'create' })).toBe(false);
+  });
+
+  it('一次回前台的两次通知只查一次（在途合并，不是节流）', async () => {
+    let calls = 0;
+    let release: (() => void) | undefined;
+    const gate = createResumeGate(() => {
+      calls += 1;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+
+    gate.trigger();
+    gate.trigger(); // 第二条链路同一秒到达
+    expect(calls, '在途时再来一次必须被合并').toBe(1);
+    expect(gate.isIdle()).toBe(false);
+
+    release?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(gate.isIdle(), '查询回来后闸门必须放开').toBe(true);
+
+    // 真的又一次切回前台 → 正常再查一次（不是节流，不会吞掉）。
+    gate.trigger();
+    expect(calls).toBe(2);
+    release?.();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D-125：只录了「便捷级」人脸（Class 2）——不许再说「本机尚未设置指纹 / 人脸」
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('D-125 便捷级（weak-only）单列', () => {
+  it('Kotlin 判两段：强档优先，且只在强档报「没录」时才追问便捷档', () => {
+    const code = codeOnly(kotlinRaw);
+    const iFn = code.indexOf('private fun availabilityName()');
+    expect(iFn, 'Kotlin 里找不到 availabilityName()').toBeGreaterThan(-1);
+    const body = code.slice(iFn, code.indexOf('private fun keystore(', iFn));
+
+    const iStrong = body.indexOf('BIOMETRIC_STRONG');
+    const iWeak = body.indexOf('BIOMETRIC_WEAK');
+    expect(iStrong).toBeGreaterThan(-1);
+    expect(iWeak, '便捷档必须查一次，否则分不出「一档都没录」与「只录了弱档」').toBeGreaterThan(
+      iStrong,
+    );
+    expect(body).toContain('"weak_only"');
+
+    // 便捷档只在「强档报 NONE_ENROLLED」时才追问——无条件追问会把硬件缺失、
+    // 策略禁用、硬件占用全掩盖成 weak_only。
+    const weakCtx = body.slice(Math.max(0, iWeak - 300), iWeak);
+    expect(weakCtx).toContain('BIOMETRIC_ERROR_NONE_ENROLLED');
+  });
+
+  it('便捷档不许放宽封印要求：密钥与对话框仍然只认 STRONG', () => {
+    const code = codeOnly(kotlinRaw);
+    // 生成密钥时写死 STRONG、BiometricPrompt 也只放 STRONG。这两处若被
+    // 「反正 weak 也能验」的念头改掉，就会造出「认证通过了、密钥却解不开」的死封印。
+    expect(code).toContain('KeyProperties.AUTH_BIOMETRIC_STRONG');
+    expect(code).toContain(
+      'setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)',
+    );
+    // 便捷档在整个插件里只该出现在可用性判定这一处，不许泄进 seal / unlock。
+    expect(code.split('BIOMETRIC_WEAK').length - 1).toBe(1);
+  });
+
+  it('wire 取值与 core 枚举都补齐（漏一处就退化成 unsupported）', () => {
+    expect(cmds).toContain('Availability::WeakOnly => "weak_only"');
+    expect(coreBio, 'core 没有 WeakOnly 变体').toContain('WeakOnly,');
+  });
+
+  it('四语言都有 weak_only 文案，且都不许说「尚未设置 / not set up」', () => {
+    const dicts = [
+      ['zh-CN', zh, '尚未设置'],
+      ['zh-TW', zhTw, '尚未設定'],
+      ['en-US', en, 'not set up'],
+      ['th', th, 'ยังไม่ได้ตั้งค่า'],
+    ] as const;
+    for (const [name, dict, banned] of dicts) {
+      const at = dict.indexOf('bio_avail_weak_only:');
+      expect(at, `${name} 缺 bio_avail_weak_only`).toBeGreaterThan(-1);
+      const line = dict.slice(at).split(String.fromCharCode(10))[0];
+      expect(line, `${name} 又把「只录了便捷级」说成「没设置」`).not.toContain(banned);
+    }
+  });
+
+  it('weak_only 也算「该去配一下」（Android 无按钮，走文案引导）', () => {
+    expect(bioShouldOfferSettings('weak_only')).toBe(true);
+    expect(bioShouldOfferSettings('available')).toBe(false);
   });
 });

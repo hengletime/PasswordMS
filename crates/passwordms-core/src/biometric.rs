@@ -109,6 +109,17 @@ pub enum Availability {
     Available,
     /// 本机未配置（未录入生物特征 / 未设置 Hello）。
     NotConfigured,
+    /// 只录入了**便捷级**（Android Class 2）生物识别——多半是 2D 人脸。
+    ///
+    /// Android 的 `canAuthenticate(BIOMETRIC_STRONG)` 对它老实报
+    /// `BIOMETRIC_ERROR_NONE_ENROLLED`，于是「什么都没录」与「只录了不够强的一档」
+    /// 混成同一个取值。两者对**能不能开启**没有区别（本应用要 `AUTH_BIOMETRIC_STRONG`
+    /// 保护 Keystore 密钥，Class 2 凭据解不开那把钥匙，必须仍然拒绝）；区别在于
+    /// **对用户说什么**：把一个「人脸解锁用得好好的」用户称作「本机尚未设置指纹 / 人脸」，
+    /// 只会让他以为软件坏了（主人 2026-10-28 真机原话：手机人脸一直是可用的）。
+    ///
+    /// 所以这一档单列，文案改成解释「这一档用不了、为什么、该怎么做」（D-125）。
+    WeakOnly,
     /// 无相应硬件。
     NotPresent,
     /// 被策略禁用。

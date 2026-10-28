@@ -2494,17 +2494,20 @@ Tauri 的 `run_command` 经 `run_on_android_context` 把 JNI 调用**投递到�
 
 守门：`src/lib/bio-android-guard.test.ts` 21 例 + `platform/keystore_rules.rs` 5 例（纯逻辑抽到平台无关模块，桌面 `cargo test` 就能验；`android_keystore.rs` 整文件被 `cfg(target_os="android")` 门控，写在里面的测试在桌面永远跑不到）。适配器测试 8 → **13**。
 
-### 3.14.24 D-123：`RunEvent::Resumed` 驱动回前台重查（2026-10-28）
+### 3.14.24 D-123 / D-124：回前台重查——接到**窗口事件**才成立（2026-10-28，两轮）
 
 **问题**：设置页本来就挂了 `window.addEventListener('focus', …)` 去重查快速解锁状态（D-114）。它在 Windows 上成立——窗口真的丢焦点（切到系统设置）又拿回来。**Android 不成立**：Activity 进后台再回前台时，WebView 里的 `document` 从未失去焦点，`focus` 事件不触发，`refreshBiometric()` 不跑，卡片停在旧值。
 
-**修法**：移动端的生命周期只有宿主知道，所以在事件循环回调里加一个分支：
+**修法**：移动端的生命周期只有宿主知道，所以在事件循环回调里加一个分支。**注意是窗口事件，不是 `RunEvent::Resumed`**（D-124 修正，原因见下）：
 
 ```rust
 app.run(|app_handle, event| match event {
     tauri::RunEvent::Exit => { /* D-96 剪贴板兜底 */ }
     #[cfg(any(target_os = "android", target_os = "ios"))]
-    tauri::RunEvent::Resumed => {
+    tauri::RunEvent::WindowEvent {
+        event: tauri::WindowEvent::Resumed,
+        ..
+    } => {
         use tauri::Emitter;
         let _ = app_handle.emit(APP_RESUMED_EVENT, ());
     }
@@ -2512,19 +2515,43 @@ app.run(|app_handle, event| match event {
 });
 ```
 
+> **D-124（主人真机第二次）**：初版接的是 `tauri::RunEvent::Resumed`，那条**在移动端一次都不发**——`tauri-runtime-wry` 全局只有一处 `callback(RunEvent::Resumed)`，条件是 `Event::NewEvents(StartCause::Poll)`（桌面事件循环）；安卓的 `onResume` 经 tao/ndk-glue 落地为 `Event::WindowEvent { event: WindowEvent::Resumed }`。错的是**层**，不是字面量，所以编译通过、旧守门全绿、真机毫无反应。
+
 四条实现约束：
 
 | 约束 | 原因 |
 |---|---|
-| 分支必须 `#[cfg(any(target_os = "android", target_os = "ios"))]` | `RunEvent::Resumed` 在上游是 `#[cfg(mobile)]`（tauri 2.12.3 `app.rs`），桌面目标不加 cfg 直接编译失败 |
-| 用 `match` 而不是两个 `if let` | `RunEvent` 是 `#[non_exhaustive]` 的非 `Copy` 枚举，`match` 一次写清、也不需要为移动端分支另拼语句 |
+| 分支必须 `#[cfg(any(target_os = "android", target_os = "ios"))]` | `WindowEvent::Resumed` 在上游是 `#[cfg(mobile)]`（tauri 2.12.3 `app.rs`），桌面目标不加 cfg 直接编译失败 |
+| 必须匹配 `RunEvent::WindowEvent { event: WindowEvent::Resumed, .. }` | 见上面的 D-124 注；`RunEvent::Resumed` 在移动端是死分支 |
 | 事件名走常量 `APP_RESUMED_EVENT` | 与前端 `src/lib/app-resume.ts` 是**跨语言字面值**，手写字符串就失去逐字比对保护（D-118 同类坑） |
 | 前端注册在**根组件**而非设置页 | 锁屏按钮的可见性同样依赖这份状态；用户在系统设置里加了指纹回来，锁屏那个按钮就该立刻变 |
 
-**上游行为**：Android 的 **首次 `onResume` 会被忽略**（Tauri 为对齐 iOS 语义刻意如此），所以启动时不会多出一次刷新；之后每次从系统设置/其它 Activity 回来都会收到。
+**上游转发**：tauri 在 `manager/window.rs` 收到同一个窗口事件时，还会自动给 JS 发 `tauri://resumed`。前端**两条都听**（`RESUME_EVENTS`），互为兜底；同秒到达由 `createResumeGate()` 做在途合并（查询未回则丢弃第二次触发，回来后可再触发），避免两次回复乱序覆盖。
 
 **前端**：`registerResumeListener()` 在 `App.svelte` 的 `onMount` 里注册，`hasTauriHost()` 判据保证 Node 测试环境不调 `listen()`；收到事件后过一遍纯函数 `shouldRefreshOnResume({ busy, route })`——正在解锁/正在开关（`busy`）时不插一脚，还在「创建保险库」向导（没有库）时不发噪音查询，其余情况 `session.refreshBiometric()`。
 
-**真正修好的场景**：①设备还没录指纹/人脸（`not_configured`）→ 去系统设置录完 → 回来卡片立刻可用；②把指纹全删了 → 回来立刻显示降级。这两件正是「去系统设置」这段引导所指向的事，之前只靠重启或重进设置页才能看到变化。
+**真正修好的场景**：①设备还没录指纹/人脸（`not_configured` / `weak_only`）→ 去系统设置录完 → 回来卡片立刻可用；②把指纹全删了 → 回来立刻显示降级。这两件正是「去系统设置」这段引导所指向的事，之前只靠重启或重进设置页才能看到变化。
 
-守门：`bio-android-guard.test.ts` 新增 4 例（事件名逐字一致 + cfg 门 + emit 用常量 + 前端注册与判据行为），**已做变异验证**：把 Rust 侧字面量改成 `app://resume` → 立刻 1 failed。
+守门：`bio-android-guard.test.ts` 6 例——事件名逐字一致、**`lib.rs` 不许再出现 `RunEvent::Resumed`**（负向钉死死分支）、必须出现 `WindowEvent::Resumed` 且其前文有 `RunEvent::WindowEvent`（钉住「层」）、cfg 门、`RESUME_EVENTS` 含两条链路、`createResumeGate` 在途合并行为。**变异验证**：把 `WindowEvent::Resumed` 改回 `RunEvent::Resumed` → 两条同时变红；删掉 `tauri://resumed` → 第四条形红。
+
+---
+
+### 3.14.25 D-125：`weak_only`——只录了便捷级人脸，不许说「未设置」（2026-10-28）
+
+**问题**：主人在 Android 上看到「本机尚未设置 指纹 / 人脸。」，而手机的人脸解锁一直可用。真因在 Android 的取值粒度：`BiometricManager.canAuthenticate(BIOMETRIC_STRONG)` 对「一档都没录」与「只录了便捷级（Class 2，多为 2D 人脸，部分虹膜同理）」返回**同一个** `BIOMETRIC_ERROR_NONE_ENROLLED`，旧代码把它一律映射成 `not_configured`，前端照模板出「尚未设置」。
+
+**能力不变**：密钥用 `AUTH_BIOMETRIC_STRONG`（Class 3）保护，Class 2 凭据解不开 —— `weak_only` 仍 ≠ `Available`，`enable` / `unlock` 照旧拒绝（core 的判据只看「是不是 `Available`」，无需改动）。改的只是分类与文案。
+
+**改动面**（缺一处就会退化成 `Unsupported`，卡片变成更糊涂的「组件无法调用」）：
+
+| 层 | 改动 |
+|---|---|
+| Kotlin `BiometricPlugin.availabilityName()` | 两段判定：STRONG 成功 → `available`；**仅在 STRONG 报 `NONE_ENROLLED` 时**才追问 WEAK，WEAK 成功 → `weak_only`；无硬件 / 策略禁用 / 硬件占用原样上报，不被便捷档掩盖 |
+| core `Availability` | 新增 `WeakOnly`（文档写明「不许并进 `NotConfigured`」的理由） |
+| Rust `keystore_rules::availability_from` | `"weak_only"` → `WeakOnly`，**未知取值仍落 `Unsupported`** |
+| Rust `biometric_cmd::availability_name` | `WeakOnly` → `"weak_only"` |
+| 前端 | `bioShouldOfferSettings()` 纳入 `weak_only`（该去补一枚指纹）；文案 `settings.bio_avail_weak_only` 四语言 |
+
+**文案**（zh-CN）：`本机只录入了「便捷级」生物识别（多半是 2D 人脸）：它能解开手机屏幕锁，但 Android 不允许这类凭据保护加密密钥，所以本功能用不了。请改用指纹。`
+
+守门：Kotlin 里 `BIOMETRIC_WEAK` 必须在 `BIOMETRIC_STRONG` **之后**且上下文含 `NONE_ENROLLED`、全文件只出现一次（不许泄进 seal / unlock）；`AUTH_BIOMETRIC_STRONG` 与 `setAllowedAuthenticators(…STRONG)` 必须仍在；wire 与 core 枚举两端补齐；四语言键齐全且**禁「尚未设置 / not set up」**。Rust 单测 `weak_only_is_never_folded_into_not_configured`。

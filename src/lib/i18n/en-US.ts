@@ -353,6 +353,8 @@ export const enUS: Messages = {
     // D-114: `not_present` no longer claims "no hardware". When Windows Hello was never
     // provisioned, WinRT reports `DeviceNotPresent` — which is exactly what misled the user.
     bio_avail_not_configured: '{noun} is not set up on this device yet.',
+    // D-125：only a convenience-class (Class 2) biometric is enrolled — usually 2D face.
+    bio_avail_weak_only: 'This device only has a convenience-class biometric (usually 2D face): it can unlock the phone screen, but Android does not allow it to protect encryption keys, so quick unlock is unavailable. Enroll a fingerprint instead.',
     bio_avail_not_present: 'No usable {noun} was detected (usually it is simply not set up — not necessarily missing hardware).',
     bio_avail_hint: 'Open Settings → Accounts → Sign-in options, set up Windows Hello (PIN or fingerprint), then switch back to this window — it re-checks automatically.',
     bio_open_settings: 'Open Windows sign-in options',

@@ -265,6 +265,9 @@ fn availability_name(a: Availability) -> &'static str {
     match a {
         Availability::Available => "available",
         Availability::NotConfigured => "not_configured",
+        // D-125：只录了便捷级（Class 2）生物识别。前端有专门的文案解释「为什么用不了」，
+        // 绝不能并进 `not_configured`——那句话会说「本机尚未设置指纹 / 人脸」。
+        Availability::WeakOnly => "weak_only",
         Availability::NotPresent => "not_present",
         Availability::DisabledByPolicy => "disabled_by_policy",
         Availability::Busy => "busy",
