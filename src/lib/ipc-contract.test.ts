@@ -268,7 +268,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（D-113 P2 起为 62/62）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（D-114 起为 63/63）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
@@ -280,7 +280,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // set_folder_pin / reorder_pinned_folders / move_item_to_folder）。
     // D-108（豆包审查 3.5-7）：删除前后端占位死命令 sync_accept_pair，59 → 58。
     // D-113 P2（docs/08 生物识别）：+4（biometric_status / _enable / _disable / _unlock），58 → 62。
-    expect(total).toBe(62);
-    expect(withAttr).toBe(62);
+    // D-114（快速解锁引导）：+1（open_biometric_settings，打开系统「登录选项」），62 → 63。
+    expect(total).toBe(63);
+    expect(withAttr).toBe(63);
   });
 });

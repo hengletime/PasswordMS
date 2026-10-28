@@ -789,3 +789,55 @@ DTO 只有 `availability` / `state` / `reason` / `enabled_at` 四个字段，**�
 - **Windows 真机 e2e**：开启 → 锁屏 → Hello 解锁 → 改密后失效 → 关闭。本机自动化只能覆盖到 DPAPI + 映射层，Hello 弹框必须人点。
 - **Android 适配器（P3）**：Keystore + `BiometricPrompt` + `CryptoObject`，异常映射 `KeyPermanentlyInvalidatedException`。
 - **文案待拍板**：30 条新增文案已按「如实告知强度上限」口径写好，**等主人逐条确认后**再出包。
+
+---
+
+## 20. D-114：真机走查发现的三处 UX 缺陷（2026-10-28）
+
+P2 出包后主人真机 e2e，第 1–4 步全过，报出三条体验问题。前两条是**回执缺失**，第三条是**平台语义误判**——尤其第三条值得写进文档，因为它会反复骗人。
+
+### 20.1 `DeviceNotPresent` ≠ 「没有硬件」（最重要的发现）
+
+`UserConsentVerifierAvailability` 的五个值看起来分工清楚：
+
+| 值 | 我们原先的理解 | 实际情况 |
+|---|---|---|
+| `Available` | 可用 | 一致 |
+| `NotConfiguredForUser` | 用户没配 | 只在「有 PIN 但没录生物特征」等部分情形出现 |
+| `DeviceNotPresent` | **机器没有传感器** | **Hello 从未配置时也会返回这个** |
+| `DisabledByPolicy` | 策略禁用 | 一致 |
+| `DeviceBusy` | 占用 | 一致 |
+
+主人机器的实测序列：**没开 Hello → 报 `DeviceNotPresent`（我们显示「本机没有可用的硬件」）→ 去系统设置开通 → 再查即 `Available`，指纹解锁正常**。也就是说，一个**有**指纹读取器的机器会被 WinRT 报成「没有传感器」——因为它还没被 Hello 纳管。
+
+**教训**：适配层不得把平台枚举值翻译成比它本身更强的断言。「检测不到」是事实，「你没有硬件」是结论。文案只能给事实 + 下一步，不能替系统下结论。
+
+### 20.2 三条缺陷与修法
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 改密后右下角闪过「确定」 | `ui.toast('success', 'common.ok')` —— `common.ok` 是按钮标签；成功 toast 仅 3 s | 卡片内常驻 `.pms-alert.is-success + role="status"`；toast 换成 `settings.password_changed` |
+| 2 | 改密后快速解锁无声消失 | 命令层删封印（§18.5 约束 2）但前端不重查、不解释 | 改密**前**记 `bioEnabled` → 成功后 `refreshBiometric()` → `settings.password_changed_bio_off` 如实说明 |
+| 3 | 未开 Hello 时红字「没有硬件」 | 见 20.1 | 文案改「未检测到（多半是尚未设置）」+ `bio_avail_hint` 指引 + 跳「登录选项」按钮 + 窗口获焦自动重查 |
+
+### 20.3 新增命令 `open_biometric_settings`（无参数）
+
+- **为什么不走 `open_url`**：`system_cmd::open_url` 与前端 `url-safety.ts` 双侧白名单都只放行 http/https（PRD F-05 不变量）。为 `ms-settings:` 开口子 = 把「打开链接」降级成「打开任意系统协议」。
+- 新命令**不接受任何输入**：目标 URI（`ms-settings:signinoptions`）与动作名（`open`）都是 Rust 里的 UTF-16 常量，`ShellExecuteW` 唤起（`Win32_UI_Shell`，仍不引新包）。前端拿不到参数位，构造不出别的 URI。
+- 非 Windows 实现返回 `false`，命令层转 `ERR_INTERNAL`，前端只弹一句错误——不影响任何其它路径。
+
+### 20.4 守门与门禁
+
+| 门 | 结果 |
+|---|---|
+| `src/lib/d114-feedback-guard.test.ts` | **7 例全绿**（禁回退 `common.ok` / 改密必须重查 / `bioWasOn` 须在改密前取 / 常驻结果条结构 / 3 个 input 都清回执 / `not_present` 文案禁断言缺硬件 / 四语言 5 键齐全） |
+| `npm run test` | **371 passed**（364 + 7） |
+| `npm run check` | 0 error / 0 warning |
+| `check-css-contract.mjs` | PASS（0 FAIL / 6 WARN）——中途因 `--pms-success-soft` 少写一个主题块 FAIL 过一次，补 `data-theme='dark'` 块后通过 |
+| `cargo test -p passwordms-core` | 270 例不变 |
+| `cargo clippy --all-targets` / `cargo fmt` | 0 告警 / 无差异 |
+
+### 20.5 未做（登记）
+
+- **`bio_avail_disabled_by_policy` 不给「打开设置」按钮**：策略级禁用在企业管控场景下改不动，给了也是假出口。
+- **Android 侧的等价跳转**（系统生物识别设置页）随 P3 的 Keystore 适配器一起做。

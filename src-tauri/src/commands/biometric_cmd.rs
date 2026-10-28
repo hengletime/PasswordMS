@@ -229,3 +229,21 @@ fn reason_name(r: InvalidatedReason) -> &'static str {
         InvalidatedReason::Tampered => "tampered",
     }
 }
+
+/// 打开系统「登录选项」页（D-114）。
+///
+/// 存在理由：`UserConsentVerifier` 在「Windows Hello 从未配置过」的机器上回报的是
+/// `DeviceNotPresent`（不是 `NotConfiguredForUser`）。前端照着 `not_present` 显示
+/// 「没有可用的硬件」会把用户带进死胡同——他真正的下一步只是去开通。所以卡片的红字
+/// 改成引导语之后，还要有这条能**一键跳过去**的通道。
+///
+/// 无参数、无 URL：目标 URI 在 Rust 里是编译期常量，前端无法借它打开任意协议
+/// （`open_url` 的白名单只放行 http/https，不能为了 `ms-settings:` 放宽）。
+#[tauri::command(rename_all = "snake_case")]
+pub fn open_biometric_settings() -> IpcResult<()> {
+    if crate::platform::open_hello_settings() {
+        Ok(())
+    } else {
+        Err(crate::error::IpcError::internal("open_biometric_settings"))
+    }
+}

@@ -66,6 +66,18 @@
   let exportPassword = $state('');
   let newPassword = $state('');
   let newPassword2 = $state('');
+  /**
+   * D-114：改密结果的**常驻**回执（`none` = 未发生）。
+   *
+   * 原实现成功后只 `ui.toast('success', 'common.ok')` —— 文案是按钮标签「确定」
+   * （等于什么也没说），3 秒后自动消失，主人实测「右下角一闪而过，看不出成没成」。
+   * 改密是低频高危操作，结果必须留在原地，直到用户下一次动手。
+   *
+   * `bio_off` 这一档对应第二个缺陷：命令层在改密成功后按 §18.5 约束 2 删掉快速解锁
+   * 封印，前端既不重查也不解释 → 用户只看到「快速解锁悄悄没了」。所以这里要区分
+   * 「改密前是否开着」，才能如实说出它为什么没了。
+   */
+  let pwdChanged = $state<'none' | 'plain' | 'bio_off'>('none');
   let importOpen = $state(false);
   // D-63：「关于」分组 —— 版本号运行时读取（禁硬编码），失败显示「—」不阻塞页面。
   let appVersion = $state<string | null>(null);
@@ -304,6 +316,8 @@
       bioPassword = '';
       bioAsking = false;
       await session.refreshBiometric();
+      // D-114：重新开启成功 → 上面那句「快速解锁已因此关闭」就不能再挂着（已经不成立了）。
+      pwdChanged = 'none';
     } catch (err) {
       // 主密码错（ERR_UNLOCK_FAILED）/ 平台不可用 / 空库（ERR_VALIDATION）都在这里出文案。
       ui.toast('error', toAppError(err).messageKey);
@@ -362,16 +376,64 @@
       ui.toast('error', 'create.mismatch');
       return;
     }
+    // 改密**会**在后端删掉快速解锁封印（§18.5 约束 2）。先记下改密前是否开着，
+    // 成功后才能如实告诉用户「它为什么没了」（D-114）。
+    const bioWasOn = bioEnabled;
     try {
       await api.vault.changeMasterPassword(oldPassword, newPassword);
       oldPassword = '';
       newPassword = '';
       newPassword2 = '';
-      ui.toast('success', 'common.ok');
+      // 重查而不是本地改值：封印是否真被删除以后端为准（前端不维护第二份真相）。
+      await session.refreshBiometric();
+      pwdChanged = bioWasOn ? 'bio_off' : 'plain';
+      // toast 仍然给（新文案），但**不再是唯一回执**——它 3 秒就没了。
+      ui.toast(
+        'success',
+        bioWasOn ? 'settings.password_changed_bio_off' : 'settings.password_changed',
+      );
+    } catch (err) {
+      // 失败时清掉上一次的成功回执：否则「已修改」会和「修改失败」同时在屏幕上。
+      pwdChanged = 'none';
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /**
+   * D-114：一键跳到系统「登录选项」。
+   *
+   * 为什么不复用 `api.system.openUrl`：那条链路只放行 http/https（PRD F-05 不变量），
+   * `ms-settings:` 打不开；为它放宽等于把「打开链接」变成「打开任意系统协议」。
+   * 所以走一条**无参数**的专用窄命令，目标 URI 在 Rust 里是常量。
+   */
+  async function openSignInOptions(): Promise<void> {
+    try {
+      await api.vault.openBiometricSettings();
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
     }
   }
+
+  /**
+   * D-114：窗口重新获得焦点时重查快速解锁状态。
+   *
+   * 用户被引导去系统设置开通 Windows Hello 后**必然**会切回来；不重查的话卡片还停在
+   * 「未检测到」，等于刚做完的事没被承认（这正是 #3 那个困惑的另一半）。
+   * 顺带覆盖「用户在系统里关掉了 Hello」：状态会跟着变，而不是一直显示可用。
+   */
+  $effect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const onFocus = (): void => {
+      // 正在开启/关闭时不插一脚（会与按钮上的 busy 态打架）。
+      if (!bioBusy) {
+        void session.refreshBiometric();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  });
 
   async function exportVault(): Promise<void> {
     // D-51 / Q-1：守卫与流程抽到 src/lib/vault-export.ts（可被 vitest 行为级验证），
@@ -542,6 +604,14 @@
     <p class="pms-hint">{ui.t('settings.bio_risk')}</p>
     {#if bio && !bioAvailable}
       <p class="pms-hint is-danger">{ui.t(`settings.bio_avail_${bio.availability}`)}</p>
+      <!-- D-114：`not_present` 的真实含义多半是「还没开通 Hello」，光说「检测不到」等于
+           把用户留在原地。给一句明确的下一步 + 一个能直接跳过去的按钮。 -->
+      {#if bio.availability === 'not_present' || bio.availability === 'not_configured'}
+        <p class="pms-hint">{ui.t('settings.bio_avail_hint')}</p>
+        <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openSignInOptions()}>
+          {ui.t('settings.bio_open_settings')}
+        </button>
+      {/if}
     {/if}
 
     {#if bioAsking}
@@ -673,17 +743,28 @@
     </p>
     <div class="set-row">
       <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
-      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password" />
+      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password"
+        oninput={() => (pwdChanged = 'none')} />
     </div>
     <div class="set-row">
       <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
-      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password" />
+      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password"
+        oninput={() => (pwdChanged = 'none')} />
     </div>
     <div class="set-row">
       <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
-      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password" />
+      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password"
+        oninput={() => (pwdChanged = 'none')} />
     </div>
     <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
+    {#if pwdChanged !== 'none'}
+      <!-- D-114：结果留在原地。toast 三秒就消失，不能作为改密这种高危操作唯一的回执；
+           `role="status"` 让读屏也念出来。`bio_off` 顺带解释了「快速解锁为什么没了」。 -->
+      <p class="pms-alert is-success pwd-result" role="status">
+        <Icon name="check" size={16} />
+        <span>{ui.t(pwdChanged === 'bio_off' ? 'settings.password_changed_bio_off' : 'settings.password_changed')}</span>
+      </p>
+    {/if}
   </div>
 
   <div class="pms-card set-card">
@@ -914,6 +995,10 @@
     display: flex;
     gap: 0.5rem;
     margin-top: 0.6rem;
+  }
+  /* D-114：改密成功的常驻结果条（`.pms-alert.is-success` 的底色在 global.css）。 */
+  .pwd-result {
+    margin-top: 0.75rem;
   }
   /* 分段控件：跟随系统 / 浅色 / 深色。 */
   .set-seg {

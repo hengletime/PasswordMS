@@ -314,8 +314,12 @@ export const th = {
     bio_state_stale_vault_key: 'คีย์ตู้เซฟถูกเปลี่ยน (เข้าร่วมด้วยการจับคู่) การปลดล็อกเร็วจึงใช้ไม่ได้แล้ว',
     bio_state_stale_enrollment: 'การตั้งค่า Windows Hello เปลี่ยนไป การปลดล็อกเร็วจึงใช้ไม่ได้แล้ว',
     bio_state_stale_tampered: 'การตั้งค่าปลดล็อกเร็วถูกแก้ไขหรือเสียหาย จึงใช้ไม่ได้แล้ว',
-    bio_avail_not_configured: 'เครื่องนี้ยังไม่ได้ตั้งค่า Windows Hello กรุณาตั้งค่าในระบบก่อน',
-    bio_avail_not_present: 'เครื่องนี้ไม่มีฮาร์ดแวร์ Windows Hello ที่ใช้ได้',
+    // D-114: ไม่ตัดสินแทนระบบว่า "ไม่มีฮาร์ดแวร์" — เมื่อยังไม่เคยตั้งค่า Windows Hello
+    // WinRT จะรายงาน DeviceNotPresent ซึ่งเป็นข้อความที่ทำให้ผู้ใช้เข้าใจผิด
+    bio_avail_not_configured: 'เครื่องนี้ยังไม่ได้ตั้งค่า Windows Hello',
+    bio_avail_not_present: 'ตรวจไม่พบ Windows Hello ที่ใช้งานได้ (ส่วนใหญ่คือยังไม่ได้ตั้งค่า ไม่ได้หมายความว่าไม่มีฮาร์ดแวร์)',
+    bio_avail_hint: 'ไปที่ 「การตั้งค่า → บัญชี → ตัวเลือกการลงชื่อเข้าใช้」 เพื่อเปิดใช้ Windows Hello (PIN หรือลายนิ้วมือ) แล้วกลับมาที่หน้าต่างนี้ ระบบจะตรวจสอบใหม่ให้อัตโนมัติ',
+    bio_open_settings: 'เปิดตัวเลือกการลงชื่อเข้าใช้ Windows',
     bio_avail_disabled_by_policy: 'Windows Hello ถูกปิดโดยนโยบายของระบบ',
     bio_avail_busy: 'Windows Hello กำลังถูกใช้งานอยู่ กรุณาลองใหม่ภายหลัง',
     bio_avail_unsupported: 'แพลตฟอร์มนี้ไม่รองรับการปลดล็อกเร็ว',
@@ -331,6 +335,9 @@ export const th = {
     auto_sync: 'ซิงค์อัตโนมัติ',
     sync_on_start: 'ซิงค์เมื่อเปิดโปรแกรม',
     change_password: 'เปลี่ยนรหัสผ่านหลัก',
+    // D-114: ต้องมีข้อความยืนยันที่ค้างอยู่ (เดิมแจ้งเพียง `common.ok`)
+    password_changed: 'เปลี่ยนรหัสผ่านหลักแล้ว ครั้งถัดไปที่ปลดล็อกให้ใช้รหัสใหม่',
+    password_changed_bio_off: 'เปลี่ยนรหัสผ่านหลักแล้ว การปลดล็อกเร็วถูกปิดไปด้วย — ต้องเปิดใหม่อีกครั้งเพื่อใช้ Windows Hello ปลดล็อกต่อ',
     change_password_old: 'รหัสผ่านหลักปัจจุบัน',
     change_password_new: 'รหัสผ่านหลักใหม่',
     export_vault: 'ส่งออกตู้เซฟ',

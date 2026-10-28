@@ -327,8 +327,13 @@ export const zhCN = {
     bio_state_stale_vault_key: '保险库密钥已更换（配对加入），快速解锁已失效。',
     bio_state_stale_enrollment: 'Windows Hello 配置已变更，快速解锁已失效。',
     bio_state_stale_tampered: '快速解锁配置被篡改或损坏，已失效。',
-    bio_avail_not_configured: '本机未设置 Windows Hello，请先在系统设置中录入。',
-    bio_avail_not_present: '本机没有可用的 Windows Hello 硬件。',
+    // D-114：`not_present` 曾被写成「本机没有可用的硬件」，但 Windows Hello 从未配置过时
+    // WinRT 回报的正是 `DeviceNotPresent` —— 主人实测被这句话误导。文案改为只陈述
+    // 「检测不到」+ 给出下一步，不再替系统断言「你没硬件」。
+    bio_avail_not_configured: '本机尚未设置 Windows Hello。',
+    bio_avail_not_present: '未检测到可用的 Windows Hello（多半是尚未设置，不一定缺少硬件）。',
+    bio_avail_hint: '请到「设置 → 账户 → 登录选项」开通 Windows Hello（PIN 或指纹），完成后切回本窗口会自动重新检测。',
+    bio_open_settings: '打开 Windows 登录选项',
     bio_avail_disabled_by_policy: 'Windows Hello 已被系统策略禁用。',
     bio_avail_busy: 'Windows Hello 暂时被占用，请稍后重试。',
     bio_avail_unsupported: '当前平台不支持快速解锁。',
@@ -344,6 +349,10 @@ export const zhCN = {
     auto_sync: '自动同步',
     sync_on_start: '启动时同步',
     change_password: '修改主密码',
+    // D-114：改密成功必须有**留在原地**的明确回执（原先只 toast 一句 `common.ok` =「确定」，
+    // 三秒消失，主人实测「右下角一闪而过，看不出到底成没成」）。
+    password_changed: '主密码已修改，下次解锁请使用新密码。',
+    password_changed_bio_off: '主密码已修改。快速解锁已因此关闭——重新开启后才能继续用 Windows Hello 解锁。',
     change_password_old: '当前主密码',
     change_password_new: '新主密码',
     export_vault: '导出保险库',

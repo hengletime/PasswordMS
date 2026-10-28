@@ -10,6 +10,13 @@
 use passwordms_core::biometric::{Availability, SealError, Subtype, VaultSealer};
 use zeroize::Zeroizing;
 
+/// 非 Windows 没有系统「登录选项」可唤（Android 的等价物是系统生物识别设置页，P3 再接）。
+///
+/// 恒 `false` 而不是 panic：调用方据此只报「打不开」，界面照常可用。
+pub fn open_hello_settings() -> bool {
+    false
+}
+
 /// 恒不可用的适配器。
 #[derive(Debug, Default, Clone, Copy)]
 pub struct UnsupportedSealer;

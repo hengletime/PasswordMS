@@ -35,8 +35,9 @@ use windows::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE,
+    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, SW_SHOWNORMAL,
 };
 
 use super::{PresenceGate, PresenceReason};
@@ -370,6 +371,44 @@ mod hello {
     }
 }
 
+/// 「设置 → 账户 → 登录选项」的 URI（UTF-16，含结尾 NUL）。
+///
+/// 是**编译期常量**、不接受外部输入：`open_url` 的白名单只放行 http/https
+/// （PRD F-05 不变量），`ms-settings:` 绝不能走那条通道——否则「打开链接」就变成
+/// 「打开任意系统协议」。这里给它一条只做一件事的窄通道。
+///
+/// 手写而不用 `w!` 宏：这个函数只在 Windows 目标编译，写死字面量比引宏更少惊喜。
+const SIGNIN_OPTIONS: [u16; 26] = [
+    0x006d, 0x0073, 0x002d, 0x0073, 0x0065, 0x0074, 0x0074, 0x0069, 0x006e, 0x0067, 0x0073, 0x003a,
+    0x0073, 0x0069, 0x0067, 0x006e, 0x0069, 0x006e, 0x006f, 0x0070, 0x0074, 0x0069, 0x006f, 0x006e,
+    0x0073, 0x0000,
+];
+
+/// `ShellExecuteW` 的动作名 `open`（UTF-16，含结尾 NUL）。
+const OPEN_VERB: [u16; 5] = [0x006f, 0x0070, 0x0065, 0x006e, 0x0000];
+
+/// 唤起系统「登录选项」页，引导用户开通 Windows Hello。
+///
+/// 存在理由（D-114）：`UserConsentVerifier` 在「Hello 从未配置过」的机器上回报的是
+/// `DeviceNotPresent` 而不是 `NotConfiguredForUser`——用户会看到「没有可用硬件」，
+/// 却完全不知道真正的下一步是去开通。文案改成引导之后，还必须有个**一键跳过去**的
+/// 入口，否则「请去系统设置里开通」等于让用户自己找。
+///
+/// 返回是否成功唤起（`ShellExecuteW` 约定：返回值 > 32 为成功）。
+pub fn open_hello_settings() -> bool {
+    let rc = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR::from_raw(OPEN_VERB.as_ptr()),
+            PCWSTR::from_raw(SIGNIN_OPTIONS.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    rc.0 as isize > 32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,6 +538,24 @@ mod tests {
     fn subtype_is_windows_dpapi_user() {
         let sealer = DpapiSealer::with_gate(Gate::allowing());
         assert_eq!(sealer.subtype(), Subtype::WindowsDpapiUser);
+    }
+
+    /// `ms-settings:signinoptions` 是手写的 UTF-16 码点表：错一个码点就会静默打开一个
+    /// 不存在的页面，用户只看到「点了没反应」——这类错误没有任何运行期报错，必须逐字校验。
+    #[test]
+    fn signin_options_uri_is_correct() {
+        let uri = String::from_utf16(&SIGNIN_OPTIONS[..SIGNIN_OPTIONS.len() - 1])
+            .expect("URI 必须是合法 UTF-16");
+        assert_eq!(uri, "ms-settings:signinoptions");
+        assert_eq!(
+            SIGNIN_OPTIONS[SIGNIN_OPTIONS.len() - 1],
+            0,
+            "必须以 NUL 结尾（PCWSTR 靠它定位串尾）"
+        );
+        let verb =
+            String::from_utf16(&OPEN_VERB[..OPEN_VERB.len() - 1]).expect("动词必须是合法 UTF-16");
+        assert_eq!(verb, "open");
+        assert_eq!(OPEN_VERB[OPEN_VERB.len() - 1], 0);
     }
 
     /// 结果映射：`RetriesExhausted` 必须归「取消」，**绝不能**归「失效」。

@@ -329,8 +329,12 @@ export const enUS: Messages = {
     bio_state_stale_vault_key: 'The vault key was replaced (joined by pairing), so quick unlock no longer works.',
     bio_state_stale_enrollment: 'Windows Hello settings changed, so quick unlock no longer works.',
     bio_state_stale_tampered: 'The quick-unlock configuration was tampered with or damaged and no longer works.',
-    bio_avail_not_configured: 'Windows Hello is not set up on this device. Add it in Windows Settings first.',
-    bio_avail_not_present: 'This device has no usable Windows Hello hardware.',
+    // D-114: `not_present` no longer claims "no hardware". When Windows Hello was never
+    // provisioned, WinRT reports `DeviceNotPresent` — which is exactly what misled the user.
+    bio_avail_not_configured: 'Windows Hello is not set up on this device yet.',
+    bio_avail_not_present: 'No usable Windows Hello was detected (usually it is simply not set up — not necessarily missing hardware).',
+    bio_avail_hint: 'Open Settings → Accounts → Sign-in options, set up Windows Hello (PIN or fingerprint), then switch back to this window — it re-checks automatically.',
+    bio_open_settings: 'Open Windows sign-in options',
     bio_avail_disabled_by_policy: 'Windows Hello is disabled by system policy.',
     bio_avail_busy: 'Windows Hello is busy right now. Try again shortly.',
     bio_avail_unsupported: 'Quick unlock is not supported on this platform.',
@@ -346,6 +350,9 @@ export const enUS: Messages = {
     auto_sync: 'Auto sync',
     sync_on_start: 'Sync on start',
     change_password: 'Change master password',
+    // D-114: success must leave a persistent, explicit receipt (it used to toast `common.ok`).
+    password_changed: 'Master password changed. Use the new one the next time you unlock.',
+    password_changed_bio_off: 'Master password changed. Quick unlock has been turned off as a result — turn it back on to keep unlocking with Windows Hello.',
     change_password_old: 'Current master password',
     change_password_new: 'New master password',
     export_vault: 'Export vault',

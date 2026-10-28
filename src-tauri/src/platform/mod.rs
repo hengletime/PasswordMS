@@ -66,3 +66,19 @@ pub fn platform_sealer() -> PlatformSealer {
 pub fn platform_sealer() -> PlatformSealer {
     UnsupportedSealer
 }
+
+/// 唤起系统「登录选项」页（D-114：把「请去开通 Windows Hello」变成可点的下一步）。
+///
+/// **无参数**：目标 URI 是编译期常量，前端无法借这条通道打开任意协议
+/// （`open_url` 的 http/https 白名单是 PRD F-05 不变量，不能为它放宽）。
+/// 非 Windows 恒 `false`——调用方只据此报「打不开」，界面照常可用。
+#[cfg(windows)]
+pub fn open_hello_settings() -> bool {
+    windows_dpapi::open_hello_settings()
+}
+
+/// 见上。
+#[cfg(not(windows))]
+pub fn open_hello_settings() -> bool {
+    unsupported::open_hello_settings()
+}

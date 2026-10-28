@@ -51,6 +51,7 @@ pub fn run() {
             commands::biometric_cmd::biometric_enable,
             commands::biometric_cmd::biometric_disable,
             commands::biometric_cmd::biometric_unlock,
+            commands::biometric_cmd::open_biometric_settings,
             // item
             commands::item_cmd::list_items,
             commands::item_cmd::get_item,

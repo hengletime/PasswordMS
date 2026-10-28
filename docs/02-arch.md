@@ -2394,7 +2394,7 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 - **适配器两段式**（`src-tauri/src/platform/`）：DPAPI 用户域加密（`bind` 作 `pOptionalEntropy`）+ `UserConsentVerifier` 在场闸门。平台部分全部关在 `cfg(windows)` 里；非 Windows 用 `UnsupportedSealer`（恒 `Unsupported`），**Android 可正常编译**，P3 再接 Keystore。`Cargo.toml` 只在 `cfg(windows)` 下打开 `windows` 特性（版本对齐既有依赖树的 0.62.2，**不引新包**）+ `windows-future`。
 - **WinRT 线程模型**：专用 STA 线程（`CoInitializeEx(APARTMENTTHREADED)`）+ `PeekMessage` 消息泵等完成回调；Tauri 命令线程不碰 WinRT。超时 / `DeviceBusy` / 未配置一律 `Unavailable`，**绝不** `Invalidated`。
 - **核心抽象**：`platform::PresenceGate`（`availability` + `request(reason)`）把「弹框」与「加解密」拆开——真机弹框无法自动化，而「`bind` 是否真的参与加密」只有适配器自己知道。于是测试可注入「永远通过」的闸门，对**真实 DPAPI** 断言「换 `bind` 必解不开」（§18.5 约束 1）。
-- **命令层 4 条**（`commands/biometric_cmd.rs`，全部 `rename_all="snake_case"`）：`biometric_status`（锁定态可调，只读）/ `biometric_enable`（解锁态 + **主密码** + 非空库）/ `biometric_disable`（幂等删除，撤销唯一动作）/ `biometric_unlock`（`Container::open` 只一次）。命令面 58 → **62**。
+- **命令层 5 条**（`commands/biometric_cmd.rs`，全部 `rename_all="snake_case"`）：`biometric_status`（锁定态可调，只读）/ `biometric_enable`（解锁态 + **主密码** + 非空库）/ `biometric_disable`（幂等删除，撤销唯一动作）/ `biometric_unlock`（`Container::open` 只一次）/ `open_biometric_settings`（**无参数**，唤起系统「登录选项」，D-114）。命令面 58 → **63**。
 - **会话层新增两个 API**（`session.rs`）：
   ① `verify_master_password(&self, pw)` —— 开启快速解锁的「证明你知道主密码」，**不改变会话状态**，生物会话（`kek=None`）同样可用（只用到头部 + KDF）；
   ② `unlock_with_opened_container(path, container, vk)` —— 与 `unlock_with_vault_key` 行为等价，差别只在复用调用方已打开的容器，消掉「算 `bind` 用旧头部、建会话用新头部」的 TOCTOU 窗口。
@@ -2402,3 +2402,18 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 - **并发**：`AppState::biometric_busy`（CAS）+ RAII `BiometricGuard`；抢不到的一侧返回 `ERR_VALIDATION`，前端静默（用户正在等前一次的 Hello 弹框）。
 - **守门**：适配器 7 例（真 DPAPI 往返 / **换熵必失败** / 输出长度落在 core 白名单 48..=1024 / 取消与不可用不弹框 / subtype / 结果映射）+ 会话级 5 例（`verify_master_password` 正确-错误-锁定态-生物会话；`unlock_with_opened_container` 与路径入口等价、空库仍拒、错 VK 仍拒）。core **270 例全绿**（265 + 5），适配器 **7 例全绿**，clippy 0，fmt 过；前端 vitest **364** / svelte-check 0 错 / CSS 契约 PASS。
 - **文档**：`docs/08-biometric-unlock.md §19`（P2 落地记录与十条约束落点表）、`docs/06-ui-design.md §6.24`（解锁页按钮 + 设置页卡片 + 行类型纪律）。
+### 3.14.20 D-114：快速解锁的三处 UX 缺陷修复
+
+主人真机走查 P2 报出三条，全部是**流程/文案**层，不改密码学模型：
+
+| # | 现象 | 根因 | 修法 |
+|---|---|---|---|
+| 1 | 改主密码后只在右下角闪过一句「确定」 | `ui.toast('success', 'common.ok')` —— `common.ok` 是按钮标签「确定」，等于什么都没说；成功 toast 只有 3 s | 改密文案点名「主密码已修改」，并在卡片内**常驻** `.pms-alert.is-success + role="status"`；三个输入框任一改动即清除旧回执 |
+| 2 | 改密后快速解锁悄悄没了，无任何解释 | 命令层按 §18.5 约束 2 删封印，前端既不重查也不说明 | 改密**前后对比** `bioEnabled`（改密后必为 false，不能事后取）→ 成功时 `refreshBiometric()` 并区分 `plain` / `bio_off` 两档文案 |
+| 3 | 没开 Windows Hello 时红字说「本机没有可用的硬件」 | `UserConsentVerifier` 在「Hello 从未配置」的机器上回报 **`DeviceNotPresent` 而不是 `NotConfiguredForUser`** | 文案只陈述「未检测到」并点明「多半是尚未设置，不一定缺硬件」；补一句操作指引 + `open_biometric_settings` 无参数命令跳「设置 → 账户 → 登录选项」；窗口重新获焦自动重查（开通后切回来即刻生效） |
+
+**为什么不复用 `open_url` 打开 `ms-settings:`**：那条链路的前后端白名单都只放行 http/https（PRD F-05 不变量），为它开口子等于把「打开链接」变成「打开任意系统协议」。新增的 `open_biometric_settings` **不带参数**，目标 URI 是 Rust 里的编译期常量，`ShellExecuteW` 唤起（`Win32_UI_Shell` 特性，仍不引新包）。
+
+守门：`src/lib/d114-feedback-guard.test.ts` 7 例（禁回退到 `common.ok` / 改密后必须重查 / `bioWasOn` 必须在改密前取 / 常驻结果条结构 / 三个 input 都要清回执 / `not_present` 文案禁再断言缺硬件 / 四语言 5 键齐全）。前端 vitest 371（364+7）/ svelte-check 0 错 / CSS 契约 PASS；core 270 例不变、clippy 0、fmt 过。
+
+附带修正：`--pms-success-soft` 在 4 个主题块（`:root` / 媒体查询暗色 / `data-theme='dark'` / `data-theme='light'`）**必须齐全**——CSS 契约脚本会逐键比对暗色两块的共有键，漏一个即 FAIL。

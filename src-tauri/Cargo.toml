@@ -49,6 +49,7 @@ zeroize.workspace = true
 #   - `Win32_Foundation`：`LocalFree`（DPAPI 输出缓冲必须由它释放）
 #   - `Win32_System_Com`：`CoInitializeEx`（WinRT 要求线程先初始化公寓）
 #   - `Win32_UI_WindowsAndMessaging`：`PeekMessageW` 等（Hello 对话框需要消息泵）
+#   - `Win32_UI_Shell`：`ShellExecuteW`（D-114：唤起「设置 → 账户 → 登录选项」）
 #   - `Security_Credentials_UI`：`UserConsentVerifier`（Windows Hello 在场闸门）
 # `windows-future` 提供 `IAsyncOperation::join/when`（阻塞/回调等待），已在依赖树中。
 [target.'cfg(windows)'.dependencies]
@@ -56,6 +57,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Security_Credentials_UI",
 ] }

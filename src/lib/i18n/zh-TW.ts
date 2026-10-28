@@ -305,8 +305,12 @@ export const zhTW = {
     bio_state_stale_vault_key: '保險庫金鑰已更換（配對加入），快速解鎖已失效。',
     bio_state_stale_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效。',
     bio_state_stale_tampered: '快速解鎖設定遭竄改或損毀，已失效。',
-    bio_avail_not_configured: '本機未設定 Windows Hello，請先在系統設定中登錄。',
-    bio_avail_not_present: '本機沒有可用的 Windows Hello 硬體。',
+    // D-114：`not_present` 不再替系統斷言「你沒有硬體」——Hello 從未設定時 WinRT 回報的
+    // 正是 `DeviceNotPresent`。改成只陳述「偵測不到」＋給下一步。
+    bio_avail_not_configured: '本機尚未設定 Windows Hello。',
+    bio_avail_not_present: '未偵測到可用的 Windows Hello（多半是尚未設定，不一定缺少硬體）。',
+    bio_avail_hint: '請到「設定 → 帳戶 → 登入選項」開通 Windows Hello（PIN 或指紋），完成後切回本視窗會自動重新偵測。',
+    bio_open_settings: '開啟 Windows 登入選項',
     bio_avail_disabled_by_policy: 'Windows Hello 已被系統策略停用。',
     bio_avail_busy: 'Windows Hello 暫時被佔用，請稍後再試。',
     bio_avail_unsupported: '目前平台不支援快速解鎖。',
@@ -322,6 +326,9 @@ export const zhTW = {
     auto_sync: '自動同步',
     sync_on_start: '啟動時同步',
     change_password: '修改主密碼',
+    // D-114：改密成功必須有**留在原地**的明確回執（原先只 toast 一句 `common.ok`＝「確定」）。
+    password_changed: '主密碼已修改，下次解鎖請使用新密碼。',
+    password_changed_bio_off: '主密碼已修改。快速解鎖已因此關閉——重新開啟後才能繼續用 Windows Hello 解鎖。',
     change_password_old: '目前主密碼',
     change_password_new: '新主密碼',
     export_vault: '匯出保險庫',

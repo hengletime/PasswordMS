@@ -77,6 +77,9 @@ export const vault = {
     invoke<BiometricStatusDto>('biometric_enable', { master_password: masterPassword }),
   biometricDisable: (): Promise<void> => invoke<void>('biometric_disable'),
   biometricUnlock: (): Promise<StatusDto> => invoke<StatusDto>('biometric_unlock'),
+  // D-114：打开系统「登录选项」。**不带参数**——目标 URI 在 Rust 里是常量，
+  // 前端拿不到「打开任意系统协议」的能力（`open_url` 的白名单只放行 http/https）。
+  openBiometricSettings: (): Promise<void> => invoke<void>('open_biometric_settings'),
   changeMasterPassword: (oldPassword: string, newPassword: string): Promise<void> =>
     invoke<void>('change_master_password', {
       old_password: oldPassword,
