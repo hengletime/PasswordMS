@@ -448,10 +448,26 @@ describe('D-122 安卓撤掉跳转按钮，改为纯文案（主人 2026-10-28 �
     }
   });
 
-  it('文案要点明「各品牌不同」，而不是给一条假路径', () => {
-    // Android 的菜单位置没有统一答案。写死一条「设置 → 安全 → …」等于把用户送去一个
-    // 不存在的页面（旧文案抄的是 iOS 的路由）。
-    expect(zh).toContain('各品牌位置不同');
-    expect(en).toContain('differs by brand');
+  it('文案只说「去设置的哪一类页面」，不列品牌、不写死菜单层级', () => {
+    // 三条禁令，任何一条被破都说明文案又开始「假装知道对方的手机长什么样」：
+    //   1. 不列品牌——全球机型太多，列三家等于告诉另外几百家「没为你考虑」；
+    //   2. 不写死菜单层级——旧文案的「设置 → 安全 → 指纹、人脸与密码」抄的是 iOS 路由，
+    //      安卓上没有这一层，等于把用户送去不存在的页面；
+    //   3. 不承诺具体位置——各家 ROM 自己改，写死了就是下一次「点了没反应」。
+    const dicts = [
+      ['zh-CN', zh, ['华为', '小米', '各品牌']],
+      ['zh-TW', zhTw, ['華為', '小米', '各品牌']],
+      ['en-US', en, ['Huawei', 'Xiaomi', 'brand', 'stock Android']],
+      ['th', th, ['Huawei', 'Xiaomi', 'แบรนด์']],
+    ] as const;
+    for (const [name, dict, banned] of dicts) {
+      const at = dict.indexOf('bio_manage_hint_android:');
+      // 键行 + 下一行（文案可能写在续行上）。用 fromCharCode 取换行，避免转义在传递中被改写。
+      const line = dict.slice(at).split(String.fromCharCode(10)).slice(0, 2).join('');
+      for (const word of banned) {
+        expect(line, `${name} 的安卓提示又列品牌了：${word}`).not.toContain(word);
+      }
+      expect(line, `${name} 的安卓提示没写「设置」`).toMatch(/设置|設定|Settings|การตั้งค่า/);
+    }
   });
 });

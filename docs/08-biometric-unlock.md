@@ -1434,7 +1434,15 @@ const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealB
 - Rust 的 Android 分支直接 `false`，并写清为什么不尝试；
 - 四语言删掉 `bio_avail_hint_android` 与 `bio_open_settings_android` 两个键，新增 `bio_manage_hint_android`。
 
-顺带修掉一个一直没说破的问题：旧 Android 文案写的是「设置 → 安全 → 指纹、人脸与密码」——**这是 iOS 的路由**，Android 上根本不存在这个菜单层级。新文案不再给单一假路径，改为「去「设置」里找生物识别 / 指纹 / 人脸相关页面」+ 三个品牌的举例。
+顺带修掉一个一直没说破的问题：旧 Android 文案写的是「设置 → 安全 → 指纹、人脸与密码」——**这是 iOS 的路由**，Android 上根本不存在这个菜单层级。
+
+第一版新文案试过「列举三个品牌」的写法（华为 / 小米 / 原生），主人当场否掉，理由很实在：
+
+1. **全球机型列不完**——写三家等于告诉另外几百家「没为你考虑」，比不写更失礼；
+2. **这几项出厂就开着**——绝大多数用户第一次打开设置页时，指纹早就录好了，他们要做的是「增删」，不是「从零找入口」；
+3. **会用密码管理器的人自己找得到**——把一个显而易见的系统页面讲成教程，是在低估用户。
+
+所以最终只留一句「去手机的「设置」里打开生物识别 / 指纹 / 人脸页面操作」。**文案只说页面类别，不承诺具体位置、不列品牌、不写菜单层级**——这三条也写进了守卫测试。
 
 | | Windows | Android |
 |---|---|---|
@@ -1460,6 +1468,6 @@ const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealB
 2. 按钮紧跟 `{#if bioShowSettingsEntry}`、中间只允许夹一层 `bioCanOpenSettings(bioPlatform)`，不许出现 `{/if}`；
 3. Android 分支必须是段落、**不许有 `<button>`**；
 4. Kotlin 不许再有 `fun openSettings` / `ACTION_BIOMETRIC_ENROLL`（查代码不查注释），Rust 不许再出现 `"openSettings"`，但 Windows 的 `open_hello_settings` 必须还在；
-5. 两个废弃键从四语言词典里同步消失，新键四语言齐全，文案里必须出现「各品牌位置不同」/「differs by brand」。
+5. 两个废弃键从四语言词典里同步消失，新键四语言齐全；安卓提示**不许出现品牌名**（华为 / 小米 / Huawei / Xiaomi / brand）且必须提到「设置」——这条做过变异验证：把「华为在…」加回文案，测试立刻变红。
 
 **已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，第 1 例立刻变红，还原后全绿。
