@@ -357,7 +357,7 @@ export const enUS: Messages = {
     bio_avail_hint: 'Open Settings → Accounts → Sign-in options, set up Windows Hello (PIN or fingerprint), then switch back to this window — it re-checks automatically.',
     bio_open_settings: 'Open Windows sign-in options',
     bio_manage_hint_android:
-      'To enroll, add or remove fingerprints or faces, open your phone Settings and go to the biometrics / fingerprint / face page. Switch back to this window and it re-checks automatically.',
+      'To enroll, add or remove fingerprints or faces, open your phone Settings and go to the biometrics / fingerprint / face page.',
     bio_avail_disabled_by_policy: '{noun} is disabled by system policy.',
     bio_avail_busy: '{noun} is busy right now. Try again shortly.',
     bio_avail_unsupported: '{noun} cannot be invoked on this system, so quick unlock is unavailable for now.',

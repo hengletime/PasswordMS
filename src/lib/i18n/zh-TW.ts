@@ -328,7 +328,7 @@ export const zhTW = {
     bio_avail_hint: '請到「設定 → 帳戶 → 登入選項」開通 Windows Hello（PIN 或指紋），完成後切回本視窗會自動重新偵測。',
     bio_open_settings: '開啟 Windows 登入選項',
     bio_manage_hint_android:
-      '需要錄入、增刪指紋或臉部時，請到手機的「設定」裡開啟生物辨識 / 指紋 / 臉部頁面操作。完成後切回本視窗會自動重新偵測。',
+      '需要錄入、增刪指紋或臉部時，請到手機的「設定」裡開啟生物辨識 / 指紋 / 臉部頁面操作。',
     bio_avail_disabled_by_policy: '{noun} 已被系統策略停用。',
     bio_avail_busy: '{noun} 暫時被佔用，請稍後再試。',
     bio_avail_unsupported: '{noun} 元件在目前系統上無法呼叫，暫時無法使用快速解鎖。',

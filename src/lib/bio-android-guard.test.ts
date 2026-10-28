@@ -470,4 +470,28 @@ describe('D-122 安卓撤掉跳转按钮，改为纯文案（主人 2026-10-28 �
       expect(line, `${name} 的安卓提示没写「设置」`).toMatch(/设置|設定|Settings|การตั้งค่า/);
     }
   });
+
+  it('不承诺「切回来自动重新检测」（Android 上做不到，主人 2026-10-28 真机否掉）', () => {
+    // 设置页确实挂了 `window.addEventListener('focus', …)` → `refreshBiometric()`，
+    // 但那套在 **Windows** 上成立：窗口真的丢了焦点又拿回来。
+    // Android 是 Activity 进后台再回来，WebView 里的 document 从未失去焦点，
+    // `focus` 事件不会触发 ⇒ 状态停在旧值，用户照做后发现没变化，只会觉得这 App 在瞎说。
+    //
+    // 所以文案只说「去哪里做」，不承诺做完之后本窗口会怎样。
+    // 想让它真成立，得在 Rust 侧接 `RunEvent::Resumed` 发事件再让前端重查（另开一条），
+    // 不是靠改文案能补上的。
+    const dicts = [
+      ['zh-CN', zh, ['自动重新检测', '自动检测', '重新检测', '会自动']],
+      ['zh-TW', zhTw, ['自動重新偵測', '自動偵測', '重新偵測', '會自動']],
+      ['en-US', en, ['re-checks automatically', 'automatically', 'auto-refresh', 'auto ']],
+      ['th', th, ['อัตโนมัติ', 'ตรวจสอบใหม่']],
+    ] as const;
+    for (const [name, dict, banned] of dicts) {
+      const at = dict.indexOf('bio_manage_hint_android:');
+      const line = dict.slice(at).split(String.fromCharCode(10)).slice(0, 2).join('');
+      for (const word of banned) {
+        expect(line, `${name} 的安卓提示又在承诺自动重查了：${word}`).not.toContain(word);
+      }
+    }
+  });
 });

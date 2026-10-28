@@ -1444,6 +1444,31 @@ const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealB
 
 所以最终只留一句「去手机的「设置」里打开生物识别 / 指纹 / 人脸页面操作」。**文案只说页面类别，不承诺具体位置、不列品牌、不写菜单层级**——这三条也写进了守卫测试。
 
+### 28.2.1 第三轮：连「切回来自动重新检测」也删掉
+
+第一版新文案结尾还有一句「完成后切回本窗口会自动重新检测」。真机验完，主人原话：
+
+> 这一句不要，因为设置后回来没有立即重新检测。
+
+查证下来，**代码是有的，只是在 Android 上不生效**：
+
+```ts
+// Settings.svelte
+$effect(() => {
+  const onFocus = () => { if (!bioBusy) void session.refreshBiometric(); };
+  window.addEventListener('focus', onFocus);
+  return () => window.removeEventListener('focus', onFocus);
+});
+```
+
+这条 `focus` 监听在 **Windows** 上完全成立——窗口真的丢焦点（切到「设置」App）又拿回来，事件必触发。而 Android 是 Activity 进后台再回前台，**WebView 里的 `document` 从未失去焦点**，`window` 的 `focus` 事件不触发，于是 `refreshBiometric()` 不会跑，卡片停在旧状态。
+
+承诺一件做不到的事，比不承诺更糟：用户按指引去做、回来发现没变化，只会认为这 App 在瞎说——这比「你自己去看看」诚实得多。
+
+**要让这句成立需要另做一条**：Rust 侧接 `RunEvent::Resumed`（Android 每次回前台都会走到），`emit` 一个事件，前端监听后调 `refreshBiometric()`。这属于新增生命周期能力，不是改文案能补的，单独立项。
+
+守卫测试加了禁词：`自动重新检测` / `自动检测` / `会自动`（简）、`自動重新偵測` / `會自動`（繁）、`automatically` / `re-checks automatically`（英）、`อัตโนมัติ` / `ตรวจสอบใหม่`（泰）。**已做变异验证**：把旧句加回去，立刻 `1 failed / 33 passed`，还原后 34 全绿。
+
 | | Windows | Android |
 |---|---|---|
 | 控制方式 | 「打开 Windows 登录选项」按钮 | 一句说明文字 |
@@ -1468,6 +1493,7 @@ const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealB
 2. 按钮紧跟 `{#if bioShowSettingsEntry}`、中间只允许夹一层 `bioCanOpenSettings(bioPlatform)`，不许出现 `{/if}`；
 3. Android 分支必须是段落、**不许有 `<button>`**；
 4. Kotlin 不许再有 `fun openSettings` / `ACTION_BIOMETRIC_ENROLL`（查代码不查注释），Rust 不许再出现 `"openSettings"`，但 Windows 的 `open_hello_settings` 必须还在；
-5. 两个废弃键从四语言词典里同步消失，新键四语言齐全；安卓提示**不许出现品牌名**（华为 / 小米 / Huawei / Xiaomi / brand）且必须提到「设置」——这条做过变异验证：把「华为在…」加回文案，测试立刻变红。
+5. 两个废弃键从四语言词典里同步消失，新键四语言齐全；安卓提示**不许出现品牌名**（华为 / 小米 / Huawei / Xiaomi / brand）且必须提到「设置」——这条做过变异验证：把「华为在…」加回文案，测试立刻变红；
+6. 安卓提示**不许承诺「自动重查」**（§28.2.1）——同样做过变异验证。
 
 **已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，第 1 例立刻变红，还原后全绿。
