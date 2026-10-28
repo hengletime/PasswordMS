@@ -49,6 +49,14 @@ pub mod codes {
     /// 【D-91 新增】回收站还原被拒：同 item_id 已有活跃条目（多设备同步复活了新版本），
     /// 旧快照还原会顶掉同步来的新数据（两端丢数据）。
     pub const ERR_RESTORE_CONFLICT: &str = "ERR_RESTORE_CONFLICT";
+    /// 【1.3.0 生物识别新增】平台不可用 / 本机未开启快速解锁。
+    pub const ERR_BIOMETRIC_UNAVAILABLE: &str = "ERR_BIOMETRIC_UNAVAILABLE";
+    /// 【1.3.0 生物识别新增】用户在平台弹窗中取消。
+    pub const ERR_BIOMETRIC_CANCELED: &str = "ERR_BIOMETRIC_CANCELED";
+    /// 【1.3.0 生物识别新增】封印已失效（改主密码 / 生物注册变更 / 篡改，见 `docs/08` §10）。
+    pub const ERR_BIOMETRIC_INVALIDATED: &str = "ERR_BIOMETRIC_INVALIDATED";
+    /// 【1.3.0 生物识别新增】该操作需要主密码（生物解锁会话不持有 KEK）。
+    pub const ERR_NEED_MASTER_PASSWORD: &str = "ERR_NEED_MASTER_PASSWORD";
     pub const ERR_IO: &str = "ERR_IO";
     pub const ERR_CRYPTO: &str = "ERR_CRYPTO";
     pub const ERR_INTERNAL: &str = "ERR_INTERNAL";
@@ -133,6 +141,21 @@ pub enum CoreError {
     /// 并经 LWW 把覆盖传播回对端（两端丢数据）。
     #[error("restore conflicts with an existing live item")]
     RestoreConflict,
+    /// 【1.3.0 生物识别】平台不可用，或本机未开启快速解锁。
+    ///
+    /// **不得**与 [`CoreError::UnlockFailed`] 混用：生物路径的失败原因对用户是可行动的
+    /// （去系统设置配 Hello、重新开启开关），折叠成「解锁失败」等于把用户带偏（`docs/08` §10）。
+    #[error("biometric unlock unavailable")]
+    BiometricUnavailable,
+    /// 【1.3.0 生物识别】用户在平台弹窗中取消——前端应**静默**回主密码输入框。
+    #[error("biometric prompt canceled")]
+    BiometricCanceled,
+    /// 【1.3.0 生物识别】封印已失效，携带可区分的失效原因。
+    #[error("biometric seal invalidated")]
+    BiometricInvalidated(crate::biometric::InvalidatedReason),
+    /// 【1.3.0 生物识别】该操作需要主密码：生物解锁会话不持有 KEK。
+    #[error("master password required for this operation")]
+    NeedMasterPassword,
     #[error("io error")]
     Io(String),
     #[error("crypto operation failed")]
@@ -175,6 +198,10 @@ impl CoreError {
             CoreError::BlobCapacity => codes::ERR_BLOB_CAPACITY,
             CoreError::VkAdoptRequiresEmpty { .. } => codes::ERR_VK_ADOPT_REQUIRES_EMPTY,
             CoreError::RestoreConflict => codes::ERR_RESTORE_CONFLICT,
+            CoreError::BiometricUnavailable => codes::ERR_BIOMETRIC_UNAVAILABLE,
+            CoreError::BiometricCanceled => codes::ERR_BIOMETRIC_CANCELED,
+            CoreError::BiometricInvalidated(_) => codes::ERR_BIOMETRIC_INVALIDATED,
+            CoreError::NeedMasterPassword => codes::ERR_NEED_MASTER_PASSWORD,
             CoreError::Io(_) => codes::ERR_IO,
             CoreError::Crypto(_) => codes::ERR_CRYPTO,
             CoreError::Internal(_) => codes::ERR_INTERNAL,
@@ -214,6 +241,20 @@ impl CoreError {
             CoreError::BlobCapacity => "err.blob_capacity",
             CoreError::VkAdoptRequiresEmpty { .. } => "err.vk_adopt_requires_empty",
             CoreError::RestoreConflict => "err.restore_conflict",
+            // 1.3.0 生物识别：四类失败各给独立 key —— 用户能据此决定「去配 Hello」
+            // 「重新开启开关」还是「改用主密码」，笼统一句「解锁失败」反而误导（`docs/08` §10）。
+            CoreError::BiometricUnavailable => "err.biometric_unavailable",
+            CoreError::BiometricCanceled => "err.biometric_canceled",
+            CoreError::BiometricInvalidated(reason) => match reason {
+                crate::biometric::InvalidatedReason::MasterPasswordChanged => {
+                    "err.bio_invalidated_password"
+                }
+                crate::biometric::InvalidatedReason::BiometricEnrollmentChanged => {
+                    "err.bio_invalidated_enrollment"
+                }
+                crate::biometric::InvalidatedReason::Tampered => "err.bio_invalidated_tampered",
+            },
+            CoreError::NeedMasterPassword => "err.need_master_password",
             // io::Error 有两类来源：本机文件读写、TCP 同步链路（transport 的 read/write 超时、
             // 对端拒绝/断开都走 From<std::io::Error>）。按 kind 细分文案——
             // 把「网络问题」从笼统的「文件读写错误」里拆出来，避免把用户排查方向带偏（D-40 跟进）。

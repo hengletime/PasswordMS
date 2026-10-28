@@ -36,7 +36,14 @@ pub enum SessionState {
 /// 解锁后持有的全部敏感上下文；`Drop` 时级联清零。
 pub struct Unlocked {
     pub repo: Repository,
-    pub kek: Kek,
+    /// 密钥加密密钥。
+    ///
+    /// - **主密码路径** = `Some`（`docs/08` §4.6）；
+    /// - **生物识别路径** = `None`：平台解封只交出 VK，拿不到 KEK。
+    ///
+    /// 全仓只有 [`Session::adopt_vault_key`] 需要 KEK（配对加入时重包裹对端 VK），
+    /// 该状态下返回 [`CoreError::NeedMasterPassword`] 而不是 panic / 静默。
+    pub kek: Option<Kek>,
     /// 【D-91】解锁期维护（迁移/回收站清理/孤儿 GC）的失败警告——core 无法落日志，
     /// 由命令层（vault_cmd::unlock）取走写入文件日志（内容仅错误码，Debug 已脱敏）。
     pub maintenance_warnings: Vec<String>,
@@ -114,7 +121,7 @@ impl Session {
         Ok(Self {
             state: SessionState::Unlocked(Unlocked {
                 repo,
-                kek,
+                kek: Some(kek),
                 maintenance_warnings: Vec::new(),
             }),
         })
@@ -179,15 +186,38 @@ impl Session {
         // D-106（豆包审查 3.2-1）：此处已跑过真实 Argon2 且 verify 通过（时序与
         // 正常解锁相当，无侧信道），但错误码仍要折叠——ERR_IO / ERR_INTERNAL 会向
         // 本地篡改者暴露「密码正确但后续失败」这一与统一化承诺不符的信号。
-        let device_id = match load_or_create_device_id(path) {
-            Ok(id) => id,
-            Err(_) => return Err(CoreError::UnlockFailed),
-        };
+        Self::finish_unlock(path, container, vault_key, Some(kek))
+            .map_err(|_| CoreError::UnlockFailed)
+    }
+
+    /// 生物识别路径解锁（`docs/08-biometric-unlock.md` §4.4）：平台已解封出 VK，**没有 KEK**。
+    ///
+    /// 与 [`Session::unlock`] 的差异只有两点：
+    /// 1. 不跑 Argon2（这正是快速解锁的全部意义）；
+    /// 2. `kek = None` ⇒ [`Session::adopt_vault_key`] 返回 [`CoreError::NeedMasterPassword`]。
+    ///
+    /// **错误不折叠**：此路径不存在「密码错 vs 数据损坏」的时序侧信道（A-05 的前提不成立），
+    /// 把 IO / 内部错误说成 `UnlockFailed` 只会误导排查（`docs/08` §10）。
+    pub fn unlock_with_vault_key(path: &Path, vault_key: VaultKey) -> CoreResult<Self> {
+        if !path.exists() {
+            return Err(CoreError::NoVault);
+        }
+        let container = Container::open(path)?;
+        Self::finish_unlock(path, container, vault_key, None)
+    }
+
+    /// 解锁收尾（主密码路径与生物路径共用）：设备 ID、仓储打开、启动前三项维护。
+    fn finish_unlock(
+        path: &Path,
+        container: Container,
+        vault_key: VaultKey,
+        kek: Option<Kek>,
+    ) -> CoreResult<Self> {
+        // D-106（豆包审查 3.2-1）：密码路径在上层把这些失败折叠成 `UnlockFailed`；
+        // 生物路径（`unlock_with_vault_key`）原样上报——两条路径的折叠策略由调用方决定。
+        let device_id = load_or_create_device_id(path)?;
         // D-108（3.2-8）：复用头部阶段打开的容器，二次 open 不再发生。
-        let mut repo = match Repository::open_with_container(container, vault_key, device_id) {
-            Ok(r) => r,
-            Err(_) => return Err(CoreError::UnlockFailed),
-        };
+        let mut repo = Repository::open_with_container(container, vault_key, device_id)?;
         // D-91（审查 C4）：三项维护此前 `let _ =` 全静默——migrate 半途失败会让
         // 附件引用与 blob 状态漂移且无人知晓。失败收集为警告，由命令层落文件日志。
         // 均为幂等操作，本次失败下次解锁自动重试。
@@ -286,7 +316,7 @@ impl Session {
         let verify_mac = verify::compute_verify_mac(&verify_new)?;
         let wrapped = keys::wrap_vault_key(&kek_new, &unlocked.repo.vault_key()[..])?;
         unlocked.repo.update_key_material(wrapped, verify_mac)?;
-        unlocked.kek = kek_new;
+        unlocked.kek = Some(kek_new);
         Ok(())
     }
 
@@ -307,12 +337,26 @@ impl Session {
             });
         }
         let header = unlocked.repo.header().clone();
-        let wrapped = keys::wrap_vault_key(&unlocked.kek, host_vk)?;
+        // 生物识别解锁的会话没有 KEK（`docs/08` §4.4）：配对加入需要它才能用本地 KEK
+        // 重包裹对端 VK。这里明确要求主密码，而不是 panic 或静默降级。
+        let kek = unlocked.kek.as_ref().ok_or(CoreError::NeedMasterPassword)?;
+        let wrapped = keys::wrap_vault_key(kek, host_vk)?;
         unlocked
             .repo
             .update_key_material(wrapped, header.verify_mac.clone())?;
         unlocked.repo.replace_vault_key(Zeroizing::new(*host_vk));
         Ok(())
+    }
+
+    /// 当前会话是否持有 KEK（即是否由主密码解锁而来）。
+    ///
+    /// 生物识别解锁的会话恒为 `false`；命令层据此在「配对加入」等需要 KEK 的入口提前
+    /// 引导用户输入主密码，而不是等调用失败再报错（`docs/08` §4.5）。
+    pub fn has_kek(&self) -> bool {
+        match &self.state {
+            SessionState::Unlocked(u) => u.kek.is_some(),
+            SessionState::Locked => false,
+        }
     }
 
     /// 当前保险库文件路径（已解锁时）。

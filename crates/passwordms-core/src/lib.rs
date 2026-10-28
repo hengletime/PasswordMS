@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attachment_name;
+pub mod biometric;
 pub mod constants;
 pub mod crypto;
 pub mod error;
