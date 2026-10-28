@@ -13,13 +13,14 @@
 
 import { describe, expect, it } from 'vitest';
 
-const modules = import.meta.glob(['../components/Settings.svelte', './i18n/*.ts'], {
+const modules = import.meta.glob(['../components/Settings.svelte', './i18n/*.ts', './bio-platform.ts'], {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>;
 
 const settings = modules['../components/Settings.svelte'] ?? '';
+const bioPlatform = modules['./bio-platform.ts'] ?? '';
 const zh = modules['./i18n/zh-CN.ts'] ?? '';
 const zhTw = modules['./i18n/zh-TW.ts'] ?? '';
 const en = modules['./i18n/en-US.ts'] ?? '';
@@ -75,7 +76,12 @@ describe('D-114 「没有硬件」不许替系统断言', () => {
   });
 
   it('两种「没配好」都要有可点的出口：引导语 + 打开登录选项按钮', () => {
-    expect(settings).toContain("bio.availability === 'not_present' || bio.availability === 'not_configured'");
+    // §23 起这段判断搬进了 `bioShouldOfferSettings()`，由 Settings 与测试共用同一份真相
+    // （Android 复用同一条逻辑，只是目标页面换成系统生物识别设置）。所以这里断言两件事：
+    // 调用点用的就是这个函数，而那个函数本身覆盖了两种「没配好」。
+    expect(settings).toContain('bioShouldOfferSettings(bio.availability)');
+    expect(bioPlatform).toContain("availability === 'not_present'");
+    expect(bioPlatform).toContain("availability === 'not_configured'");
     expect(settings).toContain('settings.bio_avail_hint');
     expect(settings).toContain('settings.bio_open_settings');
     expect(settings).toContain('api.vault.openBiometricSettings()');

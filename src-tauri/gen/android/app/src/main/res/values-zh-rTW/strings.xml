@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">"PasswordMS"</string>
+    <string name="main_activity_title">"PasswordMS"</string>
+    <string name="bio_prompt_title">"解鎖 PasswordMS"</string>
+    <string name="bio_prompt_subtitle">"驗證身分以開啟保險庫"</string>
+    <string name="bio_prompt_cancel">"取消"</string>
+</resources>

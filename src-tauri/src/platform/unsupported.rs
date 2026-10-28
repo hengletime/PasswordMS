@@ -1,6 +1,7 @@
-//! 非 Windows 平台占位适配器（Android 在 P3 接 Keystore）。
+//! 无生物识别适配器的平台占位（macOS / Linux 等）。
 //!
-//! 存在的意义是让 **Android 也能编译通过**，同时把「本机做不了生物识别」表达成
+//! Windows 走 `windows_dpapi`、Android 走 `android_keystore`；本模块是**剩下的平台**的兜底，
+//! 存在的意义是让它们编译通过，同时把「本机做不了生物识别」表达成
 //! [`Availability::NotImplemented`] 而不是编译错误或 panic：
 //!
 //! - `enable` 会在第一步就因不可用而拒绝，**不会**写出任何封印文件；
@@ -10,17 +11,11 @@
 //! **为什么是 `NotImplemented` 而不是 `Unsupported`**（D-116）：前端据此**整块不渲染**
 //! 快速解锁卡片。安卓 v1.3.1 曾显示「Windows Hello 快速解锁 · 未开启 · 当前平台不支持」
 //! ——既把 Windows 专属名词搬到安卓，又给一个还没做的功能挂了块「不支持」的牌子
-//! （主人真机实测）。`Unsupported` 保留给「有适配器但平台此刻做不了」的 Windows 故障。
+//! （主人真机实测）。`Unsupported` 保留给「有适配器但平台此刻做不了」的真实故障
+//! （Windows 的 WinRT 激活失败、Android 的安全更新缺失等）。
 
 use passwordms_core::biometric::{Availability, SealError, Subtype, VaultSealer};
 use zeroize::Zeroizing;
-
-/// 非 Windows 没有系统「登录选项」可唤（Android 的等价物是系统生物识别设置页，P3 再接）。
-///
-/// 恒 `false` 而不是 panic：调用方据此只报「打不开」，界面照常可用。
-pub fn open_hello_settings() -> bool {
-    false
-}
 
 /// 恒不可用的适配器。
 #[derive(Debug, Default, Clone, Copy)]

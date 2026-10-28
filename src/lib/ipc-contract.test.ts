@@ -271,7 +271,11 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
   it('所有 tauri::command 都带 rename_all = "snake_case"（D-114 起为 63/63）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
-    const withAttr = (all.match(/tauri::command\(rename_all = "snake_case"\)/g) ?? []).length;
+    // 不写成 `\(rename_all = "snake_case"\)` 精确匹配：§23 起有 5 个命令带 `, async`
+    // （Android 侧 `run_mobile_plugin` 会阻塞，命令必须在同步线程池里跑，不能落在主线程）。
+    // 这条不变量的本体是「**每个** command 都声明了 snake_case」，不是「参数列表只有一项」。
+    const withAttr = (all.match(/tauri::command\([^)]*rename_all = "snake_case"[^)]*\)/g) ?? [])
+      .length;
     // 防空扫描假绿：`rustTree` 的 glob 若漏了 `**`（只匹配 `src-tauri/src/*.rs`），
     // commands/ 子目录一个都扫不到，total 会是 0，而 0 === 0 会静默通过。
     expect(total).toBeGreaterThan(40);

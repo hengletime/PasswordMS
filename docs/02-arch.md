@@ -2462,3 +2462,34 @@ D-106 汇报中「另行排期」的 auto-lock 兜底与豆包报告 P3 余项�
 影响面：`enable` / `unlock` 的判定是 `availability != Available`，两个变体的**行为完全相同**，因此这是纯分类/展示改动，密码学零风险。`Unsupported` 的 wire 值 `"unsupported"` **保持不变**（老分支仍能命中），只是文案改口径为「Windows Hello 组件在当前系统上无法调用」。
 
 守门：`src/lib/d116-platform-gate.test.ts` 4 例（含「禁止改成显示但置灰」的反向断言）。前端 vitest 378 → **382**。
+
+### 3.14.23 生物识别 P3：Android Keystore 适配器（D-113，2026-10-28）
+
+`platform/mod.rs` 的 `platform_sealer()` 增加第三分支：`cfg(target_os="android")` → `android_keystore::KeystoreSealer`。**`VaultSealer` trait 一字未改**——Android 的密钥绑定语义恰好落在 `seal(vk, bind)` / `unseal(sealed, bind)` 这两个方法的表达能力之内，不需要给公共 API 加参数。
+
+**三条实现决定**
+
+| 决定 | 做法 | 为什么 |
+|---|---|---|
+| 密钥别名 | `hex(bind)` 全长（64 hex） | `bind` 已含 `vault_id` / `verify_mac` / `wkv nonce`，换库换密码自动换别名；截断会让两个库以极小概率共用一把密钥 |
+| `bind` 的角色 | GCM 的 **AAD**（`updateAAD`，加解密各一次） | 与 Windows 用 `bind` 作 DPAPI `pOptionalEntropy` 语义对齐：换 bind 必解不开 |
+| 在场验证 | `BiometricPrompt.CryptoObject(cipher)` | **认证与解密是同一个对象**，中间没有可插针的缝隙；不需要 Windows 那道独立闸门，也不会弹两次 |
+
+**线程模型（最容易写错的一处）**
+
+Tauri 的 `run_command` 经 `run_on_android_context` 把 JNI 调用**投递到主线程**执行 ⇒ Kotlin 的 `@Command` 跑在主线程。而 Rust 侧 `run_mobile_plugin` 是 `mpsc::recv()` 阻塞等回复。两条叠加，若任何一端占住主线程就是**静默死锁**（对话框永不出现，也没有错误码）。因此：
+
+1. Kotlin `@Command` 只「发起」——挂上 `BiometricPrompt` 后**立即返回，不 resolve**，把 `Invoke` 存进回调，认证结束才 `resolve`/`reject`（`AtomicBoolean` 保证只回一次）；
+2. 五个命令全部标 `#[tauri::command(rename_all = "snake_case", async)]` ⇒ 同步函数体落 `sync_threadpool`，不在主线程。
+
+> 契约测试的正则随之放宽为 `[^)]*rename_all = "snake_case"[^)]*`——不变量的本体是「每个 command 都声明 snake_case」，不是「参数列表只有一项」。63 → 58 的假红就是这么来的。
+
+**错误映射**：`canceled` → `Canceled`（前端静默）；`invalidated`（`KeyPermanentlyInvalidatedException`）→ `Invalidated`，最终呈现 `stale + enrollment_changed`；长度越界/解密失败 → `tampered`；插件不可达 → `Unavailable(Unsupported)`。`onAuthenticationFailed`（这一下没认出指纹）**不回复**——系统会让用户继续试，此时 reject 会把「没对准」变成一次失败解锁。
+
+**撤销**：`biometric_disable` 先读头部算 `bind`（删完就读不到）→ 删 `biometric.json` → 调插件 `remove` 删 Keystore 别名。`purge_platform_key()` 在 Windows 是空操作（DPAPI 主密钥由系统账户派生，我们没有自己的密钥句柄）。
+
+**平台自述**：`BiometricStatusDto` 新增 `platform`（`windows`/`android`/`other`），前端据此取词（见 `06-ui-design.md` §6.28）。用后端说而不嗅探 UA——UA 随 WebView 与 ROM 漂移。
+
+**撤销/失效的边界**：`minSdk 24`，API 30+ 用 `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)`（auth-per-use + 限强生物识别），24–29 退 `setUserAuthenticationValidityDurationSeconds(-1)`；两档都设 `setInvalidatedByBiometricEnrollment(true)`。**不关掉它**——那正是 Android 唯一能告给我们、Windows 侧至今拿不到的失效信号（§21.4 候选 C 的等价物）。
+
+守门：`src/lib/bio-android-guard.test.ts` 21 例 + `platform/keystore_rules.rs` 5 例（纯逻辑抽到平台无关模块，桌面 `cargo test` 就能验；`android_keystore.rs` 整文件被 `cfg(target_os="android")` 门控，写在里面的测试在桌面永远跑不到）。适配器测试 8 → **13**。

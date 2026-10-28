@@ -59,6 +59,9 @@ export const zhCN = {
     // D-113 P2：快速解锁按钮（仅本机已开启且平台可用时出现）。
     biometric_unlock: '使用 Windows Hello 解锁',
     biometric_waiting: '等待 Windows Hello…',
+    // §23：锁屏按钮同样按平台取词。
+    biometric_unlock_android: '用指纹 / 人脸解锁',
+    biometric_waiting_android: '等待指纹 / 人脸验证…',
   },
   create: {
     title: '创建保险库',
@@ -317,33 +320,52 @@ export const zhCN = {
     // D-113 P2：生物识别快速解锁（`docs/08-biometric-unlock.md` §6.1 / §10）。
     // 文案必须如实说明「这是 Windows Hello，不是指纹」「能拿到本机登录凭据者可绕过」。
     group_biometric: '快速解锁',
+    // §23：Android 上线后，卡片里的平台名词必须跟着平台走。用一个 `{noun}` 插值，
+    // 而不是给每条文案都写两遍——否则「Windows Hello」会继续漏到手机上去（D-116 同类缺陷）。
+    // §23：Android 侧的名词。用在 `{noun}` 插值的通用句里（如「本机尚未设置 {noun}」）。
+    bio_noun: 'Windows Hello',
+    bio_noun_android: '指纹 / 人脸',
     bio_title: 'Windows Hello 快速解锁',
     bio_desc: '用 Windows Hello 代替每次输入主密码。密钥只在本机、本 Windows 账户下可用，不进入备份与同步。',
     bio_risk: '注意：能拿到本机 Windows 登录凭据的人可以绕过 Windows Hello。本功能的安全上限取决于该账户的锁屏强度。',
+    // Android 侧是另一套名词，也是**另一套风险模型**：这里不存在「拿到账户凭据就能绕过」，
+    // 真正的约束是「新增指纹即让密钥永久失效」。照搬 Windows 那段话等于说错话。
+    bio_title_android: '指纹 / 人脸快速解锁',
+    bio_desc_android:
+      '用手机自带的指纹或人脸代替每次输入主密码。密钥由系统安全芯片保管，只在本机可用，不进入备份与同步。',
+    bio_risk_android:
+      '注意：新增或删除指纹 / 人脸记录后，已保存的密钥会永久失效，需要重新开启。这是系统的安全设计——防的正是「有人趁你不注意加一枚指纹」。',
     bio_state_on: '已开启（{date}）',
     // D-115：`state=ready` 只说明**封印文件**完好，不说明平台现在能用。Hello 被关掉时
     // 两者会同时成立，旧文案只说「已开启」就与下面的红字自相矛盾（主人真机截图）。
     bio_state_on_unavailable: '已开启，但当前不可用（{date}）',
     bio_degraded_hint: 'Windows Hello 关闭或未开通期间，快速解锁一次也用不了。重新开通后会自动恢复——已保存的配置不会被删除，也不需要重输主密码；要彻底撤销请点「关闭」。',
+    bio_degraded_hint_android:
+      '指纹 / 人脸不可用期间（例如把所有指纹都删了），快速解锁一次也用不了。重新录入后会自动恢复——已保存的配置不会被删除，也不需要重输主密码；要彻底撤销请点「关闭」。',
     bio_state_off: '未开启',
     bio_state_corrupt: '配置已损坏，请关闭后重新开启。',
     bio_state_stale_password: '主密码已修改，快速解锁已失效。',
     bio_state_stale_vault_key: '保险库密钥已更换（配对加入），快速解锁已失效。',
     bio_state_stale_enrollment: 'Windows Hello 配置已变更，快速解锁已失效。',
+    bio_state_stale_enrollment_android: '设备的指纹 / 人脸记录已变更，快速解锁已失效。',
     bio_state_stale_tampered: '快速解锁配置被篡改或损坏，已失效。',
     // D-114：`not_present` 曾被写成「本机没有可用的硬件」，但 Windows Hello 从未配置过时
     // WinRT 回报的正是 `DeviceNotPresent` —— 主人实测被这句话误导。文案改为只陈述
     // 「检测不到」+ 给出下一步，不再替系统断言「你没硬件」。
-    bio_avail_not_configured: '本机尚未设置 Windows Hello。',
-    bio_avail_not_present: '未检测到可用的 Windows Hello（多半是尚未设置，不一定缺少硬件）。',
+    bio_avail_not_configured: '本机尚未设置 {noun}。',
+    bio_avail_not_present: '未检测到可用的 {noun}（多半是尚未设置，不一定缺少硬件）。',
     bio_avail_hint: '请到「设置 → 账户 → 登录选项」开通 Windows Hello（PIN 或指纹），完成后切回本窗口会自动重新检测。',
+    // §23：Android 的设置路径完全不同，必须单独一句（不能只换名词）。
+    bio_avail_hint_android:
+      '请到「设置 → 安全 → 指纹、人脸与密码」录入指纹或人脸，完成后切回本窗口会自动重新检测。',
     bio_open_settings: '打开 Windows 登录选项',
-    bio_avail_disabled_by_policy: 'Windows Hello 已被系统策略禁用。',
-    bio_avail_busy: 'Windows Hello 暂时被占用，请稍后重试。',
+    bio_open_settings_android: '打开系统生物识别设置',
+    bio_avail_disabled_by_policy: '{noun} 已被系统策略禁用。',
+    bio_avail_busy: '{noun} 暂时被占用，请稍后重试。',
     // D-116：`unsupported` 现在只表示「有适配器、但平台此刻做不了」（如 Windows Hello 的
     // 系统组件无法激活）。「本平台根本没接」已独立成 `not_implemented`，那种情况整卡不渲染，
     // 所以这句不能再写成「当前平台不支持」——那是在为不存在的功能做解释。
-    bio_avail_unsupported: 'Windows Hello 组件在当前系统上无法调用，暂时不能使用快速解锁。',
+    bio_avail_unsupported: '{noun} 组件在当前系统上无法调用，暂时不能使用快速解锁。',
     bio_enable: '开启',
     bio_disable: '关闭',
     bio_enable_hint: '开启前需输入主密码确认身份。',
@@ -360,6 +382,8 @@ export const zhCN = {
     // 三秒消失，主人实测「右下角一闪而过，看不出到底成没成」）。
     password_changed: '主密码已修改，下次解锁请使用新密码。',
     password_changed_bio_off: '主密码已修改。快速解锁已因此关闭——重新开启后才能继续用 Windows Hello 解锁。',
+    password_changed_bio_off_android:
+      '主密码已修改。快速解锁已因此关闭——重新开启后才能继续用指纹 / 人脸解锁。',
     change_password_old: '当前主密码',
     change_password_new: '新主密码',
     export_vault: '导出保险库',

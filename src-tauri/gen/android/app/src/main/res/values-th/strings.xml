@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">"PasswordMS"</string>
+    <string name="main_activity_title">"PasswordMS"</string>
+    <string name="bio_prompt_title">"ปลดล็อก PasswordMS"</string>
+    <string name="bio_prompt_subtitle">"ยืนยันตัวตนเพื่อเปิดตู้เซฟ"</string>
+    <string name="bio_prompt_cancel">"ยกเลิก"</string>
+</resources>

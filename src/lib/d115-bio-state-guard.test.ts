@@ -84,7 +84,9 @@ describe('D-115 「已开启」不许与「不可用」同屏打架', () => {
   });
 
   it('降级时必须解释「为什么开关还在 / 撤销靠什么」', () => {
-    expect(settings).toContain("ui.t('settings.bio_degraded_hint')");
+    // §23 起键名带平台后缀（`${bioSuffix}`），这里断言的是「渲染点仍然引用这个键」，
+    // 而不是某个固定的字面量写法——否则每加一个平台就要改一次测试。
+    expect(settings).toContain('settings.bio_degraded_hint${bioSuffix}');
     // 这句话必须明确「撤销要按关闭」，不能只说「重新开通就恢复」。
     expect(zh).toContain('要彻底撤销请点「关闭」');
     // 也必须承认「关闭期间一次也用不了」（这才是真实安全语义）。

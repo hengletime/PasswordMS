@@ -35,13 +35,18 @@ use crate::state::{append_log, ensure_resync_listener, vault_path, AppState};
 /// 锁定态下没有 `Repository`，只好读容器头部；这一读是**必然**的——`bind` 的三个输入
 /// 全在明文头部里。头部读不出来（无库 / 损坏）时一律报「未开启」，不报错：解锁页不该
 /// 因为一个旁路文件而无法显示主密码输入框。
-#[tauri::command(rename_all = "snake_case")]
+///
+/// `(async)` 不是可选项：Android 侧的 `run_mobile_plugin` 会阻塞等 Kotlin 回复，而
+/// Tauri 的**同步**命令是直接在 IPC 线程上跑函数体的（`body_blocking` 不派发）。万一
+/// 那个线程就是主线程，就会和「`run_command` 把 JNI 调用 post 到主线程」撞成死锁。
+/// 标了 `(async)` 后同步函数体的落点是 `sync_threadpool`，彻底避开。
+#[tauri::command(rename_all = "snake_case", async)]
 pub fn biometric_status(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<BiometricStatusDto> {
     let path = vault_path(&app)?;
-    let sealer = crate::platform::platform_sealer();
+    let sealer = crate::platform::platform_sealer(&app);
     let availability = sealer.availability();
     let store = SealStore::new(&path);
 
@@ -61,53 +66,31 @@ pub fn biometric_status(
     };
 
     let Some(header) = header else {
-        return Ok(BiometricStatusDto {
-            availability: availability_name(availability).to_string(),
-            state: "absent".to_string(),
-            reason: None,
-            enabled_at: None,
-        });
+        return Ok(status_dto(availability, "absent", None, None));
     };
 
     let target = SealTarget::from_header(&header);
     Ok(match store.inspect(&target)? {
-        SealState::Absent => BiometricStatusDto {
-            availability: availability_name(availability).to_string(),
-            state: "absent".to_string(),
-            reason: None,
-            enabled_at: None,
-        },
-        SealState::Corrupt => BiometricStatusDto {
-            availability: availability_name(availability).to_string(),
-            state: "corrupt".to_string(),
-            reason: None,
-            enabled_at: None,
-        },
-        SealState::Ready(rec) => BiometricStatusDto {
-            availability: availability_name(availability).to_string(),
-            state: "ready".to_string(),
-            reason: None,
-            enabled_at: Some(rec.created_at),
-        },
-        SealState::Stale(reason) => BiometricStatusDto {
-            availability: availability_name(availability).to_string(),
-            state: "stale".to_string(),
-            reason: Some(reason_name(reason).to_string()),
-            enabled_at: None,
-        },
+        SealState::Absent => status_dto(availability, "absent", None, None),
+        SealState::Corrupt => status_dto(availability, "corrupt", None, None),
+        SealState::Ready(rec) => status_dto(availability, "ready", None, Some(rec.created_at)),
+        SealState::Stale(reason) => {
+            status_dto(availability, "stale", Some(reason_name(reason)), None)
+        }
     })
 }
 
 /// 开启快速解锁：**必须**重新输入主密码（§4.5）。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(rename_all = "snake_case", async)]
 pub fn biometric_enable(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     master_password: String,
 ) -> IpcResult<BiometricStatusDto> {
     let Some(_busy) = state.try_begin_biometric() else {
         return Err(busy_error());
     };
-    let sealer = crate::platform::platform_sealer();
+    let sealer = crate::platform::platform_sealer(&app);
     let availability = sealer.availability();
     if availability != Availability::Available {
         // 开启入口在 UI 上本应已置灰（§18.5 约束 7 的另一半），这里再兜一次：
@@ -140,27 +123,38 @@ pub fn biometric_enable(
     let store = SealStore::new(&repo.path());
     let record: SealRecord = biometric::enable(&store, &sealer, &target, vault_key)?;
 
-    Ok(BiometricStatusDto {
-        availability: availability_name(availability).to_string(),
-        state: "ready".to_string(),
-        reason: None,
-        enabled_at: Some(record.created_at),
-    })
+    Ok(status_dto(
+        availability,
+        "ready",
+        None,
+        Some(record.created_at),
+    ))
 }
 
 /// 关闭快速解锁：删除封印（**撤销的唯一动作**）与残留 tmp。
 ///
 /// 不要求主密码、不要求解锁态：这是降级操作，且「忘掉主密码的人必须能自救」。
-#[tauri::command(rename_all = "snake_case")]
+///
+/// 撤销必须**彻底**：除了删 `biometric.json`，还要删平台侧的密钥材料。
+/// Android 的 Keystore 条目如果不删，文件虽没了、密钥还留在系统里——那就不叫撤销。
+/// `bind` 要在**删文件之前**算好（删完就读不到头部了）。
+#[tauri::command(rename_all = "snake_case", async)]
 pub fn biometric_disable(app: tauri::AppHandle) -> IpcResult<()> {
     let path = vault_path(&app)?;
+    let bind = Container::open(&path)
+        .ok()
+        .map(|c| biometric::bind_of(&SealTarget::from_header(c.header())));
     // `remove` 幂等（文件不存在也算成功），因此关闭按钮永远可用。
     SealStore::new(&path).remove()?;
+    if let Some(bind) = bind {
+        let sealer = crate::platform::platform_sealer(&app);
+        crate::platform::purge_platform_key(&sealer, &bind);
+    }
     Ok(())
 }
 
 /// 用快速解锁打开保险库。
-#[tauri::command(rename_all = "snake_case")]
+#[tauri::command(rename_all = "snake_case", async)]
 pub fn biometric_unlock(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
@@ -178,7 +172,7 @@ pub fn biometric_unlock(
     }
 
     let path = vault_path(&app)?;
-    let sealer = crate::platform::platform_sealer();
+    let sealer = crate::platform::platform_sealer(&app);
     // §18.5 约束 10：整个流程只 open 一次容器——算 `bind` 用的是这份头部，
     // 建会话用的也是这份头部，中间没有「文件被替换」的窗口。
     let container = Container::open(&path)?;
@@ -208,6 +202,43 @@ fn busy_error() -> crate::error::IpcError {
     CoreError::Validation("biometric_busy".to_string()).into()
 }
 
+/// 组装 DTO。
+///
+/// 六个构造点全部走这里——加字段时只改一处，不会出现「某个分支忘了填」导致的
+/// 前端读不到 `platform` 而退回通用文案。
+fn status_dto(
+    availability: Availability,
+    state: &str,
+    reason: Option<&str>,
+    enabled_at: Option<i64>,
+) -> BiometricStatusDto {
+    BiometricStatusDto {
+        availability: availability_name(availability).to_string(),
+        state: state.to_string(),
+        reason: reason.map(str::to_string),
+        enabled_at,
+        platform: platform_name().to_string(),
+    }
+}
+
+/// 当前平台（§23：前端据此选择「Windows Hello」还是「指纹 / 人脸」这套名词）。
+///
+/// 由后端说出自己是谁，比前端嗅探 UA 可靠——UA 字符串随 WebView 版本和厂商 ROM 漂移。
+fn platform_name() -> &'static str {
+    #[cfg(windows)]
+    {
+        "windows"
+    }
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+    #[cfg(not(any(windows, target_os = "android")))]
+    {
+        "other"
+    }
+}
+
 /// 可用性的 wire 取值（前端 i18n 键后缀，`settings.bio_avail_*`）。
 fn availability_name(a: Availability) -> &'static str {
     match a {
@@ -233,18 +264,18 @@ fn reason_name(r: InvalidatedReason) -> &'static str {
     }
 }
 
-/// 打开系统「登录选项」页（D-114）。
+/// 打开系统的生物识别设置页（D-114；Android 侧见 §23）。
 ///
 /// 存在理由：`UserConsentVerifier` 在「Windows Hello 从未配置过」的机器上回报的是
 /// `DeviceNotPresent`（不是 `NotConfiguredForUser`）。前端照着 `not_present` 显示
 /// 「没有可用的硬件」会把用户带进死胡同——他真正的下一步只是去开通。所以卡片的红字
 /// 改成引导语之后，还要有这条能**一键跳过去**的通道。
 ///
-/// 无参数、无 URL：目标 URI 在 Rust 里是编译期常量，前端无法借它打开任意协议
-/// （`open_url` 的白名单只放行 http/https，不能为了 `ms-settings:` 放宽）。
-#[tauri::command(rename_all = "snake_case")]
-pub fn open_biometric_settings() -> IpcResult<()> {
-    if crate::platform::open_hello_settings() {
+/// 无参数、无 URL：目标页面在 Rust / Kotlin 里是编译期常量，前端拿不到参数位，构造不出
+/// 别的协议或 Intent（`open_url` 的白名单只放行 http/https，不能为了它放宽）。
+#[tauri::command(rename_all = "snake_case", async)]
+pub fn open_biometric_settings(app: tauri::AppHandle) -> IpcResult<()> {
+    if crate::platform::open_biometric_settings(&app) {
         Ok(())
     } else {
         Err(crate::error::IpcError::internal("open_biometric_settings"))

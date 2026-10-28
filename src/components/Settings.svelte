@@ -11,6 +11,7 @@
   import Modal from './common/Modal.svelte';
   import Spinner from './common/Spinner.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
+  import { bioPlatformOf, bioShouldOfferSettings, bioTextSuffix } from '../lib/bio-platform';
   import { toAppError } from '../lib/errors';
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
@@ -77,6 +78,16 @@
    * 否则用户看到的是自相矛盾的两句话。
    */
   const bioDegraded = $derived(bioEnabled && bio !== null && !bioAvailable);
+  /**
+   * §23：平台名词与平台专属文案的后缀。
+   *
+   * Windows 沿用无后缀的键，Android 用 `_android` 那一套——**不能只换名词就完事**：
+   * 两个平台的设置路径（「登录选项」vs「指纹、人脸与密码」）和风险模型都不同。
+   * 通用句（「本机尚未设置 {noun}」这类）走 `bioNoun` 插值，避免每种语言写两遍。
+   */
+  const bioPlatform = $derived(bioPlatformOf(bio));
+  const bioSuffix = $derived(bioTextSuffix(bioPlatform));
+  const bioNoun = $derived(ui.t(`settings.bio_noun${bioSuffix}`));
   let oldPassword = $state('');
   // D-51：导出保险库需要单独输入当前主密码（后端 repo.export_vault 会用它做 unlock_check 后再 copy 库文件）。
   // 旧实现误用「修改主密码」卡片的 oldPassword，而导出卡片根本没有输入框 → 空密码必报「解锁失败，请重试。」
@@ -379,6 +390,19 @@
   }
 
   /**
+   * 失效原因对应的文案键（§23）。
+   *
+   * 只有 `enrollment_changed`（生物特征变更）与平台绑定：Windows 说「Windows Hello 配置
+   * 已变更」，Android 说「指纹 / 人脸记录已变更」。其余三条（改主密码 / 换 VK / 被篡改）
+   * 是数据层原因，两个平台说法一致，不带后缀。
+   */
+  function bioStaleKey(reason: string): string {
+    return reason === 'enrollment_changed'
+      ? `settings.bio_state_stale_enrollment${bioSuffix}`
+      : `settings.bio_state_stale_${reason}`;
+  }
+
+  /**
    * D-106（豆包审查 3.5-4）：剪贴板 TTL 钳制——HTML min/max 不阻止键入，
    * 0/负值会导致复制即清空、极大值会让密码长期残留剪贴板。
    */  function clampClipboardTtl(raw: number): number {
@@ -414,7 +438,7 @@
       // toast 仍然给（新文案），但**不再是唯一回执**——它 3 秒就没了。
       ui.toast(
         'success',
-        bioWasOn ? 'settings.password_changed_bio_off' : 'settings.password_changed',
+        bioWasOn ? `settings.password_changed_bio_off${bioSuffix}` : 'settings.password_changed',
       );
     } catch (err) {
       // 失败时清掉上一次的成功回执：否则「已修改」会和「修改失败」同时在屏幕上。
@@ -613,13 +637,16 @@
     </div>
   </div>
 
-  <!-- D-113 P2：快速解锁（Windows Hello）。
+  <!-- D-113 P2：快速解锁（Windows Hello）。P3 起 Android 也接上了（Keystore）。
        独立卡片而不是塞进「安全」分组：它是**立即生效的动作**，不归底部「保存」按钮管；
        混进安全卡片会让用户以为改完要按保存才生效。
 
        D-116：**本平台没有适配器时整块不渲染**。安卓 v1.3.1 曾显示
        「Windows Hello 快速解锁 · 未开启 · 当前平台不支持」——把 Windows 专属名词搬到
-       安卓，还给一个 P3 才做的功能挂了块「不支持」的牌子（主人真机实测）。
+       安卓，还给一个当时还没做的功能挂了块「不支持」的牌子（主人真机实测）。
+       §23（v2.40）落 P3 后，判据从「有没有适配器」变成「是不是 Windows / Android」：
+       这两个平台都渲染，名词与风险说明走 `bioSuffix`（Windows 无后缀 / Android `_android`）。
+       只有 macOS / Linux 这类真没接的平台才落进 `not_implemented`。
        `bio === null` 表示状态还没读到/读失败，同样不渲染：宁可晚一帧出现，也不谎报「未开启」。
        **不要**把这条改成「显示但置灰」——那是在为不存在的功能做广告。 -->
   {#if bio && bio.availability !== 'not_implemented'}
@@ -627,7 +654,7 @@
     <h3>{ui.t('settings.group_biometric')}</h3>
     <!-- 信息行用 `.set-row.is-info`（§6.10）：窄屏堆叠只针对控件行，信息行不能拆两行。 -->
     <div class="set-row is-info">
-      <span class="set-label">{ui.t('settings.bio_title')}</span>
+      <span class="set-label">{ui.t(`settings.bio_title${bioSuffix}`)}</span>
       <span class="bio-state" class:is-warn={bioDegraded}>
         {#if bioDegraded}
           <!-- D-115：封印完好但平台不可用时，只说「已开启」会与下面的红字打架。 -->
@@ -637,28 +664,31 @@
         {:else if bio?.state === 'corrupt'}
           {ui.t('settings.bio_state_corrupt')}
         {:else if bio?.state === 'stale' && bio.reason}
-          {ui.t(`settings.bio_state_stale_${bio.reason}`)}
+          {ui.t(bioStaleKey(bio.reason))}
         {:else}
           {ui.t('settings.bio_state_off')}
         {/if}
       </span>
     </div>
-    <p class="pms-hint">{ui.t('settings.bio_desc')}</p>
-    <p class="pms-hint">{ui.t('settings.bio_risk')}</p>
+    <p class="pms-hint">{ui.t(`settings.bio_desc${bioSuffix}`)}</p>
+    <p class="pms-hint">{ui.t(`settings.bio_risk${bioSuffix}`)}</p>
     {#if bio && !bioAvailable}
-      <p class="pms-hint is-danger">{ui.t(`settings.bio_avail_${bio.availability}`)}</p>
+      <p class="pms-hint is-danger">
+        {ui.t(`settings.bio_avail_${bio.availability}`, { noun: bioNoun })}
+      </p>
       <!-- D-114：`not_present` 的真实含义多半是「还没开通 Hello」，光说「检测不到」等于
-           把用户留在原地。给一句明确的下一步 + 一个能直接跳过去的按钮。 -->
-      {#if bio.availability === 'not_present' || bio.availability === 'not_configured'}
-        <p class="pms-hint">{ui.t('settings.bio_avail_hint')}</p>
+           把用户留在原地。给一句明确的下一步 + 一个能直接跳过去的按钮。
+           §23：Android 走同一套逻辑，只是文案与目标页面换成系统生物识别设置。 -->
+      {#if bioShouldOfferSettings(bio.availability)}
+        <p class="pms-hint">{ui.t(`settings.bio_avail_hint${bioSuffix}`)}</p>
         <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openSignInOptions()}>
-          {ui.t('settings.bio_open_settings')}
+          {ui.t(`settings.bio_open_settings${bioSuffix}`)}
         </button>
       {/if}
       {#if bioDegraded}
         <!-- D-115：状态行写着「已开启」而这里说「用不了」，必须解释清楚为什么，
              以及「要彻底撤销该怎么做」——否则用户会以为关掉 Hello 就等于撤销。 -->
-        <p class="pms-hint">{ui.t('settings.bio_degraded_hint')}</p>
+        <p class="pms-hint">{ui.t(`settings.bio_degraded_hint${bioSuffix}`)}</p>
       {/if}
     {/if}
 
@@ -825,7 +855,7 @@
            `role="status"` 让读屏也念出来。`bio_off` 顺带解释了「快速解锁为什么没了」。 -->
       <p class="pms-alert is-success pwd-result" role="status">
         <Icon name="check" size={16} />
-        <span>{ui.t(pwdChanged === 'bio_off' ? 'settings.password_changed_bio_off' : 'settings.password_changed')}</span>
+        <span>{ui.t(pwdChanged === 'bio_off' ? `settings.password_changed_bio_off${bioSuffix}` : 'settings.password_changed')}</span>
       </p>
     {/if}
   </div>

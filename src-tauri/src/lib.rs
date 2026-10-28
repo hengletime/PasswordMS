@@ -13,6 +13,40 @@ use crate::commands::system_cmd;
 use crate::state::AppState;
 use tauri::Manager as _;
 
+/// Android Kotlin 插件句柄（`gen/android/.../BiometricPlugin.kt`）。
+///
+/// 只能在 `register_android_plugin` 之后拿到，所以由插件 `setup` 存进 Tauri 的托管状态；
+/// `platform::platform_sealer()` / `open_biometric_settings()` 再从 state 取回来。
+/// Windows 不需要——DPAPI 没有需要登记的插件。
+#[cfg(target_os = "android")]
+pub struct BiometricHandle(pub tauri::plugin::PluginHandle<tauri::Wry>);
+
+/// 快速解锁的 Kotlin 插件（Android 专用；其它平台是个空壳，`setup` 里什么都不注册）。
+///
+/// 为什么必须走 Tauri 插件机制：Rust 要调 Kotlin 只有两条路——直连 JNI（得自己管
+/// Activity/线程/Attach）或经 `PluginHandle::run_mobile_plugin`（Tauri 已把这些都封好）。
+/// 后者要求插件先在 `PluginManager` 里登记，也就是这里的 `setup`。
+///
+/// 注意 `Builder::new("pmsbiometric")` 的名字就是 `PluginManager.load(...)` 用的键，
+/// 而 `register_android_plugin` 的第二参是**类名**，两者含义不同，别写反。
+fn biometric_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("pmsbiometric")
+        .setup(|app, api| {
+            #[cfg(target_os = "android")]
+            {
+                let handle =
+                    api.register_android_plugin("com.passwordms.app", "BiometricPlugin")?;
+                app.manage(BiometricHandle(handle));
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = (app, api);
+            }
+            Ok(())
+        })
+        .build()
+}
+
 /// 启动应用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -21,6 +55,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(biometric_plugin())
         .manage(AppState::new())
         // D-108（3.4-6）：auto-lock 的 Rust 兜底线程——WebView 后台节流时前端
         // 定时器停摆，闲置锁定由后端按 last_activity_ms 仲裁。

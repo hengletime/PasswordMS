@@ -10,13 +10,14 @@ export interface StatusDto {
 }
 
 /**
- * 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10）。
+ * 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10 / §23）。
  *
  * 只带状态、不带密钥材料：`availability` 决定按钮显不显示/置不置灰，
- * `state` 决定是「未开启」「已开启」还是「已失效」，`reason` 只在 `stale` 时有值。
+ * `state` 决定是「未开启」「已开启」还是「已失效」，`reason` 只在 `stale` 时有值，
+ * `platform` 决定用哪套平台名词（Windows Hello / 指纹 · 人脸）。
  */
 export interface BiometricStatusDto {
-  /** `available` / `not_configured` / `not_present` / `disabled_by_policy` / `busy` / `unsupported`。 */
+  /** `available` / `not_configured` / `not_present` / `disabled_by_policy` / `busy` / `unsupported` / `not_implemented`。 */
   availability: string;
   /** `absent` / `corrupt` / `ready` / `stale`。 */
   state: string;
@@ -24,6 +25,13 @@ export interface BiometricStatusDto {
   reason?: string;
   /** 封印创建时间（毫秒），仅 `ready` 时有值。 */
   enabled_at?: number;
+  /**
+   * 当前平台：`windows` / `android` / `other`（§23）。
+   *
+   * 由后端给出而非前端嗅探 UA——UA 会随 WebView 版本与厂商 ROM 漂移。
+   * 老版本后端不带这个字段时按 `other` 处理（见 `bioPlatformOf`）。
+   */
+  platform?: string;
 }
 
 /** 自定义键值对。 */

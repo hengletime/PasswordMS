@@ -903,9 +903,9 @@ bioDegraded = (state === 'ready') && (availability !== 'available')
 |---|---|---|
 | **A（现行）** | 只修显示与文案，说清「Hello 变更不撤销 / 撤销靠关闭」 | 零密码学改动；用户需理解「撤销=关闭」 |
 | **B** | 记录开启时的 Hello 可用性，`available → not_present` 时降级为「需重输主密码才能恢复」 | 贴合「我关掉=撤销」直觉，但**安全收益接近零**（见 21.3-3），且临时性不可用（策略/驱动/远程会话）会逼用户重输 |
-| **C** | 用 `KeyCredentialManager`（NGC 密钥）做真绑定：PIN 重置 / 重新录入 ⇒ 取密钥失败 ⇒ 我们能判 `Stale` | Windows 侧首次拥有真信号；但**未打包 Win32 应用**调用 `RequestCreateAsync` 可能因无包标识失败，需先在真机做可行性探针；封印格式要再升版本；量级属 P3 |
+| **C** | 用 `KeyCredentialManager`（NGC 密钥）做真绑定：PIN 重置 / 重新录入 ⇒ 取密钥失败 ⇒ 我们能判 `Stale` | Windows 侧首次拥有真信号。**可行性已验证：见 §21.6**（未打包 Win32 应用创建/读公钥/签名/删除全链路跑通）；仍需封印格式升到 v3，量级属 P3 |
 
-建议：本轮走 **A**，把 C 作为 P3（与 Android Keystore 适配器同批）先做可行性探针再定。
+建议：本轮走 **A**；C 的可行性探针 **2026-10-28 已完成且结论为「可行」**（§21.6），可随时按 §21.6 的实现边界排期，与 Android Keystore 适配器同批推进。
 
 ### 21.5 守门与门禁（实测）
 
@@ -922,6 +922,40 @@ bioDegraded = (state === 'ready') && (availability !== 'available')
 `Repository::export_vault` 的密码错原本也是 `UnlockFailed`。主人没报，但它与 21.1 是**同一类**（已解锁会话内的复核），一并改。这是 D-51 那条「导出必须输入当前主密码」的收尾——那条只补了输入框，没补文案。
 
 ---
+
+### 21.6 方案 C 可行性探针：**已验证可行**（2026-10-28 实测）
+
+探针代码在 `target/probe-kcm/`（独立 crate，`target/` 已被 gitignore，不入库）。实测输出：
+
+```
+[0] CoInitializeEx(STA)      = 0x00000000
+[1] IsSupportedAsync         = true
+[2] RequestCreateAsync       = Success (0)
+[3] Credential.Name          = "PasswordMS-Probe"
+[4] RetrievePublicKey        = OK, 294 bytes
+[5] RequestSignAsync         = status 0 (Success), signature 256 bytes
+[6] DeleteAsync              = issued
+```
+
+**结论：未打包的 Win32 应用可以使用 `KeyCredentialManager`。**「缺包标识导致 `RequestCreateAsync` 失败」这个担心不成立——创建 / 读公钥 / 签名 / 删除全链路跑通。
+
+两轮才跑通，教训比结论值钱：
+
+| # | 坑 | 现象 | 根因 |
+|---|---|---|---|
+| 1 | **必须主线程 STA** | v1 在子线程 `CoInitializeEx(APARTMENTTHREADED)` + 消息泵，`RequestCreateAsync` 等满 180 s 既无回调也无 HRESULT 错误 | 调用被接受了，但**凭据 UI 画不出来**——凭据 UI 必须落在进程的 UI 线程上 |
+| 2 | **超时 ≠ 被拒** | 差点据此判「不可行」 | 判「不可行」前必须先排除「对话框没显示」。探针把 `Result<IAsyncOperation>` 作参数，正是为了把「调用立即报错」（被拒）与「调用发出但等不到人」（没弹窗/没人按）分开 |
+| 3 | 日志攒字符串 | v1 中途超时，`[1]` 的结果一个字都没打出来 | 探针必须逐行 flush（`stdout().flush()`），卡住时外部才有据可查 |
+
+数据侧面印证：公钥 294 B / 签名 256 B ⇒ RSA-2048，符合 NGC 默认值（与 §5 假设一致）。
+
+**实现方案的边界（留给 P3 落地时照此办）**
+
+- 每个 vault 一个凭据名（如 `PasswordMS-{vault_id}`），`DeleteAsync` 即撤销；
+- `RequestSignAsync` **每次都要用户手势**，无法静默签——这本身就是最强的「在场证明」，可以替代当前 `UserConsentVerifier` 那道闸门；
+- NGC 凭据绑 **Windows 账户**，换账户取不到私钥，与 DPAPI 用户域的前提一致，不引入新的降级面；
+- PIN 重置 / 生物特征重录 ⇒ `RequestSignAsync` 失败 ⇒ 正是 §21.4 缺的那个 `Stale` 信号；
+- 封印格式需要升到 `SEAL_VERSION=3`（要存凭据名 + 公钥），旧封印按 `Absent` 处理并要求重新开启，不能静默继续用 v2。
 
 ## 22. D-116：安卓上不该出现「Windows Hello 快速解锁」
 
@@ -986,3 +1020,225 @@ NotImplemented,
 | `npm run test` | **382 passed**（378 + 4） |
 | `npm run check` / CSS 契约 | 0 错 0 警 / PASS（0 FAIL / 6 WARN） |
 | `cargo check -p passwordms-core -p passwordms --lib`（gnullvm） | 通过 |
+
+## 23. D-113 P3 落地：Android Keystore 适配器（2026-10-28）
+
+到这一节为止，那张「快速解锁」卡片在手机上第一次真的能用。**它不是把 Windows 那套搬过来**——两个平台的密码学前提完全不同，照搬会同时做错安全和文案两件事。
+
+### 23.1 为什么 Android 是「一段式」，而 Windows 是「两段式」
+
+| | Windows（§19.2） | Android（本节） |
+|---|---|---|
+| 加解密 | DPAPI `CryptProtectData`，`bind` 作 `pOptionalEntropy` | Keystore AES-GCM，`bind` 作 **AAD**（`updateAAD`） |
+| 在场验证 | 另起一道 `UserConsentVerifier` 闸门 | **不需要独立闸门** |
+| 两者关系 | 先后调用，靠 `DpapiSealer::seal` 把顺序钉死 | **对象级合一**：`BiometricPrompt.CryptoObject(cipher)` 认证成功后解锁的就是这把 cipher |
+| 绑定强度 | 软绑定（能拿到账户凭据者可解 DPAPI 主密钥，§7 T1b） | **硬绑定**（私钥/密钥不可导出，绑 CPU 安全域） |
+
+Android 这边之所以不需要第二道闸门：`setUserAuthenticationRequired(true)` 的密钥在 `init` 之后处于「未认证」态，`doFinal` 会抛 `UserNotAuthenticatedException`，只有过 `CryptoObject` 认证才会解开。**「认证过了」和「能用这把钥匙」是同一件事**，中间没有可插针的缝隙，也不会弹两次框。
+
+> 这也是为什么 §19.3 定的「4 命令」在 Android 上一条都不用改——`VaultSealer` 的 `seal`/`unseal` 语义天然覆盖了闸门。
+
+### 23.2 密钥别名从 `bind` 派生（不改 core 的 trait）
+
+`VaultSealer::seal(vk, bind)` 拿不到 `vault_id`，而 Keystore 需要一把一把地起别名。三条路：给 trait 加参数（影响 core 公共 API 与全部测试）、让调用方额外传（污染接口）、或者**从 `bind` 派生**。
+
+选第三条。`bind = SHA-256("passwordms/v1/biometric" ‖ 0x00 ‖ vault_id ‖ verify_mac ‖ nonce ‖ ct)`，本身就唯一绑定了「哪个库、哪个主密码、哪把 VK」，**换库换密码换 VK 自动换别名**，不需要多传一个参数。
+
+```
+alias = "passwordms/bio/" + hex(bind)      // 32 字节 → 64 个 hex 字符
+```
+
+**不截断**：截断（例如只取前 8 字节）会让两个库以极小概率压到同一别名上，一旦撞上就是「两库共用一把密钥」。为省几十个字节冒这个风险不值得，所以 `key_id()` 用全长，并有守门测试钉住长度 = 64。
+
+派生与可用性映射是**纯函数**，放在 `platform/keystore_rules.rs`（无平台依赖），这样 `cargo test` 在 Windows 上就能验——`android_keystore.rs` 整个文件被 `cfg(target_os="android")` 门控，写在里面的测试在桌面永远跑不到。
+
+### 23.3 封印字节格式
+
+```
+sealed_vk = [12B IV][ciphertext ‖ 16B GCM tag]
+```
+
+- `48 ≤ len ≤ 1024`（core 的 `SEAL_VK_MIN_LEN..=SEAL_VK_MAX_LEN`）；VK 32 字节时实际 60 字节，落在范围内。
+- 长度越界一律在 Kotlin 侧就拒（`tampered`），不落盘——否则下次必判 `Corrupt`。
+- IV 由系统生成（加密时不传 `GCMParameterSpec`），解密时从前 12 字节读回。
+
+### 23.4 三条必须守住的纪律（都有守门）
+
+**纪律一：Kotlin 侧绝不阻塞主线程。**
+
+Tauri 的 `run_command` 是这样把调用送到 Kotlin 的：
+
+```rust
+handle.run_on_android_context(move |env, activity, _webview| {
+    env.call_method(plugin_manager, "runCommand", ...)   // ← 在主线程执行
+});
+```
+
+也就是说 **`@Command` 方法跑在主线程上**。若在里头 `CountDownLatch.await()` / `Thread.sleep` / `runBlocking`，主线程被占住，BiometricPrompt 的窗口永远画不出来，回调也永远不会来 —— 死锁，而且没有任何错误信息。
+
+正确写法：`@Command` 只负责「发起」，立即返回（**不 resolve**），把 `Invoke` 交给对话框回调，认证结束时才 `resolve`/`reject`。用 `AtomicBoolean` 保证每个 Invoke 只回一次。
+
+**纪律二：五个命令必须 `#[tauri::command(..., async)]`。**
+
+Tauri 的同步命令是**直接在调用线程上跑函数体**的（`body_blocking` 里没有派发），而 Rust 侧 `run_mobile_plugin` 是 `mpsc::recv()` 阻塞等回复。两条叠在一起：若命令落在主线程，就撞上纪律一的同一个死锁。
+
+标了 `(async)` 之后，同步函数体的落点变成 `sync_threadpool`（`ExecutionContext::Async` + 无 `asyncness` ⇒ `"sync_threadpool"`），彻底避开主线程。
+
+受影响的五个：`biometric_status` / `_enable` / `_disable` / `_unlock` / `open_biometric_settings`。
+
+> 契约测试的正则因此放宽：原来精确匹配 `tauri::command(rename_all = "snake_case")`，`(rename_all = "snake_case", async)` 匹配不到，63 → 58 直接报红。改成 `[^)]*rename_all = "snake_case"[^)]*` ——这条不变量的本体是「每个 command 都声明了 snake_case」，不是「参数列表只有一项」。
+
+**纪律三：加解密与在场验证必须绑在同一个对象上。**
+
+`BiometricPrompt.CryptoObject(cipher)` 是唯一被允许的形态。若有人改成「先弹框认证、再自己 `cipher.init` 一遍」，Android 相对 Windows 的那点优势当场消失，且守门会红。
+
+### 23.5 错误码翻译表（Kotlin → Rust → core）
+
+| Kotlin `code` | `SealError` | 前端表现 |
+|---|---|---|
+| `canceled` | `Canceled` | **静默**（用户自己按的取消） |
+| `invalidated` | `Invalidated` | `stale` + `enrollment_changed` → 「设备的指纹 / 人脸记录已变更，快速解锁已失效」 |
+| `tampered` | `Platform`（core 归为篡改） | `stale` + `tampered` |
+| 其它 / 插件不可达 | `Platform` / `Unavailable(Unsupported)` | 视为平台故障，不当成失效 |
+
+`onAuthenticationFailed`（这一下没认出指纹）**不回复**——系统会继续让用户试，在这里 reject 会把「没对准」变成一次失败解锁。
+
+### 23.6 撤销必须彻底
+
+`biometric_disable` 原来只删 `biometric.json`。Android 上这不够：Keystore 条目还在，等于「钥匙没扔、只是把锁孔堵了」。
+
+现在：先读头部算 `bind`（删完就读不到了）→ 删文件 → 调插件 `remove` 删别名。`purge_platform_key()` 在 Windows 是空操作（DPAPI 没有属于我们的密钥句柄，主密钥由系统账户派生）。
+
+### 23.7 平台取词：不再把 Windows 名词搬给安卓
+
+D-116 只解决了「不该显示这张卡」，现在它真的要显示了，于是所有 `Windows Hello` 字样都得跟着平台走。做法：
+
+- 后端 `BiometricStatusDto` 新增 `platform`（`windows`/`android`/`other`）——**由后端说出自己是谁**，不用 `navigator.userAgent`（UA 随 WebView 版本与厂商 ROM 漂移）。
+- 前端 `lib/bio-platform.ts` 提供 `bioPlatformOf()` / `bioTextSuffix()`：Windows 用原键，Android 用 `_android` 后缀。
+- 通用句（「本机尚未设置 {noun}」这类）用 `{noun}` 插值，避免每种语言写两遍：Windows 是 `Windows Hello`，Android 是 `指纹 / 人脸`（英文用 `Biometric unlock` —— `fingerprint / face` 会让动词出错）。
+- 设置路径与风险说明必须分开写：Android 是「设置 → 安全 → 指纹、人脸与密码」，风险是「新增指纹即永久失效」；照搬 Windows 那句「拿到账户凭据者可绕过」在 Android 上根本不成立。
+
+新增 12 个键 × 四语言（zh-CN 为唯一事实来源）：`bio_noun` / `bio_noun_android` / `bio_title_android` / `bio_desc_android` / `bio_risk_android` / `bio_avail_hint_android` / `bio_open_settings_android` / `bio_degraded_hint_android` / `bio_state_stale_enrollment_android` / `password_changed_bio_off_android` / `biometric_unlock_android` / `biometric_waiting_android`。
+
+BiometricPrompt 自己的标题/副标题/取消按钮走 Android 资源（`res/values*/strings.xml` 四语言），跟随**系统**语言——与系统原生安全对话框的行为一致。
+
+### 23.8 「打开系统设置」在 Android 上指向哪里
+
+`open_biometric_settings` 命令不变（无参数），平台分发到不同落点：
+
+- Windows → `ms-settings:signinoptions`（§20.3）
+- Android → `Settings.ACTION_BIOMETRIC_ENROLL`（API 30+；24–29 退到 `ACTION_SECURITY_SETTINGS`，因为那些版本没有专门的录入页）
+
+仍然**无参数**：目标 Action 是编译期常量，前端拿不到参数位，构造不出别的 Intent。
+
+### 23.9 API 版本策略
+
+`minSdk = 24`，但两条路径不同：
+
+| SDK | 密钥规格 | 说明 |
+|---|---|---|
+| 30+ | `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)` | timeout=0 = auth-per-use，且限定**强**生物识别 |
+| 24–29 | `setUserAuthenticationValidityDurationSeconds(-1)` | 语义同为「每次使用都要认证」，但无法进一步限定 STRONG |
+
+两档都设 `setInvalidatedByBiometricEnrollment(true)`。**不关掉它**：那等于放弃「有人趁你不注意加一枚指纹」这个真实威胁模型，而这恰恰是 Android 唯一能告给我们、Windows 侧拿不到的信号（§21.3）。
+
+### 23.10 守门与门禁
+
+| 门 | 结果 |
+|---|---|
+| `src/lib/bio-android-guard.test.ts` | **21 例全绿**（Kotlin 无阻塞等待 / doFinal 只在回调内 / 5 命令全 async / CryptoObject / bind 双向走 AAD / 禁改失效联动 / auth-per-use / 撤销彻底 / 平台取词 / 四语言 12 键 / 对话框资源四语言） |
+| `platform/keystore_rules.rs` 单测 | **5 例**（别名全长稳定、不同 bind 不撞、空 bind 不 panic、可用性映射不猜「未配置」、Android 永不产出 `NotImplemented`） |
+| `npm run test` | **403 passed**（382 + 21） |
+| `npm run check` / CSS 契约 | 0 错 0 警 / PASS（0 FAIL / 6 WARN） |
+| `cargo test -p passwordms-core` | **271 passed / 0 failed** |
+| `cargo clippy --all-targets` / `cargo fmt --check` | 0 告警 / 无差异 |
+
+### 23.11 未做（登记）
+
+- **P3 剩余：Windows 侧 `KeyCredentialManager` 真绑定**。可行性已验证（§21.6），需要 `SEAL_VERSION=3` 与「每次解锁签一个随机挑战」，可以替代当前 `UserConsentVerifier` 那道闸门。
+- **iOS**：`LocalAuthentication` + Keychain，与 Android 的硬绑定同构。当前无 iOS 构建目标。
+- **旧 Android（24–29）的实机复验**：代码有兼容分支，但只在 API 30+ 的设备上验证过。
+
+## 24. D-117：生物特征变更后「重新开启」永远失败（自审发现，2026-10-28）
+
+P3 出包前的最后一轮代码走查（没等主人真机反馈）发现两条，都属于「编译过、跑得动、只有在特定时机才会以最难看的方式失败」的那一类。
+
+### 24.1 症状与根因
+
+`setInvalidatedByBiometricEnrollment(true)` 的效果是：**用户新增或删除一枚指纹 / 人脸后，那把 Keystore 密钥永久失效**——之后任何使用（加密也一样）都抛 `KeyPermanentlyInvalidatedException`。
+
+而第一版 `seal` 对这个异常的处理是「如实上报 `invalidated`、退出」。看起来正确，实际是**死路**：
+
+1. 用户加了一枚指纹 → 解锁失败 → 界面按 §23.5 说「设备的指纹 / 人脸记录已变更，快速解锁已失效，请重新开启」；
+2. 用户照做，点「开启」→ core 的 `enable` 先查 `availability`（此时 `Available`，生物识别正常）→ `seal` → `cipher.init` 抛同一个 `KeyPermanentlyInvalidatedException` → 又报一次失效。
+
+**那条废掉的密钥仍然占着这个别名**，而别名由 `bind` 派生（`bind` 不随生物特征变化），所以每次重试都撞上同一把死钥匙 —— 界面上表现为「点了开启没反应 / 一直报失效」，唯一出路是卸载重装或换主密码（`bind` 变了才换别名）。
+
+### 24.2 修法
+
+`seal` 捕获失效后**先删别名再重建**：
+
+```kotlin
+val cipher = try {
+    cipherForSeal(alias)
+} catch (e: KeyPermanentlyInvalidatedException) {
+    deleteKey(alias)          // 废钥匙必须让位，否则这个别名永远不可用
+    cipherForSeal(alias)      // 全新密钥（此时同样受 auth-per-use + 失效联动约束）
+} catch (e: Exception) { ... }
+```
+
+写入路径**不再上报 `invalidated`**：在那里，失效意味着「重建」，不是「死路」。`unseal` 仍如实报 `invalidated`（读的时候密钥确实废了，只能引导重开）。
+
+安全性没有放松：重建出来的仍是同一套参数（`AUTH_BIOMETRIC_STRONG`、auth-per-use、`setInvalidatedByBiometricEnrollment(true)`），而且**必须现场过一次 BiometricPrompt 才能写入**（`seal` 走 `authenticate`）。
+
+### 24.3 顺带修掉的一条错误分类
+
+`unseal` 里 `UserNotAuthenticatedException` 原本映射 `canceled`。正常路径走不到（只在认证成功的回调里 `doFinal`），但如果真发生，报 `canceled` 会让前端**静默**——用户按了指纹、什么都没发生、也没有任何解释。改为 `platform`：它是平台异常，必须可见。
+
+### 24.4 守门
+
+`bio-android-guard.test.ts` 加 2 例（18 → 20；D-118 随后又加 1 例交叉核对，见 §25.3）：
+
+- 「密钥失效后必须删掉旧别名再重建」——断言 `catch` → `deleteKey(alias)` → `cipherForSeal(alias)` 的**顺序**，且 `seal` 段内不得再出现 `"invalidated"`；
+- 「『未认证』不能谎报成用户取消」——断言该 catch 落到 `"platform"` 而不是 `"canceled"`。
+
+### 24.5 教训
+
+失效联动（`setInvalidatedByBiometricEnrollment`）与「密钥别名由不可变输入派生」这两件事单独看都对，**叠在一起就制造了一个不可恢复点**：别名不变、钥匙已死、代码只会重试不会换锁。凡是「输入不变 ⇒ 标识不变」的派生标识，配「会永久失效的底层资源」时，失效路径必须自己负责清理，不能指望上层换参数。
+
+## 25. D-118：Rust 与 Kotlin 命令名不一致，按钮静默失效（自审发现，2026-10-28）
+
+同一个自审里发现的第二条。**它不会编译报错、不会 panic、不会在测试里露头**，只会在真机上表现成「点了没反应」。
+
+### 25.1 根因
+
+Tauri 的 Android 插件命令表是这样建的（`PluginHandle.kt`）：
+
+```kotlin
+if (method.isAnnotationPresent(Command::class.java)) {
+  commands[method.name] = methodMeta      // ← 键就是 Kotlin 函数名的字面值
+}
+```
+
+**没有 snake_case 转换**。而 Rust 侧 `run_mobile_plugin("open_settings", ...)` 里的字符串是要原样去查这张表的。Kotlin 写的是 `@Command fun openSettings(invoke: Invoke)`（Kotlin 习惯驼峰），于是查不到 → `PluginHandle` 抛「命令不存在」→ `open_biometric_settings()` 返回 `false` → 前端只报一句「打不开系统设置」。
+
+其余四条命令（`availability` / `seal` / `unseal` / `remove`）都是单词，恰好躲过了这个坑——**正是「只有一条中招」让它更容易漏掉**。
+
+### 25.2 修法
+
+Rust 侧改调 `"openSettings"`，并在调用点写明「这里是函数名字面值，不是 snake_case」。不改 Kotlin 侧：把 Kotlin 函数命名成 `open_settings` 会违背该语言惯例，而且下一条同样的问题还会再犯。
+
+### 25.3 守门（交叉核对两边）
+
+新增一例测试直接从两侧抽名字比对：
+
+- Kotlin：`/@Command\s+fun\s+(\w+)/g`
+- Rust：`/run_mobile_plugin(?:::<[^>]*>)?\(\s*"([A-Za-z_]+)"/g`（跨 `platform/mod.rs` 与 `android_keystore.rs`）
+
+两条断言：①调到的命令集合必须正好是那五个（少一个说明某条分支没接上）；②每个名字都必须在 Kotlin 的 `@Command` 集合里。
+
+**已做变异验证**：把 `"openSettings"` 改回 `"open_settings"`，该例立刻变红（1 failed / 20 passed），还原后 21 全绿——守门不是摆设。
+
+### 25.4 教训
+
+跨语言边界上的**字符串标识符**不受类型系统保护，两边各自「看起来对」是最危险的组合。只要一处用字符串点名另一处的符号，就必须有一条测试同时读**两边的源码**去比对字面值——这类 bug 用任何单侧测试都抓不到。

@@ -1,4 +1,11 @@
 <resources>
     <string name="app_name">"PasswordMS"</string>
     <string name="main_activity_title">"PasswordMS"</string>
+
+    <!-- 快速解锁的 BiometricPrompt 文案（docs/08-biometric-unlock.md §23）。
+         应用内语言与系统语言不一致时，这里跟随**系统**语言——与系统原生安全对话框
+         的行为一致（用户对「系统的指纹框说系统语言」有预期）。 -->
+    <string name="bio_prompt_title">"Unlock PasswordMS"</string>
+    <string name="bio_prompt_subtitle">"Verify your identity to open the vault"</string>
+    <string name="bio_prompt_cancel">"Cancel"</string>
 </resources>

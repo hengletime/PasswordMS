@@ -57,6 +57,9 @@ export const zhTW = {
     restore_password_required: '請先輸入主密碼（備份建立時的主密碼），還原後將用它自動解鎖。',
     biometric_unlock: '使用 Windows Hello 解鎖',
     biometric_waiting: '等待 Windows Hello…',
+    // §23：鎖屏按鈕同樣依平台取詞。
+    biometric_unlock_android: '用指紋 / 臉部解鎖',
+    biometric_waiting_android: '等待指紋 / 臉部驗證…',
   },
   create: {
     title: '建立保險庫',
@@ -295,27 +298,41 @@ export const zhTW = {
     group_sync: '同步',
     group_about: '關於',
     group_biometric: '快速解鎖',
+    // §23：平台名詞用 `{noun}` 插值，避免「Windows Hello」漏到手機上（D-116 同類缺陷）。
+    bio_noun: 'Windows Hello',
+    bio_noun_android: '指紋 / 臉部',
     bio_title: 'Windows Hello 快速解鎖',
     bio_desc: '用 Windows Hello 取代每次輸入主密碼。金鑰只在本機、本 Windows 帳戶下可用，不進入備份與同步。',
     bio_risk: '注意：能取得本機 Windows 登入認證的人可以繞過 Windows Hello。本功能的安全上限取決於該帳戶的鎖屏強度。',
+    bio_title_android: '指紋 / 臉部快速解鎖',
+    bio_desc_android:
+      '用手機內建的指紋或臉部取代每次輸入主密碼。金鑰由系統安全晶片保管，只在本機可用，不進入備份與同步。',
+    bio_risk_android:
+      '注意：新增或刪除指紋 / 臉部記錄後，已儲存的金鑰會永久失效，需要重新開啟。這是系統的安全設計——防的正是「有人趁你不注意加一枚指紋」。',
     bio_state_on: '已開啟（{date}）',
     bio_state_on_unavailable: '已開啟，但目前無法使用（{date}）',
     bio_degraded_hint: 'Windows Hello 關閉或未開通期間，快速解鎖一次也用不了。重新開通後會自動恢復——已儲存的設定不會被刪除，也不需要重輸主密碼；要徹底撤銷請點「關閉」。',
+    bio_degraded_hint_android:
+      '指紋 / 臉部無法使用期間（例如把所有指紋都刪了），快速解鎖一次也用不了。重新錄入後會自動恢復——已儲存的設定不會被刪除，也不需要重輸主密碼；要徹底撤銷請點「關閉」。',
     bio_state_off: '未開啟',
     bio_state_corrupt: '設定已損毀，請關閉後重新開啟。',
     bio_state_stale_password: '主密碼已修改，快速解鎖已失效。',
     bio_state_stale_vault_key: '保險庫金鑰已更換（配對加入），快速解鎖已失效。',
     bio_state_stale_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效。',
+    bio_state_stale_enrollment_android: '裝置的指紋 / 臉部記錄已變更，快速解鎖已失效。',
     bio_state_stale_tampered: '快速解鎖設定遭竄改或損毀，已失效。',
     // D-114：`not_present` 不再替系統斷言「你沒有硬體」——Hello 從未設定時 WinRT 回報的
     // 正是 `DeviceNotPresent`。改成只陳述「偵測不到」＋給下一步。
-    bio_avail_not_configured: '本機尚未設定 Windows Hello。',
-    bio_avail_not_present: '未偵測到可用的 Windows Hello（多半是尚未設定，不一定缺少硬體）。',
+    bio_avail_not_configured: '本機尚未設定 {noun}。',
+    bio_avail_not_present: '未偵測到可用的 {noun}（多半是尚未設定，不一定缺少硬體）。',
     bio_avail_hint: '請到「設定 → 帳戶 → 登入選項」開通 Windows Hello（PIN 或指紋），完成後切回本視窗會自動重新偵測。',
+    bio_avail_hint_android:
+      '請到「設定 → 安全性 → 指紋、臉部與密碼」錄入指紋或臉部，完成後切回本視窗會自動重新偵測。',
     bio_open_settings: '開啟 Windows 登入選項',
-    bio_avail_disabled_by_policy: 'Windows Hello 已被系統策略停用。',
-    bio_avail_busy: 'Windows Hello 暫時被佔用，請稍後再試。',
-    bio_avail_unsupported: 'Windows Hello 元件在目前系統上無法呼叫，暫時無法使用快速解鎖。',
+    bio_open_settings_android: '開啟系統生物辨識設定',
+    bio_avail_disabled_by_policy: '{noun} 已被系統策略停用。',
+    bio_avail_busy: '{noun} 暫時被佔用，請稍後再試。',
+    bio_avail_unsupported: '{noun} 元件在目前系統上無法呼叫，暫時無法使用快速解鎖。',
     bio_enable: '開啟',
     bio_disable: '關閉',
     bio_enable_hint: '開啟前需輸入主密碼確認身分。',
@@ -331,6 +348,8 @@ export const zhTW = {
     // D-114：改密成功必須有**留在原地**的明確回執（原先只 toast 一句 `common.ok`＝「確定」）。
     password_changed: '主密碼已修改，下次解鎖請使用新密碼。',
     password_changed_bio_off: '主密碼已修改。快速解鎖已因此關閉——重新開啟後才能繼續用 Windows Hello 解鎖。',
+    password_changed_bio_off_android:
+      '主密碼已修改。快速解鎖已因此關閉——重新開啟後才能繼續用指紋 / 臉部解鎖。',
     change_password_old: '目前主密碼',
     change_password_new: '新主密碼',
     export_vault: '匯出保險庫',

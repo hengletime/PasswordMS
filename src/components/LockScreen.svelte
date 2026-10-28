@@ -11,6 +11,7 @@
   import { toAppError } from '../lib/errors';
   import { api } from '../lib/ipc';
   import { session } from '../lib/stores/session.svelte';
+  import { bioPlatformOf, bioTextSuffix } from '../lib/bio-platform';
   import { ui } from '../lib/stores/ui.svelte';
 
   let password = $state('');
@@ -28,6 +29,9 @@
   const canBiometricUnlock = $derived(
     session.biometric?.availability === 'available' && session.biometric?.state === 'ready',
   );
+
+  /** §23：按钮文案按平台取词（「Windows Hello」/「指纹 · 人脸」）。 */
+  const bioSuffix = $derived(bioTextSuffix(bioPlatformOf(session.biometric)));
 
   onMount(() => {
     // 锁定态可查（后端只读头部 + 旁路文件）；查不到时 store 会置 null，按钮自然不出现。
@@ -168,10 +172,10 @@
         onclick={() => void unlockWithBiometric()}
       >
         {#if session.busy}
-          <Spinner size={16} label={ui.t('lock.biometric_waiting')} />
-          {ui.t('lock.biometric_waiting')}
+          <Spinner size={16} label={ui.t(`lock.biometric_waiting${bioSuffix}`)} />
+          {ui.t(`lock.biometric_waiting${bioSuffix}`)}
         {:else}
-          <Icon name="unlock" size={15} />{ui.t('lock.biometric_unlock')}
+          <Icon name="unlock" size={15} />{ui.t(`lock.biometric_unlock${bioSuffix}`)}
         {/if}
       </button>
     {/if}

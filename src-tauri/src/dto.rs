@@ -22,14 +22,14 @@ pub struct StatusDto {
     pub locked: bool,
 }
 
-/// 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10）。
+/// 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10 / §23）。
 ///
 /// **只带状态，不带任何密钥材料**（§18.5 约束 6）：IPC 里永远不出现 VK、`sealed_vk`
-/// 或 `bind`。前端拿到这三个字段足以决定「按钮显不显示、置不置灰、旁边写哪句文案」。
+/// 或 `bind`。前端拿到这几个字段足以决定「按钮显不显示、置不置灰、旁边写哪句文案」。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BiometricStatusDto {
     /// 平台可用性：`available` / `not_configured` / `not_present` / `disabled_by_policy`
-    /// / `busy` / `unsupported`（见 `settings.bio_avail_*`）。
+    /// / `busy` / `unsupported` / `not_implemented`（见 `settings.bio_avail_*`）。
     pub availability: String,
     /// 封印状态：`absent`（未开启 / 别的库 / 未知版本）/ `corrupt`（损坏）/ `ready`
     /// / `stale`（已失效，原因在 [`Self::reason`]）。
@@ -41,6 +41,12 @@ pub struct BiometricStatusDto {
     /// 封印创建时间（毫秒，仅 `ready` 时有值），设置页显示「已开启（2026-10-28）」。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled_at: Option<i64>,
+    /// 当前平台：`windows` / `android` / `other`（§23）。
+    ///
+    /// 前端据此选择平台专属名词（「Windows Hello」/「指纹 · 人脸」）与风险说明。
+    /// **不用 `navigator.userAgent` 嗅探**：UA 随 WebView 版本变化，且同一个 UA
+    /// 字符串在不同 Android 厂商 ROM 上并不稳定——由后端说出自己是谁，才是唯一可靠的来源。
+    pub platform: String,
 }
 
 /// 条目 DTO（直接复用核心 `Item`：字段与 `ItemKind` 内部标签均符合契约）。
