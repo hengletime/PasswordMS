@@ -158,14 +158,21 @@ describe('§23 纪律三：加解密与在场验证必须绑定', () => {
     const kotlinCmds = new Set(
       [...codeOnly(kotlinRaw).matchAll(/@Command\s+fun\s+(\w+)/g)].map((m) => m[1]),
     );
-    expect(kotlinCmds.size).toBeGreaterThanOrEqual(5);
+    // 四条（D-122 之后 `openSettings` 已删；原本五条）。
+    expect(kotlinCmds.size).toBeGreaterThanOrEqual(4);
 
-    const callSites = [platformMod, keystoreRs].join('\n');
+    // 只扫**代码**：注释里提到命令名（比如解释 D-122 为什么撤掉它）不算调用。
+    const callSites = codeOnly([platformMod, keystoreRs].join('\n'));
     const rustCmds = [...callSites.matchAll(/run_mobile_plugin(?:::<[^>]*>)?\(\s*"([A-Za-z_]+)"/g)].map(
       (m) => m[1],
     );
-    // 五条命令都被真正调到了（少一条说明有分支写错或没接上）。
-    expect(new Set(rustCmds)).toEqual(new Set(['availability', 'seal', 'unseal', 'remove', 'openSettings']));
+    // 四条命令都被真正调到了（少一条说明有分支写错或没接上）。
+    // D-122：`openSettings` 已从两侧一起删除——这条命令点了没反应且无从检测，撤得干净
+    // 比留着「以后可能好使」更诚实。
+    expect(new Set(rustCmds)).toEqual(new Set(['availability', 'seal', 'unseal', 'remove']));
+    expect(rustCmds, 'Rust 还在调 openSettings，Kotlin 已经没有这个命令了').not.toContain(
+      'openSettings',
+    );
     for (const cmd of rustCmds) {
       expect(kotlinCmds.has(cmd), `Rust 调了 ${cmd}，但 Kotlin 没有同名 @Command 函数`).toBe(true);
     }
@@ -231,8 +238,7 @@ describe('§23 前端按平台取词，不再把 Windows 名词搬给安卓', ()
       'bio_title_android',
       'bio_desc_android',
       'bio_risk_android',
-      'bio_avail_hint_android',
-      'bio_open_settings_android',
+      'bio_manage_hint_android',
       'bio_degraded_hint_android',
       'bio_state_stale_enrollment_android',
       'password_changed_bio_off_android',
@@ -390,13 +396,62 @@ describe('D-121（B 案）系统生物识别设置入口的显示条件', () => 
     expect(line).toContain('bioSealBroken');
   });
 
-  it('按钮由独立判据渲染，不再嵌在「平台不可用」块里', () => {
+  it('入口由独立判据渲染，不再嵌在「平台不可用」块里', () => {
     const iCond = settings.indexOf('{#if bioShowSettingsEntry}');
-    const iBtn = settings.indexOf('bio_open_settings${bioSuffix}');
     expect(iCond, '缺少 {#if bioShowSettingsEntry} 块').toBeGreaterThan(-1);
+    const iBtn = settings.indexOf("ui.t('settings.bio_open_settings')");
     expect(iBtn).toBeGreaterThan(iCond);
-    // 判据与按钮之间不许出现 {/if}——那说明按钮落进的是别的块（旧写法就是这么埋的）。
-    expect(settings.slice(iCond, iBtn)).not.toContain('{/if}');
+    // 判据与按钮之间只允许夹一层平台判断，不许出现 {/if}
+    // ——出现就说明按钮落进了别的块（旧写法就是这么把它埋掉的）。
+    const between = settings.slice(iCond, iBtn);
+    expect(between).toContain('bioCanOpenSettings(bioPlatform)');
+    expect(between).not.toContain('{/if}');
     // 正常态（available + ready）两个条件都为假 ⇒ 不渲染，不打扰。
+  });
+});
+
+describe('D-122 安卓撤掉跳转按钮，改为纯文案（主人 2026-10-28 真机「点了完全没反应」）', () => {
+  it('Android 分支里是段落不是按钮', () => {
+    const iCond = settings.indexOf('{#if bioShowSettingsEntry}');
+    const iElse = settings.indexOf('{:else}', iCond);
+    expect(iElse, '缺少 {:else} 分支').toBeGreaterThan(iCond);
+    const iEnd = settings.indexOf('{/if}', iElse);
+    const branch = settings.slice(iElse, iEnd);
+    expect(branch, 'Android 分支必须给文案').toContain('bio_manage_hint_android');
+    expect(branch, 'Android 分支不许再有按钮——点了没反应比没按钮更糟').not.toContain('<button');
+  });
+
+  it('Kotlin / Rust 里的跳转链路已删干净，不留死代码', () => {
+    expect(kotlinRaw, 'Kotlin 还留着 openSettings').not.toContain('fun openSettings');
+    // 查**代码**不查注释：注释里留着这条 action 名是为了说明为什么撤掉它，属正常。
+    expect(codeOnly(kotlinRaw), 'Kotlin 还在用 ACTION_BIOMETRIC_ENROLL').not.toContain(
+      'ACTION_BIOMETRIC_ENROLL',
+    );
+    expect(codeOnly(platformMod), 'Rust 还在调 run_mobile_plugin("openSettings")').not.toContain(
+      '"openSettings"',
+    );
+    // Windows 那条留着：ms-settings 是文档化协议，稳定可用。
+    expect(platformMod).toContain('open_hello_settings');
+  });
+
+  it('两个已撤销的键从词典里同步删掉（留着会让人以为按钮还在）', () => {
+    for (const [name, dict] of [
+      ['zh-CN', zh],
+      ['zh-TW', zhTw],
+      ['en-US', en],
+      ['th', th],
+    ] as const) {
+      for (const dead of ['bio_avail_hint_android:', 'bio_open_settings_android:']) {
+        expect(dict, `${name} 还留着已废弃的 ${dead}`).not.toContain(dead);
+      }
+      expect(dict, `${name} 缺少 bio_manage_hint_android`).toContain('bio_manage_hint_android:');
+    }
+  });
+
+  it('文案要点明「各品牌不同」，而不是给一条假路径', () => {
+    // Android 的菜单位置没有统一答案。写死一条「设置 → 安全 → …」等于把用户送去一个
+    // 不存在的页面（旧文案抄的是 iOS 的路由）。
+    expect(zh).toContain('各品牌位置不同');
+    expect(en).toContain('differs by brand');
   });
 });

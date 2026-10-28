@@ -2771,7 +2771,7 @@ dependencies = [
 
 [[package]]
 name = "passwordms"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "base64 0.22.1",
  "passwordms-core",
@@ -2792,7 +2792,7 @@ dependencies = [
 
 [[package]]
 name = "passwordms-core"
-version = "1.4.1"
+version = "1.4.2"
 dependencies = [
  "argon2",
  "base32",

@@ -356,10 +356,9 @@ export const zhCN = {
     bio_avail_not_present: '未检测到可用的 {noun}（多半是尚未设置，不一定缺少硬件）。',
     bio_avail_hint: '请到「设置 → 账户 → 登录选项」开通 Windows Hello（PIN 或指纹），完成后切回本窗口会自动重新检测。',
     // §23：Android 的设置路径完全不同，必须单独一句（不能只换名词）。
-    bio_avail_hint_android:
-      '请到「设置 → 安全 → 指纹、人脸与密码」录入指纹或人脸，完成后切回本窗口会自动重新检测。',
     bio_open_settings: '打开 Windows 登录选项',
-    bio_open_settings_android: '打开系统生物识别设置',
+    bio_manage_hint_android:
+      '需要录入、增删指纹或人脸时，请到手机的「设置」里找生物识别 / 指纹 / 人脸相关页面——各品牌位置不同（华为在「生物识别和密码」，小米在「密码与安全」，原生安卓在「安全」）。完成后切回本窗口会自动重新检测。',
     bio_avail_disabled_by_policy: '{noun} 已被系统策略禁用。',
     bio_avail_busy: '{noun} 暂时被占用，请稍后重试。',
     // D-116：`unsupported` 现在只表示「有适配器、但平台此刻做不了」（如 Windows Hello 的

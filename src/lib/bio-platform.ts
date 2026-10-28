@@ -33,9 +33,29 @@ export function bioTextSuffix(platform: BioPlatform): '' | '_android' {
   return platform === 'android' ? '_android' : '';
 }
 
-/** 是否应该显示「去系统设置开通」的引导按钮（两个平台都有等价页面，§22.4 / D-114）。 */
+/** 是否处在「平台还没配好、用户该去开通」的状态（§22.4 / D-114）。 */
 export function bioShouldOfferSettings(availability: string): boolean {
   return availability === 'not_present' || availability === 'not_configured';
+}
+
+/**
+ * 是否渲染「一键跳到系统设置」的**按钮**（D-122，2026-10-28 主人拍板）。
+ *
+ * **只有 Windows**。`ms-settings:signinoptions` 是微软文档化的协议，可靠且会稳定
+ * 打开「登录选项」页。
+ *
+ * Android 撤掉按钮，原因不是没实现，而是**实现了也不可控**：主人真机点击后
+ * 「完全没有反应，一点提示都没有」——`startActivity` 没抛异常（抛了就一定会弹红字，
+ * 因为 `catch` 里是 `invoke.reject`），说明 Intent 确实发出去了，是 ROM 把
+ * `android.settings.BIOMETRIC_ENROLL` 忽略掉了或拉起后立刻 finish。各品牌把生物识别
+ * 设置放在完全不同的位置，没有任何 action 能保证命中，也没有办法在客户端检测「到底
+ * 跳成功了没有」。留一个点了没反应的按钮，比不给按钮更糟。
+ *
+ * 所以 Android 改为**纯文案**（`settings.bio_manage_hint_android`）：说清楚去手机的
+ * 哪个大类里找，并明说各品牌不同——用户自己两步就能到，比一个假的按钮强。
+ */
+export function bioCanOpenSettings(platform: BioPlatform): boolean {
+  return platform === 'windows';
 }
 
 /**

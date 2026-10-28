@@ -120,15 +120,22 @@ pub fn open_biometric_settings(_app: &tauri::AppHandle) -> bool {
 }
 
 #[cfg(target_os = "android")]
-pub fn open_biometric_settings(app: &tauri::AppHandle) -> bool {
-    use tauri::Manager;
-    let handle = app.state::<crate::BiometricHandle>().inner().0.clone();
-    // 命令名 = Kotlin 侧 `@Command fun` 的**函数名字面**（`PluginHandle` 里就是
-    // `commands[method.name] = ...`，不做 snake_case 转换）——所以这里是 `openSettings`
-    // 而不是 `open_settings`。写成后者不会编译报错、也不会 panic，只会让按钮点了没反应。
-    handle
-        .run_mobile_plugin::<serde_json::Value>("openSettings", serde_json::json!({}))
-        .is_ok()
+pub fn open_biometric_settings(_app: &tauri::AppHandle) -> bool {
+    // D-122（2026-10-28 主人拍板）：Android **不再尝试跳转**。
+    //
+    // 曾经这条走 `run_mobile_plugin("openSettings")` → Kotlin `startActivity(ACTION_
+    // BIOMETRIC_ENROLL)`。命令名对齐之后仍然跳不过去，主人真机现象是「点了完全没有反应，
+    // 一点提示都没有」——注意这**不是**失败被吞：`startActivity` 若抛异常，Kotlin 会
+    // `invoke.reject`，Rust 拿 Err，前端一定弹红字。全静默说明 Intent 确实发出去了，
+    // 是 ROM 忽略或拉起后立刻 finish。
+    //
+    // 国产 ROM 把生物识别设置放在各家自己的位置，没有任何 action 能保证命中，客户端也
+    // 无法判定「跳成功了没有」（`resolveActivity` 在 API 30+ 受包可见性影响会误报）。
+    // 留一个点了没反应的按钮比不给按钮更糟，所以退化为纯文案引导（前端
+    // `settings.bio_manage_hint_android`），把「去哪个大类里找」和「各品牌不同」说清楚。
+    //
+    // Windows 的 `ms-settings:signinoptions` 是文档化协议、稳定可用，那条保留。
+    false
 }
 
 #[cfg(not(any(windows, target_os = "android")))]

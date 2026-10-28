@@ -355,10 +355,9 @@ export const enUS: Messages = {
     bio_avail_not_configured: '{noun} is not set up on this device yet.',
     bio_avail_not_present: 'No usable {noun} was detected (usually it is simply not set up — not necessarily missing hardware).',
     bio_avail_hint: 'Open Settings → Accounts → Sign-in options, set up Windows Hello (PIN or fingerprint), then switch back to this window — it re-checks automatically.',
-    bio_avail_hint_android:
-      'Enroll a fingerprint or face in Settings → Security → Fingerprint, face & passcode, then switch back to this window — it re-checks automatically.',
     bio_open_settings: 'Open Windows sign-in options',
-    bio_open_settings_android: 'Open system biometric settings',
+    bio_manage_hint_android:
+      'To add, enroll or remove fingerprints or faces, open your phone Settings and look for Biometrics / Fingerprint / Face — the location differs by brand (Huawei: Biometrics & password; Xiaomi: Passwords & security; stock Android: Security). Switch back to this window and it re-checks automatically.',
     bio_avail_disabled_by_policy: '{noun} is disabled by system policy.',
     bio_avail_busy: '{noun} is busy right now. Try again shortly.',
     bio_avail_unsupported: '{noun} cannot be invoked on this system, so quick unlock is unavailable for now.',

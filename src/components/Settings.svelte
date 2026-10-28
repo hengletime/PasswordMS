@@ -11,7 +11,13 @@
   import Modal from './common/Modal.svelte';
   import Spinner from './common/Spinner.svelte';
   import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
-  import { bioPlatformOf, bioShouldOfferSettings, bioTextSuffix, localizeBioMessageKey } from '../lib/bio-platform';
+  import {
+    bioCanOpenSettings,
+    bioPlatformOf,
+    bioShouldOfferSettings,
+    bioTextSuffix,
+    localizeBioMessageKey,
+  } from '../lib/bio-platform';
   import { toAppError } from '../lib/errors';
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
@@ -690,21 +696,35 @@
         {ui.t(`settings.bio_avail_${bio.availability}`, { noun: bioNoun })}
       </p>
       <!-- D-114：`not_present` 的真实含义多半是「还没开通 Hello」，光说「检测不到」等于
-           把用户留在原地。给一句明确的下一步 + 一个能直接跳过去的按钮。
-           §23：Android 走同一套逻辑，只是文案与目标页面换成系统生物识别设置。 -->
-      {#if bioShouldOfferSettings(bio.availability)}
-        <p class="pms-hint">{ui.t(`settings.bio_avail_hint${bioSuffix}`)}</p>
+           把用户留在原地。给一句明确的下一步。
+           D-122：这条路只对 Windows 成立（有可点的按钮），Android 的说明统一由下面
+           那个 `bio_manage_hint_android` 承担，不在这里重复说第二遍。 -->
+      {#if bioShouldOfferSettings(bio.availability) && bioCanOpenSettings(bioPlatform)}
+        <p class="pms-hint">{ui.t('settings.bio_avail_hint')}</p>
       {/if}
     {/if}
     <!-- D-121（B 案）：入口只在**有事可做**时出现——平台不可用（去开通），或封印已失效
          （去看看系统里增删了哪些指纹）。一切正常时不打扰：那不是问题现场。
-         按钮单独提到两个信息块之外，因为「失效」这次可能发生在平台完全可用的时候
+         判据单独提到两个信息块之外，因为「失效」这次可能发生在平台完全可用的时候
          （D-119 的墓碑：`availability = available` 而 `state = stale`），
-         条件若还挂在 `!bioAvailable` 里就永远走不到——主人真机就是这么找不到它的。 -->
+         条件若还挂在 `!bioAvailable` 里就永远走不到——主人真机就是这么找不到它的。
+
+         D-122：Android 上**没有按钮**，只有一句话。`ACTION_BIOMETRIC_ENROLL` 在国产
+         ROM 上各家响应不一，主人真机点击完全静默（startActivity 不抛异常 ⇒ Intent 发出
+         去了、被 ROM 忽略或秒退），既跳不过去也没法报错。与其留一个点了没反应的按钮，
+         不如把「去哪个大类里找」说清楚——各品牌路径不同，用户自己两步就到。 -->
     {#if bioShowSettingsEntry}
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openSignInOptions()}>
-        {ui.t(`settings.bio_open_settings${bioSuffix}`)}
-      </button>
+      {#if bioCanOpenSettings(bioPlatform)}
+        <button
+          class="pms-btn is-ghost is-sm"
+          type="button"
+          onclick={() => void openSignInOptions()}
+        >
+          {ui.t('settings.bio_open_settings')}
+        </button>
+      {:else}
+        <p class="pms-hint">{ui.t('settings.bio_manage_hint_android')}</p>
+      {/if}
     {/if}
     {#if bioDegraded}
       <!-- D-115：状态行写着「已开启」而这里说「用不了」，必须解释清楚为什么，

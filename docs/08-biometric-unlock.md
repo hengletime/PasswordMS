@@ -1381,7 +1381,11 @@ export function localizeBioMessageKey(key, platform) {
 
 `bio-android-guard.test.ts` 新增四例：改写函数行为（android 加后缀 / windows 原样 / 无关句不改写）、两处调用点都过改写、四语言两套键齐全（缺键会让 `ui.t` 把 key 本身画到屏幕上）、android 变体里不许再出现「Windows Hello」。
 
-## 28. D-121：系统生物识别设置入口的显示条件（B 案，2026-10-28 主人拍板）
+## 28. D-121 / D-122：系统设置入口——先修显示条件，再整个撤掉（2026-10-28 主人真机两轮）
+
+这条缺陷被真机打回两次，两次的结论完全相反，值得完整记下来。
+
+### 28.1 第一轮（D-121）：按钮根本找不到
 
 D-118 修好了命令名，但主人**找不到那个按钮**。原因不是修错了，是**渲染条件太窄**：
 
@@ -1393,37 +1397,69 @@ D-118 修好了命令名，但主人**找不到那个按钮**。原因不是修�
 
 真机指纹正常可用（`availability = available`）⇒ 整块不渲染 ⇒ 按钮不存在。
 
-### 28.1 三案与结论
+三案：A 常驻 / **B 只在不可用或失效时显示** / C 维持现状。主人选 B。
 
-| 案 | 行为 | 结论 |
-|---|---|---|
-| A | 常驻（任何时候都能去管理系统指纹） | 更省事，但正常态每开一次设置就被劝去系统设置，属于噪音 |
-| **B** | **只在「平台不可用」或「封印已失效」时显示** | **主人选定** |
-| C | 维持现状 | 验收时得先删光指纹才能触发，不现实 |
-
-### 28.2 实现要点（这条最容易做漏）
-
-B 案的第一个陷阱：**失效恰好可以发生在平台完全可用的时候**——指纹变更废的是 Keystore 里那把钥匙，`availability` 照样是 `available`。所以判据**不能**再嵌在外层 `{#if bio && !bioAvailable}` 里，必须提出来：
+**B 案的第一个陷阱**：失效恰好可以发生在平台完全可用的时候——指纹变更废的是 Keystore 里那把钥匙，`availability` 照样是 `available`。所以判据不能再嵌在外层块里：
 
 ```ts
 const bioSealBroken = $derived(bio?.state === 'stale' || bio?.state === 'corrupt');
 const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealBroken));
 ```
 
-第二个陷阱：D-119 如果按第一版「删文件」修，状态就成 `Absent`，`bioSealBroken` 恒假 ⇒ **B 案永远不触发**。这也是墓碑方案（§26.3）的直接动因。
+**第二个陷阱**：D-119 如果按第一版「删文件」修，状态就成 `Absent`，`bioSealBroken` 恒假 ⇒ B 案永远不触发。这也是墓碑方案（§26.3）的直接动因。
+
+改完按钮出现了，但在 Android 上**点了什么都不发生**——于是有了第二轮。
+
+### 28.2 第二轮（D-122）：按钮能看见，但点了完全没反应
+
+主人原话：「点后者不能跳系统指纹页，点击没有跳转」，进一步确认是「**完全没有反应，一点提示都没有**」。
+
+这句「一点提示都没有」是决定性证据，它把所有「失败路径」都排除了：
+
+| 若发生 | 必然可观察到的现象 |
+|---|---|
+| `run_mobile_plugin` 失败（命令没注册 / 名字不匹配） | Rust 拿 `Err` → 前端 `toast` 红字 |
+| `startActivity` 抛 `ActivityNotFoundException` | Kotlin `invoke.reject` → 同上，一定弹字 |
+| `startActivity` 抛 `SecurityException` | 同上 |
+
+三条都不成立 ⇒ `startActivity` **成功了**，`invoke.resolve()` 也正常返回。也就是说 Intent 确实发出去了，是 ROM 那边把 `android.settings.BIOMETRIC_ENROLL` 忽略掉、或者拉起后立刻 `finish`。而客户端**没有任何办法**判定「用户到底有没有看到那个页面」——`resolveActivity` 受包可见性影响会误报，`startActivity` 成功与否也说明不了页面留在了前台。
+
+国产 ROM 把生物识别设置放在完全不同的位置（华为「生物识别和密码」、小米「密码与安全」、原生「安全」），没有任何一个 action 能保证命中。
+
+**结论（主人拍板）：Android 不做跳转，只给文案。**
+
+- 前端：`bioCanOpenSettings(platform)` 只对 Windows 为真；
+- Android 分支渲染 `settings.bio_manage_hint_android` 段落，不是按钮；
+- Kotlin 删掉 `openSettings` 命令与 `Intent` / `Settings` 两个 import；
+- Rust 的 Android 分支直接 `false`，并写清为什么不尝试；
+- 四语言删掉 `bio_avail_hint_android` 与 `bio_open_settings_android` 两个键，新增 `bio_manage_hint_android`。
+
+顺带修掉一个一直没说破的问题：旧 Android 文案写的是「设置 → 安全 → 指纹、人脸与密码」——**这是 iOS 的路由**，Android 上根本不存在这个菜单层级。新文案不再给单一假路径，改为「去「设置」里找生物识别 / 指纹 / 人脸相关页面」+ 三个品牌的举例。
+
+| | Windows | Android |
+|---|---|---|
+| 控制方式 | 「打开 Windows 登录选项」按钮 | 一句说明文字 |
+| 目标 | `ms-settings:signinoptions`（微软文档化协议） | 无（用户自己在系统设置里找） |
+| 依据 | 协议稳定、跳转确定 | 各 ROM 入口不一，跳转不可控也不可检测 |
 
 ### 28.3 各状态下的可见性（验收对照）
 
-| `state` / `availability` | 状态行 | 「开启快速解锁」 | 「打开系统生物识别设置」 |
-|---|---|---|---|
-| `ready` / `available` | 已开启（日期） | —（显示「关闭」） | **不显示** |
-| `stale` / `available`（指纹变更后） | 记录已变更，已失效 | 显示 | **显示** |
-| `ready` / `not_configured` | 已开启但当前不可用 | —（显示「关闭」） | **显示** |
-| `absent` / `not_configured` | 未开启 | 置灰 | **显示** |
-| `absent` / `available`（从未开启） | 未开启 | 显示 | **不显示** |
+| `state` / `availability` | 状态行 | 主按钮 | Windows 入口 | Android 入口 |
+|---|---|---|---|---|
+| `ready` / `available` | 已开启（日期） | 关闭快速解锁 | 不显示 | 不显示 |
+| `stale` / `available`（指纹变更后） | 记录已变更，已失效 | 开启快速解锁 | **按钮** | **说明文字** |
+| `ready` / `not_configured` | 已开启但当前不可用 | 关闭快速解锁 | **按钮** | **说明文字** |
+| `absent` / `not_configured` | 未开启 | 开启（置灰） | **按钮** | **说明文字** |
+| `absent` / `available`（从未开启） | 未开启 | 开启快速解锁 | 不显示 | 不显示 |
 
 ### 28.4 守门
 
-`bio-android-guard.test.ts` 两例：`bioShowSettingsEntry` 判据必须同时含 `!bioAvailable` 与 `bioSealBroken`；按钮必须紧跟在 `{#if bioShowSettingsEntry}` 之后、中间不许出现 `{/if}`（落进别的块就是旧写法）。
+`bio-android-guard.test.ts` 五例：
 
-**已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，该例立刻变红（1 failed / 28 passed），还原后 29 全绿。
+1. `bioShowSettingsEntry` 判据必须同时含 `!bioAvailable` 与 `bioSealBroken`；
+2. 按钮紧跟 `{#if bioShowSettingsEntry}`、中间只允许夹一层 `bioCanOpenSettings(bioPlatform)`，不许出现 `{/if}`；
+3. Android 分支必须是段落、**不许有 `<button>`**；
+4. Kotlin 不许再有 `fun openSettings` / `ACTION_BIOMETRIC_ENROLL`（查代码不查注释），Rust 不许再出现 `"openSettings"`，但 Windows 的 `open_hello_settings` 必须还在；
+5. 两个废弃键从四语言词典里同步消失，新键四语言齐全，文案里必须出现「各品牌位置不同」/「differs by brand」。
+
+**已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，第 1 例立刻变红，还原后全绿。

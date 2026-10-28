@@ -1,9 +1,7 @@
 package com.passwordms.app
 
 import android.app.Activity
-import android.content.Intent
 import android.os.Build
-import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
@@ -241,27 +239,12 @@ class BiometricPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
-    /**
-     * 打开系统的生物识别录入页（D-114 的「给一条能走的路」在 Android 上的等价物）。
-     *
-     * 无参数：目标 Action 是编译期常量，Rust 侧也没有参数位，前端构造不出别的 Intent。
-     */
-    @Command
-    fun openSettings(invoke: Invoke) {
-        val intent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            Intent(Settings.ACTION_BIOMETRIC_ENROLL)
-        } else {
-            // API 24–29 没有专门的生物识别录入页，退到安全设置由用户自己找。
-            Intent(Settings.ACTION_SECURITY_SETTINGS)
-        }
-        try {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            host.startActivity(intent)
-            invoke.resolve()
-        } catch (e: Exception) {
-            invoke.reject("cannot open settings: ${e.javaClass.simpleName} ${e.message}", "platform")
-        }
-    }
+    // 原 `openSettings` 命令（跳系统生物识别设置页）已在 D-122 移除，原因见
+    // docs/08-biometric-unlock.md §28：`Settings.ACTION_BIOMETRIC_ENROLL` 在国产 ROM 上
+    // 各家响应不一，主人真机实测点击**完全静默**——`startActivity` 不抛异常（抛了就会
+    // reject、前端一定弹红字），说明 Intent 确实发出去了，是 ROM 忽略或拉起后立刻 finish。
+    // 既跳不过去、也无法在客户端判定「到底跳成了没有」，留着只会是一个点了没反应的按钮。
+    // Android 改为纯文案引导（`settings.bio_manage_hint_android`，各品牌路径写在文案里）。
 
     // ------------------------------------------------------------------ 内部
 
