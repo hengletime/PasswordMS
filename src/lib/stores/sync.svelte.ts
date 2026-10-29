@@ -54,6 +54,15 @@ class SyncStore {
    */
   syncingDeviceId = $state<string | null>(null);
   /**
+   * D-129：自动同步（静默）是否在跑。
+   *
+   * 为什么与 `syncingDeviceId` 分开：那个字段驱动设备行按钮的转圈，自动同步在后台跑时
+   * 不该让任何按钮转起来（用户没点，却看到「正在同步…」）。但两者必须**互斥**——
+   * 一个后台同步和一个手动同步同时推进同一份 `DeviceSyncState` 会产生 seq/base 竞态
+   * （后端 `sync_busy` 也会挡，但前端先让路可以少一次注定失败的 IPC）。
+   */
+  autoBusy = $state(false);
+  /**
    * D-69：上一次 join 成功时拿到的**会话码**，供 `PairScan` 与电脑屏逐字核对。
    *
    * 为什么从「指纹」改成「会话码」（主人真机实测得出的结论）：原实现里电脑屏显示的是
@@ -255,6 +264,55 @@ class SyncStore {
     }
   }
 
+  /**
+   * D-129：自动同步用的**静默**同步（不弹任何 toast），返回「是否至少一台成功」。
+   *
+   * 与 `syncNow` 的三点区别，每一点都是刻意的：
+   * 1. **不弹提示**。自动同步每 5 分钟一次，成功弹一条等于骚扰；失败弹一条更糟——
+   *    对端离线是自动同步的**常态**（手机不在同一局域网、笔记本合上了），不是错误。
+   * 2. **遍历全部已配对设备**。`syncNow` 同步的是用户点的那一台；自动同步没有「用户点的那台」。
+   * 3. **不占 `syncingDeviceId`**。那是设备行按钮的转圈态，自动同步不该让按钮转起来。
+   *    用独立的 `autoBusy` 防重入，并**让路**给手动同步（用户在等的就是他点的那台）。
+   *
+   * `vault.load` 用静默模式：自动同步期间不该因为一次读库失败弹红字。
+   * 编辑器草稿是独立 `$state` 拷贝（`ItemEditor.svelte:28-34`），reload 不会冲掉它。
+   */
+  async syncQuiet(): Promise<boolean> {
+    if (this.autoBusy || this.syncingDeviceId !== null) {
+      return false; // 已在跑 / 手动同步占用中：这一拍直接放弃，等下一拍
+    }
+    this.autoBusy = true;
+    let anyOk = false;
+    let applied = 0;
+    try {
+      // 快照：遍历期间若会话被锁定，`sync.reset()` 会清空 `devices`，
+      // 直接迭代响应式数组会在中途丢元素。
+      const targets = [...this.devices];
+      for (const device of targets) {
+        try {
+          const result = await api.sync.now(device.device_id);
+          anyOk = true;
+          applied += result.applied;
+        } catch {
+          // 静默：单台失败不影响其余设备，也不上屏。
+        }
+      }
+      if (applied > 0) {
+        // D-47：同步进来的数据必须立即上屏，否则要切页才刷新。
+        await vault.load(true);
+      }
+      if (anyOk) {
+        await this.loadStatus(true);
+        await this.loadConflicts(true);
+      }
+    } catch {
+      // 装载/刷新失败：不弹提示，调度器会按失败退避。
+    } finally {
+      this.autoBusy = false;
+    }
+    return anyOk;
+  }
+
   /** 读取某冲突的当前选择。 */
   choiceOf(conflictId: string): ConflictChoice | null {
     return this.choices[conflictId] ?? DEFAULT_CONFLICT_CHOICE;
@@ -295,6 +353,8 @@ class SyncStore {
     this.choices = {};
     // D-66：锁定会中断所有在飞的同步，忙碌态必须一并复位（否则解锁后按钮永久置灰）。
     this.syncingDeviceId = null;
+    // D-129：自动同步的占用标记同理（否则锁定再解锁后 `syncQuiet` 永远提前返回）。
+    this.autoBusy = false;
     // D-69：上一次配对的会话码不该跨解锁残留（下次解锁看到的应是空白，而非旧数据）。
     this.lastPairSessionCode = null;
     this.lastPairDeviceName = '';
