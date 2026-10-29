@@ -2564,3 +2564,33 @@ app.run(|app_handle, event| match event {
 - 「记录已变更」统一改说**生物识别记录**（准确性：任何生物特征变化都会废掉密钥）。
 - **平台限制实证**：本地核查 `android.jar`（api 35/36/37）的 `android.security.keystore.KeyProperties`，`AUTH_BIOMETRIC_STRONG` 存在、**`AUTH_BIOMETRIC_WEAK` 三个版本都不存在** ⇒ Keystore 从未提供「便捷级生物识别绑密钥」的取值。放宽只能走时长型认证（`validityDuration`，安全等级下降）或纯界面锁（不可信），主人裁定维持 A 案。
 - 守门：`bio-android-guard.test.ts` 新增 `d126` 四例（字面量零命中 / 取值逐字 / weak_only 仍给出「录入指纹」这一步 / `bio_manage_hint_android` 禁自动承诺），变异验证三条全红。
+
+### 3.14.27 Windows 适配器变成「TPM2 优先 + DPAPI 兜底」（1.4.8，2026-10-29）
+
+架构上只有一处变化，但它是**语义级**的：`VaultSealer::subtype()` 原来同时承担两件事，Windows 两条腿并存后必然错一件。
+
+| 语义 | 方法 | 谁读它 |
+|---|---|---|
+| 新封印**写**什么 subtype | `subtype()` | 只有 `enable` |
+| 这条老封印我**解不解得了** | `accepts(subtype)`（新增，带默认实现） | `unlock` |
+
+默认实现 `subtype == self.subtype()` 让 Android / Mock / Unsupported 三个适配器**零改动**、行为不变。`unlock` 里的等值比较改成 `!sealer.accepts(...)`。
+
+适配器结构（`platform/mod.rs` → `PlatformSealer = WinSealer<HelloGate>`）：
+
+```
+platform_sealer() ── WinSealer::new()
+                      ├── tpm_ready()? → Some(TpmSealer)   subtype()=WindowsTpm2Seal
+                      └── 否          → None               subtype()=WindowsDpapiUser
+                     seal()   : 有 TPM 走 TPM，否则 DPAPI
+                     unseal() : 按密文魔数 PMST 分派（**不**按当前 subtype）
+                     accepts(): DPAPI 恒 true / TPM2 看本机有无 TPM / Android false
+                     purge()  : 删 TPM 持久密钥（DPAPI 无可删物）
+```
+
+两条设计约束值得记住：
+
+1. **`unseal` 按密文自识别，不按「当前首选」**。否则「本机 TPM 今晚读不到」会连累老 DPAPI 封印一起解不开。
+2. **升级不搬移**。老封印保持 DPAPI 不动，用户下次「重新开启」才迁到 TPM——迁移动作永远由用户的一次显式操作触发，后台不偷偷重写密钥文件。
+
+威胁模型、实测数据、PKCS#1 取舍、回滚行为见 `docs/08-biometric-unlock.md` §33。

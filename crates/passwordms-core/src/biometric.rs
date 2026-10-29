@@ -84,7 +84,10 @@ pub enum Subtype {
     /// Windows DPAPI 用户域 + Windows Hello 在场校验（**软绑定**，§6.3）。
     #[serde(rename = "windows-dpapi-user")]
     WindowsDpapiUser,
-    /// Windows TPM2 密封（1.3.x 实现，抗磁盘镜像离线解密）。
+    /// Windows TPM2 密封（1.4.8 实现，抗磁盘镜像离线解密，`docs/08` §33）。
+    ///
+    /// 与 [`Subtype::WindowsDpapiUser`] **并存**：老封印读得懂、新封印写这个。
+    /// 能不能解由 [`VaultSealer::accepts`] 判定，不要拿本枚举值直接比较。
     #[serde(rename = "windows-tpm2-seal")]
     WindowsTpm2Seal,
     /// Android Keystore + BiometricPrompt（**硬绑定**，§6.3）。
@@ -256,8 +259,24 @@ pub trait VaultSealer {
     /// 当前可用性（每次解锁/开启前都查，别缓存）。
     fn availability(&self) -> Availability;
 
-    /// 本实现对应的细分类型。
+    /// 本实现**新封印**要写的细分类型。
+    ///
+    /// 只在 [`enable`] 里被读一次。它**不代表**「本实现能解哪些封印」——Windows 上同一个
+    /// 适配器既能写 TPM 封印也能解开更早版本留下的 DPAPI 封印，判定交给 [`Self::accepts`]。
     fn subtype(&self) -> Subtype;
+
+    /// 本实现**能不能解**某一类封印。
+    ///
+    /// 默认实现是「只认自己写的那个类型」，对单形态适配器（Android Keystore / 测试 Mock）
+    /// 与旧行为完全一致。需要**同时兼容新旧两种封印**的适配器（Windows：TPM 优先、
+    /// 老封印仍是 DPAPI）必须覆盖，否则升级后老用户那条本来好用的封印会以
+    /// `BiometricUnavailable` 被拒——数据不丢，但功能凭空消失。
+    ///
+    /// 放宽这里**不会**削弱任何密码学校验：真正能否解开取决于 `unseal` 里的密钥与
+    /// 完整性校验，本方法只决定「要不要把它交给 `unseal` 试一次」。
+    fn accepts(&self, subtype: Subtype) -> bool {
+        subtype == self.subtype()
+    }
 
     /// 用 `bind` 作附加认证数据加密 VK。
     fn seal(&self, vk: &[u8], bind: &[u8]) -> Result<Vec<u8>, SealError>;
@@ -610,7 +629,10 @@ pub fn unlock(
     };
     // 跨平台拷来的封印（如 Android 目录拷到 Windows）：是「本机用不了」而不是「已损坏」，
     // 因此**不得**让上层据此删除封印（审计 M-1）。
-    if rec.platform_subtype != sealer.subtype() {
+    //
+    // 用 `accepts` 而不是 `== sealer.subtype()`：Windows 侧同一个适配器要能解开更早版本
+    // 写下的 DPAPI 封印（升级不搬移、不失效），而 `subtype()` 表达的是「新封印写什么」。
+    if !sealer.accepts(rec.platform_subtype) {
         return Err(CoreError::BiometricUnavailable);
     }
     let bind = bind_of(target);

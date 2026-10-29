@@ -18,7 +18,7 @@
 //!
 //! | 平台 | 适配器 | 形态 |
 //! |---|---|---|
-//! | Windows | `DpapiSealer<HelloGate>` | 两段式：DPAPI 用户域 + `UserConsentVerifier` 闸门 |
+//! | Windows | `WinSealer<HelloGate>` | 两段式：**TPM2 优先 / DPAPI 兜底** + `UserConsentVerifier` 闸门（§6.1 / §33） |
 //! | Android | `KeystoreSealer` | **一段式**：Keystore 密钥硬绑生物识别，`CryptoObject` 让闸门与加解密合一（§23） |
 //! | 其它 | `UnsupportedSealer` | 恒 `NotImplemented`，前端整卡不渲染（D-116） |
 
@@ -56,6 +56,10 @@ mod android_keystore;
 mod unsupported;
 #[cfg(windows)]
 mod windows_dpapi;
+#[cfg(windows)]
+mod windows_sealer;
+#[cfg(windows)]
+mod windows_tpm;
 
 #[cfg(target_os = "android")]
 pub use android_keystore::KeystoreSealer;
@@ -63,10 +67,15 @@ pub use android_keystore::KeystoreSealer;
 pub use unsupported::UnsupportedSealer;
 #[cfg(windows)]
 pub use windows_dpapi::{DpapiSealer, HelloGate};
+#[cfg(windows)]
+pub use windows_sealer::WinSealer;
 
 /// 本机构建对应的适配器类型。
+///
+/// Windows 是**一个适配器两种手段**（TPM2 优先、DPAPI 兜底），而不是两个类型：
+/// 封印记录的 subtype 只在 `unlock` 里被读一次，谁去解由 [`WinSealer`] 自己按密文分派。
 #[cfg(windows)]
-pub type PlatformSealer = DpapiSealer<HelloGate>;
+pub type PlatformSealer = WinSealer<HelloGate>;
 #[cfg(target_os = "android")]
 pub type PlatformSealer = KeystoreSealer<tauri::Wry>;
 #[cfg(not(any(windows, target_os = "android")))]
@@ -78,7 +87,7 @@ pub type PlatformSealer = UnsupportedSealer;
 /// 存进 state 的 [`crate::BiometricHandle`]（Tauri 的 `PluginHandle`）。
 #[cfg(windows)]
 pub fn platform_sealer(_app: &tauri::AppHandle) -> PlatformSealer {
-    DpapiSealer::new()
+    WinSealer::new()
 }
 
 #[cfg(target_os = "android")]
@@ -94,15 +103,21 @@ pub fn platform_sealer(_app: &tauri::AppHandle) -> PlatformSealer {
 
 /// 删掉平台侧的密钥材料（撤销的实质动作，`SealStore::remove()` 的搭档）。
 ///
-/// Windows 的 DPAPI **没有**可删除的密钥句柄（主密钥由系统账户派生，不属于我们），
-/// 所以这里是空操作；Android 必须真删 Keystore 条目，否则「关闭快速解锁」只删了文件、
-/// 密钥还留在系统里，撤销就不彻底。
+/// - Windows：DPAPI **没有**可删的密钥句柄（主密钥由系统账户派生，不属于我们），
+///   但 TPM2 封印器有一把持久密钥，必须删；两件事都由 [`WinSealer::purge`] 处理。
+/// - Android：必须真删 Keystore 条目，否则「关闭快速解锁」只删了文件、密钥还留在系统里，
+///   撤销就不彻底。
+#[cfg(windows)]
+pub fn purge_platform_key(sealer: &PlatformSealer, bind: &[u8]) {
+    sealer.purge(bind);
+}
+
 #[cfg(target_os = "android")]
 pub fn purge_platform_key(sealer: &PlatformSealer, bind: &[u8]) {
     sealer.purge_key(bind);
 }
 
-#[cfg(not(target_os = "android"))]
+#[cfg(not(any(windows, target_os = "android")))]
 pub fn purge_platform_key(_sealer: &PlatformSealer, _bind: &[u8]) {}
 
 /// 唤起系统的生物识别 / 登录设置页（D-114 的成果在 Android 上延续）。

@@ -53,6 +53,9 @@ zeroize.workspace = true
 #   - `Security_Credentials_UI`：`UserConsentVerifier`（Windows Hello 在场闸门）
 # `windows-future` 提供 `IAsyncOperation::join/when`（阻塞/回调等待），已在依赖树中。
 [target.'cfg(windows)'.dependencies]
+# TPM2 密封器要把 `bind` 摘要附在明文尾部（CNG 没有 AAD 概念），所以需要 SHA-256。
+# 与 core 同一个 workspace 版本，不引入新的传递依赖。
+sha2.workspace = true
 windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",

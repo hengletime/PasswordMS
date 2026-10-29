@@ -91,6 +91,8 @@ struct MockSealer {
     mode: Mode,
     subtype: Subtype,
     availability: Availability,
+    /// 「额外还能解哪一档」——模拟 Windows 的 TPM 适配器仍要读得懂老 DPAPI 封印。
+    extra_accept: Option<Subtype>,
 }
 
 impl MockSealer {
@@ -100,6 +102,7 @@ impl MockSealer {
             mode: Mode::Ok,
             subtype: Subtype::AndroidKeystore,
             availability: Availability::Available,
+            extra_accept: None,
         }
     }
 
@@ -143,6 +146,10 @@ impl VaultSealer for MockSealer {
 
     fn subtype(&self) -> Subtype {
         self.subtype
+    }
+
+    fn accepts(&self, subtype: Subtype) -> bool {
+        subtype == self.subtype || self.extra_accept == Some(subtype)
     }
 
     fn seal(&self, vk: &[u8], bind: &[u8]) -> Result<Vec<u8>, SealError> {
@@ -826,6 +833,87 @@ fn enable_rejects_short_ciphertext() {
     let err = enable(&store, &broken, &t, &Zeroizing::new(VK_A)).unwrap_err();
     assert_eq!(err.code(), "ERR_CRYPTO");
     assert!(!store.path().exists(), "拒绝的开启不得留下任何文件");
+}
+
+// ── 28. `accepts` 放宽后，升级仍能读老 subtype 的封印 ────────────────
+//
+// Windows 从「DPAPI 用户域」升级到「TPM2 密封」时，老用户磁盘上躺着的是 DPAPI 封印。
+// `subtype()` 说的是「新封印写什么」，若解封也只认它，升级那一刻所有老封印会以
+// `BiometricUnavailable` 被拒——数据不丢，但功能凭空消失（§33.2）。
+#[test]
+fn widened_accepts_lets_new_sealer_read_old_seal() {
+    let dir = temp_dir("accepts-wide");
+    let path = dir.join("v.vault");
+    let store = SealStore::new(&path);
+    let wkv = synth_wkv(1);
+    let t = target("vault-1", &MAC_1, &wkv);
+
+    let old = MockSealer {
+        subtype: Subtype::WindowsDpapiUser,
+        ..MockSealer::new()
+    };
+    let rec = enable(&store, &old, &t, &Zeroizing::new(VK_A)).unwrap();
+    assert_eq!(rec.platform_subtype, Subtype::WindowsDpapiUser);
+
+    // 新适配器：写 TPM2，但声明「老 DPAPI 封印我也能解」。
+    let new = MockSealer {
+        subtype: Subtype::WindowsTpm2Seal,
+        extra_accept: Some(Subtype::WindowsDpapiUser),
+        ..MockSealer::new()
+    };
+    let vk = unlock(&store, &new, &t).expect("放宽后必须能解老封印");
+    assert_eq!(&vk[..], &VK_A[..]);
+}
+
+// ── 29. 放宽**只**到声明的那一档，不得顺带认别家 ──────────────────────
+//
+// 放宽是实现方的声明，不是「什么都能试」。若谁图省事让 `accepts` 恒 true，跨平台拷来的
+// 封印（Android 目录拷到 Windows）就会从「本机用不了」变成「交给 unseal 试一次」——
+// 试完必失败，但错误分类会漂成 Tampered，前端就会说「配置损坏、请重新开启」，
+// 而正确的话是「本机用不了」。两条分支都要钉住。
+#[test]
+fn widened_accepts_still_rejects_other_subtypes() {
+    let dir = temp_dir("accepts-narrow");
+    let path = dir.join("v.vault");
+    let store = SealStore::new(&path);
+    let wkv = synth_wkv(1);
+    let t = target("vault-1", &MAC_1, &wkv);
+
+    // 库存里是 Android Keystore 封印（模拟从手机拷来的目录）。
+    let android = MockSealer::new();
+    enable(&store, &android, &t, &Zeroizing::new(VK_A)).unwrap();
+
+    // 换到 Windows 侧：写 TPM2、只额外认 DPAPI。
+    let win = MockSealer {
+        subtype: Subtype::WindowsTpm2Seal,
+        extra_accept: Some(Subtype::WindowsDpapiUser),
+        ..MockSealer::new()
+    };
+    let err = unlock(&store, &win, &t).unwrap_err();
+    assert_eq!(
+        err.code(),
+        "ERR_BIOMETRIC_UNAVAILABLE",
+        "未声明的 subtype 必须报「本机用不了」，不能落到 unseal 里去当篡改"
+    );
+
+    // 反过来：不放宽的同 subtype 适配器（升级前的老代码）也照样解不开新封印——
+    // 这正是必须先放宽、后写新封印的次序理由。
+    let strict = MockSealer {
+        subtype: Subtype::WindowsDpapiUser,
+        ..MockSealer::new()
+    };
+    let tpm_rec = {
+        let dir2 = temp_dir("accepts-strict");
+        let path2 = dir2.join("v.vault");
+        let store2 = SealStore::new(&path2);
+        let tpm = MockSealer {
+            subtype: Subtype::WindowsTpm2Seal,
+            ..MockSealer::new()
+        };
+        enable(&store2, &tpm, &t, &Zeroizing::new(VK_B)).unwrap();
+        unlock(&store2, &strict, &t).unwrap_err()
+    };
+    assert_eq!(tpm_rec.code(), "ERR_BIOMETRIC_UNAVAILABLE");
 }
 
 // ── 测试助手 ─────────────────────────────────────────────────────────

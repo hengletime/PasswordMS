@@ -332,7 +332,7 @@ Android 侧不新增 Rust 依赖（Kotlin 插件 + JNI 桥）。
 |---|---|---|---|
 | 改主密码 | 主动删除 + 被动失效 | 「主密码已变更，快速解锁已关闭」 | 重新开启（输新主密码） |
 | Android 新增/删除指纹 | 密钥永久失效 | 「生物特征有变更，已关闭快速解锁」 | 重新开启 |
-| Windows Hello 被重置/PIN 变更 | DPAPI 仍可解（用户域未变）→ Hello 校验失败 | 「Windows Hello 不可用，请用主密码」 | 修复 Hello 后可继续用 |
+| Windows Hello 被重置 / PIN 变更 | 封印**仍可解**（DPAPI 用户域未变；TPM 密钥也没被动过） | 用户无感——用**新 PIN** 照样通过 `UserConsentVerifier` | 无需动作。**本应用感知不到这类事件**（2026-10-29 更正：原写「Hello 校验失败 → 请用主密码」是错的，见 §21.4 更正） |
 | 换机器 / 重装系统 | 旁路文件不存在或 DPAPI 解不开 | 只剩密码框 | 密码解锁即可，无需处理 |
 | **远程桌面（RDP）会话** | `UserConsentVerifier` 在 RDP 下不可用 | 隐藏「Hello 解锁」按钮，**不删**旁路 | 本地会话照常可用；不因临时不可用而毁掉封印 |
 | **Android 备份/换机恢复** | Keystore 密钥不随备份迁移 ⇒ 封印必然解不开；且本项目 `allowBackup="false"`（manifest 已在册），系统本就不会备份 | 「生物特征/设备已变更，已关闭快速解锁」 | 密码解锁后重新开启 |
@@ -903,9 +903,9 @@ bioDegraded = (state === 'ready') && (availability !== 'available')
 |---|---|---|
 | **A（现行）** | 只修显示与文案，说清「Hello 变更不撤销 / 撤销靠关闭」 | 零密码学改动；用户需理解「撤销=关闭」 |
 | **B** | 记录开启时的 Hello 可用性，`available → not_present` 时降级为「需重输主密码才能恢复」 | 贴合「我关掉=撤销」直觉，但**安全收益接近零**（见 21.3-3），且临时性不可用（策略/驱动/远程会话）会逼用户重输 |
-| **C** | 用 `KeyCredentialManager`（NGC 密钥）做真绑定：PIN 重置 / 重新录入 ⇒ 取密钥失败 ⇒ 我们能判 `Stale` | Windows 侧首次拥有真信号。**可行性已验证：见 §21.6**（未打包 Win32 应用创建/读公钥/签名/删除全链路跑通）；仍需封印格式升到 v3，量级属 P3 |
+| **C（2026-10-29 已作废）** | 用 `KeyCredentialManager`（NGC 密钥）做真绑定 | 原设想「PIN 重置 ⇒ 取密钥失败 ⇒ 能判 `Stale`」**不成立**，且它**根本不能用来包 VK**。三条硬事实见 §21.7 |
 
-建议：本轮走 **A**；C 的可行性探针 **2026-10-28 已完成且结论为「可行」**（§21.6），可随时按 §21.6 的实现边界排期，与 Android Keystore 适配器同批推进。
+建议：本轮走 **A**。C 案的可行性探针（§21.6）只证明了「能创建 / 签名 / 删除」，随后的语义核查（§21.7）证明它**做不到我们要的那件事**——签名不等于密封，且 PIN 重置后旧凭据仍可用。**不要**再按 §21.6 排期。
 
 ### 21.5 守门与门禁（实测）
 
@@ -923,7 +923,7 @@ bioDegraded = (state === 'ready') && (availability !== 'available')
 
 ---
 
-### 21.6 方案 C 可行性探针：**已验证可行**（2026-10-28 实测）
+### 21.6 方案 C 可行性探针：只证明了「能签名」（**结论已被 §21.7 推翻**，2026-10-28 实测）
 
 探针代码在 `target/probe-kcm/`（独立 crate，`target/` 已被 gitignore，不入库）。实测输出：
 
@@ -939,6 +939,8 @@ bioDegraded = (state === 'ready') && (availability !== 'available')
 
 **结论：未打包的 Win32 应用可以使用 `KeyCredentialManager`。**「缺包标识导致 `RequestCreateAsync` 失败」这个担心不成立——创建 / 读公钥 / 签名 / 删除全链路跑通。
 
+> **但这只说明「能签名」。**「能不能用它包 VK」「PIN 重置能不能判出来」是另外两个问题，答案都是否——见 §21.7。
+
 两轮才跑通，教训比结论值钱：
 
 | # | 坑 | 现象 | 根因 |
@@ -949,13 +951,31 @@ bioDegraded = (state === 'ready') && (availability !== 'available')
 
 数据侧面印证：公钥 294 B / 签名 256 B ⇒ RSA-2048，符合 NGC 默认值（与 §5 假设一致）。
 
-**实现方案的边界（留给 P3 落地时照此办）**
+**实现方案的边界（原文保留，但第 4、5 条已被 §21.7 推翻——读这两条请连带读 §21.7）**
 
 - 每个 vault 一个凭据名（如 `PasswordMS-{vault_id}`），`DeleteAsync` 即撤销；
 - `RequestSignAsync` **每次都要用户手势**，无法静默签——这本身就是最强的「在场证明」，可以替代当前 `UserConsentVerifier` 那道闸门；
 - NGC 凭据绑 **Windows 账户**，换账户取不到私钥，与 DPAPI 用户域的前提一致，不引入新的降级面；
-- PIN 重置 / 生物特征重录 ⇒ `RequestSignAsync` 失败 ⇒ 正是 §21.4 缺的那个 `Stale` 信号；
-- 封印格式需要升到 `SEAL_VERSION=3`（要存凭据名 + 公钥），旧封印按 `Absent` 处理并要求重新开启，不能静默继续用 v2。
+- ~~PIN 重置 / 生物特征重录 ⇒ `RequestSignAsync` 失败 ⇒ 正是 §21.4 缺的那个 `Stale` 信号~~ → **错，见 §21.7-2**；
+- ~~封印格式需要升到 `SEAL_VERSION=3`（要存凭据名 + 公钥），旧封印按 `Absent` 处理并要求重新开启~~ → **不成立：KCM 没有解密入口，包不了 VK，见 §21.7-1**。
+
+### 21.7 更正：KCM（方案 C）**不能**用来包 VK，也判不出 PIN 重置（2026-10-29 查实）
+
+§21.6 只证明了「能创建、能读公钥、能签名、能删除」。**能签名 ≠ 能密封。** 三条硬事实把方案 C 判死：
+
+| # | 事实 | 依据 |
+|---|---|---|
+| 1 | **KCM 只提供签名，没有任何解密入口** | 接口全集是 `RequestCreateAsync` / `RequestSignAsync` / `RetrievePublicKey` / `DeleteAsync`。VK 要能被封印器解回来，KCM 给不了这个能力 |
+| 2 | **`RequestDeriveSharedSecretAsync` 不能救** | 仅 Build **26100+** 才有；且语义是 ECDH 派生共享密钥——NGC 密钥是 **RSA**，没有 ECDH |
+| 3 | **「签固定串 + SHA256(签名) 当主密钥」是坏的** | `RequestSignAsync` 走 RSA-PSS，**盐每次随机** ⇒ 同一串签名两次结果不同 ⇒ 派生不出稳定密钥。（换成 PKCS#1 v1.5 也仍然只有签名、没有解密，且要为此改 NGC 策略） |
+
+所以「用 KCM 把 VK 包起来」这条路**从接口层就不存在**，不是工程量问题。
+
+**「PIN 重置能判出来」也不成立。** 官方原文的语义是：PIN 重置时用**新钥匙**解密后**重新加密**旧材料，而不是销毁。也就是说 PIN 改过之后，旧凭据**仍然可用**——我们要的那个「失效信号」根本不会出现。方案 C 的两条收益（包 VK、判失效）**同时为零**。
+
+**顺带钉住的另一条平台事实：Windows 没有「只认生物识别」这个选项。** 官方把「user verification method」列在「业界还没见到」的清单里；Hello 的 PIN / 指纹 / 人脸各自有一把 protector key 包着**同一把**认证密钥，PIN protector 就是「拿 PIN 当熵做 TPM seal」⇒ **密码学上 PIN 与指纹等价**。想让「必须指纹、不许 PIN」在 Windows 上成立，没有 API 支撑。这也是 §6.3 把 Windows 定位成「软绑定」、文案必须写「Windows Hello 快速解锁」而不是「指纹解锁」的根本原因。
+
+**取代方案**：抗离线解密这件事改由 TPM2 密封承担（§33），走 CNG 的 `NCryptEncrypt`/`NCryptDecrypt` + 不可导出的 TPM 私钥——那条路才是「真的能用 TPM 包东西」，且已在真机跑通。
 
 ## 22. D-116：安卓上不该出现「Windows Hello 快速解锁」
 
@@ -1695,3 +1715,134 @@ Kotlin 判定改成两段：强档能用 → `available`；**强档报「没录�
 2. `bio_manage_hint_android` **不写**「完成后切回会自动重新检测」。主人 1.4.6 真机复验：切出再切回状态仍不变（D-124 的窗口事件在这台机上没收敛），承诺不成立。这条不改代码，只锁文案。
 
 **待办（未做，等主人发话）**：D-124 在这台华为机上仍未生效。更可靠的一条路是在 `BiometricPlugin.kt` / `MainActivity` 的 `onResume()` 里直接 `trigger` 一个事件到前端——Activity 生命周期是平台保证的，不依赖 tauri 的转发层。属于「另开」，不在本轮范围。
+
+## 33. TPM2 密封：Windows 从「软绑定」升到「抗离线解密」（2026-10-29）
+
+> 来源：§13.10 backlog 第 1 条（原定 1.3.x 延后）。主人 2026-10-29 拍板：**安全第一、功能第二、
+> 易用性第三**，于是先做技术验证再落码，不做「先上线再观察」。
+
+### 33.1 要解决的到底是什么
+
+DPAPI 用户域的保护强度**取决于 Windows 账户口令**：DPAPI 主密钥在磁盘上，被账户口令派生的
+密钥加密。拿到账户口令（或 SAM + 离线爆破）的人，可以在**另一台机器上**解开 `biometric.json`
+里封的 VK——不需要这台电脑，也不需要 Hello。这是威胁模型里的 **T1b（磁盘镜像 / 备份离机解密）**。
+
+TPM 能把这条路堵死，理由只有一个：**私钥不可导出**。加解密在 TPM 内部完成，磁盘上没有任何
+能带走的解密能力。除此之外它不比 DPAPI 强，一点也没有：
+
+| 威胁 | DPAPI 用户域 | TPM2 密封 |
+|---|---|---|
+| T1b 磁盘镜像 / 备份拷走 | ❌ 可解（有账户口令即可离线解） | ✅ 解不开（私钥在 TPM 里） |
+| 换机 / 换 Windows 用户 | ✅ 挡住 | ✅ 挡住 |
+| 本机本用户、能执行代码的恶意进程 | ❌ 挡不住（直接调 API） | ❌ **同样挡不住**（直接调 `NCryptDecrypt`） |
+| 旁人趁解锁态点开应用 | ✅ 由 Hello 闸门挡 | ✅ 同上（闸门未变） |
+
+所以本轮**没有**动 Hello 闸门、没有动 `Availability` 语义、没有动 UI 文案。升级的只是
+「离线那条腿」。
+
+### 33.2 平台实测：四条硬事实（`target/probe-tpm`，跑完自删密钥）
+
+| # | 事实 | 依据 |
+|---|---|---|
+| 1 | `Microsoft Platform Crypto Provider` 可创建持久 RSA 密钥并 finalize | 探针逐步 flush 打印每步结果 |
+| 2 | **私钥导出被拒** `0x8009000A` | 这条是 T1b 的全部依据；已写成守门用例 `tpm_private_key_is_not_exportable` |
+| 3 | **PKCS#1 v1.5 是唯一可用的填充** | OAEP 带/不带 `BCRYPT_PKCS1_PADDING_INFO` 四种组合全失败（`0x80090027`） |
+| 4 | **不设 `NCRYPT_KEY_USAGE_PROPERTY` 就加密必失败** | 默认用途只允许签名；设 `NCRYPT_ALLOW_ALL_USAGES` 后才通 |
+
+落码阶段又撞出两条**只在实现里才会遇到**的：
+
+| # | 踩坑 | 结论 |
+|---|---|---|
+| 5 | 在 `NCryptCreatePersistedKey` 之后设 `NCRYPT_LENGTH_PROPERTY`，`NCryptFinalizeKey` 报 `0x80280909` | 该 provider 把长度当**创建参数**，finalize 前改写会被拒。**不要设 Length**，默认就是 RSA-2048（探针实测密文 256 字节）。换成「加密后校验密文长度 == 256」来守住强度 |
+| 6 | 并行跑测试时随机出现 `NTE_DEVICE_NOT_READY`（`0x80090030`）/ `0x80280909` | **TPM 是全局单命令队列**。→ 进程内 `static TPM_LOCK: Mutex<()>` 串行化 CNG 段，且对这两个码做 3 次退避重试（40/80/160ms） |
+
+第 6 条不是测试的毛病，是**真实运行风险**：系统里 Hello、BitLocker、其它应用都在用同一颗 TPM；
+用户点「开启快速解锁」时如果 Hello 刚关掉对话框，不重试就是「随机报错」。代码里锁只包 CNG 段，
+**不包**闸门弹框——用户盯着对话框的那 120 秒不能占着锁。
+
+### 33.3 设计：固定一把钥匙 + 明文尾巴，而不是按 `bind` 派生
+
+Android 侧按 `bind` 派生 Keystore 别名（`key_id(bind)`），遗留孤儿条目只占磁盘。**TPM 不能照抄**：
+持久密钥占的是 TPM 内部 slot（典型几十个），而 `bind` 每次改主密码都会变 ⇒ 按 `bind` 派生意味着
+改 20 次密码就把 slot 用光，之后**永久无法开启**。
+
+| 决定 | 内容 | 理由 |
+|---|---|---|
+| 密钥名 | 固定 `PasswordMS-VK-Seal` | slot 零增长；`windows_sealer` 与 `windows_tpm` 两处常量由 `tpm_key_name_matches_tpm_module` 钉住一致 |
+| `bind` 绑定 | 明文 = `VK(32) ‖ SHA256("passwordms/v1/biometric-tpm" ‖ len ‖ bind)[..16]` | CNG 没有 AAD 概念，只能把 `bind` 摘要**加密进去**再比对；换 `bind` 必然解不开 |
+| 密文布局 | `b"PMST" ‖ PKCS1(VK‖tag)` = 4 + 256 = 260 字节 | 落在 core 白名单 `48..=1024`；魔数让 `unseal` **按密文自识别**，不靠调用顺序 |
+| 分派 | 见 `PMST` → TPM 分支；否则 → DPAPI | 「本机 TPM 今晚读不到」不能变成「老封印全都解不开」 |
+| 回落 | `new()` 探测 provider，就绪走 TPM，否则静默走 DPAPI | 主人拍板不做用户开关；回落是安全等价的下降，不是把保护关掉 |
+
+### 33.4 core 的一处语义拆分（`VaultSealer::accepts`）
+
+原实现里 `subtype()` 同时承担两个语义，Windows 两条腿并存时必然错一个：
+
+- `enable`：这条**新**封印该写什么 subtype；
+- `unlock`：这条**老**封印我解不解得了。
+
+于是加了一个带默认实现的方法：
+
+```rust
+fn accepts(&self, subtype: Subtype) -> bool {
+    subtype == self.subtype()   // 单形态适配器（Android / Mock）行为不变
+}
+```
+
+`unlock` 里 `rec.platform_subtype != sealer.subtype()` 改成 `!sealer.accepts(rec.platform_subtype)`。
+两处守门（core `biometric_wrap.rs` #28/#29）：
+
+1. 放宽后**能**读老 subtype 的封印（升级不失效）；
+2. 放宽**只**到声明的那一档——Android 拷来的封印仍报 `BiometricUnavailable`（不是 `Tampered`），
+   否则错误分类会漂成「配置损坏、请重新开启」。
+
+`WinSealer::accepts` 的取值：`DPAPI → true`（永远）、`TPM2 → 本机 TPM 在场`、`Android → false`。
+
+### 33.5 为什么用 PKCS#1 v1.5（如实登记代价）
+
+PKCS#1 v1.5 有 Bleichenbacher 类「填充 oracle」风险，前提是攻击者能**反复提交密文并观察到
+「填充是否正确」这一比特**。本场景不满足：
+
+- 密文只存在于本机 `biometric.json`，没有网络端点、没有跨进程解密服务；
+- `unseal` 把「填充错」「长度错」「`bind` 尾巴不符」**一律**映射成同一个 `SealError::Platform`，
+  不向调用方提供任何可区分的比特；
+- 能直接调 `NCryptDecrypt` 的攻击者本来就能拿到明文，不需要 oracle。
+
+而且这不是取舍——OAEP 在这个 provider 上四种组合**全失败**（事实 3）。真要 OAEP 就得换
+CNG 软件 provider，那样私钥可导出，T1b 直接归零，等于白做。
+
+### 33.6 迁移、回滚、失效面
+
+| 场景 | 行为 |
+|---|---|
+| 1.4.7 用户升级到本版 | 磁盘上是 DPAPI 封印 → `accepts(DPAPI) = true` → **照常解锁**；不搬移、不重写，下次「重新开启」才迁到 TPM |
+| 本版用户回滚到 1.4.7 | 1.4.7 的 `subtype()` 恒为 DPAPI ⇒ 老代码把 TPM 封印判成 `BiometricUnavailable`（前端提示「快速解锁暂不可用」）。**不删封印、不报篡改**，主密码照常可用；升级回来后封印仍有效 |
+| 无 TPM（虚拟机 / 被策略禁用） | `tpm_ready()` false ⇒ 全程 DPAPI，与 1.4.7 等价 |
+| TPM 被清 / 换主板 | 密钥没了 ⇒ `open_key` 失败 ⇒ `SealError::Platform` ⇒ core 归 `Tampered`（「配置损坏，请重新开启」）。**不**归 `Invalidated`：那会写墓碑说「生物识别记录已变更」，用户会去改指纹，而真正该做的是重新开启 |
+| 关闭快速解锁 | `WinSealer::purge` 删 `PasswordMS-VK-Seal`。固定名 ⇒ 影响本机所有以本密封器保护的库；当前单库（`vault_path` 固定）无实际影响，多库前必须改成按库派生 + 枚举清理 |
+| 多进程 / 系统占用 TPM | `TPM_LOCK` 串行 + 瞬时码重试；仍失败则报错，不产出一半的封印（core 的长度门禁挡在落盘前） |
+
+### 33.7 验收（已跑，全部实测）
+
+| 门 | 结果 |
+|---|---|
+| core `biometric_wrap.rs` | **29 例全绿**（27 + 新增 #28/#29） |
+| `platform::` 单元测试（含真 TPM） | **31 例全绿**（TPM 9 + 路由 8 + DPAPI 8 + keystore_rules 6），并行跑也绿 |
+| `cargo fmt --all` / `cargo clippy --all-targets` | 0 警告 |
+| 前端三门 | `npm run test` 431 例 / `npm run check` 0 error 0 warning / CSS 契约 PASS |
+| 真 TPM 往返 | 260 字节密文、48 字节明文、解回原 VK；换 `bind` 解不开；末字节翻转解不开；私钥导出被拒 |
+| 跨层全链路 | `core_enable_and_unlock_through_winsealer`：core `enable` 落盘 → core `unlock` 解回，`platform_subtype` 记为 `windows-tpm2-seal`、密文带 `PMST` |
+| 变异验证 3 条 | ①core 改回 `== sealer.subtype()` → 升级用例红；②删 `bind` 尾巴校验 → `mismatched_bind_cannot_unseal` 红；③去掉魔数分派 → 3 例红。全部恢复后复绿 |
+
+**本机环境**：Intel PTT（`ACPI\INTC7001`），TPM 2.0 就绪。
+
+### 33.8 仍然没做的事（登记，不悄悄掩盖）
+
+1. **PCR 策略**：现在**不绑** PCR。绑了会在 Windows 更新 / 固件升级后大面积失效，而收益只覆盖
+   「攻击者能改引导链但拿不到账户口令」这一类。要做必须先在真机上跑够一个更新周期。
+2. **`bind` 变迁留下的孤儿密钥**：固定名方案下根本不产生（这正是选它的原因之一）；若将来改成
+   按库派生，必须同时实现 `NCryptEnumKeys` 前缀清理，否则 slot 会被耗光。
+3. **状态可见性**：`biometric_status` 不告诉前端「本机在用 TPM 还是 DPAPI」。功能无影响，
+   但用户无法自查保护等级。属于 UI 决策，未扩围。
+4. **`tpm_ready()` 每次现查**：跟随「可用性不得缓存」的既有纪律。`NCryptOpenStorageProvider`
+   只加载 provider、不发 TPM 命令，开销可忽略；若将来发现唤醒功耗问题再议缓存策略。
