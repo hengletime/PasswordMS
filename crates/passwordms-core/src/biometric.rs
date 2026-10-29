@@ -156,6 +156,25 @@ pub enum SealError {
     Unavailable(Availability),
     /// 平台密钥已永久失效（Android `KeyPermanentlyInvalidatedException` 等）。
     Invalidated,
+    /// 平台侧那把**保护密钥已经不在了**（D-127）。
+    ///
+    /// 与 [`Self::Invalidated`] 的区别：Android 的 `Invalidated` 是「钥匙还在、但被系统废弃」；
+    /// 这里是「钥匙/密钥容器根本打不开」——Windows TPM 持久密钥被清理、TPM 换了固件、
+    /// 用户在别的系统里重建过同名密钥，都会走到这条路。
+    ///
+    /// 归到 [`InvalidatedReason::PlatformKeyReset`]，绝不能被说成密文被篡改：
+    /// 密文一个字都没变，只是没人能打开它了。
+    KeyGone,
+    /// **暂时性**平台故障：重试可能成功，与密文完整性和密钥生死都无关。
+    ///
+    /// 典型来源是「在场闸门」本身出错——Windows Hello 的 WinRT 调用返回非零 HRESULT
+    /// （COM 公寓冲突、系统对话框服务正忙、用户会话切换瞬间）。这类失败原本被塞进
+    /// [`Self::Platform`]，于是 core 把一次**与密文毫无关系**的闸门故障报成「配置被篡改或
+    /// 损坏」（D-127，2026-10-29 主人实测：装完新版重开软件，用 Hello 解锁即报「被篡改」）。
+    ///
+    /// 语义边界：`Transient` **不得**用于「解不开密文」——那必须留在 `Platform`，
+    /// 否则真正的篡改会被降级成「稍后再试」，掩盖攻击痕迹。
+    Transient(String),
     /// 其它平台错误（含「密文/tag 校验失败」——core 会归类为篡改）。
     Platform(String),
 }
@@ -168,6 +187,12 @@ impl From<SealError> for CoreError {
             SealError::Invalidated => {
                 CoreError::BiometricInvalidated(InvalidatedReason::BiometricEnrollmentChanged)
             }
+            // 保护密钥不在了 ⇒ 密钥被重置，不是篡改（密文原封未动）。
+            SealError::KeyGone => {
+                CoreError::BiometricInvalidated(InvalidatedReason::PlatformKeyReset)
+            }
+            // 暂时性故障 ⇒ 「现在用不了」，绝不是「配置坏了」。不删封印、不写墓碑。
+            SealError::Transient(_) => CoreError::BiometricUnavailable,
             SealError::Platform(msg) => CoreError::Crypto(format!("biometric: {msg}")),
         }
     }
@@ -186,6 +211,13 @@ pub enum InvalidatedReason {
     VaultKeyChanged,
     /// 生物特征注册集变更（Android 新增/删除指纹 ⇒ 平台密钥永久失效）。
     BiometricEnrollmentChanged,
+    /// 平台侧的**保护密钥被重置**（D-127）：密钥还在原位置、但已经不是封这条密文的那一把。
+    ///
+    /// Windows TPM 的持久密钥 `PasswordMS-VK-Seal` 会因为 TPM 清理、系统/固件更新、
+    /// 重装系统等原因被重建。重建后旧密文必然解不开——这**不是**篡改，也不该吓唬用户。
+    /// 与 [`Self::Tampered`] 的分界靠 [`SealRecord::key_fp`]：指纹对不上 ⇒ 密钥换了；
+    /// 指纹对得上却解不开 ⇒ 才是密文真被改过。
+    PlatformKeyReset,
     /// 密文被篡改 / 损坏。
     Tampered,
 }
@@ -217,6 +249,16 @@ pub struct SealRecord {
     pub mac_check: Vec<u8>,
     /// 创建时间（毫秒）。
     pub created_at: i64,
+    /// 封印时**平台保护密钥**的指纹（D-127）。
+    ///
+    /// 用途只有一个：把「平台密钥被重置」（需重新开启）与「密文被篡改/损坏」（可能是攻击
+    /// 痕迹，不能自动清理）分开。两者在 `unseal` 那一步的表现完全一样——都是解不开。
+    ///
+    /// * 明文指纹，**不是机密**：它只是公钥派生量的摘要，泄露它也解不出 VK；
+    /// * `None` = 旧版本写的记录（1.4.11 及以前）或该适配器不提供指纹（Android Keystore）。
+    ///   此时跳过比对、退回原来的 `Tampered` 归类——**不改变老封印的任何行为**。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_fp: Option<String>,
     /// 墓碑：平台**宣告**本封印永久失效的时刻与原因（D-119）。
     ///
     /// `None` = 没被宣告过失效。这是「从未开启」与「开了但废了」之间**唯一**的区分——
@@ -246,6 +288,9 @@ impl std::fmt::Debug for SealRecord {
             .field("platform_subtype", &self.platform_subtype)
             .field("sealed_vk_len", &self.sealed_vk.len())
             .field("created_at", &self.created_at)
+            // 指纹是可公开的摘要，打出来才能在被重置时一眼看出「换过钥匙」。
+            .field("key_fp", &self.key_fp)
+            .field("invalidated", &self.invalidated)
             .finish()
     }
 }
@@ -283,6 +328,19 @@ pub trait VaultSealer {
 
     /// 用 `bind` 作附加认证数据解密 VK。
     fn unseal(&self, sealed: &[u8], bind: &[u8]) -> Result<Zeroizing<Vec<u8>>, SealError>;
+
+    /// 当前**平台保护密钥**的指纹（D-127）。
+    ///
+    /// 只用来区分「密钥被重置」与「密文被篡改」，**不参与任何密码学校验**，也**不得**
+    /// 参与「能不能解」的判定——真正决定解不解得开的永远是 `unseal`。
+    ///
+    /// 默认返回 `None`（= 本适配器不提供）：Android Keystore 的密钥在注册集变更时是
+    /// 「永久失效」而非「被替换」，已有 [`SealError::Invalidated`] 精确表达，不需要这层。
+    ///
+    /// 实现要求：**不要弹任何 UI**（这个方法可能在用户已经点过按钮之后被调用）。
+    fn key_fingerprint(&self) -> Option<String> {
+        None
+    }
 }
 
 /// 封印状态（[`SealStore::inspect`] 的结论）。
@@ -574,6 +632,8 @@ pub fn enable(
         wkv_check: wkv_check_of(target).to_vec(),
         mac_check: mac_check_of(target).to_vec(),
         created_at: now_ms(),
+        // D-127：记下封印用的是**哪一把**平台密钥。密钥日后被重建时，这就是唯一的证据。
+        key_fp: sealer.key_fingerprint(),
         // 新封的印没有被宣告过失效。
         invalidated: None,
     };
@@ -599,6 +659,47 @@ pub fn is_platform_revoked(e: &CoreError) -> bool {
         e,
         CoreError::BiometricInvalidated(InvalidatedReason::BiometricEnrollmentChanged)
     )
+}
+
+/// 解封失败的归类（D-127）：把「平台密钥被重置」与「密文真被改」分开。
+///
+/// 唯一判据是**封印时记下的密钥指纹与当前指纹是否一致**：
+///
+/// | 封印时 `key_fp` | 当前指纹 | 结论 | 为什么 |
+/// |---|---|---|---|
+/// | 有 | 有且**不同** | [`InvalidatedReason::PlatformKeyReset`] | 密钥换了，旧密文当然解不开 |
+/// | 有 | 有且相同 | [`InvalidatedReason::Tampered`] | 密钥没变还解不开 ⇒ 密文被动过 |
+/// | 有 | 无（平台此调用不出来） | [`InvalidatedReason::Tampered`] | 证据不足，保守按篡改处理 |
+/// | 无（旧记录 / Android） | 任意 | [`InvalidatedReason::Tampered`] | 退回 D-127 之前的行为，老封印不受影响 |
+///
+/// 保守方向是**刻意的**：漏判篡改（说成"密钥被重置"）会让用户以为"重新开启就好"，
+/// 而真正的攻击痕迹被一次「重新开启」抹平；反过来把重置说成篡改，最坏只是吓一跳。
+pub fn classify_unseal_failure(
+    saved_fp: Option<&str>,
+    now_fp: Option<String>,
+) -> InvalidatedReason {
+    match (saved_fp, now_fp.as_deref()) {
+        (Some(a), Some(b)) if a != b => InvalidatedReason::PlatformKeyReset,
+        _ => InvalidatedReason::Tampered,
+    }
+}
+
+/// 就地留墓碑（D-119）：把「已失效」写进文件，**不删文件**。
+///
+/// 删掉的话状态退化成 `Absent`，「从未开启」与「开了又废了」就分不开了：设置页只能说
+/// 「未开启」，用户既看不到原因、也没有「去系统设置看看」的入口。
+///
+/// 写字失败**不覆盖**主错误：用户最需要知道的是「为什么失效」，状态没收敛只是下次
+/// 再点一次而已，不丢任何数据。
+fn bury(store: &SealStore, rec: &SealRecord, reason: InvalidatedReason) {
+    let dead = SealRecord {
+        invalidated: Some(InvalidatedMarker {
+            at: now_ms(),
+            reason,
+        }),
+        ..rec.clone()
+    };
+    let _ = store.save(&dead);
 }
 
 /// 用封印解锁：返回 VK。
@@ -640,27 +741,36 @@ pub fn unlock(
         Ok(v) => v,
         Err(SealError::Canceled) => return Err(CoreError::BiometricCanceled),
         Err(SealError::Unavailable(_)) => return Err(CoreError::BiometricUnavailable),
+        // D-127：闸门/平台暂时故障与密文无关，不能说成「配置损坏」，更不能动文件。
+        Err(SealError::Transient(_)) => return Err(CoreError::BiometricUnavailable),
         Err(e @ SealError::Invalidated) => {
             // D-119：平台宣告密钥永久失效 ⇒ 就地留墓碑，**不删文件**。
-            //
-            // 删掉的话状态退化成 `Absent`，「从未开启」与「开了又废了」就分不开了：
-            // 设置页只能说「未开启」，用户既看不到原因、也没有「去系统设置看看」的入口。
-            //
-            // 写字失败**不覆盖**主错误：用户最需要知道的是「为什么失效」，状态没收敛
-            // 只是下次再点一次而已，不丢任何数据。
-            let dead = SealRecord {
-                invalidated: Some(InvalidatedMarker {
-                    at: now_ms(),
-                    reason: InvalidatedReason::BiometricEnrollmentChanged,
-                }),
-                ..rec.clone()
-            };
-            let _ = store.save(&dead);
+            bury(store, &rec, InvalidatedReason::BiometricEnrollmentChanged);
             return Err(e.into());
         }
-        // 绑定串对得上却解不开 ⇒ 密文被篡改/损坏。
+        // D-127：保护密钥不在了（TPM 持久密钥被清理/重建）。
+        //
+        // 密文一字未动、绑定串也完全对得上，只是没人能打开它了。报「篡改」会让人
+        // 以为被攻击——上次主人就是这么被吓到的。
+        //
+        // **刻意不写墓碑**：钥匙「打不开」也可能只是 TPM 服务此刻没就绪（驱动加载中、
+        // 系统刚从休眠恢复）。写墓碑等于把一条**可能还能用**的封印永久标记成失效，
+        // 与「不替攻击者完成破坏」是同一条原则。这里只报准确原因，让用户重试或重新开启；
+        // 只有指纹**确实变了**（下面 `Platform` 分支）才算硬证据，那时才落墓碑。
+        Err(SealError::KeyGone) => {
+            return Err(CoreError::BiometricInvalidated(
+                InvalidatedReason::PlatformKeyReset,
+            ));
+        }
+        // 绑定串对得上却解不开：**两种**可能，不能一律说成篡改（D-127）。
         Err(SealError::Platform(_)) => {
-            return Err(CoreError::BiometricInvalidated(InvalidatedReason::Tampered))
+            let reason = classify_unseal_failure(rec.key_fp.as_deref(), sealer.key_fingerprint());
+            if reason == InvalidatedReason::PlatformKeyReset {
+                // 密钥被重置：写墓碑让设置页说清原因（与 D-119 同一条通路，文件不删）。
+                // 篡改（`Tampered`）**不写**——那可能是攻击痕迹，改文件等于替攻击者收尾。
+                bury(store, &rec, reason);
+            }
+            return Err(CoreError::BiometricInvalidated(reason));
         }
     };
     if raw.len() != crate::constants::KEY_LEN {
@@ -699,6 +809,36 @@ mod tests {
         assert!(!is_platform_revoked(&CoreError::BiometricCanceled));
     }
 
+    /// D-127：解封失败的归类矩阵。
+    ///
+    /// 判错方向的代价不对称：把「密钥被重置」误判成篡改，最坏是吓用户一跳；反过来把
+    /// 篡改误判成重置，用户点一次「重新开启」就把攻击痕迹抹平了。所以只有**两个指纹都
+    /// 拿得到且不同**才允许说「重置」，其余一律按篡改。
+    #[test]
+    fn classify_unseal_failure_matrix() {
+        use InvalidatedReason::{PlatformKeyReset, Tampered};
+        assert_eq!(
+            classify_unseal_failure(Some("fp-a"), Some("fp-b".into())),
+            PlatformKeyReset,
+            "指纹变了 ⇒ 钥匙换了，密文当然解不开"
+        );
+        assert_eq!(
+            classify_unseal_failure(Some("fp-a"), Some("fp-a".into())),
+            Tampered,
+            "钥匙没变还解不开 ⇒ 密文被动过"
+        );
+        assert_eq!(
+            classify_unseal_failure(None, Some("fp-b".into())),
+            Tampered,
+            "旧记录没有基线可比，证据不足时不得降级"
+        );
+        assert_eq!(
+            classify_unseal_failure(Some("fp-a"), None),
+            Tampered,
+            "平台这次取不到指纹 ⇒ 同样证据不足"
+        );
+    }
+
     /// D-119：墓碑让 `inspect` 报 `Stale`，且**不删文件**。
     ///
     /// 这条测的是「失效之后状态还看得见」——删掉文件的话 `inspect` 会返回 `Absent`，
@@ -725,6 +865,7 @@ mod tests {
             wkv_check: wkv_check_of(&t).to_vec(),
             mac_check: mac_check_of(&t).to_vec(),
             created_at: now_ms(),
+            key_fp: None,
             invalidated: None,
         };
         store.save(&rec).unwrap();

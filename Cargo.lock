@@ -2880,7 +2880,7 @@ dependencies = [
 
 [[package]]
 name = "passwordms"
-version = "1.4.11"
+version = "1.4.12"
 dependencies = [
  "base64 0.22.1",
  "passwordms-core",
@@ -2895,6 +2895,7 @@ dependencies = [
  "tauri-plugin-fs",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
  "thiserror 2.0.21",
  "uuid",
  "windows",
@@ -2904,7 +2905,7 @@ dependencies = [
 
 [[package]]
 name = "passwordms-core"
-version = "1.4.11"
+version = "1.4.12"
 dependencies = [
  "argon2",
  "base32",
@@ -4217,6 +4218,22 @@ dependencies = [
  "thiserror 2.0.21",
  "url",
  "windows",
+ "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "726b6da0dd5bd1344f84f4108a622c07d01923baacb5c803a605189672c5352f"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
  "zbus",
 ]
 

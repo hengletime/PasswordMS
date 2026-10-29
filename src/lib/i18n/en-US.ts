@@ -362,6 +362,8 @@ export const enUS: Messages = {
     bio_state_stale_enrollment: 'Windows Hello settings changed, so quick unlock no longer works.',
     bio_state_stale_enrollment_android: 'The device’s biometric records changed, so quick unlock no longer works.',
     bio_state_stale_tampered: 'The quick-unlock configuration was tampered with or damaged and no longer works.',
+    bio_state_stale_platform_key_reset:
+      'The system security key was reset (usually after a system update or reinstall), so quick unlock no longer works.',
     // D-114: `not_present` no longer claims "no hardware". When Windows Hello was never
     // provisioned, WinRT reports `DeviceNotPresent` — which is exactly what misled the user.
     bio_avail_not_configured: '{noun} is not set up on this device yet.',
@@ -613,6 +615,8 @@ export const enUS: Messages = {
     bio_invalidated_enrollment: 'Windows Hello settings changed, so quick unlock no longer works. Please enable it again.',
     bio_invalidated_enrollment_android: 'The device’s biometric records changed, so quick unlock no longer works. Please enable it again.',
     bio_invalidated_tampered: 'The quick-unlock configuration was tampered with or damaged. Please enable it again.',
+    bio_invalidated_platform_key_reset:
+      'Quick unlock no longer works: the system security key was reset. Unlock with your master password, then enable it again in Settings.',
     io: 'File read/write error.',
     network_timeout: 'Network timeout: make sure both devices are on the same LAN and the peer is still on the pairing screen, then retry.',
     network_refused: 'Connection refused: the peer may have left the pairing screen, or a firewall blocked the port. Ask the peer to show the QR code again.',

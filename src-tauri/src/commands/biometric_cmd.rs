@@ -199,6 +199,21 @@ pub fn biometric_unlock(
                     "[biometric] platform key invalidated by enrollment change; tombstoned",
                 );
             }
+            // D-127：**每次**失败都留痕。上次「装完新版重开就报被篡改」查不出原因，
+            // 就是因为这条路径完全静默——最后只能靠推理。日志里带 subtype 与指纹，
+            // 下次一眼能看出是「钥匙换了」还是「密文真坏了」。
+            append_log(
+                &app,
+                &format!(
+                    "[biometric] unlock failed: {:?} (subtype={:?}, key_fp={:?})",
+                    err,
+                    store.inspect(&target).ok().and_then(|s| match s {
+                        passwordms_core::biometric::SealState::Ready(r) => r.key_fp,
+                        _ => None,
+                    }),
+                    sealer.key_fingerprint()
+                ),
+            );
             return Err(err.into());
         }
     };
@@ -284,6 +299,9 @@ fn reason_name(r: InvalidatedReason) -> &'static str {
         InvalidatedReason::MasterPasswordChanged => "master_password_changed",
         InvalidatedReason::VaultKeyChanged => "vault_key_changed",
         InvalidatedReason::BiometricEnrollmentChanged => "enrollment_changed",
+        // D-127：平台保护密钥被重置（TPM 清理 / 系统更新 / 重装）。与 `tampered` 分开，
+        // 因为引导完全不同：这个重新开启一次就好，且不该让人以为被攻击。
+        InvalidatedReason::PlatformKeyReset => "platform_key_reset",
         InvalidatedReason::Tampered => "tampered",
     }
 }

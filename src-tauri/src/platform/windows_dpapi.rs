@@ -75,7 +75,11 @@ impl PresenceGate for HelloGate {
             Ok(result) => map_result(result),
             // 超时 = 暂时不可用，**不是**失效：不删封印，只是要求改用主密码。
             Err(hello::WaitError::Timeout) => Err(SealError::Unavailable(Availability::Busy)),
-            Err(hello::WaitError::Platform(detail)) => Err(SealError::Platform(detail)),
+            // D-127：闸门本身的失败（HRESULT 非零：COM 公寓冲突、系统认证服务正忙、
+            // 会话切换瞬间）与**密文**毫无关系，却曾经被塞进 `Platform`，于是 core 把它
+            // 归类成 `Tampered`，用户看到「快速解锁配置被篡改或损坏」——把人吓一跳，
+            // 而实际上重试一次就好。这里必须是 `Transient`（= 现在用不了，稍后再试）。
+            Err(hello::WaitError::Platform(detail)) => Err(SealError::Transient(detail)),
         }
     }
 }

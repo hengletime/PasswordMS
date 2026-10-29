@@ -1401,7 +1401,7 @@ export function localizeBioMessageKey(key, platform) {
 
 `bio-android-guard.test.ts` 新增四例：改写函数行为（android 加后缀 / windows 原样 / 无关句不改写）、两处调用点都过改写、四语言两套键齐全（缺键会让 `ui.t` 把 key 本身画到屏幕上）、android 变体里不许再出现「Windows Hello」。
 
-## 28. D-121 / D-122：系统设置入口——先修显示条件，再整个撤掉（2026-10-28 主人真机两轮）
+## 28. D-121 / D-127：系统设置入口——先修显示条件，再整个撤掉（2026-10-28 主人真机两轮）
 
 这条缺陷被真机打回两次，两次的结论完全相反，值得完整记下来。
 
@@ -1430,7 +1430,7 @@ const bioShowSettingsEntry = $derived(bio !== null && (!bioAvailable || bioSealB
 
 改完按钮出现了，但在 Android 上**点了什么都不发生**——于是有了第二轮。
 
-### 28.2 第二轮（D-122）：按钮能看见，但点了完全没反应
+### 28.2 第二轮（D-127）：按钮能看见，但点了完全没反应
 
 主人原话：「点后者不能跳系统指纹页，点击没有跳转」，进一步确认是「**完全没有反应，一点提示都没有**」。
 
@@ -1518,7 +1518,7 @@ $effect(() => {
 
 **已做变异验证**：把判据改回 `bio !== null && !bioAvailable`，第 1 例立刻变红，还原后全绿。
 
-## 29. D-123：把「切回来会重新检测」做成真的（2026-10-28 主人拍板）
+## 29. D-128：把「切回来会重新检测」做成真的（2026-10-28 主人拍板）
 
 ### 29.1 为什么上一版删了那句话
 
@@ -1601,7 +1601,7 @@ for (const name of RESUME_EVENTS) void listen(name, () => gate.trigger());
 
 ### 30.2 根因：挂在永远不会执行的那一层
 
-D-123 写的是 `tauri::RunEvent::Resumed`。这个变体确实存在（`#[cfg(mobile)]`，所以移动端能编过、桌面端被 cfg 掉也不报错），**但移动端从来不发它**：
+D-128 写的是 `tauri::RunEvent::Resumed`。这个变体确实存在（`#[cfg(mobile)]`，所以移动端能编过、桌面端被 cfg 掉也不报错），**但移动端从来不发它**：
 
 - `tauri-runtime-wry` 全局只有 **一处** `callback(RunEvent::Resumed)`，条件是 `Event::NewEvents(StartCause::Poll)`——那是**桌面**事件循环「顺便醒来」的信号；
 - 安卓的生命周期由 tao 的 ndk-glue 从 `onResume` 送上来，落地成 `Event::WindowEvent { event: WindowEvent::Resumed }`；
@@ -1622,7 +1622,7 @@ Rust 改接窗口事件（最终形态见 §29.2）。前端**同时**监听两�
 
 ### 30.4 守门：必须咬住「层」，而不只是「字面量」
 
-D-123 的四条守门里有一条咬字面量（`app://resumed` 两侧一致），它全绿——因为错的不是名字，是**挂载点**。这一轮补的：
+D-128 的四条守门里有一条咬字面量（`app://resumed` 两侧一致），它全绿——因为错的不是名字，是**挂载点**。这一轮补的：
 
 1. `lib.rs` **不许**再出现 `RunEvent::Resumed`（负向断言，直接钉死死分支）；
 2. 必须出现 `WindowEvent::Resumed`，且其前 200 字符内必须有 `RunEvent::WindowEvent`（钉住「层」，不是随便哪个字符串）；
@@ -1818,7 +1818,7 @@ CNG 软件 provider，那样私钥可导出，T1b 直接归零，等于白做。
 | 1.4.7 用户升级到本版 | 磁盘上是 DPAPI 封印 → `accepts(DPAPI) = true` → **照常解锁**；不搬移、不重写，下次「重新开启」才迁到 TPM |
 | 本版用户回滚到 1.4.7 | 1.4.7 的 `subtype()` 恒为 DPAPI ⇒ 老代码把 TPM 封印判成 `BiometricUnavailable`（前端提示「快速解锁暂不可用」）。**不删封印、不报篡改**，主密码照常可用；升级回来后封印仍有效 |
 | 无 TPM（虚拟机 / 被策略禁用） | `tpm_ready()` false ⇒ 全程 DPAPI，与 1.4.7 等价 |
-| TPM 被清 / 换主板 | 密钥没了 ⇒ `open_key` 失败 ⇒ `SealError::Platform` ⇒ core 归 `Tampered`（「配置损坏，请重新开启」）。**不**归 `Invalidated`：那会写墓碑说「生物识别记录已变更」，用户会去改指纹，而真正该做的是重新开启 |
+| TPM 被清 / 换主板 | 密钥没了 ⇒ `open_key` 失败 ⇒ `SealError::KeyGone` ⇒ core 报 `PlatformKeyReset`（「系统的安全密钥已被重置」）。**不**归 `Invalidated`（那会写墓碑说「生物识别记录已变更」，用户会去改指纹，而真正该做的是重新开启），**也不写墓碑**（钥匙打不开可能只是 TPM 暂时没就绪）。见 §36 |
 | 关闭快速解锁 | `WinSealer::purge` 删 `PasswordMS-VK-Seal`。固定名 ⇒ 影响本机所有以本密封器保护的库；当前单库（`vault_path` 固定）无实际影响，多库前必须改成按库派生 + 枚举清理 |
 | 多进程 / 系统占用 TPM | `TPM_LOCK` 串行 + 瞬时码重试；仍失败则报错，不产出一半的封印（core 的长度门禁挡在落盘前） |
 
@@ -2111,3 +2111,126 @@ zeroize = { version = "1.8", features = ["derive"] }
 
 **结论**：`vault_key()` 保持 `pub`。若将来要过第三方审计、或「命令层永不持有 VK」成为硬红线，
 再按上面那张表排一个专门的窗口做——不要夹在功能迭代中间。
+
+## 36. 失效分类：密钥被重置 ≠ 密文被篡改（D-127，1.4.12，2026-10-29）
+
+### 36.1 症状
+
+主人装完 v1.4.10 / v1.4.11 后重新打开软件，用 Windows Hello 解锁，弹出：
+
+> 快速解锁配置被篡改或损坏，已失效，请重新开启。
+
+点「重新开启」立刻就好，下次安装再来一遍。**两个版本之前没有这个现象**。
+
+### 36.2 现场证据（先说不确定的部分）
+
+`D:/Tools/PasswordMS-Portable/biometric.json` 结构完整：`version=2`、`platform_subtype=windows-tpm2-seal`、
+`sealed_vk` 是 260 字节（`MAGIC` 4 + RSA-2048 密文 256）、`mac_check`/`wkv_check` 各 8 字节。
+也就是说**文件一点都没坏**——`inspect` 的三道结构校验全过。
+
+坏掉的那一份已被 19:47 那次「重新开启」覆盖，**无法回溯**。因此下面这条判断必须如实标注为
+推理而非实测：生物识别相关代码从 v1.4.9 到 HEAD **一行未改**（`git diff v1.4.9..HEAD -- src-tauri/src/platform/ crates/`
+为空），所以问题只能出在**运行方式**变了，而不是这段逻辑被改坏。
+
+v1.4.10 起唯一相关的运行方式变化是两条，且互相放大：
+
+1. **关窗 = 隐藏到托盘**：用户以为退出了，进程还在；
+2. **没有单实例守卫**：用户再点一次图标，就有了第二个实例。
+
+两个实例共用同一个 `passwordms.vault`、同一个 `biometric.json`，还会同时抢 TPM 上那把持久密钥
+（TPM 的 RSA 解密是串行的，`retry_transient` 重试一旦耗尽就返回 `Platform`）。
+
+### 36.3 真正的缺陷：错误分类把三件不同的事压成了一件
+
+不管诱因是哪一条，**下面这条路径本身就是错的**，而且它正好是用户看到的那句话：
+
+| 层 | 代码 | 问题 |
+|---|---|---|
+| 闸门 | `HelloGate::request` 的 `WaitError::Platform` → `SealError::Platform` | 闸门失败（COM 公寓冲突、认证服务正忙、会话切换瞬间）与**密文**毫无关系 |
+| 平台 | `TpmSealer::unseal` 的 `open_key` 失败 → `SealError::Platform` | 密钥不在了，密文原封不动，却被当成「解不开」 |
+| core | `Err(SealError::Platform(_))` → `InvalidatedReason::Tampered` | 一律判篡改，于是 UI 说「被篡改或损坏」 |
+
+三者都被同一句文案兜住，而三类原因的正确引导完全不同：闸门抖动是「稍后再试」、密钥不在了是
+「重新开启一次」、密文被改才该让人警惕。把它们混在一起，代价是让用户**以为自己在被攻击**。
+
+### 36.4 修法：三个判据各归其位
+
+新增两个 `SealError` 变体，并给封印记录加一个**可比的密钥指纹**：
+
+| 来源 | 新分类 | core 结论 | 用户看到 |
+|---|---|---|---|
+| 闸门 HRESULT 非零 | `SealError::Transient` | `BiometricUnavailable`（不动文件） | 「本机暂时用不了，请用主密码」（可重试） |
+| TPM 持久密钥打不开 | `SealError::KeyGone` | `PlatformKeyReset`（**不写墓碑**：可能只是 TPM 暂时没就绪） | 「系统的安全密钥已被重置（常见于重装系统或系统更新），重新开启即可」 |
+| 能打开但对不上指纹 / tag | `SealError::Platform` + 指纹不同 | `PlatformKeyReset` + **写墓碑**（硬证据：钥匙确实换了） | 同上 |
+| 指纹相同却解不开 | `SealError::Platform` | `Tampered`（**不写墓碑**） | 原「被篡改或损坏」 |
+
+**为什么 `KeyGone` 不写墓碑**：`open_key` 失败也可能只是 TPM 服务此刻没就绪（驱动加载中、
+刚从休眠恢复）。写墓碑等于把一条**可能还能用**的封印永久标记成失效——这正是既有测试
+`missing_key_is_key_gone_not_invalidated` 一直守着的那条原则（原判据是「不得归 `Invalidated`」，
+因为那会连带删掉平台侧材料）。只有**指纹确实变了**才是有硬证据的「换过钥匙」，那时才落墓碑。
+
+**指纹怎么来**：`SealRecord.key_fp` 存 `SHA-256(RSAPUBLICBLOB)[..8]` 的十六进制（16 字符）。
+只导出公钥——私钥不可导出是 §33 的 T1b 立身之本，已有 `tpm_private_key_is_not_exportable` 守着。
+指纹不是机密：它是公开参数的摘要，泄露它也解不出任何 VK。
+
+**为什么不用 `SealError::Invalidated`**：那个语义是「钥匙还在、被系统废弃」（Android 新增指纹），
+而这里是「钥匙根本打不开 / 换了一把」。混用会让 Android 侧「去系统设置看看指纹」的引导错误地
+出现在 Windows 上。
+
+### 36.5 判据矩阵（`classify_unseal_failure`）
+
+| 封印时 `key_fp` | 当前指纹 | 结论 |
+|---|---|---|
+| 有 | 有且**不同** | `PlatformKeyReset` |
+| 有 | 有且相同 | `Tampered` |
+| 有 | 无（平台此调用不出来） | `Tampered` |
+| 无（旧记录 / Android / DPAPI） | 任意 | `Tampered`（退回 1.4.11 行为） |
+
+保守方向是刻意的：判错的两个方向代价不对称——把「密钥被重置」误判成篡改，最坏是吓用户一跳；
+反过来把篡改误判成重置，用户点一次「重新开启」就把攻击痕迹抹平了。
+
+### 36.6 向后兼容：加字段不改版本号
+
+`key_fp` 用 `#[serde(default, skip_serializing_if = "Option::is_none")]`，**`SEAL_VERSION` 保持 2**。
+
+这是必须的：若升到 3，`inspect` 的规则 3 会把所有旧文件判成 `Absent`（「从未开启」），
+等于让**每一个**已开启快速解锁的用户升级后功能凭空消失。而用 `default` 的话，旧文件读成
+`None`，行为与 1.4.11 完全一致（走矩阵最后一行），用户重新开启一次之后就带上指纹了。
+
+守门：`record_without_key_fp_field_still_loads_and_unlocks` 用 `patch_json` 把字段整个删掉，
+断言仍 `Ready` 且能解锁。
+
+### 36.7 守门（5 例，均做过变异验证）
+
+| 测试 | 守什么 | 变异验证 |
+|---|---|---|
+| `classify_unseal_failure_matrix` | 四条判据 | 把 `a != b` 改成 `a == b` ⇒ 红 |
+| `key_gone_reports_platform_key_reset_without_tombstone` | 钥匙不在了 ⇒ 重置，但**不写墓碑**，钥匙回来仍能用 | — |
+| `transient_gate_failure_is_unavailable_and_leaves_record_untouched` | 闸门抖动不动文件、恢复后仍能解锁 | 把 `Transient` 归回 `Tampered` ⇒ 红 |
+| `corrupted_ciphertext_with_same_fingerprint_stays_tampered` | 指纹相同 ⇒ 仍是篡改（不能松） | — |
+| `changed_fingerprint_is_platform_key_reset` | 指纹变了 ⇒ 重置 | — |
+| `legacy_record_without_fingerprint_keeps_tampered_behavior` | 旧记录行为不变 | — |
+
+另外 `biometric_unlock` 每次失败**都写日志**（含 `subtype` 与两侧指纹）：
+
+```
+[biometric] unlock failed: BiometricInvalidated(PlatformKeyReset) (subtype=..., key_fp=Some("..."))
+```
+
+这条是这次最该补的东西——整条失败路径原本完全静默，最后只能靠推理，这也是 36.2 里那个
+「无法回溯」的直接原因。
+
+### 36.8 配套：单实例守卫（D-128）
+
+诱因那一半用 `tauri-plugin-single-instance` 堵死（详见 `docs/02-arch.md` §3.14.31）：第二个实例
+不再启动任何业务，只把已有窗口唤到前台就退出。这样「关窗只是隐藏」不会演变成「两个进程抢同一把
+TPM 钥匙」。
+
+### 36.9 没做的事（登记）
+
+* **没有自动重建封印**：`unlock` 失败时手里没有 VK（那正是要解封的东西），无法重新封一份。
+  只能引导用户点「重新开启」——这一步 `enable` 会走 `open_or_create_key`，把钥匙建回来。
+* **DPAPI 路径没有指纹**：DPAPI 的主密钥由系统按用户账户派生，没有可枚举的持久密钥。
+  因此没有 TPM 的机器上，解封失败仍归 `Tampered`（与 1.4.11 一致）。
+* **根因未复现**：需要主密码才能开启快速解锁，我无法自己造一个可解锁的库跑端到端。
+  若下次仍出现，`[biometric] unlock failed` 那行日志会直接给出是「钥匙换了」还是「密文真坏了」。

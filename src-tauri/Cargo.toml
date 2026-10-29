@@ -56,6 +56,9 @@ zeroize.workspace = true
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-autostart = "2"
+# D-128：单实例守卫。**必须**放在这段 target 条件依赖里——移动端没有「第二个实例」
+# 这个概念（系统保证一个前台进程），插件也无移动端实现。
+tauri-plugin-single-instance = "2"
 
 # 生物识别快速解锁的 Windows 适配器（`docs/08-biometric-unlock.md` §5 / §6.1）。
 #

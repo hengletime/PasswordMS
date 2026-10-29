@@ -73,6 +73,10 @@ enum Mode {
     Cancel,
     /// 平台密钥永久失效（对应 Android 新增指纹）。
     Invalidated,
+    /// 保护密钥不在了（D-127：对应 Windows TPM 持久密钥被清理/重建）。
+    KeyGone,
+    /// 暂时性平台故障（D-127：对应 Hello 闸门返回非零 HRESULT）。
+    Transient,
     /// 加密阶段直接失败（用于验证「失败不动旧文件」）。
     FailSeal,
     /// 解封成功但返回荒谬长度（用于验证「长度白名单」）。
@@ -93,6 +97,8 @@ struct MockSealer {
     availability: Availability,
     /// 「额外还能解哪一档」——模拟 Windows 的 TPM 适配器仍要读得懂老 DPAPI 封印。
     extra_accept: Option<Subtype>,
+    /// 平台保护密钥的指纹（D-127）。`None` = 本适配器不提供（Android / DPAPI）。
+    fp: Option<String>,
 }
 
 impl MockSealer {
@@ -103,6 +109,7 @@ impl MockSealer {
             subtype: Subtype::AndroidKeystore,
             availability: Availability::Available,
             extra_accept: None,
+            fp: None,
         }
     }
 
@@ -152,6 +159,10 @@ impl VaultSealer for MockSealer {
         subtype == self.subtype || self.extra_accept == Some(subtype)
     }
 
+    fn key_fingerprint(&self) -> Option<String> {
+        self.fp.clone()
+    }
+
     fn seal(&self, vk: &[u8], bind: &[u8]) -> Result<Vec<u8>, SealError> {
         if self.mode == Mode::FailSeal {
             return Err(SealError::Platform("mock seal failure".into()));
@@ -173,6 +184,8 @@ impl VaultSealer for MockSealer {
         match self.mode {
             Mode::Cancel => return Err(SealError::Canceled),
             Mode::Invalidated => return Err(SealError::Invalidated),
+            Mode::KeyGone => return Err(SealError::KeyGone),
+            Mode::Transient => return Err(SealError::Transient("mock gate hiccup".into())),
             Mode::ShortVk => return Ok(Zeroizing::new(vec![0u8; 5])),
             _ => {}
         }
@@ -914,6 +927,193 @@ fn widened_accepts_still_rejects_other_subtypes() {
         unlock(&store2, &strict, &t).unwrap_err()
     };
     assert_eq!(tpm_rec.code(), "ERR_BIOMETRIC_UNAVAILABLE");
+}
+
+// ── D-127. 解封失败的归类：密钥被重置 ≠ 密文被篡改 ────────────────────
+//
+// 这一组守的是**文案与后果都不对**的那个缺陷（2026-10-29 主人实测）：
+// 装完新版重开软件、用 Windows Hello 解锁，弹出「快速解锁配置被篡改或损坏」。
+// 实际情况是 TPM 那把持久密钥换了/闸门抖了一下——密文一个字都没动。
+// 报「篡改」既吓人，又把引导带偏（用户会怀疑被入侵，而不是「重新开启一次」）。
+
+/// 保护密钥不在了 ⇒ [`InvalidatedReason::PlatformKeyReset`]，但**不留墓碑**。
+///
+/// 「打不开」可能只是 TPM 此刻没就绪；写墓碑会把一条还能用的封印永久标记成失效，
+/// 与「不替攻击者完成破坏」是同一条原则（旧的 `missing_key_is_platform_error_not_invalidated`
+/// 守的就是这件事，这里换个分类继续守）。
+#[test]
+fn key_gone_reports_platform_key_reset_without_tombstone() {
+    let dir = temp_dir("keygone");
+    let store = SealStore::new(&dir.join("v.vault"));
+    let mut sealer = MockSealer::new();
+    let wkv = synth_wkv(1);
+    let t = target("vault-keygone", &MAC_1, &wkv);
+
+    enable(&store, &sealer, &t, &Zeroizing::new(VK_A)).unwrap();
+    let before = std::fs::read(store.path()).unwrap();
+    sealer.mode = Mode::KeyGone;
+
+    match unlock(&store, &sealer, &t) {
+        Err(passwordms_core::CoreError::BiometricInvalidated(reason)) => assert_eq!(
+            reason,
+            InvalidatedReason::PlatformKeyReset,
+            "钥匙不在了不是篡改：密文一字未动，只是没人打得开"
+        ),
+        other => panic!("应为 BiometricInvalidated(PlatformKeyReset)，实为 {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(store.path()).unwrap(),
+        before,
+        "钥匙打不开可能是暂时的，这里写墓碑等于把可能还能用的封印永久废掉"
+    );
+    // 钥匙回来了就必须还能用（证明上面那次失败没留任何后果）。
+    sealer.mode = Mode::Ok;
+    let vk = unlock(&store, &sealer, &t).expect("钥匙回来之后必须能解锁");
+    assert_eq!(&vk[..], &VK_A[..]);
+}
+
+/// 闸门暂时故障 ⇒ 「不可用」，**不动**封印文件（更不能说成损坏）。
+#[test]
+fn transient_gate_failure_is_unavailable_and_leaves_record_untouched() {
+    let dir = temp_dir("transient");
+    let store = SealStore::new(&dir.join("v.vault"));
+    let mut sealer = MockSealer::new();
+    let wkv = synth_wkv(2);
+    let t = target("vault-transient", &MAC_1, &wkv);
+
+    enable(&store, &sealer, &t, &Zeroizing::new(VK_A)).unwrap();
+    let before = std::fs::read(store.path()).unwrap();
+    sealer.mode = Mode::Transient;
+
+    match unlock(&store, &sealer, &t) {
+        Err(passwordms_core::CoreError::BiometricUnavailable) => {}
+        other => panic!("闸门抖动应报「不可用」，实为 {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read(store.path()).unwrap(),
+        before,
+        "暂时故障绝不能改文件：重试一次就好了，写墓碑等于把好封印废掉"
+    );
+    // 而且恢复后必须还能正常解锁（证明上面那次失败没留任何后果）。
+    sealer.mode = Mode::Ok;
+    let vk = unlock(&store, &sealer, &t).expect("闸门恢复后必须能解锁");
+    assert_eq!(&vk[..], &VK_A[..]);
+}
+
+/// 指纹相同却解不开 ⇒ 密文真被动过 ⇒ [`InvalidatedReason::Tampered`]。
+#[test]
+fn corrupted_ciphertext_with_same_fingerprint_stays_tampered() {
+    let dir = temp_dir("tampered-same-fp");
+    let store = SealStore::new(&dir.join("v.vault"));
+    let mut sealer = MockSealer::new();
+    sealer.fp = Some("fp-same".to_string());
+    let wkv = synth_wkv(3);
+    let t = target("vault-tampered", &MAC_1, &wkv);
+
+    enable(&store, &sealer, &t, &Zeroizing::new(VK_A)).unwrap();
+    // 就地改密文一个字节（密钥没变）。
+    let mut rec = match store.inspect(&t).unwrap() {
+        SealState::Ready(r) => r,
+        other => panic!("应为 Ready，实为 {other:?}"),
+    };
+    rec.sealed_vk[20] ^= 0xFF;
+    store.save(&rec).unwrap();
+
+    match unlock(&store, &sealer, &t) {
+        Err(passwordms_core::CoreError::BiometricInvalidated(reason)) => assert_eq!(
+            reason,
+            InvalidatedReason::Tampered,
+            "钥匙没换却解不开，只能是密文被改了——这个判断不能松"
+        ),
+        other => panic!("应为 Tampered，实为 {other:?}"),
+    }
+}
+
+/// 指纹不同 ⇒ 密钥被重建 ⇒ [`InvalidatedReason::PlatformKeyReset`]。
+#[test]
+fn changed_fingerprint_is_platform_key_reset() {
+    let dir = temp_dir("fp-changed");
+    let store = SealStore::new(&dir.join("v.vault"));
+    let mut sealer = MockSealer::new();
+    sealer.fp = Some("fp-old".to_string());
+    let wkv = synth_wkv(4);
+    let t = target("vault-fp", &MAC_1, &wkv);
+
+    enable(&store, &sealer, &t, &Zeroizing::new(VK_A)).unwrap();
+    // TPM 里的钥匙被重建：同名、不同模数。旧密文解不开，但文件本身没被动过。
+    sealer.fp = Some("fp-new".to_string());
+    let mut rec = match store.inspect(&t).unwrap() {
+        SealState::Ready(r) => r,
+        other => panic!("应为 Ready，实为 {other:?}"),
+    };
+    rec.sealed_vk[20] ^= 0xFF;
+    store.save(&rec).unwrap();
+
+    match unlock(&store, &sealer, &t) {
+        Err(passwordms_core::CoreError::BiometricInvalidated(reason)) => assert_eq!(
+            reason,
+            InvalidatedReason::PlatformKeyReset,
+            "指纹变了就该说「密钥被重置」，这是同一句「重新开启」但对用户是两种事"
+        ),
+        other => panic!("应为 PlatformKeyReset，实为 {other:?}"),
+    }
+}
+
+/// 旧记录（1.4.11 及以前，无 `key_fp` 字段）保持原行为：仍归 `Tampered`。
+///
+/// 保守方向是刻意的——没有指纹可比的证据不足，不能把可能的篡改降级成「重新开启就好」。
+#[test]
+fn legacy_record_without_fingerprint_keeps_tampered_behavior() {
+    let dir = temp_dir("legacy-fp");
+    let store = SealStore::new(&dir.join("v.vault"));
+    let sealer = MockSealer::new(); // fp = None，等价于旧版本的记录
+    let wkv = synth_wkv(5);
+    let t = target("vault-legacy", &MAC_1, &wkv);
+
+    let rec = enable(&store, &sealer, &t, &Zeroizing::new(VK_A)).unwrap();
+    assert_eq!(rec.key_fp, None, "不提供指纹的适配器不该凭空写出指纹");
+
+    let mut rec = rec;
+    rec.sealed_vk[20] ^= 0xFF;
+    store.save(&rec).unwrap();
+
+    match unlock(&store, &sealer, &t) {
+        Err(passwordms_core::CoreError::BiometricInvalidated(reason)) => assert_eq!(
+            reason,
+            InvalidatedReason::Tampered,
+            "老封印的行为必须与 1.4.11 完全一致（不能因新字段而改变归类）"
+        ),
+        other => panic!("应为 Tampered，实为 {other:?}"),
+    }
+}
+
+/// 向后兼容：1.4.11 及以前写的 `biometric.json` **没有** `key_fp` 字段，必须照样读得出来。
+///
+/// 这条是加字段时最容易踩的雷：如果 `key_fp` 不是 `#[serde(default)]`，老文件反序列化
+/// 失败 → `inspect` 报 `Corrupt` → 所有已开启快速解锁的用户升级后全部看到「配置已损坏」。
+#[test]
+fn record_without_key_fp_field_still_loads_and_unlocks() {
+    let dir = temp_dir("legacy-json");
+    let store = SealStore::new(&dir.join("v.vault"));
+    let mut sealer = MockSealer::new();
+    sealer.fp = Some("fp-present".to_string());
+    let wkv = synth_wkv(6);
+    let t = target("vault-legacy-json", &MAC_1, &wkv);
+
+    let rec = enable(&store, &sealer, &t, &Zeroizing::new(VK_A)).unwrap();
+    assert_eq!(rec.key_fp.as_deref(), Some("fp-present"));
+
+    // 模拟旧版本的文件：整个字段不存在（不是 null）。
+    patch_json(&store, |v| {
+        v.as_object_mut().unwrap().remove("key_fp");
+    });
+
+    match store.inspect(&t).unwrap() {
+        SealState::Ready(back) => assert_eq!(back.key_fp, None, "缺字段必须读成 None"),
+        other => panic!("旧文件必须仍判 Ready，实为 {other:?}"),
+    }
+    let vk = unlock(&store, &sealer, &t).expect("旧文件必须还能解锁");
+    assert_eq!(&vk[..], &VK_A[..]);
 }
 
 // ── 测试助手 ─────────────────────────────────────────────────────────

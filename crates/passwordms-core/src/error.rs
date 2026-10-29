@@ -272,6 +272,11 @@ impl CoreError {
                 crate::biometric::InvalidatedReason::BiometricEnrollmentChanged => {
                     "err.bio_invalidated_enrollment"
                 }
+                // D-127：平台保护密钥被重置（TPM 清理 / 系统更新 / 重装），与篡改分开说——
+                // 前者是「重新开启一次就好」，后者可能是攻击痕迹，混在一起会误导用户。
+                crate::biometric::InvalidatedReason::PlatformKeyReset => {
+                    "err.bio_invalidated_platform_key_reset"
+                }
                 crate::biometric::InvalidatedReason::Tampered => "err.bio_invalidated_tampered",
             },
             CoreError::NeedMasterPassword => "err.need_master_password",

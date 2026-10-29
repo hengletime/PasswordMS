@@ -94,7 +94,30 @@ fn load_prefs(app: &tauri::AppHandle) {
 /// 启动应用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    // D-128 单实例守卫：**必须是第一个注册的插件**。
+    //
+    // 官方要求它先于其它插件初始化，否则第二个实例可能还没走到检查就已经建好了自己的
+    // 窗口/托盘，出现两个图标闪一下再退的观感。
+    //
+    // 为什么非做不可（不只是"体验问题"）：
+    // - v1.4.10 起关闭窗口只是**隐藏到托盘**，进程常驻。用户以为关了、再点一次图标，
+    //   就成了第二个实例；
+    // - 两个实例共用同一个 `passwordms.vault` 与 `biometric.json`，还会同时抢 TPM 上
+    //   那把持久密钥——`unseal` 的 transient 重试一旦耗尽就会被归类成"密文被篡改"，
+    //   也就是主人看到的「快速解锁配置被篡改或损坏」（D-127 的直接诱因）。
+    //
+    // 第二个实例不做任何业务：把已有窗口唤到前台，然后由插件自己退出。
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+        // 小窗若正开着，它盖在主窗口上面；先让它让位（失焦也会自动收起，这里主动一点）。
+        crate::quick_search::hide(app);
+        crate::tray::show_main(app);
+        crate::state::append_log(app, "[single] 已有实例在运行，已唤出其主窗口，本实例退出");
+    }));
+
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())

@@ -361,6 +361,7 @@ export const zhCN = {
     bio_state_stale_enrollment: 'Windows Hello 配置已变更，快速解锁已失效。',
     bio_state_stale_enrollment_android: '设备的生物识别记录已变更，快速解锁已失效。',
     bio_state_stale_tampered: '快速解锁配置被篡改或损坏，已失效。',
+    bio_state_stale_platform_key_reset: '系统的安全密钥已被重置（常见于重装系统或系统更新），快速解锁已失效。',
     // D-114：`not_present` 曾被写成「本机没有可用的硬件」，但 Windows Hello 从未配置过时
     // WinRT 回报的正是 `DeviceNotPresent` —— 主人实测被这句话误导。文案改为只陈述
     // 「检测不到」+ 给出下一步，不再替系统断言「你没硬件」。
@@ -622,6 +623,8 @@ export const zhCN = {
     bio_invalidated_enrollment: 'Windows Hello 配置已变更，快速解锁已失效，请重新开启。',
     bio_invalidated_enrollment_android: '设备的生物识别记录已变更，快速解锁已失效，请重新开启。',
     bio_invalidated_tampered: '快速解锁配置被篡改或损坏，已失效，请重新开启。',
+    bio_invalidated_platform_key_reset:
+      '快速解锁已失效：系统的安全密钥已被重置。请用主密码解锁后在设置中重新开启。',
     io: '文件读写出错。',
     network_timeout: '网络响应超时：请确认两台设备在同一局域网、对方仍停在配对等待页，然后重试。',
     network_refused: '连接被拒绝：对方可能已离开配对页，或防火墙拦下了端口，请对方重新展示二维码。',

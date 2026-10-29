@@ -148,6 +148,17 @@ impl<G: PresenceGate + Clone> VaultSealer for WinSealer<G> {
         }
         self.dpapi.unseal(sealed, bind)
     }
+
+    /// D-127：转发 TPM 密钥指纹。
+    ///
+    /// 只有 TPM 封印需要「密钥是哪一把」这个概念——DPAPI 的主密钥由系统按用户账户派生，
+    /// 没有可枚举的持久密钥，也就没有可比的指纹（返回 `None`，行为与 1.4.11 一致）。
+    ///
+    /// 用 `self.tpm` 而不是 `subtype()`：后者表达「新封印写什么」，而这里问的是
+    /// 「**眼下**这把钥匙长什么样」。
+    fn key_fingerprint(&self) -> Option<String> {
+        self.tpm.as_ref().and_then(|t| t.key_fingerprint())
+    }
 }
 
 /// 让 `WinSealer` 在 `HelloGate` 上也能直接当适配器用（`platform_sealer` 走 `new()`）。

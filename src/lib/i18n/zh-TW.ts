@@ -333,6 +333,7 @@ export const zhTW = {
     bio_state_stale_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效。',
     bio_state_stale_enrollment_android: '裝置的生物辨識記錄已變更，快速解鎖已失效。',
     bio_state_stale_tampered: '快速解鎖設定遭竄改或損毀，已失效。',
+    bio_state_stale_platform_key_reset: '系統的安全金鑰已被重設（常見於重裝系統或系統更新），快速解鎖已失效。',
     // D-114：`not_present` 不再替系統斷言「你沒有硬體」——Hello 從未設定時 WinRT 回報的
     // 正是 `DeviceNotPresent`。改成只陳述「偵測不到」＋給下一步。
     bio_avail_not_configured: '本機尚未設定 {noun}。',
@@ -552,6 +553,8 @@ export const zhTW = {
     bio_invalidated_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效，請重新開啟。',
     bio_invalidated_enrollment_android: '裝置的生物辨識記錄已變更，快速解鎖已失效，請重新開啟。',
     bio_invalidated_tampered: '快速解鎖設定遭竄改或損毀，已失效，請重新開啟。',
+    bio_invalidated_platform_key_reset:
+      '快速解鎖已失效：系統的安全金鑰已被重設。請用主密碼解鎖後在設定中重新開啟。',
     io: '檔案讀寫發生錯誤。',
     network_timeout: '網路回應逾時：請確認兩台裝置在同一區域網路、對方仍停在配對等待頁，然後重試。',
     network_refused: '連線被拒絕：對方可能已離開配對頁，或防火牆攔下了連接埠，請對方重新顯示 QR 碼。',

@@ -44,10 +44,11 @@ use passwordms_core::biometric::{Availability, SealError, Subtype, VaultSealer};
 
 use windows::core::HSTRING;
 use windows::Win32::Security::Cryptography::{
-    NCryptCreatePersistedKey, NCryptDecrypt, NCryptDeleteKey, NCryptEncrypt, NCryptFinalizeKey,
-    NCryptFreeObject, NCryptOpenKey, NCryptOpenStorageProvider, NCryptSetProperty, CERT_KEY_SPEC,
-    NCRYPT_ALLOW_ALL_USAGES, NCRYPT_FLAGS, NCRYPT_HANDLE, NCRYPT_KEY_HANDLE,
-    NCRYPT_KEY_USAGE_PROPERTY, NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PROV_HANDLE, NCRYPT_SILENT_FLAG,
+    NCryptCreatePersistedKey, NCryptDecrypt, NCryptDeleteKey, NCryptEncrypt, NCryptExportKey,
+    NCryptFinalizeKey, NCryptFreeObject, NCryptOpenKey, NCryptOpenStorageProvider,
+    NCryptSetProperty, CERT_KEY_SPEC, NCRYPT_ALLOW_ALL_USAGES, NCRYPT_FLAGS, NCRYPT_HANDLE,
+    NCRYPT_KEY_HANDLE, NCRYPT_KEY_USAGE_PROPERTY, NCRYPT_PAD_PKCS1_FLAG, NCRYPT_PROV_HANDLE,
+    NCRYPT_SILENT_FLAG,
 };
 
 use super::{PresenceGate, PresenceReason};
@@ -211,6 +212,53 @@ fn open_key(prov: &Prov, name: &str) -> Result<Key, String> {
     }
     .map_err(|e| format!("open key {}: {}", name, hr(&e)))?;
     Ok(Key(key))
+}
+
+/// 导出持久密钥的**公开**部分并取其摘要，作为「这把钥匙是哪一把」的指纹（D-127）。
+///
+/// 只导出 `RSAPUBLICBLOB`（模数 + 指数），私钥不可导出（这是 T1b 的立身之本，已有
+/// `tpm_private_key_is_not_exportable` 守着）。指纹不是机密：它是公开参数的摘要，
+/// 泄露它也解不出任何 VK。
+///
+/// 取前 8 字节十六进制就够：这把钥匙要么完全一致、要么完全不同，碰撞概率与"猜中
+/// 2048 位模数"同量级。短一些也便于写进日志与 `biometric.json` 给人看。
+fn key_public_fingerprint(key: &Key) -> Result<String, String> {
+    let blob_type = HSTRING::from("RSAPUBLICBLOB");
+    let mut needed = 0u32;
+    // 第一次只问长度（`pboutput = None`）。
+    unsafe {
+        NCryptExportKey(
+            key.0,
+            None,
+            &blob_type,
+            None,
+            None,
+            &mut needed,
+            NCRYPT_FLAGS(0),
+        )
+    }
+    .map_err(|e| format!("export size: {}", hr(&e)))?;
+    // RSA-2048 的公开 blob 是 276 字节；给足余量但**拒绝**荒谬值，
+    // 免得一个坏驱动让这里分配出几百 MB。
+    if needed == 0 || needed > 8192 {
+        return Err(format!("export size out of range: {needed}"));
+    }
+    let mut buf = vec![0u8; needed as usize];
+    unsafe {
+        NCryptExportKey(
+            key.0,
+            None,
+            &blob_type,
+            None,
+            Some(&mut buf),
+            &mut needed,
+            NCRYPT_FLAGS(0),
+        )
+    }
+    .map_err(|e| format!("export: {}", hr(&e)))?;
+    buf.truncate(needed as usize);
+    let digest = Sha256::digest(&buf);
+    Ok(digest[..8].iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// 打开持久密钥；不存在则创建并 finalize。
@@ -426,7 +474,14 @@ impl<G: PresenceGate> VaultSealer for TpmSealer<G> {
         let _guard = lock_tpm();
         let prov = open_provider(PROVIDER).map_err(SealError::Platform)?;
         // 只开不建：解封路径不该产生任何新钥匙。
-        let key = open_key(&prov, &self.key_name).map_err(SealError::Platform)?;
+        //
+        // D-127：打不开**不是**密文的问题。持久密钥被清理 / 被重建后，`biometric.json`
+        // 一个字节都没变，却再也解不开——报 `KeyGone` 让 core 说「平台密钥被重置，
+        // 重新开启即可」，而不是「配置被篡改」。
+        let key = match open_key(&prov, &self.key_name) {
+            Ok(k) => k,
+            Err(_) => return Err(SealError::KeyGone),
+        };
         let plain = decrypt(&key, &sealed[MAGIC.len()..]).map_err(SealError::Platform)?;
 
         if plain.len() != PLAIN_LEN {
@@ -445,6 +500,17 @@ impl<G: PresenceGate> VaultSealer for TpmSealer<G> {
         let mut vk: Zeroizing<Vec<u8>> = Zeroizing::new(vec![0u8; VK_LEN]);
         vk.copy_from_slice(&plain[..VK_LEN]);
         Ok(vk)
+    }
+
+    /// D-127：当前 TPM 持久密钥的公钥指纹。
+    ///
+    /// `None` = 打不开（密钥不在 / TPM 此刻不可用）。**不弹任何窗**——这个调用发生在
+    /// 用户已经点过「用 Windows Hello 解锁」之后，再弹一次就是两次认证框。
+    fn key_fingerprint(&self) -> Option<String> {
+        let _guard = lock_tpm();
+        let prov = open_provider(PROVIDER).ok()?;
+        let key = open_key(&prov, &self.key_name).ok()?;
+        key_public_fingerprint(&key).ok()
     }
 }
 
@@ -516,6 +582,62 @@ mod tests {
             sealer: TpmSealer::with_parts(Gate::allowing(), name.clone()),
             name,
         }
+    }
+
+    /// D-127：指纹必须**真的取得到**，而且要稳定。
+    ///
+    /// 这一段是整个「密钥被重置 vs 密文被篡改」分流的地基：指纹取不到，
+    /// `classify_unseal_failure` 就永远走「证据不足 ⇒ 按篡改处理」那条路，分流形同虚设，
+    /// 而所有单测（用 Mock）照样全绿。所以必须碰真 TPM 验一次。
+    ///
+    /// 用独立密钥名（`fixture` 的 `test_key_name`），Drop 时 purge，不碰主人的真实封印。
+    #[test]
+    fn key_fingerprint_is_retrievable_and_stable() {
+        if !tpm_or_skip() {
+            return;
+        }
+        let f = fixture("fp");
+        // 密钥还没建（`key_fingerprint` 只开不建）⇒ 必须如实返回 None，不能编一个假的。
+        assert!(
+            f.sealer.key_fingerprint().is_none(),
+            "密钥未创建时不得凭空给出指纹"
+        );
+
+        f.sealer
+            .seal(&[0x11u8; 32], &bind(9))
+            .expect("seal 会建出持久密钥");
+
+        let a = f
+            .sealer
+            .key_fingerprint()
+            .expect("有 TPM 且密钥已建，指纹必须取得到");
+        let b = f.sealer.key_fingerprint().expect("第二次同样要取得到");
+        assert_eq!(
+            a, b,
+            "指纹必须稳定：不稳定会让每次解锁都误判成「密钥被重置」"
+        );
+        assert_eq!(a.len(), 16, "8 字节 hex = 16 字符");
+        assert!(
+            a.chars().all(|c| c.is_ascii_hexdigit()),
+            "指纹应为小写十六进制，实际 {a}"
+        );
+    }
+
+    /// 两把**不同的**持久密钥必须给出不同指纹——否则分流会把「换过钥匙」判成「没换」。
+    #[test]
+    fn different_keys_have_different_fingerprints() {
+        if !tpm_or_skip() {
+            return;
+        }
+        let a = fixture("fp-a");
+        let b = fixture("fp-b");
+        a.sealer.seal(&[0x22u8; 32], &bind(10)).unwrap();
+        b.sealer.seal(&[0x22u8; 32], &bind(10)).unwrap();
+        assert_ne!(
+            a.sealer.key_fingerprint(),
+            b.sealer.key_fingerprint(),
+            "两把不同的 RSA 密钥不能撞指纹"
+        );
     }
 
     /// 本机没有 TPM 时，依赖真 TPM 的用例跳过（不是失败）：CI/虚拟机上它们无从验证。
@@ -598,12 +720,16 @@ mod tests {
         );
     }
 
-    /// 钥匙不存在时解封：`Platform`（core 归为篡改），**不是** `Invalidated`。
+    /// 钥匙不存在时解封：`KeyGone`（core 归为「密钥被重置」），**不是** `Invalidated`。
     ///
     /// 判成 `Invalidated` 会让命令层删平台侧材料并留墓碑——那是在「可能只是 TPM 暂时
     /// 读不到」的情况下替攻击者完成破坏（§18.5 约束 3 的同一条原则）。
+    ///
+    /// D-127 把这里从 `Platform` 改成 `KeyGone`：`Platform` 会被 core 归成「密文被篡改」，
+    /// 而钥匙缺失与密文完整性毫无关系。`KeyGone` → `PlatformKeyReset`，**不 purge、不写墓碑**，
+    /// 所以上面那条原则仍然成立，只是原因说得更准。
     #[test]
-    fn missing_key_is_platform_error_not_invalidated() {
+    fn missing_key_is_key_gone_not_invalidated() {
         if !tpm_or_skip() {
             return;
         }
@@ -621,8 +747,11 @@ mod tests {
         let mut sealed = MAGIC.to_vec();
         sealed.extend(cipher);
         match sealer.unseal(&sealed, &bind(1)) {
-            Err(SealError::Platform(_)) => {}
-            other => panic!("钥匙缺失应归 Platform，实际 {other:?}"),
+            Err(SealError::KeyGone) => {}
+            Err(SealError::Invalidated) => {
+                panic!("钥匙缺失不得归 Invalidated：那会让命令层删材料、留墓碑")
+            }
+            other => panic!("钥匙缺失应归 KeyGone，实际 {other:?}"),
         }
     }
 
