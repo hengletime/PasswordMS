@@ -483,6 +483,21 @@ export const zhTW = {
     quit: '結束',
     hint_minimized: 'PasswordMS 仍在系統匣執行。再次點擊關閉將最小化到系統匣；若要結束請用系統匣選單。',
   },
+  // v1.4.11：快速搜尋小窗（與主視窗是兩個獨立 WebView，語言靠 localStorage 繼承）。
+  quick: {
+    placeholder: '搜尋登入項目…',
+    copied_password: '密碼已複製',
+    copied_username: '使用者名稱已複製',
+    no_username: '沒有使用者名稱',
+    empty: '沒有符合的登入項目',
+    empty_all: '保險庫裡還沒有登入項目',
+    load_failed: '讀取失敗，請開啟主視窗重試',
+    locked_hint: '保險庫已鎖定，請從系統匣圖示開啟 PasswordMS 解鎖',
+    copy_failed: '複製失敗，請重試',
+    key_password: '複製密碼',
+    key_username: '複製使用者名稱',
+    key_close: '關閉',
+  },
   err: {
     hotkey_need_modifier: '熱鍵至少需要一個 Ctrl、Alt 或 Win 鍵（只按 Shift 會與正常輸入衝突）。',
     hotkey_repeated: '同一個修飾鍵重複了，請重新錄製。',

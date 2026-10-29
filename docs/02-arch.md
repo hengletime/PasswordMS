@@ -2247,6 +2247,41 @@ graph TD
 
 **代价与守门**：命令名仍是 67 个，但 `#[tauri::command]` 属性出现 71 次（这 4 个命令各两份）。`ipc-contract.test.ts` 因此钉两个数：属性 71/71（每个都带 `rename_all`）+ **去重后的名字 = 67**。第二个数才是真守门——若移动端桩被写成 `prefs_get_mobile`，71/71 照样绿，而 Android 上 invoke `prefs_get` 直接 `command not found`。
 
+### 3.14.30 快速搜索小窗（1.4.11）
+
+**新增一个桌面专属模块** `src-tauri/src/quick_search.rs`（`#[cfg(desktop)]`，移动端没有第二个窗口这回事），**零新增 IPC 命令**。
+
+| 关注点 | 做法 | 为什么只能这么做 |
+|---|---|---|
+| 窗口创建 | `setup` 里 `ensure` 一个隐藏的 `WebviewWindowBuilder`，`WebviewUrl::App("index.html?w=quick")` | 热键最需要立刻回应的时刻是刚开机、主窗口缩在托盘时；首次建 WebView 要几百毫秒，那时按下去就是"没反应" |
+| 窗口销毁 | 不主动销毁，只 `hide`；`ensure` 发现窗口没了（Alt+F4）就重建 | 隐藏窗口复用 = 零等待；重建覆盖"用户把它关掉了"这条真实路径 |
+| 位置 | `cursor_position` → `monitor_from_point` → 该屏居中 | `center()` 只认主显示器，多屏场景会跳到另一块屏 |
+| 尺寸换算 | 逻辑像素 × `monitor.scale_factor()` 后再算物理坐标 | 不换算会在 125%/150% 缩放的机器上偏移 |
+| 热键路由 | `AppState::session_unlocked()` 决定唤小窗还是主窗口 | 锁屏态小窗没有明文可取，此时用户唯一要做的是输主密码 |
+| 失焦 | `on_window_event` 里 `Focused(false)` → `hide` | 复制完要切到目标程序，小窗必须让开 |
+
+**它是第二个 WebView，这句话的全部后果**：
+
+1. **JS 上下文独立**：主窗口的 `vault` / `session` store 在小窗里是空的，也不会互相同步。所以小窗数据一律现取：`get_status`（判锁）→ `list_items`（列表）→ `get_item`（取明文）→ `copy_secret`（写剪贴板 + TTL）→ `record_usage`（频度埋点）。**列表接口本身不带明文密码**（`wipe_plaintext` 的既定行为），想省一次 IPC 直接拿列表里的 `password` 只会拿到 `null`。
+2. **`localStorage` 共享**（同 origin）：`passwordms.locale` / `passwordms.theme` 两个键直接读，语言与主题自动继承，不需要宿主传参。
+3. **前端入口要分流**：`main.ts` 按 `isQuickWindow(location.search)` 动态 `import`，小窗不解析主界面那 500KB 组件。分流必须发生在 `mount` 之前（窗口 label 要异步取，来不及）。
+4. **权限要单独给**：`capabilities/default.json` 的 `windows` 只含 `"main"`，小窗拿不到任何窗口权限。新增 `capabilities/quick.json`，`windows: ["quick"]`，权限只有 `core:default` + `core:window:allow-hide`——它只需"把自己藏起来"。
+
+**事件复用而非新增**：`app://quick-search` 在 1.4.10 是发给主窗口（唤窗 + 聚焦搜索框），1.4.11 接收方变成小窗自己（清空旧词 + 聚焦输入框），主窗口那条监听删除。理由：**新增一条事件等于新增一处跨语言字面值契约**，而这里语义本来就相同（"窗口刚被唤出来，把光标放好"）。
+
+**实测代价**（2026-10-29，本机 Win11，另有主人在运行的 1.4.10 实例）：
+
+| 版本 | 新增 `msedgewebview2` 进程 | 新增进程合计 WorkingSet | 应用本体 |
+|---|---|---|---|
+| 1.4.10（单窗口） | 2 | 71.0 MB | 32.2 MB |
+| 1.4.11（主窗 + 预建小窗） | 3 | 134.9 MB | 33.1 MB |
+
+⇒ **小窗 ≈ +1 个 WebView2 渲染进程、约 +64 MB 常驻内存**。这就是"预建隐藏窗口"的真实代价：用 64MB 换掉首次唤出的数百毫秒。
+
+测法：启动前记录全部 `msedgewebview2` 的 pid，启动后只统计**新出现的 pid** 的 WorkingSet 之和。**不能直接做前后总量差**——本机其它应用的 webview 进程自身在 GC，实测两次基线相差 55MB，差值法会得出"1.4.11 比 1.4.10 更省内存"这种荒谬结论。
+
+**已知边界**：小窗不显示 TOTP 动态码；不支持拖动（无需拖动，也省一项权限）；热键只在桌面存在，Android 上整个模块不参与编译（`cargo check --target aarch64-linux-android` 零错误）。
+
 **开机自启以系统为准**：`prefs.autostart` 只是"上次我们设置的值"；界面读的是 `autolaunch().is_enabled()`，用户在任务管理器里禁用后界面如实显示关闭。
 
 ## 10. 待明确事项

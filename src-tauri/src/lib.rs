@@ -13,6 +13,9 @@ pub mod error;
 pub mod hotkey;
 pub mod platform;
 pub mod prefs;
+// 快速搜索小窗同样是桌面专属：移动端只有一个窗口，也没有"任意程序里按热键唤出"这回事。
+#[cfg(desktop)]
+pub mod quick_search;
 pub mod state;
 #[cfg(desktop)]
 pub mod tray;
@@ -111,11 +114,19 @@ pub fn run() {
             None,
         ))
         // 关窗改为隐藏到托盘（托盘缺失时自动退回"关窗即退出"，见 `tray::on_window_event`）。
-        .on_window_event(|window, event| {
-            // 只劫持主窗口。将来若加"快速搜索"小窗，它的关闭绝不能被当成最小化。
-            if window.label() == "main" {
-                crate::tray::on_window_event(window.app_handle(), event);
+        .on_window_event(|window, event| match window.label() {
+            // 只劫持主窗口：小窗的关闭是"收起"，绝不能沿用到托盘那套"首次提示"逻辑。
+            "main" => crate::tray::on_window_event(window.app_handle(), event),
+            // 小窗是"用完就走"的浮层：点别处（失焦）立即收起。
+            //
+            // 这条是复制密码后能不能顺手粘贴的关键——用户复制完要切到目标程序去，
+            // 小窗若还浮在屏幕上，就正好挡住刚填的那一行。
+            crate::quick_search::LABEL => {
+                if matches!(event, tauri::WindowEvent::Focused(false)) {
+                    let _ = window.hide();
+                }
             }
+            _ => {}
         });
 
     let result = builder
@@ -134,7 +145,20 @@ pub fn run() {
             // 反面——所以同时把 hotkey 也跳过，避免"热键唤不出窗口又没法从托盘恢复"）。
             #[cfg(desktop)]
             match crate::tray::install(app.handle()) {
-                Ok(()) => crate::hotkey::install_from_prefs(app.handle()),
+                Ok(()) => {
+                    crate::hotkey::install_from_prefs(app.handle());
+                    // 预建隐藏小窗：首次按热键零等待（理由见 `quick_search` 模块注释）。
+                    // 建不出来不影响主程序——热键届时会退回"唤主窗口"路径。
+                    match crate::quick_search::ensure(app.handle()) {
+                        Ok(_) => {
+                            crate::state::append_log(app.handle(), "[quick] 小窗已预建（隐藏）")
+                        }
+                        Err(e) => crate::state::append_log(
+                            app.handle(),
+                            &format!("[quick] 预建小窗失败：{e}"),
+                        ),
+                    }
+                }
                 Err(e) => crate::state::append_log(app.handle(), &e),
             }
             Ok(())

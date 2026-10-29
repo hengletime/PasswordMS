@@ -10,8 +10,7 @@
   import { AUTOLOCK_LOCKED_EVENT } from './lib/auto-lock-event';
   import { RESUME_EVENTS, createResumeGate, hasTauriHost, shouldRefreshOnResume } from './lib/app-resume';
   import { api } from './lib/ipc';
-  import { QUICK_SEARCH_EVENT, TRAY_HINT_EVENT } from './lib/tray-events';
-  import { session } from './lib/stores/session.svelte';
+  import { TRAY_HINT_EVENT } from './lib/tray-events';  import { session } from './lib/stores/session.svelte';
   import { settings } from './lib/stores/settings.svelte';
   import { sync } from './lib/stores/sync.svelte';
   import { ui } from './lib/stores/ui.svelte';
@@ -37,13 +36,9 @@
     void listen(TRAY_HINT_EVENT, () => {
       ui.toast('info', 'tray.hint_minimized');
     });
-    // 热键：只在主界面跳转焦点。锁屏态由后端唤窗，用户看到的是主密码输入框——
-    // 那里不该被搜索框抢焦点（搜索框此时根本不存在）。
-    void listen(QUICK_SEARCH_EVENT, () => {
-      if (ui.route === 'main') {
-        ui.requestSearchFocus();
-      }
-    });
+    // v1.4.11：这里**不再**监听 `QUICK_SEARCH_EVENT`。热键已改为唤快速搜索小窗，
+    // 那条事件的接收方变成了小窗自己（`QuickSearch.svelte`）；主窗口收不到也不需要收
+    // ——旧代码还会顺手 `requestSearchFocus()`，可窗口根本没被唤出来，等于空转。
   }
 
   /**

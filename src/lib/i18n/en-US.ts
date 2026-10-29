@@ -542,6 +542,21 @@ export const enUS: Messages = {
     quit: 'Quit',
     hint_minimized: 'PasswordMS is still running in the tray. Click close again to minimize to the tray; use the tray menu to quit.',
   },
+  // v1.4.11: quick search window (a separate WebView from the main window).
+  quick: {
+    placeholder: 'Search logins…',
+    copied_password: 'Password copied',
+    copied_username: 'Username copied',
+    no_username: 'No username',
+    empty: 'No matching logins',
+    empty_all: 'No logins in the vault yet',
+    load_failed: 'Could not load. Open the main window and try again.',
+    locked_hint: 'The vault is locked. Open PasswordMS from the tray icon to unlock it.',
+    copy_failed: 'Copy failed. Please try again.',
+    key_password: 'copy password',
+    key_username: 'copy username',
+    key_close: 'close',
+  },
   err: {
     hotkey_need_modifier: 'A hotkey needs Ctrl, Alt, or Win (Shift alone conflicts with normal typing).',
     hotkey_repeated: 'The same modifier appears twice. Record it again.',

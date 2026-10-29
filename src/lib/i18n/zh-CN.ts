@@ -548,6 +548,21 @@ export const zhCN = {
     quit: '退出',
     hint_minimized: 'PasswordMS 仍在托盘运行。再次点击关闭将最小化到托盘；要退出请用托盘菜单。',
   },
+  // v1.4.11：快速搜索小窗。它与主窗口是两个独立 WebView，语言靠 localStorage 继承同一个值。
+  quick: {
+    placeholder: '搜索登录条目…',
+    copied_password: '密码已复制',
+    copied_username: '用户名已复制',
+    no_username: '没有用户名',
+    empty: '没有匹配的登录条目',
+    empty_all: '库里还没有登录条目',
+    load_failed: '读取失败，请打开主窗口重试',
+    locked_hint: '保险库已锁定，请从托盘图标打开 PasswordMS 解锁',
+    copy_failed: '复制失败，请重试',
+    key_password: '复制密码',
+    key_username: '复制用户名',
+    key_close: '关闭',
+  },
   err: {
     hotkey_need_modifier: '热键至少需要一个 Ctrl、Alt 或 Win 键（只按 Shift 会和正常输入冲突）。',
     hotkey_repeated: '同一个修饰键重复了，请重新录制。',

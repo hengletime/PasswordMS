@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "quick",
+  "description": "快速搜索小窗（v1.4.11）：只给它「把自己藏起来」这一项窗口能力，加上事件监听。",
+  "windows": ["quick"],
+  "permissions": ["core:default", "core:window:allow-hide"]
+}

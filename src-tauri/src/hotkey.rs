@@ -1,4 +1,9 @@
-//! 全局热键（v1.4.10，仅桌面）。
+//! 全局热键（v1.4.10 引入，v1.4.11 改为唤小窗；仅桌面）。
+//!
+//! ## 按下之后发生什么
+//!
+//! **解锁态 → 快速搜索小窗**（`quick_search::toggle`，可见则收起）；
+//! **锁屏态 → 主窗口的解锁页**（小窗在锁着的时候没有东西可复制）。
 //!
 //! ## 为什么注册在后端而不是前端
 //!
@@ -84,10 +89,26 @@ fn register(app: &AppHandle, canonical: Option<&str>) -> Result<(), String> {
     gs.on_shortcut(shortcut, |app: &AppHandle, _sc: &Shortcut, event| {
         // 只在按下时响应。不加这一句会在"松开"时也触发一次——用户会看到窗口闪两下。
         if event.state() == ShortcutState::Pressed {
-            crate::tray::show_main(app, true);
+            // v1.4.11：解锁态唤**快速搜索小窗**，锁屏态唤**主窗口**。
+            //
+            // 这个分叉不是优化而是必要条件：小窗存在的意义就是从库里取一条密码，
+            // 锁着的时候库里没有任何可取的东西，弹一个小窗等于弹一块"用不了"的板子；
+            // 而用户此刻真正要做的是输主密码，那只有主窗口有。
+            if unlocked(app) {
+                crate::quick_search::toggle(app);
+            } else {
+                crate::tray::show_main(app);
+            }
         }
     })
     .map_err(|e| format!("注册失败：{e}"))
+}
+
+/// 会话是否已解锁。委托给 `AppState::session_unlocked`（锁中毒按未解锁处理）。
+fn unlocked(app: &AppHandle) -> bool {
+    app.try_state::<crate::state::AppState>()
+        .map(|s| s.session_unlocked())
+        .unwrap_or(false)
 }
 
 /// 启动时按已保存的配置装热键。失败不阻断启动（只记日志 + 前端可读到状态）。

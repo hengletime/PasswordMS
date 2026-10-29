@@ -15,8 +15,11 @@ pub const AUTOLOCK_LOCKED_EVENT: &str = "autolock://locked";
 /// 首次点窗口 X 的一次性教育提示（窗口保持可见，见 `tray.rs`）。
 pub const TRAY_HINT_EVENT: &str = "app://tray-hint";
 
-/// 全局热键被按下 → 前端把焦点打到搜索框（v1.4.10）。
+/// 快速搜索小窗被唤出 → 小窗前端清空上次关键词、把光标放进输入框（v1.4.11）。
 ///
-/// 事件只负责"聚焦"，唤出窗口由 Rust 侧完成（`unminimize + show + set_focus`）——
+/// **v1.4.10 时它是发给主窗口的**（热键唤主窗口 + 聚焦搜索框）。v1.4.11 热键改为
+/// 唤小窗，这条事件的接收方随之变成小窗自己；主窗口不再监听它。
+///
+/// 事件只负责"聚焦"，唤出窗口由 Rust 侧完成（`show + set_focus`）——
 /// 前端拿不到窗口 API 的正确时序，等 JS 收到事件再唤窗会慢半拍且可能抢焦点失败。
 pub const QUICK_SEARCH_EVENT: &str = "app://quick-search";

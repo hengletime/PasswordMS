@@ -460,7 +460,6 @@ function tsEventConsts(text: string): Record<string, string> {
 
 describe('宿主事件名与 Rust `app_events.rs` 逐字一致（v1.4.10）', () => {
   const appEventsRs = Object.entries(rustModules).find(([p]) => p.endsWith('app_events.rs'))?.[1] ?? '';
-  const trayRs = Object.entries(rustModules).find(([p]) => p.endsWith('tray.rs'))?.[1] ?? '';
 
   it('`app_events.rs` 存在且至少定义 3 个常量（防空扫通过）', () => {
     const rust = rustEventConsts(appEventsRs);
@@ -486,8 +485,14 @@ describe('宿主事件名与 Rust `app_events.rs` 逐字一致（v1.4.10）', ()
 
   it('两个新事件在后端**真的会被发出**（常量不许只定义不用）', () => {
     // 只比对字面值挡不住"定义了但从没 emit"——那种代码编译通过、界面全无反应。
-    expect(trayRs).toContain('emit(TRAY_HINT_EVENT');
-    expect(trayRs).toContain('emit(QUICK_SEARCH_EVENT');
+    //
+    // 扫描面用**全树**而不是钉住某个文件：v1.4.11 热键改为唤快速搜索小窗后，
+    // `QUICK_SEARCH_EVENT` 的发出点从 `tray.rs` 搬到了 `quick_search.rs`。
+    // 钉死文件名会让"只是搬家"被判成"事件没人发了"——这条不变量关心的是
+    // **有没有人在发**，而不是**由谁发**。（真搬家过：本测试抓过一次。）
+    const all = Object.values(rustTree).join('\n');
+    expect(all).toContain('emit(TRAY_HINT_EVENT');
+    expect(all).toContain('emit(QUICK_SEARCH_EVENT');
   });
 
   it('热键与托盘相关命令都在 generate_handler 注册面上（防幽灵前端调用）', () => {

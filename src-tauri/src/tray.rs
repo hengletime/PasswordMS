@@ -19,7 +19,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::app_events::{AUTOLOCK_LOCKED_EVENT, QUICK_SEARCH_EVENT, TRAY_HINT_EVENT};
+use crate::app_events::{AUTOLOCK_LOCKED_EVENT, TRAY_HINT_EVENT};
 use crate::prefs::AppPrefs;
 use crate::state::AppState;
 
@@ -69,7 +69,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
         // 左键单击 = 唤出主窗口（菜单只走右键），这是 Windows 上密码管理器的通用手感。
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            MENU_SHOW => show_main(app, false),
+            MENU_SHOW => show_main(app),
             MENU_LOCK => lock_now(app),
             MENU_QUIT => {
                 // 走 `exit` 而不是关窗：`CloseRequested` 已被改成隐藏，关窗退不出去。
@@ -85,7 +85,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
                 ..
             } = event
             {
-                show_main(tray.app_handle(), false);
+                show_main(tray.app_handle());
             }
         })
         .build(app)
@@ -116,8 +116,12 @@ fn build_menu(app: &AppHandle, labels: &TrayLabels) -> tauri::Result<Menu<tauri:
     Menu::with_items(app, &[&show, &lock, &sep, &quit])
 }
 
-/// 唤出主窗口。`focus_search` 为真时顺带发「聚焦搜索框」事件（热键路径）。
-pub fn show_main(app: &AppHandle, focus_search: bool) {
+/// 唤出主窗口。
+///
+/// v1.4.11 起不再有 `focus_search` 参数：热键改成唤快速搜索小窗后，本函数只剩
+/// 「托盘左键 / 托盘菜单 / 锁屏态热键」三个入口，它们都只要求"把主界面端上来"。
+/// 「聚焦搜索框」的语义整个搬进了小窗自己的 `app://quick-search` 处理。
+pub fn show_main(app: &AppHandle) {
     let Some(window) = app.get_webview_window(MAIN_WINDOW) else {
         // 窗口被销毁（理论上不该发生：关窗只是隐藏）。留痕，别静默。
         crate::state::append_log(app, "[tray] 主窗口不存在，无法显示");
@@ -126,9 +130,6 @@ pub fn show_main(app: &AppHandle, focus_search: bool) {
     let _ = window.unminimize();
     let _ = window.show();
     let _ = window.set_focus();
-    if focus_search {
-        let _ = app.emit(QUICK_SEARCH_EVENT, ());
-    }
 }
 
 /// 托盘「锁定」：复用 auto-lock worker 的同一套级联（`perform_lock`），
