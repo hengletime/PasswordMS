@@ -320,6 +320,17 @@ impl Repository {
         &self.vault_key
     }
 
+    /// 本机 VK 是否与给定值相同（**常量时间**比较）。
+    ///
+    /// 供「重配对豁免」判定（U1/U2 红线）使用：相等 = 同一逻辑库，可安全跳过采纳。
+    ///
+    /// **不要**在调用方写 `repo.vault_key()[..] == other`——那有两个问题：
+    /// ① 普通 `==` 走短路比较，不是常量时间；② 逼调用方持有裸 VK 引用（多一处可误用面）。
+    /// 二者都不致命（本地内存比较无远程时序观测者），但没有理由留着一个更差的写法。
+    pub fn matches_vault_key(&self, other: &[u8; 32]) -> bool {
+        crate::crypto::verify::constant_time_eq(&self.vault_key[..], other)
+    }
+
     /// 替换 VK（仅限本地库为空时采用 Host 的 VK，见 U1/U2 裁定）。
     ///
     /// 调用方须先确认 [`Repository::record_count`] 为 0；否则解不出既有密文。

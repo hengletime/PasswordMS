@@ -15,6 +15,7 @@ use passwordms_core::sync::protocol::{qr_svg, QRPayload};
 use passwordms_core::sync::resync;
 use passwordms_core::sync::server::SyncServer;
 use tauri::Manager;
+use zeroize::Zeroizing;
 
 use crate::dto::{ConflictDto, DeviceDto, PairResultDto, PairingDto, SyncResultDto, SyncStatusDto};
 use crate::error::{lock_err, IpcError, IpcResult};
@@ -27,16 +28,24 @@ pub fn sync_start_pairing(
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<PairingDto> {
     // 必须处于解锁态；同时取出 VK（身份私钥的包裹密钥，D-96）。
+    //
+    // `Zeroizing`：`repo.vault_key()` 本来是 `&Zeroizing<[u8; 32]>`，drop 即清零。但
+    // `to_vec()` 复制出的是一份**普通 `Vec<u8>`**，不享受这层保护——为绕开
+    // `session` 锁的作用域就必须复制，那就用 `Zeroizing` 把保护补回来，
+    // 否则明文 VK 会以不受管理的形态留在堆上直到被覆盖（`docs/08` §35.5）。
     let (host_id, host_vk) = {
         let session = state.lock_session().map_err(lock_err)?;
         let repo = session.repo()?;
-        (repo.device_id().to_string(), repo.vault_key()[..].to_vec())
+        (
+            repo.device_id().to_string(),
+            Zeroizing::new(repo.vault_key().to_vec()),
+        )
     };
 
     // 确保持久重同步监听器在线，并把其端口通告给 Joiner（D-11）。
     let sync_port = ensure_resync_listener(&app)?;
 
-    let identity = load_or_create_identity(&app, &host_vk)?;
+    let identity = load_or_create_identity(&app, &host_vk[..])?;
     // 若已有配对会话，先作废。
     *state.pairing.lock().map_err(lock_err)? = None;
 
@@ -142,7 +151,7 @@ fn sync_join_impl(
             repo.list_paired_devices()
                 .iter()
                 .any(|d| d.device_id == joiner.host_id())
-                || repo.vault_key()[..] == joiner.host_vault_key()[..]
+                || repo.matches_vault_key(joiner.host_vault_key())
         };
         if !already_paired {
             session.adopt_vault_key(joiner.host_vault_key())?;

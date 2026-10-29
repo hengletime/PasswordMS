@@ -2036,7 +2036,7 @@ zeroize = { version = "1.8", features = ["derive"] }
 但它有个致命弱点：**只要在 Cargo.toml 加一个词就消失，而且消失时全仓一片绿、功能毫无变化**。
 这正是必须机器守门的形状。
 
-### 35.3 新增 6 例断言（`src/lib/ipc-contract.test.ts`）
+### 35.3 新增 7 例断言（`src/lib/ipc-contract.test.ts`）
 
 | 断言 | 钉住什么 | 对应翻车形态 |
 |---|---|---|
@@ -2046,6 +2046,7 @@ zeroize = { version = "1.8", features = ["derive"] }
 | TS 侧同词表 | 前端拿到即已泄露 | 只改 Rust 忘改 / 只改 TS |
 | `BiometricStatusDto` 字段数恒为 5 | 最容易长出密钥字段的那个 DTO | 悄悄加一个字段 |
 | 命令不返回 `Vec<u8>` / `[u8` / `Zeroizing` / `VaultKey` | 绕过 DTO 层的直传 | 直接回字节数组 |
+| 命令层 `.vault_key()` 调用点恒为 2 处（`biometric_cmd.rs` / `sync_cmd.rs`） | 新增第 3 处必须显式改白名单 | 未来某人顺手多取一处裸 VK（§35.5 ③） |
 
 词表是**精确匹配**（不做子串），否则 `device_fingerprint` 之类会误伤；已核实现有
 `dto.rs` / `types.ts` 对 9 个词零命中。
@@ -2057,18 +2058,56 @@ zeroize = { version = "1.8", features = ["derive"] }
 | 根 `Cargo.toml` zeroize 加 `"serde"` | `zeroize 不得启用 serde` 红，报错含具体声明行 |
 | `BiometricStatusDto` 加 `pub vk: String` | **两条**同时红（词表 + 字段数） |
 | `system_cmd` 某命令返回 `IpcResult<Vec<u8>>` | `没有任何命令把裸二进制…` 红 |
+| `system_cmd` 里加一个 `fn` 调 `repo.vault_key()` | 白名单断言红（提示新增了第 3 处调用点） |
 
-前端全量 **437 例全绿**（431 + 新增 6），`npm run check` 0 error 0 warning，CSS 契约 PASS。
+前端全量 **438 例全绿**（431 + 新增 7），`npm run check` 0 error 0 warning，CSS 契约 PASS。
 
 ### 35.4 已知缺口（登记，不掩盖）
 
-1. **`Repository::vault_key()` 是 `pub`**：命令层手里有 VK 字节，只要有人手工
-   `to_vec()` + base64 塞进某个 DTO，上面的断言**抓不到**（它只认词表和返回类型）。
-   要根治得把 `vault_key()` 降为 `pub(crate)`，把「包身份私钥」「封印」这两个需求改成
-   core 内部的专用方法。触及同步与生物识别两条主线，属独立重构。
+1. **`Repository::vault_key()` 是 `pub`** —— 已核算，**决定不做完整收窄**，理由与替代措施见 §35.5。
 2. **断言只看 Cargo.toml 的 `zeroize` 单行声明**：若有人把 features 拆成多行 TOML 写法，
    行匹配会漏。代码审查时看到 `zeroize` 或 `Zeroizing` 相关改动必须多看一眼。
 3. **不覆盖 `Option<VK>` / 泛型包装**：`IpcResult<Option<Zeroizing<…>>>` 这类形态没进正则。
    现实中不会出现（DTO 是唯一出境通道，且 DTO 已被词表挡住），但正则确实不是全域覆盖。
 
 以上三条都是「纵深防御的层次不够深」，**不影响当前结论**：现状下 VK 无法跨 IPC，有断言守着。
+
+### 35.5 `vault_key()` 可见性：核算后不排期，改做三处低成本加固（2026-10-29）
+
+主人问「为什么要安全重构、有什么收益」，核算后的答案与最初的直觉相反。
+
+**先说收益为什么接近零。** VK 在解锁态就以 `Zeroizing<[u8; 32]>` 躺在 `Repository` 里。
+能执行代码的攻击者（T1b：本机本用户恶意进程）不会经过我们的 API，他直接读进程内存，或者
+直接调 `NCryptDecrypt` 让 TPM 解密。收窄可见性只约束**编译期的本仓代码**，约束不到任何
+真实攻击者——这和 §33.1 的表里「本机本用户恶意进程：同样挡不住」是同一件事。
+
+它实际防的是**未来有人写错**。这一条有价值，但要跟成本摆在一起看：
+
+| 改造面 | 数量 | 说明 |
+|---|---|---|
+| `src-tauri` 命令层调用点 | 3 → 2 处 | `biometric_enable` / `sync_start_pairing` |
+| core **集成测试**调用点 | **29 处** | 集成测试是独立 crate，`pub(crate)` 会让它们全部编译不过 |
+| core 内部调用点 | 10 处 | 同 crate，不受影响 |
+| 需新建的 core API | 3~4 个 | 其中「包身份私钥」要把读路径逻辑搬进 core |
+
+两个关键结论：
+
+- **回调形式是假收窄**。`Session::with_vault_key(|vk| …)` 的闭包里照样能 `to_vec()` 复制出来，
+  等于没收窄。真收窄只有「把操作搬进 core」一条路。
+- **风险不对称**。同步配对是全链功能（QR / 握手 / 身份私钥 / item key 包裹），29 处测试改动
+  = 大量回归，而这类纯重构的回归表现是「配对偶发失败」，极难查。用「未来假设性 bug」
+  换「当下真实功能的稳定性」不划算。
+
+**于是改成三处低成本加固，全部已落地：**
+
+| 加固 | 内容 | 收益 |
+|---|---|---|
+| ① 明文副本清零 | `sync_start_pairing` 里 `vault_key()[..].to_vec()` → `Zeroizing::new(…to_vec())` | 原来 `to_vec()` 复制出的是一份**普通 `Vec<u8>`**，不享受 `Zeroizing` 的 drop 清零 ⇒ 明文 VK 以不受管理的形态留在堆上直到被覆盖。`src-tauri` 早已依赖 zeroize，一行修好 |
+| ② 常量时间比较 | 新增 `Repository::matches_vault_key(&[u8; 32]) -> bool`，内部走 `verify::constant_time_eq` | 原来 `repo.vault_key()[..] == joiner.host_vault_key()[..]` 是普通 `==`（短路比较）且逼调用方持有裸 VK 引用。本地内存比较没有远程时序观测者，所以不是漏洞，但没理由留一个更差的写法 |
+| ③ 白名单断言 | `ipc-contract.test.ts`：命令层 `.vault_key()` 调用点必须恰好是 `['biometric_cmd.rs', 'sync_cmd.rs']` | 新增第 3 处调用必须显式改这个数组 = 强制作者当场解释「这里为什么也需要裸 VK」。用约 20 行测试拿到收窄的主要收益 |
+
+③ 的代价与边界：它只数**调用点个数与文件**，不管调用之后怎么用（拿去 `to_vec()` 塞 DTO 仍
+需要人看）；注释行被过滤（`//` 开头不算），行尾注释算。这三条都写进了测试注释。
+
+**结论**：`vault_key()` 保持 `pub`。若将来要过第三方审计、或「命令层永不持有 VK」成为硬红线，
+再按上面那张表排一个专门的窗口做——不要夹在功能迭代中间。
