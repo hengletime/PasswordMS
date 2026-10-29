@@ -19,6 +19,7 @@
     localizeBioMessageKey,
   } from '../lib/bio-platform';
   import { toAppError } from '../lib/errors';
+  import { comboFromEvent, formatHotkey } from '../lib/hotkey-combo';
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
   import { loadSettingsPageSide } from '../lib/settings-page';
@@ -39,7 +40,7 @@
   } from '../lib/update-check';
   import { runVaultExport } from '../lib/vault-export';
   import { isSafeUrl } from '../lib/url-safety';
-  import type { CompactionStatsDto, VaultFileInfoDto, VaultSettings } from '../types';
+  import type { CompactionStatsDto, PrefsDto, VaultFileInfoDto, VaultSettings } from '../types';
 
   /** D-63：项目主页（「关于」分组打开外链，走与详情页相同的安全校验 + IPC 链路）。 */
   const HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS';
@@ -168,6 +169,94 @@
       await api.system.openUrl(HOMEPAGE_URL);
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  // ===== v1.4.10：系统集成（全局热键 / 开机自启） =====
+  //
+  // 这两项存在**应用级配置**里（`prefs.json`），不随保险库加密——锁屏态与冷启动就要可用。
+  // 与 `settings.value` 完全独立：不要把它们塞进 `VaultSettings`，那会让"锁着的时候
+  // 热键注册不出来"，而锁屏正是最想按热键的时刻。
+
+  /** 应用级配置；`null` = 尚未加载或读取失败（看 `prefsFailed` 区分）。 */
+  let prefsDto = $state<PrefsDto | null>(null);
+  /** `true` = 读取失败（UI 必须显示"读取失败"，不能渲染成"未设置"）。 */
+  let prefsFailed = $state(false);
+  /** 是否正在录制新热键（监听键盘）。 */
+  let hotkeyRecording = $state(false);
+
+  /** 热键显示文案；未设置时明确写"未设置"而不是留白。 */
+  const hotkeyDisplay = $derived(
+    prefsDto && prefsDto.hotkey.length > 0
+      ? formatHotkey(prefsDto.hotkey)
+      : ui.t('settings.hotkey_none'),
+  );
+
+  /** 读应用级配置。独立 try/catch：它失败不该影响四块旁路数据里的任何一块。 */
+  async function loadPrefs(): Promise<void> {
+    try {
+      prefsDto = await api.prefs.get();
+      prefsFailed = false;
+    } catch {
+      prefsFailed = true;
+    }
+  }
+
+  /** 开始录制：把按钮切到等待态，实际的按键由下面的 window 监听接住。 */
+  function startHotkeyRecord(): void {
+    hotkeyRecording = true;
+  }
+
+  /**
+   * 录制期间接管键盘。
+   *
+   * 用 `capture` + `preventDefault`：否则用户按 Ctrl+P 会先被 WebView 当成打印、
+   * Ctrl+S 当成保存，按键被吃掉导致"录不上"。
+   * 用 `$effect` 管注册/注销，避免组件被销毁时（切到别的分区）留下一个野监听。
+   */
+  $effect((): (() => void) | void => {
+    if (!hotkeyRecording) {
+      return;
+    }
+    const onKeydown = (event: KeyboardEvent): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        hotkeyRecording = false;
+        return;
+      }
+      const combo = comboFromEvent(event);
+      if (combo === null) {
+        // 还只是按下了修饰键，或者没有主修饰键——继续等，不报错。
+        return;
+      }
+      void saveHotkey(combo);
+    };
+    window.addEventListener('keydown', onKeydown, true);
+    return (): void => window.removeEventListener('keydown', onKeydown, true);
+  });
+
+  /** 保存热键。失败时**保持录制态**，用户直接再按一个组合即可——省一次点击。 */
+  async function saveHotkey(spec: string): Promise<void> {
+    try {
+      prefsDto = await api.prefs.setHotkey(spec);
+      hotkeyRecording = false;
+      ui.toast('success', 'settings.hotkey_saved');
+    } catch (err) {
+      // ERR_HOTKEY_UNAVAILABLE（被占用）/ ERR_HOTKEY_* （键位问题）都由后端给出具体文案。
+      ui.toast('error', toAppError(err).messageKey);
+    }
+  }
+
+  /** 开关开机自启。失败时重读真实状态，让勾选框回滚到系统的实际值。 */
+  async function onAutostartToggle(event: Event): Promise<void> {
+    const enabled = (event.target as HTMLInputElement).checked;
+    try {
+      prefsDto = await api.prefs.setAutostart(enabled);
+      ui.toast('success', enabled ? 'settings.autostart_on' : 'settings.autostart_off');
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+      void loadPrefs();
     }
   }
 
@@ -304,6 +393,8 @@
     // 「不可用」并保持 `null`，不参与 `loadSettingsPageSide` 的失败隔离矩阵——
     // 它坏了绝不该影响库文件信息/版本号的显示）。
     void session.refreshBiometric();
+    // v1.4.10：系统集成配置（应用级，与上面四块互相独立）。
+    void loadPrefs();
   }
 
   $effect((): void => {
@@ -635,6 +726,56 @@
       </div>
     </div>
   </div>
+
+  <!-- v1.4.10：系统集成（全局热键 / 开机自启）。
+       为什么单独成卡：这两项属于「本机怎么用这个程序」，既不进保险库、也不随库迁移，
+       和上面外观/安全的语义不同；混进去会让用户以为换台机器也会带着走。 -->
+  {#if prefsDto === null && !prefsFailed}
+    <!-- 配置还没读到：先不渲染，避免卡片"闪现又消失" -->
+  {:else if prefsDto && !prefsDto.supported}
+    <!-- 移动端没有托盘/全局热键/自启：整卡不渲染（D-116 口径，不给不存在的功能做广告） -->
+  {:else}
+  <div class="pms-card set-card">
+    <h3>{ui.t('settings.group_system')}</h3>
+    <div class="set-row">
+      <span class="set-label">{ui.t('settings.hotkey')}</span>
+      <button
+        class="pms-btn is-sm set-ctl"
+        class:is-primary={hotkeyRecording}
+        type="button"
+        aria-label={ui.t('settings.hotkey')}
+        onclick={startHotkeyRecord}
+      >
+        {hotkeyRecording ? ui.t('settings.hotkey_recording') : hotkeyDisplay}
+      </button>
+    </div>
+    <p class="pms-hint">{ui.t('settings.hotkey_hint')}</p>
+    {#if prefsFailed}
+      <!-- 读取失败 ≠ 未设置：必须显式说出来（D-73 的教训）。 -->
+      <p class="pms-alert is-warning">
+        <Icon name="alert" size={16} />
+        <span>{ui.t('settings.prefs_load_failed')}</span>
+      </p>
+    {:else if prefsDto && prefsDto.hotkey.length > 0 && !prefsDto.hotkey_ok}
+      <!-- 已设置却没注册上：大概率被别的程序占了，直接告诉用户怎么修。 -->
+      <p class="pms-alert is-warning">
+        <Icon name="alert" size={16} />
+        <span>{ui.t('settings.hotkey_unavailable')}</span>
+      </p>
+    {/if}
+    <div class="set-row is-check">
+      <span class="set-label">{ui.t('settings.autostart')}</span>
+      <label class="pms-check">
+        <input
+          type="checkbox"
+          checked={prefsDto?.autostart ?? false}
+          onchange={(e) => void onAutostartToggle(e)}
+        />
+      </label>
+    </div>
+    <p class="pms-hint">{ui.t('settings.autostart_hint')}</p>
+  </div>
+  {/if}
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_security')}</h3>

@@ -389,3 +389,27 @@ impl From<passwordms_core::store::repository::CompactionOutcome> for CompactionR
         }
     }
 }
+
+/// 应用级配置（v1.4.10）：热键 / 开机自启 / 托盘提示。
+///
+/// 与 `VaultSettings` 的区别：这份**不随保险库加密**，锁屏态与冷启动即可用
+/// （详见 `src-tauri/src/prefs.rs` 模块文档）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrefsDto {
+    /// 当前平台是否具备系统集成能力（桌面 true / 移动端 false）。
+    ///
+    /// 前端据此**整卡不渲染**——与 D-116 同一口径：「还没有的功能不做广告」。
+    /// 平台身份由后端自报，前端不做 UA 嗅探（`bio-platform` 的教训）。
+    pub supported: bool,
+    /// 规范化后的热键串（`ctrl+alt+KeyP`）。**空串 = 用户主动禁用热键**。
+    pub hotkey: String,
+    /// 该热键此刻在系统里是否真的注册着。
+    ///
+    /// `false` 有两种含义，靠 `hotkey` 是否为空区分：空 = 用户关掉的（正常）；
+    /// 非空 = 注册失败（被占用），设置页要显示红字。
+    pub hotkey_ok: bool,
+    /// 开机自启**系统实际状态**（读注册表，不是读我们的配置）。
+    ///
+    /// 用户在任务管理器里禁用了启动项时，这里如实反映——界面不该撒谎。
+    pub autostart: bool,
+}

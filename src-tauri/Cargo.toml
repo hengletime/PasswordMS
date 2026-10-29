@@ -29,7 +29,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 passwordms-core = { path = "../crates/passwordms-core" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-opener = "2"
@@ -40,6 +40,22 @@ thiserror.workspace = true
 uuid.workspace = true
 base64.workspace = true
 zeroize.workspace = true
+
+# 系统集成（v1.4.10）：托盘常驻、全局热键、开机自启。
+#
+# 两个插件都**只在 Rust 侧调用**，不给前端 JS 包（`@tauri-apps/plugin-*` 一律不装）：
+#   · 热键必须在后端注册——前端注册要求窗口先加载完成，冷启动时按热键会没反应；
+#     且键位要写进 `prefs.json` 由后端读，走 JS 侧就得两处维护同一份字符串。
+#   · 自启是同一次点击里的「写注册表 + 落配置」原子动作，前端只发一条命令。
+# 好处：`capabilities/default.json` 无需新增任何插件权限 —— 前端根本无法直接调它们。
+#
+# ⚠️ **必须是 target 条件依赖，不能放 [dependencies]**（2026-10-29 实测）：
+# 放进公共依赖后 `cargo check --target aarch64-linux-android` 直接炸 17 个错误
+# （`tauri::menu` / `tauri::tray` 在移动端不存在，两个插件也没有移动端实现）。
+# 系统集成本来就是桌面专属功能，Android 上连设置卡都不渲染（靠 DTO 的 `supported` 字段）。
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-autostart = "2"
 
 # 生物识别快速解锁的 Windows 适配器（`docs/08-biometric-unlock.md` §5 / §6.1）。
 #

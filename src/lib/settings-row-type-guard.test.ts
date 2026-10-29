@@ -110,12 +110,13 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(actionRows).toHaveLength(2);
   });
 
-  it('复选框行共 3 条 is-check（D-110：自动同步 / 启动同步 / 更新检查）', () => {
+  it('复选框行共 4 条 is-check（D-110：自动同步 / 启动同步 / 更新检查；v1.4.10：开机自启）', () => {
     // 计数 0 → 3 是 **D-110 的有意变更**（主人手机实测）：窄屏堆叠把复选框
     // 堆到文字下一行——复选框行是第三种行类型，必须像 is-info / is-actions
     // 一样登记标记、在窄屏媒体块里覆盖回横排。
+    // v1.4.10 系统集成：+1（开机自启），3 → 4。
     const checkRows = SRC.match(/class="set-row is-check"/g) ?? [];
-    expect(checkRows).toHaveLength(3);
+    expect(checkRows).toHaveLength(4);
   });
 
   it('别的行一个都不许标 is-*：控件行必须继续走窄屏堆叠', () => {
@@ -126,12 +127,13 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     // 两个同步开关移入 is-check，不再是裸行）。D-113 P2 的快速解锁开启密码输入框也是裸行
     // （控件行，窄屏就该堆叠），裸行 10 → 11。
     // 这里不写死裸行具体条数（将来加控件行会合法变动），只断言「裸行是多数、且标记行
-    // 共 11 条（6 条 is-info + 2 条 is-actions + 3 条 is-check，D-76 / D-107 / D-110 / D-113 起）」。
+    // 共 12 条（6 条 is-info + 2 条 is-actions + 4 条 is-check，D-76 / D-107 / D-110 / D-113 /
+    // v1.4.10 起）」。
     expect(plainRows.length).toBeGreaterThanOrEqual(8);
-    expect(plainRows.length + 11).toBe(totalRows.length);
+    expect(plainRows.length + 12).toBe(totalRows.length);
     // 白色名单外不许出现别的 `is-*` 变体（例如 `is-buttons` 这种手滑写法）。
     const anyVariant = SRC.match(/class="set-row is-[a-z-]+"/g) ?? [];
-    expect(anyVariant).toHaveLength(11);
+    expect(anyVariant).toHaveLength(12);
   });
 
   it('覆盖规则在同一个移动端媒体块内，且都在一刀切 `.set-row` 之后（层叠顺序）', () => {

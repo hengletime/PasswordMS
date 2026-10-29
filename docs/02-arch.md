@@ -2215,6 +2215,40 @@ graph TD
 
 ---
 
+### 3.14.29 系统集成：托盘 / 全局热键 / 开机自启（1.4.10，2026-10-29）
+
+**新增三个模块 + 一个新命令组**（`src-tauri/src/`）：
+
+| 模块 | 职责 | 关键约束 |
+|---|---|---|
+| `prefs.rs` | 应用级配置 `AppPrefs{hotkey, autostart, tray_hint_shown}`，存 `data_dir/prefs.json` | 纯逻辑（路径由调用方给），可单测；**永不因坏配置失败**——解析失败/字段非法都回落默认值并返回告警串给调用方记日志；原子写（`.tmp` + rename）；`#[serde(default)]` 向前兼容 |
+| `tray.rs` | 托盘图标 + 菜单 + `CloseRequested` 拦截 + 首次教育提示 | 托盘缺失时**放过** `CloseRequested`（恢复旧行为）；首次点 X 只提示不隐藏 |
+| `hotkey.rs` | 注册/改键/回滚/启动装载 | 改键 = 先 `unregister_all` 再注册，失败按旧值回滚；`Pressed` 状态才响应（否则窗口闪两下） |
+| `commands/prefs_cmd.rs` | `prefs_get` / `prefs_set_hotkey` / `prefs_set_autostart` / `tray_set_labels` | 顺序恒为「**先让系统状态成立，再落盘**」——注册不上就不写配置，避免"设置里写着却没生效" |
+| `app_events.rs` | 后端→前端事件名常量（3 个） | 与前端 `tray-events.ts` / `auto-lock-event.ts` 字面值跨语言契约，`ipc-contract.test.ts` 逐字比对 + 检查**常量真的被 emit**（只比值挡不住"定义了从没发"） |
+
+**为什么配置不进 `VaultSettings`**：那份设置在保险库内、随库加密，未解锁根本读不到。而托盘菜单、关窗行为、开机自启、热键键位这几件事恰恰发生在锁屏状态——甚至发生在一台从没解锁过的新机器上（开机自启要在启动瞬间就知道开没开）。放库里等于「保险库锁着的时候热键注册不出来」，而那正是最需要它的时刻。
+
+**路径用 `data_dir` 而非 `app_config_dir`**：`data_dir` 已实现便携模式（exe 旁存在 `passwordms.portable` 时全部数据随 exe 走）。配置留系统盘会让绿色版"换台机器拷走目录"时热键/自启设置莫名丢失。
+
+**热键键名的实测事实**（推翻了设计时的假设）：`Shortcut`（global-hotkey 0.8 / keyboard-types 0.7）对 `P` 与 `KeyP` **两种写法都接受**。因此不能靠"解析失败"来拒绝裸字母——必须在 `canonical_hotkey` 里主动归一（单字母 → `KeyX`、单数字 → `DigitX`），否则同一个物理键会存出两种规范化结果，"改个写法"在配置里看起来像换了键，去重与回滚判断都会漂。
+
+**校验器与注册器同一个**：`canonical_hotkey` 末尾直接 `canonical.parse::<Shortcut>()`，杜绝"校验通过、注册时才报错"的两套标准。
+
+**新增依赖**（均为官方插件，且**只在 Rust 侧调用**，前端不装 JS 包 → `capabilities/default.json` 零新增权限）：`tauri` 的 `tray-icon` + `image-png` feature、`tauri-plugin-global-shortcut 2.4.1`、`tauri-plugin-autostart 2.7.0`。
+
+**这四个命令必须分平台写两份实现**（v1.4.10 的实测教训，不是风格选择）：`tauri::menu` / `tauri::tray` 在移动端**根本不存在**，`global-shortcut` / `autostart` 两个插件也**没有移动端实现**。第一版把它们放进公共 `[dependencies]`，`cargo check --target aarch64-linux-android` 当场炸出 17 个错误。正确形态是三层同时收口：
+
+1. `src-tauri/Cargo.toml` 用 `[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]` 挂两个插件——**不能放公共 `[dependencies]`**，否则移动端连依赖解析都过不去；
+2. `lib.rs` 里 `hotkey` / `tray` 两个 `pub mod` 与 builder 上的 `.plugin()` / `.on_window_event()` 全部 `#[cfg(desktop)]`；
+3. `commands/prefs_cmd.rs` 给同名同签名的**两套** `#[tauri::command]`（`cfg(desktop)` 真实现 + `cfg(not(desktop))` 桩）。**不要**在函数体内塞 `cfg` 分支——那样桌面 API 的引用仍留在移动端编译单元里，错误照旧。
+
+移动端桩的语义要显式：`prefs_get` 返回 `PrefsDto{supported:false}`（不是报错——前端需要"这个平台没有这功能"这个**可读事实**，而不是一个只能 catch 的失败），三个写命令返回 `ERR_NOT_SUPPORTED`。`supported` 由后端自报、前端不做 UA 嗅探（D-116 的同一条纪律）。
+
+**代价与守门**：命令名仍是 67 个，但 `#[tauri::command]` 属性出现 71 次（这 4 个命令各两份）。`ipc-contract.test.ts` 因此钉两个数：属性 71/71（每个都带 `rename_all`）+ **去重后的名字 = 67**。第二个数才是真守门——若移动端桩被写成 `prefs_get_mobile`，71/71 照样绿，而 Android 上 invoke `prefs_get` 直接 `command not found`。
+
+**开机自启以系统为准**：`prefs.autostart` 只是"上次我们设置的值"；界面读的是 `autolaunch().is_enabled()`，用户在任务管理器里禁用后界面如实显示关闭。
+
 ## 10. 待明确事项
 
 | # | 事项 | 风险 | 建议处理 |

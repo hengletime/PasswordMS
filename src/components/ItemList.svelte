@@ -27,6 +27,26 @@
 
   let query = $state('');
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /** 搜索框引用（v1.4.10：全局热键唤出后把焦点打进来）。 */
+  let searchInput = $state<HTMLInputElement | undefined>(undefined);
+  /**
+   * 已消费的聚焦信号序号。
+   *
+   * 初始化为**挂载那一刻**的值：这样「用户在别的分区按过热键、随后切回条目列表」
+   * 不会突然把搜索框抢走焦点——只响应挂载之后新产生的请求。
+   */
+  let consumedFocusSeq = ui.searchFocusSeq;
+
+  $effect(() => {
+    const seq = ui.searchFocusSeq;
+    if (seq === consumedFocusSeq || !searchInput) {
+      return;
+    }
+    consumedFocusSeq = seq;
+    // `select()` 而不是只 `focus()`：按热键来就是为了搜东西，直接打字即覆盖旧关键词。
+    searchInput.focus();
+    searchInput.select();
+  });
 
   // D-81：store 的 query 被外部重置（保存成功后回落「全部条目」、锁定 reset）时，
   // 搜索框显示值必须跟着变 —— 「搜索框显示 = 实际过滤」是验收项。
@@ -222,7 +242,13 @@
   <header class="list-head">
     <div class="pms-input-group list-search">
       <span class="list-search-icon"><Icon name="search" size={16} /></span>
-      <input class="pms-input" placeholder={ui.t('common.search')} value={query} oninput={onSearchInput} />
+      <input
+        class="pms-input"
+        bind:this={searchInput}
+        placeholder={ui.t('common.search')}
+        value={query}
+        oninput={onSearchInput}
+      />
       <!-- D-101：搜索词非空才渲染清空按钮（空态不占位）。 -->
       {#if query.length > 0}
         <button

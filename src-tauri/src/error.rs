@@ -32,6 +32,33 @@ impl IpcError {
             record_count: None,
         }
     }
+
+    /// 构造**外壳层**错误（错误码不属于密码库核心的错误，如热键/自启）。
+    ///
+    /// 为什么这些码不进 `CoreError`：核心库不该知道什么叫"快捷键"或"开机自启"——
+    /// 那是本机外壳的 UI 概念。但错误码字符串仍是**同一张表**（见 [`shell_codes`]），
+    /// 前端 `ErrorCode` 与之逐字对齐，契约测试守着。
+    pub fn shell(code: &str, message_key: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            message_key: message_key.to_string(),
+            record_count: None,
+        }
+    }
+}
+
+/// 外壳层错误码（非密码库核心语义）。
+pub mod shell_codes {
+    /// 热键键位串非法（缺修饰键、键名不认识、同一修饰键写两遍）。
+    pub const ERR_HOTKEY_INVALID: &str = "ERR_HOTKEY_INVALID";
+    /// 热键合法但注册不上：被其它程序占用或被系统策略拦下。
+    pub const ERR_HOTKEY_UNAVAILABLE: &str = "ERR_HOTKEY_UNAVAILABLE";
+    /// 开机自启开关写入失败（注册表被策略锁、UUID 缺失等）。
+    pub const ERR_AUTOSTART_FAILED: &str = "ERR_AUTOSTART_FAILED";
+    /// 该系统集成能力在当前平台不可用（移动端调用桌面专属命令）。
+    ///
+    /// 正常路径到不了：设置卡按 `PrefsDto.supported` 整块不渲染。纯防御。
+    pub const ERR_NOT_SUPPORTED: &str = "ERR_NOT_SUPPORTED";
 }
 
 impl From<CoreError> for IpcError {

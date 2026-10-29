@@ -23,6 +23,7 @@ import type {
   ItemDto,
   PairingDto,
   PairResultDto,
+  PrefsDto,
   StatusDto,
   SyncResultDto,
   SyncStatusDto,
@@ -252,5 +253,27 @@ export const settings = {
     invoke<VaultSettings>('update_settings', { settings: value }),
 };
 
+/**
+ * 应用级配置类（v1.4.10 系统集成：热键 / 开机自启 / 托盘文案）。
+ *
+ * 与 `settings` 的区别：这里的东西**不随保险库加密**，锁屏态也要能读写。
+ */
+export const prefs = {
+  get: (): Promise<PrefsDto> => invoke<PrefsDto>('prefs_get'),
+  /**
+   * 改热键。传空串 = 关闭热键。
+   *
+   * 失败会抛 `ERR_HOTKEY_INVALID`（键位不合法）或 `ERR_HOTKEY_UNAVAILABLE`（被占用）。
+   * 后端失败时已回滚到旧键位，所以前端不需要做补偿。
+   */
+  setHotkey: (hotkey: string): Promise<PrefsDto> =>
+    invoke<PrefsDto>('prefs_set_hotkey', { hotkey }),
+  setAutostart: (enabled: boolean): Promise<PrefsDto> =>
+    invoke<PrefsDto>('prefs_set_autostart', { enabled }),
+  /** 把托盘菜单文案交给后端（启动一次 + 切换界面语言时一次）。 */
+  setTrayLabels: (labels: { show: string; lock: string; quit: string }): Promise<void> =>
+    invoke<void>('tray_set_labels', { labels }),
+};
+
 /** 全部命令的聚合入口。 */
-export const api = { system, vault, items, folders, keydocs, tools, importer, trash, health, sync, settings };
+export const api = { system, vault, items, folders, keydocs, tools, importer, trash, health, sync, settings, prefs };

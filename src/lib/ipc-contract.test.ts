@@ -268,7 +268,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（D-114 起为 63/63）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（v1.4.10 起为 71/71，67 个命令名）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     // 不写成 `\(rename_all = "snake_case"\)` 精确匹配：§23 起有 5 个命令带 `, async`
@@ -285,8 +285,26 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // D-108（豆包审查 3.5-7）：删除前后端占位死命令 sync_accept_pair，59 → 58。
     // D-113 P2（docs/08 生物识别）：+4（biometric_status / _enable / _disable / _unlock），58 → 62。
     // D-114（快速解锁引导）：+1（open_biometric_settings，打开系统「登录选项」），62 → 63。
-    expect(total).toBe(63);
-    expect(withAttr).toBe(63);
+    // v1.4.10 系统集成：+4 个**命令名**（prefs_get / prefs_set_hotkey / prefs_set_autostart /
+    // tray_set_labels），63 → 67。
+    //
+    // ⚠️ 但 `#[tauri::command]` 的**出现次数**是 71，不是 67：这 4 个命令要同时满足桌面与移动，
+    // 而 `tauri::menu` / `tray` / global-shortcut / autostart 在移动端根本不存在（见 Cargo.toml
+    // 的 target 条件依赖段），函数体内塞 cfg 分支也会把桌面 API 引用留进移动端编译单元。
+    // 所以 `commands/prefs_cmd.rs` 给了 `cfg(desktop)` + `cfg(not(desktop))` **两套同名同签名
+    // 实现**，各带一份属性 ⇒ 4 个名字 × 2 = 8 个属性，属性总数 63 + 8 = 71。
+    expect(total).toBe(71);
+    expect(withAttr).toBe(71);
+
+    // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
+    // 若移动端桩写成 `prefs_get_mobile`，计数仍会是 71/71，但前端在 Android 上 invoke
+    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数 = 67**，
+    // 即平台分立只许增加实现份数，不许增加命令名。
+    const names = [
+      ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
+    ].map((m) => m[1]);
+    expect(names.length).toBe(71);
+    expect(new Set(names).size).toBe(67);
   });
 });
 
@@ -404,5 +422,81 @@ describe('VK 不跨 JS 边界（§18.5 约束 6 · §13.10 第 3 条）', () => 
       )
       .sort();
     expect(sites).toEqual(['biometric_cmd.rs', 'sync_cmd.rs']);
+  });
+});
+
+// ── 宿主事件名跨语言一致性（v1.4.10 系统集成） ────────────────────────────────
+//
+// 后端 `app_events.rs` 定义事件名，前端 `tray-events.ts` / `auto-lock-event.ts` 各自
+// 有一份字面量。两边写不一样**不会有任何编译错误**，只会静默失效——D-118 踩过一次、
+// D-123 又踩过一次「挂错层」。这里逐字比对，并检查常量不是"只定义不发"的死代码。
+
+const eventModules = import.meta.glob('./{tray-events.ts,auto-lock-event.ts}', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
+const trayEventsTs = eventModules['./tray-events.ts'] ?? '';
+const autoLockEventTs = eventModules['./auto-lock-event.ts'] ?? '';
+
+/** 抽 Rust `pub const NAME: &str = "value";`。 */
+function rustEventConsts(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of text.matchAll(/pub const ([A-Z_]+): &str = "([^"]+)";/g)) {
+    out[m[1]] = m[2];
+  }
+  return out;
+}
+
+/** 抽 TS `export const NAME = 'value';`。 */
+function tsEventConsts(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const m of text.matchAll(/export const ([A-Z_]+) = '([^']+)';/g)) {
+    out[m[1]] = m[2];
+  }
+  return out;
+}
+
+describe('宿主事件名与 Rust `app_events.rs` 逐字一致（v1.4.10）', () => {
+  const appEventsRs = Object.entries(rustModules).find(([p]) => p.endsWith('app_events.rs'))?.[1] ?? '';
+  const trayRs = Object.entries(rustModules).find(([p]) => p.endsWith('tray.rs'))?.[1] ?? '';
+
+  it('`app_events.rs` 存在且至少定义 3 个常量（防空扫通过）', () => {
+    const rust = rustEventConsts(appEventsRs);
+    expect(Object.keys(rust).length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('前端 `tray-events.ts` 的每个常量都能在后端找到同值定义', () => {
+    const rust = rustEventConsts(appEventsRs);
+    const ts = tsEventConsts(trayEventsTs);
+    expect(Object.keys(ts).length).toBeGreaterThanOrEqual(2);
+    for (const [name, value] of Object.entries(ts)) {
+      expect(rust[name], `前端 ${name} 在后端 app_events.rs 没有对应常量`).toBeDefined();
+      expect(rust[name], `${name} 两边字面值不一致`).toBe(value);
+    }
+  });
+
+  it('自动锁定事件与 `auto-lock-event.ts` 一致', () => {
+    const rust = rustEventConsts(appEventsRs);
+    const ts = tsEventConsts(autoLockEventTs);
+    expect(ts.AUTOLOCK_LOCKED_EVENT).toBeDefined();
+    expect(rust.AUTOLOCK_LOCKED_EVENT).toBe(ts.AUTOLOCK_LOCKED_EVENT);
+  });
+
+  it('两个新事件在后端**真的会被发出**（常量不许只定义不用）', () => {
+    // 只比对字面值挡不住"定义了但从没 emit"——那种代码编译通过、界面全无反应。
+    expect(trayRs).toContain('emit(TRAY_HINT_EVENT');
+    expect(trayRs).toContain('emit(QUICK_SEARCH_EVENT');
+  });
+
+  it('热键与托盘相关命令都在 generate_handler 注册面上（防幽灵前端调用）', () => {
+    const registered = extract(libRs, /commands::prefs_cmd::([a-z_]+),/g);
+    expect(registered).toEqual([
+      'prefs_get',
+      'prefs_set_autostart',
+      'prefs_set_hotkey',
+      'tray_set_labels',
+    ]);
   });
 });

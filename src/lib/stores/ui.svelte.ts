@@ -111,6 +111,14 @@ class UiStore {
   toasts = $state<Toast[]>([]);
   /** 当前确认框（null = 无）。 */
   confirmRequest = $state<ConfirmRequest | null>(null);
+  /**
+   * 「请把焦点打到搜索框」的信号（v1.4.10，全局热键用）。
+   *
+   * 用**自增序号**而不是布尔量：热键可以连按，布尔量在「已经是 true」时不会触发
+   * 响应式更新，第二次按就没反应；序号每次都变，`$effect` 每次都跑。
+   * 初始 0 表示"从未请求过"，`ItemList` 挂载时据此避免自动聚焦。
+   */
+  searchFocusSeq = $state(0);
   private seq = 0;
 
   /** 翻译当前语言。 */
@@ -132,6 +140,11 @@ class UiStore {
   /** 切换分区。 */
   setSection(section: MainSection): void {
     this.section = section;
+  }
+
+  /** 请求聚焦搜索框（热键路径；只递增序号，实际聚焦由 `ItemList` 做）。 */
+  requestSearchFocus(): void {
+    this.searchFocusSeq += 1;
   }
 
   /**

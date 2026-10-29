@@ -354,7 +354,29 @@ export interface CompactionResultDto {
   dropped_frames: number;
 }
 
+/**
+ * 应用级配置（v1.4.10；镜像 Rust `dto.rs::PrefsDto`）。
+ *
+ * 与 `VaultSettings` 的区别：这份**不随保险库加密**，锁屏态/冷启动即可读写。
+ */
+export interface PrefsDto {
+  /**
+   * 当前平台是否具备系统集成能力（桌面 true / 移动端 false）。
+   *
+   * `false` 时设置卡**整块不渲染**——与 D-116 同一口径：还没有的功能不做广告。
+   * 平台身份由后端自报，前端不做 UA 嗅探。
+   */
+  supported: boolean;
+  /** 规范化后的热键串（`ctrl+alt+KeyP`）。**空串 = 用户主动禁用热键**。 */
+  hotkey: string;
+  /** 该热键此刻是否真的注册在系统里。`false` 且 `hotkey` 非空 = 注册失败（被占用）。 */
+  hotkey_ok: boolean;
+  /** 开机自启**系统实际状态**（读注册表，不是读我们的配置）。 */
+  autostart: boolean;
+}
+
 /** IPC 错误 JSON（Rust `IpcError`）。 */
+
 export interface IpcErrorShape {
   code: string;
   message_key: string;

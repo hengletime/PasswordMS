@@ -9,6 +9,8 @@
   import Toast from './components/common/Toast.svelte';
   import { AUTOLOCK_LOCKED_EVENT } from './lib/auto-lock-event';
   import { RESUME_EVENTS, createResumeGate, hasTauriHost, shouldRefreshOnResume } from './lib/app-resume';
+  import { api } from './lib/ipc';
+  import { QUICK_SEARCH_EVENT, TRAY_HINT_EVENT } from './lib/tray-events';
   import { session } from './lib/stores/session.svelte';
   import { settings } from './lib/stores/settings.svelte';
   import { sync } from './lib/stores/sync.svelte';
@@ -19,6 +21,48 @@
     void init();
     registerAutoLockListener();
     registerResumeListener();
+    registerShellListener();
+  });
+
+  /**
+   * v1.4.10 系统集成：托盘提示 + 全局热键。
+   *
+   * 两条都由宿主发起（Rust 已把窗口唤到前台），前端只做"焦点该落在哪"和"提示什么"。
+   */
+  function registerShellListener(): void {
+    if (!hasTauriHost()) {
+      return;
+    }
+    // 首次点 X：窗口还在，来得及把这条话说完。之后再点就直接隐藏，不再打扰。
+    void listen(TRAY_HINT_EVENT, () => {
+      ui.toast('info', 'tray.hint_minimized');
+    });
+    // 热键：只在主界面跳转焦点。锁屏态由后端唤窗，用户看到的是主密码输入框——
+    // 那里不该被搜索框抢焦点（搜索框此时根本不存在）。
+    void listen(QUICK_SEARCH_EVENT, () => {
+      if (ui.route === 'main') {
+        ui.requestSearchFocus();
+      }
+    });
+  }
+
+  /**
+   * 托盘菜单文案跟随界面语言（Rust 侧读不到用户选的 UI 语言）。
+   *
+   * `ui.t()` 内部读 `locale`，所以这个 effect 会在切语言时重跑；
+   * 失败静默——后端有中文默认文案，托盘依然可用，不值得为它弹错误。
+   */
+  $effect((): void => {
+    if (!hasTauriHost()) {
+      return;
+    }
+    void api.prefs
+      .setTrayLabels({
+        show: ui.t('tray.show_window'),
+        lock: ui.t('tray.lock'),
+        quit: ui.t('tray.quit'),
+      })
+      .catch((): void => {});
   });
 
   /**

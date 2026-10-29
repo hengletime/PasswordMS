@@ -64,6 +64,11 @@ pub struct AppState {
     /// 不走会话锁的用户命令（复制 / 生成器 / TOTP 等）显式调 [`AppState::touch_activity`]。
     /// **worker 自身的轮询不刷新它**（否则永不闲置）。
     pub last_activity_ms: AtomicI64,
+    /// 应用级配置（v1.4.10）：热键键位 / 开机自启 / 托盘提示已读。
+    ///
+    /// **不放进保险库**：锁屏态和冷启动时就要用它（详见 `prefs.rs` 模块文档）。
+    /// 启动时由 `lib.rs` 从磁盘载入并覆盖这里的默认值。
+    pub prefs: Mutex<crate::prefs::AppPrefs>,
 }
 
 impl AppState {
@@ -79,7 +84,13 @@ impl AppState {
             sync_busy: AtomicBool::new(false),
             biometric_busy: AtomicBool::new(false),
             last_activity_ms: AtomicI64::new(now_ms()),
+            prefs: Mutex::new(crate::prefs::AppPrefs::default()),
         }
+    }
+
+    /// 取配置副本（锁中毒时回落默认值——配置读不到不该让调用方失败）。
+    pub fn prefs_snapshot(&self) -> crate::prefs::AppPrefs {
+        self.prefs.lock().map(|g| g.clone()).unwrap_or_default()
     }
 
     /// 记录一次用户活动（auto-lock 闲置基准，D-108 3.4-6）。
@@ -150,6 +161,15 @@ pub fn data_dir(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
 /// 保险库文件路径（数据目录 / `passwordms.vault`）。
 pub fn vault_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
     Ok(data_dir(app)?.join("passwordms.vault"))
+}
+
+/// 应用级配置路径（数据目录 / `prefs.json`，v1.4.10）。
+///
+/// 刻意用 [`data_dir`] 而不是 `app_config_dir`：便携版（exe 旁有
+/// `passwordms.portable`）的语义是「换台机器拷走目录就能继续用」，
+/// 配置留在系统盘会让热键/自启设置莫名其妙地"丢失"。
+pub fn prefs_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
+    Ok(data_dir(app)?.join("prefs.json"))
 }
 
 /// 轻量文件日志（数据目录 / `passwordms.log`）。

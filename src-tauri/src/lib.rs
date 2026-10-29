@@ -2,12 +2,20 @@
 //!
 //! 业务逻辑全部下沉到 `passwordms-core`；本层只做「参数解包 → 调核心 → 错误映射」。
 
+pub mod app_events;
 pub mod commands;
 mod content_uri;
 pub mod dto;
 pub mod error;
+// 系统集成是桌面专属：移动端没有托盘、没有全局热键插件、也没有自启（见 Cargo.toml 的
+// target 条件依赖与 `docs/06` §6.33）。Android 上设置卡按 DTO 的 `supported` 不渲染。
+#[cfg(desktop)]
+pub mod hotkey;
 pub mod platform;
+pub mod prefs;
 pub mod state;
+#[cfg(desktop)]
+pub mod tray;
 
 use crate::commands::system_cmd;
 use crate::state::AppState;
@@ -58,14 +66,59 @@ fn biometric_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
+/// 启动时把应用级配置从磁盘读进托管状态（v1.4.10）。
+///
+/// 读不到 / 读坏了都回落默认值并留痕——**配置问题绝不能让程序起不来**，
+/// 万一 prefs.json 被写坏，用户至少还能打开软件去修它。
+fn load_prefs(app: &tauri::AppHandle) {
+    let Ok(path) = crate::state::prefs_path(app) else {
+        crate::state::append_log(app, "[prefs] 数据目录不可用，使用默认配置");
+        return;
+    };
+    let (prefs, warn) = crate::prefs::load_or_default(&path);
+    if let Some(w) = warn {
+        crate::state::append_log(app, &w);
+    }
+    match app.try_state::<AppState>() {
+        Some(state) => match state.prefs.lock() {
+            Ok(mut guard) => *guard = prefs,
+            Err(_) => crate::state::append_log(app, "[prefs] 状态锁中毒，使用默认配置"),
+        },
+        None => crate::state::append_log(app, "[prefs] 托管状态未就绪，使用默认配置"),
+    }
+}
+
 /// 启动应用。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let result = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_fs::init());
+
+    // v1.4.10 系统集成：全局热键 + 开机自启 + 关窗最小化。
+    //
+    // 三者都是**桌面专属**，必须整段 cfg(desktop)：移动端没有 `tauri::menu` / `tauri::tray`，
+    // 这两个插件也没有移动端实现。曾经把它们放进公共依赖，结果
+    // `cargo check --target aarch64-linux-android` 直接炸 17 个错误（2026-10-29 实测）。
+    #[cfg(desktop)]
+    let builder = builder
+        // 两个插件都**只在后端使用**，前端拿不到对应权限（见 `capabilities/default.json`）。
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
+        // 关窗改为隐藏到托盘（托盘缺失时自动退回"关窗即退出"，见 `tray::on_window_event`）。
+        .on_window_event(|window, event| {
+            // 只劫持主窗口。将来若加"快速搜索"小窗，它的关闭绝不能被当成最小化。
+            if window.label() == "main" {
+                crate::tray::on_window_event(window.app_handle(), event);
+            }
+        });
+
+    let result = builder
         .plugin(biometric_plugin())
         .manage(AppState::new())
         // D-108（3.4-6）：auto-lock 的 Rust 兜底线程——WebView 后台节流时前端
@@ -76,6 +129,14 @@ pub fn run() {
             // 取不到不是错误（窗口可能稍后才创建）——闸门会自动回落到 UWP 版 API。
             #[cfg(windows)]
             crate::platform::note_main_window(app.handle());
+            load_prefs(app.handle());
+            // 托盘失败不阻断启动：只是没有托盘图标（关窗会退化成"必须用托盘退出"的
+            // 反面——所以同时把 hotkey 也跳过，避免"热键唤不出窗口又没法从托盘恢复"）。
+            #[cfg(desktop)]
+            match crate::tray::install(app.handle()) {
+                Ok(()) => crate::hotkey::install_from_prefs(app.handle()),
+                Err(e) => crate::state::append_log(app.handle(), &e),
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -155,6 +216,11 @@ pub fn run() {
             // settings
             commands::settings_cmd::get_settings,
             commands::settings_cmd::update_settings,
+            // prefs（v1.4.10 系统集成：热键 / 开机自启 / 托盘文案）
+            commands::prefs_cmd::prefs_get,
+            commands::prefs_cmd::prefs_set_hotkey,
+            commands::prefs_cmd::prefs_set_autostart,
+            commands::prefs_cmd::tray_set_labels,
         ])
         .build(tauri::generate_context!());
 
