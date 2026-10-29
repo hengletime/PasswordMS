@@ -57,9 +57,16 @@ zeroize.workspace = true
 # 与 core 同一个 workspace 版本，不引入新的传递依赖。
 sha2.workspace = true
 windows = { version = "0.62", features = [
+    # interop 版 Hello 要显式标注 `IAsyncOperation<UserConsentVerificationResult>` 类型。
+    "Foundation",
     "Win32_Foundation",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
+    # 守门测试用 `RtlGetVersion` 判 build（决定 interop 是否该可用）。
+    "Win32_System_LibraryLoader",
+    # IUserConsentVerifierInterop / RoGetActivationFactory：Windows 11 22000+ 才有，
+    # 用来把 Hello 对话框挂到应用主窗口上（§34）。
+    "Win32_System_WinRT",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Security_Credentials_UI",

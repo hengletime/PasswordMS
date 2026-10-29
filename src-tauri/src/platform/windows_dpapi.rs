@@ -27,14 +27,20 @@ use passwordms_core::biometric::{Availability, SealError, Subtype, VaultSealer};
 use zeroize::{Zeroize, Zeroizing};
 
 use windows::core::{Error as WinError, HSTRING, PCWSTR};
+// `IAsyncOperation` 不在 `windows::Foundation`（0.62 把它移到独立 crate 了），
+// 依赖里已有 `windows-future = "0.3"`，直接用它。
 use windows::Security::Credentials::UI::{
     UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
 };
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
+use windows::Win32::Foundation::{LocalFree, HLOCAL, HWND};
 use windows::Win32::Security::Cryptography::{
     CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+use windows_future::IAsyncOperation;
+// interop 接口由 Win32 侧提供（不是 WinRT 投影），命名空间容易搞错：
+// `Security::Credentials::UI` 里只有 `IUserConsentVerifierStatics`（UWP 那份）。
+use windows::Win32::System::WinRT::{IUserConsentVerifierInterop, RoGetActivationFactory};
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, SW_SHOWNORMAL,
@@ -265,6 +271,14 @@ fn hr_hex(e: &WinError) -> String {
 mod hello {
     use super::*;
 
+    /// WinRT 激活用的类名。
+    ///
+    /// 字面量必须与 Windows SDK 一致（`RuntimeClass_Windows_Security_Credentials_UI_
+    /// UserConsentVerifier`），写错只会表现成「本机没有 interop」→ 静默回落，
+    /// 症状是「明明 Win11 却挂不上主窗口」，没有报错可查。改它之前先跑一次真机。
+    // `pub(super)`：守门测试要拿它去真激活一次，**类名写错只会静默回落**，
+    // 没有别的手段能发现（§34.5）。
+    pub(super) const UCV_CLASS: &str = "Windows.Security.Credentials.UI.UserConsentVerifier";
     /// 等待过程中的失败分类。
     ///
     /// 与 [`SealError`] 分开：这里只描述「等不到结果」，语义映射留给调用方
@@ -289,7 +303,68 @@ mod hello {
     }
 
     /// 请求一次在场校验（会弹系统对话框）。
+    ///
+    /// **优先走 interop（§34）**：`Windows 11 22000+` 提供
+    /// `IUserConsentVerifierInterop::RequestVerificationForWindowAsync`，可以把对话框挂到
+    /// 应用主窗口上（owner window）。UWP 版 `RequestVerificationAsync` 没有 owner 概念，
+    /// 对话框归系统自己安排——多显示器、窗口失焦、最小化等场景下会落到别处，用户可能
+    /// 等满 120 秒才知超时。
+    ///
+    /// 拿不到 interop（Windows 10 / 系统裁剪了 WinRT 组件）就**回落** UWP 版：
+    /// 功能不变，只是没有 owner 窗口。回落是静默的，不提示用户——他改不了这件事，
+    /// 告诉他只会多一个无法处理的告警。
     pub fn request_verification(
+        message: &str,
+        timeout: Duration,
+    ) -> Result<UserConsentVerificationResult, WaitError> {
+        if let Some(hwnd) = crate::platform::main_window_hwnd() {
+            match request_via_interop(hwnd, message, timeout) {
+                Ok(Some(result)) => return Ok(result),
+                // 本机没有 interop 接口 → 悄悄回落，不算错误。
+                Ok(None) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        request_verification_uwp(message, timeout)
+    }
+
+    /// Windows 11 22000+：对话框挂在 `hwnd` 上。
+    ///
+    /// 返回 `Ok(None)` 专指「本机拿不到 interop 接口」，调用方据此回落；其它情况
+    /// （超时 / 平台错误 / 真实结果）原样上抛，**不**与「没有接口」混为一谈——
+    /// 混了就会在弹出对话框前的一瞬间失败时偷偷再弹一次，用户看到两次认证框。
+    fn request_via_interop(
+        hwnd: isize,
+        message: &str,
+        timeout: Duration,
+    ) -> Result<Option<UserConsentVerificationResult>, WaitError> {
+        let message = HSTRING::from(message);
+        run_on_sta(timeout, move |tx| {
+            // 先确认接口在不在。`RoGetActivationFactory` 要求本线程已 CoInitialize，
+            // 而 `run_on_sta` 已经做了，所以这里是「接口不存在」而不是「没初始化」。
+            let class = HSTRING::from(UCV_CLASS);
+            let interop: IUserConsentVerifierInterop =
+                match unsafe { RoGetActivationFactory(&class) } {
+                    Ok(i) => i,
+                    Err(_) => {
+                        let _ = tx.send(Ok(None));
+                        return Ok(());
+                    }
+                };
+            let op: IAsyncOperation<UserConsentVerificationResult> = unsafe {
+                interop.RequestVerificationForWindowAsync(
+                    HWND(hwnd as *mut core::ffi::c_void),
+                    &message,
+                )?
+            };
+            op.when(move |r| {
+                let _ = tx.send(r.map(Some));
+            })
+        })
+    }
+
+    /// Windows 10 回退路径：UWP 版，没有 owner 窗口。
+    fn request_verification_uwp(
         message: &str,
         timeout: Duration,
     ) -> Result<UserConsentVerificationResult, WaitError> {
@@ -570,5 +645,76 @@ mod tests {
             other => panic!("设备占用应为 Unavailable(Busy)，实际 {other:?}"),
         }
         assert!(map_result(UserConsentVerificationResult::Verified).is_ok());
+    }
+
+    /// 本机 build 号（`RtlGetVersion`，不受应用 manifest 影响——`GetVersionEx` 会）。
+    fn os_build() -> u32 {
+        #[repr(C)]
+        struct OsVer {
+            size: u32,
+            major: u32,
+            minor: u32,
+            build: u32,
+            platform: u32,
+            csd: [u16; 128],
+        }
+        unsafe {
+            let Ok(ntdll) = windows::Win32::System::LibraryLoader::GetModuleHandleW(
+                windows::core::w!("ntdll.dll"),
+            ) else {
+                return 0;
+            };
+            let Some(fp) = windows::Win32::System::LibraryLoader::GetProcAddress(
+                ntdll,
+                windows::core::s!("RtlGetVersion"),
+            ) else {
+                return 0;
+            };
+            let f: unsafe extern "system" fn(*mut OsVer) -> i32 = std::mem::transmute(fp);
+            let mut v = OsVer {
+                size: std::mem::size_of::<OsVer>() as u32,
+                major: 0,
+                minor: 0,
+                build: 0,
+                platform: 0,
+                csd: [0; 128],
+            };
+            if f(&mut v) == 0 {
+                v.build
+            } else {
+                0
+            }
+        }
+    }
+
+    /// **类名常量必须真能激活**。
+    ///
+    /// 为什么值得单独一条：`UCV_CLASS` 拼错时，生产代码的表现是「拿不到 interop →
+    /// 静默回落 UWP 版」——功能照常可用，只是永远挂不上主窗口，**没有任何报错**。
+    /// 这类缺陷靠真机走查也看不出来（对话框还是会出现），只有断言才能钉住。
+    ///
+    /// Windows 10（build < 22000）本机就没有这个接口，此时跳过：跳过是**正确**信号，
+    /// 不是掩盖——那条路上生产代码本来就走 UWP 回落分支。
+    #[test]
+    fn interop_class_name_can_be_activated() {
+        let build = os_build();
+        if build < 22000 {
+            eprintln!("skip: build {build} < 22000，本机无 IUserConsentVerifierInterop");
+            return;
+        }
+        let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        let class = HSTRING::from(hello::UCV_CLASS);
+        let got = unsafe { RoGetActivationFactory::<IUserConsentVerifierInterop>(&class) };
+        // 顺序要紧：**先**把 COM 对象的结论取出来并释放，**再** CoUninitialize。
+        // 反过来会崩（实测 0xC0000005）：反初始化之后再 drop 接口指针，
+        // 内部 Release 走的是已经拆掉的信道。
+        let detail = got.as_ref().err().map(|e| (e.code().0, e.message()));
+        drop(got);
+        if hr.is_ok() {
+            unsafe { CoUninitialize() };
+        }
+        if let Some((code, msg)) = detail {
+            panic!("build {build} 上拿不到 interop（0x{code:08X} {msg}）——类名常量可能写错了");
+        }
     }
 }

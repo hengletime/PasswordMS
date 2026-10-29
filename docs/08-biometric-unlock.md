@@ -1870,3 +1870,105 @@ Hello 弹框无法脚本驱动，这一段必须人工。执行顺序与结果�
    但用户无法自查保护等级。属于 UI 决策，未扩围。
 4. **`tpm_ready()` 每次现查**：跟随「可用性不得缓存」的既有纪律。`NCryptOpenStorageProvider`
    只加载 provider、不发 TPM 命令，开销可忽略；若将来发现唤醒功耗问题再议缓存策略。
+
+## 34. Hello 对话框挂到主窗口：改用 interop 版 API（1.4.9，2026-10-29）
+
+> 来源：§33 收尾时登记的 P1 项。当时描述为「迁到 `IUserConsentVerifierInterop`，
+> 可删自建 `run_on_sta` + `PeekMessage` 约 60 行」。**这个描述是错的**，
+> 本文第 2 节说明错在哪、为什么错。
+
+### 34.1 改的是「用错 API」，不是「优化」
+
+一直用的是 `UserConsentVerifier::RequestVerificationAsync`。查微软文档时看到一句明确的
+话（`UserConsentVerifier` 类页面，Desktop apps 一节）：
+
+> **This API is for Universal Windows Platform (UWP) apps.**
+> The alternative API to use for a desktop app is described in Examples.
+
+也就是说，一个 Win32 桌面应用调用 UWP 版是**不在官方支持面上的**。它能用（主人真机
+验过 Hello 解锁），是系统做了兼容，但语义上没有 owner 概念：
+
+| | UWP 版 `RequestVerificationAsync` | interop 版 `RequestVerificationForWindowAsync` |
+|---|---|---|
+| owner 窗口 | 无。对话框归系统自己安排 | **显式指定 HWND** |
+| 多显示器 | 可能出现在非应用所在的屏幕 | 跟着 owner 走 |
+| 窗口最小化 / 失焦 | 对话框可能不可见，用户只能等超时 | 挂 owner，行为确定 |
+| 最低系统 | Windows 10 | **Windows 11 Build 22000** |
+
+### 34.2 实测：为什么 60 行删不掉（推翻原判断）
+
+写了独立探针（`target/probe-ucv/`，无 UI、不弹框）拿到四条硬事实：
+
+| # | 测点 | 结果 |
+|---|---|---|
+| 1 | 本机 build | **26300**（满足 22000 门槛） |
+| 2 | 未 `CoInitialize` 时 `RoGetActivationFactory` | 失败 `0x800401F0`（尚未调用 CoInitialize） |
+| 3 | `CoInitializeEx(STA)` 之后拿 `IUserConsentVerifierInterop` | **成功**，IID `39E050C3-4E74-441A-8DC0-B81104DF949C` |
+| 4 | `CheckAvailabilityAsync().GetResults()` 同步等待 | 失败 **`0x8000000E`**（E_ILLEGAL_METHOD_CALL，在意外的时间调用了方法） |
+
+第 4 条是关键：`IAsyncOperation::GetResults()` 在**没有消息泵**的 STA 线程上不被允许同步
+阻塞。这正是现有 `pump()`（`PeekMessage` 循环）存在的理由——它不是"顺手写的防御"，
+是 WinRT 的硬要求。
+
+**所以：**
+
+- `run_on_sta`（`CoInitializeEx` + 线程隔离）**必须留**，事实 2 证明没有它连接口都拿不到；
+- `pump`（`PeekMessage` 抽送）**必须留**，事实 4 证明不能改成 `GetResults()` 同步等；
+- 改造的真实范围只有一行 API 替换 + 一个 HWND 参数。
+
+原判断「可删约 60 行」是把「WinRT 异步调用」误当成「普通阻塞调用」得出的，属于没验证就
+下结论。**登记在此以免将来又有人照着那句去删代码。**
+
+### 34.3 设计
+
+```
+HelloGate::request()
+  └── hello::request_verification(message, 120s)
+        ├── main_window_hwnd() ── Some(hwnd) ─→ request_via_interop(hwnd, ...)
+        │                                          ├─ Ok(Some(r)) → 用 r
+        │                                          ├─ Ok(None)    → 本机无 interop，往下
+        │                                          └─ Err(e)      → 真错误，上抛
+        └── request_verification_uwp(...)   ← 回退路径（Win10 / 无窗口）
+```
+
+| 决定 | 内容 | 理由 |
+|---|---|---|
+| HWND 存哪 | `platform::main_hwnd` 静态 `AtomicIsize`，启动时 `note_main_window()` 写一次 | 闸门从命令线程调进来，那条路径上没有 `AppHandle`。存 `isize` 而不是 `HWND`：`HWND` 含裸指针，不是 `Send + Sync`，塞静态量要绕过类型系统 |
+| 有效性 | 每次现查 `IsWindow`（`hwnd_if_valid`），不缓存判断 | 窗口销毁后必须立刻不给值，否则对话框会挂到不存在的 owner 上 |
+| 回落触发条件 | **只有**「拿不到 interop 接口」 | 调用失败、超时、用户取消都原样上抛。混在一起会在"弹框前一瞬间失败"时偷偷再弹一次，用户看到两个认证框 |
+| 回落是否告知用户 | 否 | 他改不了这件事（Win10 就是没有），提示只会多一个无法处理的告警 |
+| 可用性查询 | **仍走 UWP 版** | interop 只提供 `RequestVerificationForWindowAsync`，没有窗口版 `CheckAvailabilityAsync` |
+
+### 34.4 失效面
+
+| 场景 | 行为 |
+|---|---|
+| Windows 10（build < 22000） | `RoGetActivationFactory` 失败 → `Ok(None)` → 回落 UWP 版。README 承诺的 Win10 支持不受影响 |
+| 系统裁剪了 WinRT | 同上，静默回落 |
+| setup 阶段窗口还没建好 | `note_main_window` 记一条日志（`passwordms.log`）后放弃，全程 UWP 版 |
+| 窗口销毁重建（当前不会发生，单窗口） | `IsWindow` 返回 false → 回落；窗口重建后不会自动重新登记（需重启）—— 已登记为限制 |
+| Windows 11 但 interop 调用本身失败 | 上抛 `SealError::Platform`，**不**重复弹框 |
+
+### 34.5 守门
+
+| 测试 | 钉住什么 |
+|---|---|
+| `interop_class_name_can_be_activated` | `UCV_CLASS` 常量能真激活。类名写错时生产代码只会**静默回落**，功能照常、无任何报错，真机走查也看不出来（框还是会弹），只有断言能发现。build < 22000 时跳过 |
+| `zero_hwnd_is_none` / `bogus_hwnd_is_rejected` / `real_window_is_accepted` | `hwnd_if_valid` 三个方向：0、无效值、有效句柄 |
+| `unregistered_means_none` | 未登记时 `main_window_hwnd()` 为 `None`（同时兼作「无测试污染全局状态」的哨兵） |
+
+**变异验证**：把 `UCV_CLASS` 末尾加一个字符 → `interop_class_name_can_be_activated` 红，
+恢复后绿。另把 `hwnd_if_valid` 里的 `if raw == 0 { return None }` 删掉 → 四例仍绿，
+证明那行冗余（`IsWindow(0)` 本来就 FALSE），已删除，不留无用分支。
+
+**踩坑（自己写出来的）**：守卫测试第一版先 `CoUninitialize()` 再 `drop` COM 对象，进程崩
+`0xC0000005`。原因是接口指针析构时内部还要 `Release`，而公寓已经拆了。顺序必须是
+「取出结论 → drop → CoUninitialize」。
+
+### 34.6 没做的事
+
+1. **不把 owner 换成子窗口 / 当前焦点窗口**：只在主窗口上。用户可能开着多个弹层，但那属于
+   UI 细节，改它要动前端事件流。
+2. **不删 `run_on_sta` / `pump`**：见 34.2，删了功能直接坏。
+3. **窗口重建后不重新登记 HWND**：当前单窗口、不重建，没有触发条件；将来若支持多窗口必须补
+   （`WindowEvent` 里重新登记）。

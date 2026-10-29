@@ -2594,3 +2594,20 @@ platform_sealer() ── WinSealer::new()
 2. **升级不搬移**。老封印保持 DPAPI 不动，用户下次「重新开启」才迁到 TPM——迁移动作永远由用户的一次显式操作触发，后台不偷偷重写密钥文件。
 
 威胁模型、实测数据、PKCS#1 取舍、回滚行为见 `docs/08-biometric-unlock.md` §33。
+
+### 3.14.28 Hello 闸门改用 interop 版 API（1.4.9，2026-10-29）
+
+`platform/windows_dpapi.rs` 的闸门实现有一处调用变更，架构含义只有一条：**桌面应用不再调用 UWP 专属 API**。
+
+| 项 | 改前 | 改后 |
+|---|---|---|
+| 调用 | `UserConsentVerifier::RequestVerificationAsync` | `IUserConsentVerifierInterop::RequestVerificationForWindowAsync(hwnd, msg)` |
+| owner 窗口 | 无 | 主窗口 HWND |
+| 线程模型 | `run_on_sta`（STA + `CoInitializeEx`）+ `pump`（`PeekMessage`） | **不变**（§34.2 实测证明必需） |
+| 回退 | — | Win10 / 无窗口 → 原 UWP 版 |
+
+新增一个进程级寄存器 `platform::main_hwnd`（`AtomicIsize`，启动时由 `note_main_window()` 写一次），因为闸门从命令线程进入，那条路径上没有 `AppHandle`。句柄每次现查 `IsWindow`，不缓存有效性判断。
+
+可用性查询（`CheckAvailabilityAsync`）仍走 UWP 版：interop 只提供窗口版请求方法，没有窗口版可用性查询。
+
+为什么不能借这次改动删掉 `run_on_sta` / `pump`：见 `docs/08-biometric-unlock.md` §34.2 的四条实测（尤其 `GetResults()` 在无消息泵的 STA 上返回 `E_ILLEGAL_METHOD_CALL`）。

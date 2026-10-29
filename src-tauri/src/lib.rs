@@ -72,6 +72,10 @@ pub fn run() {
         // 定时器停摆，闲置锁定由后端按 last_activity_ms 仲裁。
         .setup(|app| {
             crate::state::spawn_auto_lock_worker(app.handle().clone());
+            // §34：Hello 对话框要挂到主窗口上，先把 HWND 记下来。
+            // 取不到不是错误（窗口可能稍后才创建）——闸门会自动回落到 UWP 版 API。
+            #[cfg(windows)]
+            crate::platform::note_main_window(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

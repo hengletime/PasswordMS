@@ -157,3 +157,117 @@ pub fn open_biometric_settings(_app: &tauri::AppHandle) -> bool {
 pub fn open_biometric_settings(_app: &tauri::AppHandle) -> bool {
     false
 }
+
+// ── 主窗口句柄（仅 Windows，供 Hello 对话框指定 owner window）──────────────
+//
+// 为什么要存：`IUserConsentVerifierInterop::RequestVerificationForWindowAsync` 要求传
+// owner HWND，而 Hello 闸门是从命令线程调进去的，那条路径上没有 `AppHandle`。
+//
+// 为什么用**启动时写一次的原子值**而不是 `OnceLock<HWND>`：HWND 是 `*mut c_void`，
+// 不是 `Send + Sync`，塞进静态量要绕过类型系统。存 `isize` 等价且不需要 unsafe 断言。
+//
+// 失效处理：窗口若被销毁重建（当前版本不会发生——单窗口、不重建），值会过期，
+// 由调用侧 `IsWindow` 把关后回落老 API，不抛错（§34.4）。
+#[cfg(windows)]
+mod main_hwnd {
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    /// 0 = 尚未登记。
+    static RAW: AtomicIsize = AtomicIsize::new(0);
+
+    pub fn set(hwnd: isize) {
+        RAW.store(hwnd, Ordering::Release);
+    }
+
+    pub fn get() -> Option<isize> {
+        match RAW.load(Ordering::Acquire) {
+            0 => None,
+            v => Some(v),
+        }
+    }
+}
+
+/// 登记主窗口句柄（`lib.rs` 启动时调一次）。
+///
+/// 取不到窗口不算错误：Linux/macOS 没有这条路径，Windows 上极端情况下（窗口延迟创建）
+/// 也只是继续用 UWP 版 API，功能不变。
+#[cfg(windows)]
+pub fn note_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let win = app
+        .get_webview_window("main")
+        .or_else(|| app.webview_windows().into_values().next());
+    let Some(w) = win else {
+        // 拿不到窗口不致命（闸门会回落 UWP 版），但**必须留痕**：
+        // 否则「Win11 明明该挂主窗口却静默走了老路」这种回退没人能发现。
+        crate::state::append_log(app, "bio: setup 阶段拿不到主窗口，Hello 将回落 UWP 版");
+        return;
+    };
+    match w.hwnd() {
+        Ok(h) => {
+            let raw = h.0 as isize;
+            main_hwnd::set(raw);
+            crate::state::append_log(app, &format!("bio: 主窗口句柄已登记 hwnd={raw}"));
+        }
+        Err(e) => crate::state::append_log(
+            app,
+            &format!("bio: 取主窗口句柄失败（{e}），Hello 将回落 UWP 版"),
+        ),
+    }
+}
+
+/// 句柄有效性校验（抽出成独立函数，**为了可测**）。
+///
+/// 失效句柄一律 `None`：`RequestVerificationForWindowAsync` 拿到无效 owner 会
+/// 直接失败，而失败发生在「用户已经点了按钮」之后——那时再回落已经晚了，
+/// 用户看到的是错误而不是认证框。所以在**进入闸门之前**就把无效句柄挡掉。
+///
+/// 不额外判 `raw == 0`：`IsWindow(0)` 本身就返回 FALSE（已用变异验证确认——
+/// 把那行判断删掉，`zero_hwnd_is_none` 依然绿），多写一层只是噪声。
+#[cfg(windows)]
+pub(crate) fn hwnd_if_valid(raw: isize) -> Option<isize> {
+    let hwnd = windows::Win32::Foundation::HWND(raw as *mut core::ffi::c_void);
+    unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindow(Some(hwnd)).as_bool() }
+        .then_some(raw)
+}
+
+/// 当前登记的主窗口句柄（未登记 / 已失效 → `None`）。
+///
+/// 每次现查 `IsWindow`，不缓存「有效」判断：窗口销毁后这里必须立刻不给值，
+/// 否则 Hello 对话框会挂到一个不存在的 owner 上。
+#[cfg(windows)]
+pub(crate) fn main_window_hwnd() -> Option<isize> {
+    main_hwnd::get().and_then(hwnd_if_valid)
+}
+
+#[cfg(all(test, windows))]
+mod hwnd_tests {
+    use super::*;
+
+    #[test]
+    fn zero_hwnd_is_none() {
+        assert_eq!(hwnd_if_valid(0), None, "0 不是句柄");
+    }
+
+    #[test]
+    fn bogus_hwnd_is_rejected() {
+        // 0x1234 不可能是本进程的窗口；IsWindow 必须否掉。
+        assert_eq!(hwnd_if_valid(0x1234), None);
+    }
+
+    #[test]
+    fn real_window_is_accepted() {
+        // 桌面窗口恒存在，是「有效句柄」的稳定样本。
+        let d = unsafe { windows::Win32::UI::WindowsAndMessaging::GetDesktopWindow() };
+        let raw = d.0 as isize;
+        assert_ne!(raw, 0);
+        assert_eq!(hwnd_if_valid(raw), Some(raw), "有效句柄必须放行");
+    }
+
+    #[test]
+    fn unregistered_means_none() {
+        // 测试进程不会调 setup，所以寄存器应为空。
+        // 若这里失败，说明有测试污染了全局状态 → 必须修，不是放宽断言。
+        assert_eq!(main_window_hwnd(), None);
+    }
+}
