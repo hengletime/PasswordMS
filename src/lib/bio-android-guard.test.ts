@@ -259,7 +259,7 @@ describe('§23 前端按平台取词，不再把 Windows 名词搬给安卓', ()
   });
 
   it('Android 那句风险说明讲的是「新增指纹即失效」，不是 Windows 的凭据绕过', () => {
-    expect(zh).toContain('新增或删除指纹 / 人脸记录后，已保存的密钥会永久失效');
+    expect(zh).toContain('新增或删除指纹等生物识别记录后，已保存的密钥会永久失效');
     // 反向：Android 文案里不许再出现 Windows 专属名词。
     const androidRisk = zh.slice(zh.indexOf('bio_risk_android'));
     expect(androidRisk.slice(0, 200)).not.toContain('Windows Hello');
@@ -696,5 +696,74 @@ describe('D-125 便捷级（weak-only）单列', () => {
   it('weak_only 也算「该去配一下」（Android 无按钮，走文案引导）', () => {
     expect(bioShouldOfferSettings('weak_only')).toBe(true);
     expect(bioShouldOfferSettings('available')).toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D-126：Android 文案一律不提「人脸」——绝大多数手机是 2D 人脸，提了就是自找解释
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FACE_WORDS = ['人脸', '人臉', '臉部', 'ใบหน้า'];
+
+/** 把某个 key 后面的第一个字符串字面量取出来（多行值也能取到）。 */
+function valueOf(src: string, key: string): string {
+  const at = src.indexOf(key + ':');
+  if (at < 0) return '';
+  const m = src.slice(at + key.length + 1).match(/'((?:[^'\\]|\\.)*)'/);
+  return m ? m[1] : '';
+}
+
+/** 文件里所有字符串字面量（注释里的字不算——注释是给开发看的，允许保留技术说明）。 */
+function literalsOf(src: string): string[] {
+  const out: string[] = [];
+  const re = /'((?:[^'\\]|\\.)*)'/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) out.push(m[1]);
+  return out;
+}
+
+describe('D-126 Android 文案不提「人脸」', () => {
+  it('四语言字典的每一条可见字符串都不含人脸字样', () => {
+    for (const [name, src] of [
+      ['zh-CN', zh],
+      ['zh-TW', zhTw],
+      ['th', th],
+    ] as const) {
+      const hits = literalsOf(src).filter((s) => FACE_WORDS.some((w) => s.includes(w)));
+      expect(hits, `${name} 仍有：${hits.slice(0, 2).join(' | ')}`).toHaveLength(0);
+    }
+    // 英文要按词边界判，否则 interface / surface 会误报。
+    const enHits = literalsOf(en).filter((s) => /(^|[^A-Za-z])face([^A-Za-z]|$)/i.test(s));
+    expect(enHits, `en-US 仍有：${enHits.slice(0, 2).join(' | ')}`).toHaveLength(0);
+  });
+
+  it('Android 的名词与标题只讲指纹', () => {
+    expect(valueOf(zh, 'bio_noun_android')).toBe('指纹');
+    expect(valueOf(zhTw, 'bio_noun_android')).toBe('指紋');
+    expect(valueOf(zh, 'bio_title_android')).toBe('指纹快速解锁');
+    expect(valueOf(en, 'bio_title_android')).toBe('Fingerprint quick unlock');
+    expect(valueOf(th, 'bio_title_android')).toContain('ลายนิ้วมือ');
+    expect(valueOf(zh, 'biometric_unlock_android')).toBe('用指纹解锁');
+  });
+
+  it('便捷级那条仍然给出唯一可行的下一步（改用指纹）', () => {
+    for (const [name, src, hint] of [
+      ['zh-CN', zh, '指纹'],
+      ['zh-TW', zhTw, '指紋'],
+      ['en-US', en, 'fingerprint'],
+      ['th', th, 'ลายนิ้วมือ'],
+    ] as const) {
+      const v = valueOf(src, 'bio_avail_weak_only');
+      expect(v.toLowerCase(), `${name} 的 weak_only 不再指向指纹`).toContain(hint.toLowerCase());
+    }
+  });
+
+  it('引导文案不许再承诺「自动检测」（主人真机验过：不灵，D-124 未收敛）', () => {
+    // 中文 / 英文 / 泰语三种「自动」写法；宁可文案朴素，也不许写一句做不到的承诺。
+    for (const [name, src] of [['zh-CN', zh], ['zh-TW', zhTw], ['en-US', en], ['th', th]] as const) {
+      const v = valueOf(src, 'bio_manage_hint_android');
+      expect(v, `${name} 又写回了自动检测`).not.toMatch(/自动|自動|automatic|อัตโนมัติ/i);
+      expect(v.length, `${name} 引导文案为空`).toBeGreaterThan(10);
+    }
   });
 });

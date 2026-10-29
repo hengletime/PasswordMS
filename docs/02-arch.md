@@ -2552,6 +2552,15 @@ app.run(|app_handle, event| match event {
 | Rust `biometric_cmd::availability_name` | `WeakOnly` → `"weak_only"` |
 | 前端 | `bioShouldOfferSettings()` 纳入 `weak_only`（该去补一枚指纹）；文案 `settings.bio_avail_weak_only` 四语言 |
 
-**文案**（zh-CN）：`本机只录入了「便捷级」生物识别（多半是 2D 人脸）：它能解开手机屏幕锁，但 Android 不允许这类凭据保护加密密钥，所以本功能用不了。请改用指纹。`
+**文案**（zh-CN，D-126 起的版本）：`本机只录入了「便捷级」生物识别：它能解开手机屏幕锁，但 Android 不允许用它保护加密密钥，所以本功能用不了。请先在系统设置里录入一枚指纹。`
 
 守门：Kotlin 里 `BIOMETRIC_WEAK` 必须在 `BIOMETRIC_STRONG` **之后**且上下文含 `NONE_ENROLLED`、全文件只出现一次（不许泄进 seal / unlock）；`AUTH_BIOMETRIC_STRONG` 与 `setAllowedAuthenticators(…STRONG)` 必须仍在；wire 与 core 枚举两端补齐；四语言键齐全且**禁「尚未设置 / not set up」**。Rust 单测 `weak_only_is_never_folded_into_not_configured`。
+
+### 3.14.26 D-126：Android 文案去「人脸」+ 便捷级不可用于绑密钥的实证（2026-10-29）
+
+主人拍板：绝大多数手机是 2D 便捷级人脸、本功能用不了，**文案不提「人脸」**，免得被当 bug 反复解释。
+
+- 四语言字典：`bio_noun_android` / `bio_title_android` / `biometric_unlock_android` / `biometric_waiting_android` / `bio_desc_android` / `bio_risk_android` / `bio_degraded_hint_android` / `bio_manage_hint_android` / `bio_avail_weak_only` / `bio_state_stale_enrollment_android` / `bio_invalidated_enrollment_android` / `biometric_canceled_android` / `password_changed_bio_off_android` 全面去字（英文按词边界替换，`fingerprint / face` → `fingerprint`）。
+- 「记录已变更」统一改说**生物识别记录**（准确性：任何生物特征变化都会废掉密钥）。
+- **平台限制实证**：本地核查 `android.jar`（api 35/36/37）的 `android.security.keystore.KeyProperties`，`AUTH_BIOMETRIC_STRONG` 存在、**`AUTH_BIOMETRIC_WEAK` 三个版本都不存在** ⇒ Keystore 从未提供「便捷级生物识别绑密钥」的取值。放宽只能走时长型认证（`validityDuration`，安全等级下降）或纯界面锁（不可信），主人裁定维持 A 案。
+- 守门：`bio-android-guard.test.ts` 新增 `d126` 四例（字面量零命中 / 取值逐字 / weak_only 仍给出「录入指纹」这一步 / `bio_manage_hint_android` 禁自动承诺），变异验证三条全红。

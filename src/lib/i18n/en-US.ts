@@ -61,8 +61,8 @@ export const enUS: Messages = {
     biometric_unlock: 'Unlock with Windows Hello',
     biometric_waiting: 'Waiting for Windows Hello…',
     // §23: the lock-screen button also takes its wording from the platform.
-    biometric_unlock_android: 'Unlock with fingerprint / face',
-    biometric_waiting_android: 'Waiting for fingerprint / face…',
+    biometric_unlock_android: 'Unlock with fingerprint',
+    biometric_waiting_android: 'Waiting for fingerprint…',
   },
   create: {
     title: 'Create vault',
@@ -333,33 +333,33 @@ export const enUS: Messages = {
     // Android has a different noun and a genuinely different threat model: there is no
     // "bypass with account credentials" here, the real constraint is that enrolling a new
     // fingerprint permanently invalidates the key.
-    bio_title_android: 'Fingerprint / face quick unlock',
+    bio_title_android: 'Fingerprint quick unlock',
     bio_desc_android:
-      'Use your phone’s fingerprint or face instead of typing the master password every time. The key is held by the system’s secure hardware, works only on this device, and never enters backups or sync.',
+      'Use your phone’s fingerprint instead of typing the master password every time. The key is held by the system’s secure hardware, works only on this device, and never enters backups or sync.',
     bio_risk_android:
-      'Note: adding or removing a fingerprint / face record permanently invalidates the stored key, and you will have to enable this again. That is the system’s security design — it guards against someone quietly enrolling an extra fingerprint.',
+      'Note: adding or removing a fingerprint or other biometric record permanently invalidates the stored key, and you will have to enable this again. That is the system’s security design — it guards against someone quietly enrolling an extra fingerprint.',
     bio_state_on: 'Enabled ({date})',
     bio_state_on_unavailable: 'Enabled, but currently unavailable ({date})',
     bio_degraded_hint: 'While Windows Hello is off or not set up, quick unlock cannot be used at all. It comes back automatically once Hello is available again — the saved configuration is not deleted and you do not need to re-enter your master password. To revoke it for good, choose Turn off.',
     bio_degraded_hint_android:
-      'While fingerprint / face is unavailable (for example after removing every fingerprint), quick unlock cannot be used at all. It comes back automatically once you enroll again — the saved configuration is not deleted and you do not need to re-enter your master password. To revoke it for good, choose Turn off.',
+      'While fingerprint is unavailable (for example after removing every fingerprint), quick unlock cannot be used at all. It comes back automatically once you enroll again — the saved configuration is not deleted and you do not need to re-enter your master password. To revoke it for good, choose Turn off.',
     bio_state_off: 'Off',
     bio_state_corrupt: 'Configuration is damaged. Turn it off, then enable it again.',
     bio_state_stale_password: 'The master password changed, so quick unlock no longer works.',
     bio_state_stale_vault_key: 'The vault key was replaced (joined by pairing), so quick unlock no longer works.',
     bio_state_stale_enrollment: 'Windows Hello settings changed, so quick unlock no longer works.',
-    bio_state_stale_enrollment_android: 'The device’s fingerprint / face records changed, so quick unlock no longer works.',
+    bio_state_stale_enrollment_android: 'The device’s biometric records changed, so quick unlock no longer works.',
     bio_state_stale_tampered: 'The quick-unlock configuration was tampered with or damaged and no longer works.',
     // D-114: `not_present` no longer claims "no hardware". When Windows Hello was never
     // provisioned, WinRT reports `DeviceNotPresent` — which is exactly what misled the user.
     bio_avail_not_configured: '{noun} is not set up on this device yet.',
-    // D-125：only a convenience-class (Class 2) biometric is enrolled — usually 2D face.
-    bio_avail_weak_only: 'This device only has a convenience-class biometric (usually 2D face): it can unlock the phone screen, but Android does not allow it to protect encryption keys, so quick unlock is unavailable. Enroll a fingerprint instead.',
+    // D-125/D-126：only a convenience-class (Class 2) biometric is enrolled. Since D-126 the
+    bio_avail_weak_only: 'This device only has a convenience-class biometric: it can unlock the phone screen, but Android does not allow it to protect encryption keys, so quick unlock is unavailable. Enroll a fingerprint instead.',
     bio_avail_not_present: 'No usable {noun} was detected (usually it is simply not set up — not necessarily missing hardware).',
     bio_avail_hint: 'Open Settings → Accounts → Sign-in options, set up Windows Hello (PIN or fingerprint), then switch back to this window — it re-checks automatically.',
     bio_open_settings: 'Open Windows sign-in options',
     bio_manage_hint_android:
-      'To enroll, add or remove fingerprints or faces, open your phone Settings and go to the biometrics / fingerprint / face page.',
+      'To enroll, add or remove fingerprints, open your phone Settings and go to the biometrics / fingerprint page.',
     bio_avail_disabled_by_policy: '{noun} is disabled by system policy.',
     bio_avail_busy: '{noun} is busy right now. Try again shortly.',
     bio_avail_unsupported: '{noun} cannot be invoked on this system, so quick unlock is unavailable for now.',
@@ -379,7 +379,7 @@ export const enUS: Messages = {
     password_changed: 'Master password changed. Use the new one the next time you unlock.',
     password_changed_bio_off: 'Master password changed. Quick unlock has been turned off as a result — turn it back on to keep unlocking with Windows Hello.',
     password_changed_bio_off_android:
-      'Master password changed. Quick unlock has been turned off as a result — turn it back on to keep unlocking with fingerprint / face.',
+      'Master password changed. Quick unlock has been turned off as a result — turn it back on to keep unlocking with your fingerprint.',
     change_password_old: 'Current master password',
     change_password_new: 'New master password',
     export_vault: 'Export vault',
@@ -571,7 +571,7 @@ export const enUS: Messages = {
     bio_invalidated_password: 'The master password changed, so quick unlock no longer works. Please enable it again.',
     bio_invalidated_vault_key: 'The vault key was replaced (joined by pairing), so quick unlock no longer works. Please enable it again.',
     bio_invalidated_enrollment: 'Windows Hello settings changed, so quick unlock no longer works. Please enable it again.',
-    bio_invalidated_enrollment_android: 'The device’s fingerprint / face records changed, so quick unlock no longer works. Please enable it again.',
+    bio_invalidated_enrollment_android: 'The device’s biometric records changed, so quick unlock no longer works. Please enable it again.',
     bio_invalidated_tampered: 'The quick-unlock configuration was tampered with or damaged. Please enable it again.',
     io: 'File read/write error.',
     network_timeout: 'Network timeout: make sure both devices are on the same LAN and the peer is still on the pairing screen, then retry.',

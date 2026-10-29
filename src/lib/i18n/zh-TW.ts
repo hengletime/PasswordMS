@@ -58,8 +58,8 @@ export const zhTW = {
     biometric_unlock: '使用 Windows Hello 解鎖',
     biometric_waiting: '等待 Windows Hello…',
     // §23：鎖屏按鈕同樣依平台取詞。
-    biometric_unlock_android: '用指紋 / 臉部解鎖',
-    biometric_waiting_android: '等待指紋 / 臉部驗證…',
+    biometric_unlock_android: '用指紋解鎖',
+    biometric_waiting_android: '等待指紋驗證…',
   },
   create: {
     title: '建立保險庫',
@@ -300,37 +300,37 @@ export const zhTW = {
     group_biometric: '快速解鎖',
     // §23：平台名詞用 `{noun}` 插值，避免「Windows Hello」漏到手機上（D-116 同類缺陷）。
     bio_noun: 'Windows Hello',
-    bio_noun_android: '指紋 / 臉部',
+    bio_noun_android: '指紋',
     bio_title: 'Windows Hello 快速解鎖',
     bio_desc: '用 Windows Hello 取代每次輸入主密碼。金鑰只在本機、本 Windows 帳戶下可用，不進入備份與同步。',
     bio_risk: '注意：能取得本機 Windows 登入認證的人可以繞過 Windows Hello。本功能的安全上限取決於該帳戶的鎖屏強度。',
-    bio_title_android: '指紋 / 臉部快速解鎖',
+    bio_title_android: '指紋快速解鎖',
     bio_desc_android:
-      '用手機內建的指紋或臉部取代每次輸入主密碼。金鑰由系統安全晶片保管，只在本機可用，不進入備份與同步。',
+      '用手機內建的指紋取代每次輸入主密碼。金鑰由系統安全晶片保管，只在本機可用，不進入備份與同步。',
     bio_risk_android:
-      '注意：新增或刪除指紋 / 臉部記錄後，已儲存的金鑰會永久失效，需要重新開啟。這是系統的安全設計——防的正是「有人趁你不注意加一枚指紋」。',
+      '注意：新增或刪除指紋等生物辨識記錄後，已儲存的金鑰會永久失效，需要重新開啟。這是系統的安全設計——防的正是「有人趁你不注意加一枚指紋」。',
     bio_state_on: '已開啟（{date}）',
     bio_state_on_unavailable: '已開啟，但目前無法使用（{date}）',
     bio_degraded_hint: 'Windows Hello 關閉或未開通期間，快速解鎖一次也用不了。重新開通後會自動恢復——已儲存的設定不會被刪除，也不需要重輸主密碼；要徹底撤銷請點「關閉」。',
     bio_degraded_hint_android:
-      '指紋 / 臉部無法使用期間（例如把所有指紋都刪了），快速解鎖一次也用不了。重新錄入後會自動恢復——已儲存的設定不會被刪除，也不需要重輸主密碼；要徹底撤銷請點「關閉」。',
+      '指紋無法使用期間（例如把所有指紋都刪了），快速解鎖一次也用不了。重新錄入後會自動恢復——已儲存的設定不會被刪除，也不需要重輸主密碼；要徹底撤銷請點「關閉」。',
     bio_state_off: '未開啟',
     bio_state_corrupt: '設定已損毀，請關閉後重新開啟。',
     bio_state_stale_password: '主密碼已修改，快速解鎖已失效。',
     bio_state_stale_vault_key: '保險庫金鑰已更換（配對加入），快速解鎖已失效。',
     bio_state_stale_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效。',
-    bio_state_stale_enrollment_android: '裝置的指紋 / 臉部記錄已變更，快速解鎖已失效。',
+    bio_state_stale_enrollment_android: '裝置的生物辨識記錄已變更，快速解鎖已失效。',
     bio_state_stale_tampered: '快速解鎖設定遭竄改或損毀，已失效。',
     // D-114：`not_present` 不再替系統斷言「你沒有硬體」——Hello 從未設定時 WinRT 回報的
     // 正是 `DeviceNotPresent`。改成只陳述「偵測不到」＋給下一步。
     bio_avail_not_configured: '本機尚未設定 {noun}。',
-    // D-125：只錄了便捷級（Class 2，多半是 2D 人臉），不能說「尚未設定」。
-    bio_avail_weak_only: '本機只錄入了「便捷級」生物辨識（多半是 2D 人臉）：它能解開手機螢幕鎖，但 Android 不允許這類憑證保護加密金鑰，所以本功能用不了。請改用指紋。',
+    // D-125/D-126：只錄了便捷級（Class 2），不能說「尚未設定」；Android 文案不提「人臉」。
+    bio_avail_weak_only: '本機只錄入了「便捷級」生物辨識：它能解開手機螢幕鎖，但 Android 不允許用它保護加密金鑰，所以本功能用不了。請先在系統設定裡錄入一枚指紋。',
     bio_avail_not_present: '未偵測到可用的 {noun}（多半是尚未設定，不一定缺少硬體）。',
     bio_avail_hint: '請到「設定 → 帳戶 → 登入選項」開通 Windows Hello（PIN 或指紋），完成後切回本視窗會自動重新偵測。',
     bio_open_settings: '開啟 Windows 登入選項',
     bio_manage_hint_android:
-      '需要錄入、增刪指紋或臉部時，請到手機的「設定」裡開啟生物辨識 / 指紋 / 臉部頁面操作。',
+      '需要錄入、增刪指紋時，請到手機的「設定」裡開啟生物辨識 / 指紋頁面操作。',
     bio_avail_disabled_by_policy: '{noun} 已被系統策略停用。',
     bio_avail_busy: '{noun} 暫時被佔用，請稍後再試。',
     bio_avail_unsupported: '{noun} 元件在目前系統上無法呼叫，暫時無法使用快速解鎖。',
@@ -350,7 +350,7 @@ export const zhTW = {
     password_changed: '主密碼已修改，下次解鎖請使用新密碼。',
     password_changed_bio_off: '主密碼已修改。快速解鎖已因此關閉——重新開啟後才能繼續用 Windows Hello 解鎖。',
     password_changed_bio_off_android:
-      '主密碼已修改。快速解鎖已因此關閉——重新開啟後才能繼續用指紋 / 臉部解鎖。',
+      '主密碼已修改。快速解鎖已因此關閉——重新開啟後才能繼續用指紋解鎖。',
     change_password_old: '目前主密碼',
     change_password_new: '新主密碼',
     export_vault: '匯出保險庫',
@@ -504,13 +504,13 @@ export const zhTW = {
     blob_capacity: '附件超出本機保險庫剩餘容量。',
     biometric_unavailable: '本機目前無法使用快速解鎖，請用主密碼解鎖。',
     biometric_canceled: '已取消 Windows Hello 驗證。',
-    biometric_canceled_android: '已取消指紋 / 臉部驗證。',
+    biometric_canceled_android: '已取消指紋驗證。',
     biometric_invalidated: '快速解鎖已失效，請用主密碼解鎖後在設定中重新開啟。',
     need_master_password: '這次解鎖無法驗證保險庫金鑰，請輸入主密碼解鎖。',
     bio_invalidated_password: '主密碼已修改，快速解鎖已失效，請重新開啟。',
     bio_invalidated_vault_key: '保險庫金鑰已更換（配對加入），快速解鎖已失效，請重新開啟。',
     bio_invalidated_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效，請重新開啟。',
-    bio_invalidated_enrollment_android: '裝置的指紋 / 臉部記錄已變更，快速解鎖已失效，請重新開啟。',
+    bio_invalidated_enrollment_android: '裝置的生物辨識記錄已變更，快速解鎖已失效，請重新開啟。',
     bio_invalidated_tampered: '快速解鎖設定遭竄改或損毀，已失效，請重新開啟。',
     io: '檔案讀寫發生錯誤。',
     network_timeout: '網路回應逾時：請確認兩台裝置在同一區域網路、對方仍停在配對等待頁，然後重試。',

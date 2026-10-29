@@ -1642,7 +1642,9 @@ Kotlin 判定改成两段：强档能用 → `available`；**强档报「没录�
 
 新增 `Availability::WeakOnly`（core）+ `"weak_only"`（wire）+ 四语言 `settings.bio_avail_weak_only`：
 
-> 本机只录入了「便捷级」生物识别（多半是 2D 人脸）：它能解开手机屏幕锁，但 Android 不允许这类凭据保护加密密钥，所以本功能用不了。请改用指纹。
+> 本机只录入了「便捷级」生物识别：它能解开手机屏幕锁，但 Android 不允许用它保护加密密钥，所以本功能用不了。请先在系统设置里录入一枚指纹。
+>
+> （v2.47 / D-126 起这句话不再提「人脸」，原因见 §32。）
 
 **能力一点没放宽**：`weak_only` 仍 ≠ `available`，开关照旧置灰，后端 `enable` 照旧拒绝。改的只有「说什么」。
 
@@ -1655,3 +1657,41 @@ Kotlin 判定改成两段：强档能用 → `available`；**强档报「没录�
 5. `bioShouldOfferSettings('weak_only')` 为真（该去补一枚指纹）。
 
 **变异验证**：把 `weak_only` 从 `keystore_rules.rs` 的映射删掉 → Rust 单测 `weak_only_is_never_folded_into_not_configured` 变红；把 zh-CN 文案改回「本机尚未设置…」→ 第 4 条变红。
+
+## 32. D-126：文案不再提「人脸」——顺带把「能不能支持 2D 人脸」这条查实了（主人拍板，2026-10-29）
+
+### 32.1 决定
+
+主人原话：「既然人脸识别大多数情况不可用（绝大多数手机的前摄 2D 人脸），那就不要提『人脸识别』字样，免得用户说人脸识别用不了的 bug，我还要去解释（还解释也用不了）」。
+
+于是四语言的 Android 文案**全面去掉人脸字样**（词表见 `docs/06` §6.32）。能力一个字没动：仍是 `AUTH_BIOMETRIC_STRONG` 才可用，`weak_only` 仍拒绝开启。
+
+### 32.2 「能不能放宽到 2D 人脸」——平台层面已经查实：不能
+
+这个问题不能靠读文档猜，直接查本地 SDK 的 `android/security/keystore/KeyProperties.class`（api 35 / 36 / 37 三个平台包，逐字搜索常量名）：
+
+| 平台包 | `AUTH_BIOMETRIC_STRONG` | `AUTH_BIOMETRIC_WEAK` |
+|---|---|---|
+| android-35 | 有 | **无** |
+| android-36 | 有 | **无** |
+| android-37.0 | 有 | **无** |
+
+`KeyGenParameterSpec.setUserAuthenticationParameters()` 的 `allowedAuthenticators` 只能由 `KeyProperties` 里的常量拼出来，而那里**根本不存在**「便捷级生物识别」这个取值。也就是说：**Android 从未提供「用 Class 2 生物识别保护加密密钥」的 API**，这不是我们的保守选择。
+
+（`BiometricManager.Authenticators.BIOMETRIC_WEAK` 是另一回事——它只用于**问系统「能不能弹框」**，不能用于**绑密钥**。两者容易混，混了就会写出「认证通过、密钥解不开」的死封印。）
+
+真要支持 2D 人脸，只剩两条路，都降级：
+
+| 路 | 机制 | 代价 |
+|---|---|---|
+| 时长型认证 | `setUserAuthenticationValidityDurationSeconds(N)`：设备解锁后 N 秒内密钥可用，走设备解锁通道（2D 人脸也算） | 手机只要处于解锁态，谁拿到谁能开库；认证与解密不再绑同一把 cipher |
+| 纯界面锁 | 密钥改用 `AUTH_DEVICE_CREDENTIAL`，人脸只在前端做门面 | 可被照片/视频骗过，且无法与密钥绑定＝假装受保护 |
+
+主人 2026-10-29 拍板取 **A 案：保持现状**（宁可少一个入口，不降安全等级）。
+
+### 32.3 顺手钉住的两条文案纪律
+
+1. 「记录已变更」类文案改说「**生物识别记录**」——任何一类生物特征的新增/删除都会让密钥失效，写「指纹」在只加过脸的机器上就是另一句谎话。
+2. `bio_manage_hint_android` **不写**「完成后切回会自动重新检测」。主人 1.4.6 真机复验：切出再切回状态仍不变（D-124 的窗口事件在这台机上没收敛），承诺不成立。这条不改代码，只锁文案。
+
+**待办（未做，等主人发话）**：D-124 在这台华为机上仍未生效。更可靠的一条路是在 `BiometricPlugin.kt` / `MainActivity` 的 `onResume()` 里直接 `trigger` 一个事件到前端——Activity 生命周期是平台保证的，不依赖 tauri 的转发层。属于「另开」，不在本轮范围。
