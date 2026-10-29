@@ -289,3 +289,99 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(withAttr).toBe(63);
   });
 });
+
+// ── VK 不跨 JS 边界（`docs/08` §18.5 约束 6 · `docs/03` §13.10 第 3 条） ─────────────
+//
+// 2026-10-29 核实的事实，先写清楚**什么不成立**：
+//
+//   `Repository::vault_key()` 是 `pub`，命令层**实际调用**了三处（`biometric_cmd` 取 VK
+//   去封印、`sync_cmd` 取 VK 包身份私钥 / 比对 `adopt`）。所以「命令层根本拿不到 VK」
+//   **不是事实**，不能拿它当不变量——写成断言只会是一条假绿。
+//
+// 真正成立的是**类型层面不可序列化**：`VaultKey = Zeroizing<[u8; 32]>`，而 zeroize 里
+// `impl<Z> Serialize for Zeroizing<Z>` 带 `#[cfg(feature = "serde")]` 门控；那个 feature
+// 来自 zeroize 的 **optional dependency**，隐式生成、默认不开。本项目只开 `derive`
+// ⇒ VK 物理上过不了 serde，也就过不了 Tauri IPC。
+//
+// 但这层屏障只需在 Cargo.toml 里加一个词就消失，且消失时**全仓一片绿、功能毫无变化**
+// —— 正是必须机器守门的形态。三条断言对应三种真实翻车路径：
+//
+//   ① 有人为了「顺手打个日志」给 zeroize 开 serde（物理屏障失效）；
+//   ② 有人新建一个带 `vk` 字段的 DTO（类型换成 String，屏障不适用）；
+//   ③ 有人让命令直接回 `Vec<u8>` / `Zeroizing`（绕过 DTO 层）。
+//
+// 已知局限（如实登记）：本条只看 Cargo.toml 里的 `zeroize` 声明行。若有人把 features
+// 拆成多行 TOML 写法，行匹配会漏——所以文档里同时要求 code review 关注 Cargo.toml 改动，
+// 不能只靠这条测试。
+describe('VK 不跨 JS 边界（§18.5 约束 6 · §13.10 第 3 条）', () => {
+  const cargos = import.meta.glob(
+    ['../../Cargo.toml', '../../crates/passwordms-core/Cargo.toml'],
+    { query: '?raw', import: 'default', eager: true },
+  ) as Record<string, string>;
+
+  /** 密钥材料的字段名（精确匹配，不做子串——否则 `device_fingerprint` 之类会误伤）。 */
+  const FORBIDDEN_FIELDS = [
+    'vk',
+    'sealed_vk',
+    'vault_key',
+    'master_key',
+    'master_password',
+    'kek',
+    'verify_key',
+    'unwrapped_key',
+    'bind',
+  ];
+
+  it('读取到根与 core 的 Cargo.toml（glob 写错会让下面的断言空转）', () => {
+    expect(Object.keys(cargos).length).toBe(2);
+    expect((cargos['../../Cargo.toml'] ?? '').length).toBeGreaterThan(500);
+    expect((cargos['../../crates/passwordms-core/Cargo.toml'] ?? '').length).toBeGreaterThan(100);
+  });
+
+  it('zeroize 不得启用 serde feature（否则 `Zeroizing` 可序列化，VK 失去物理屏障）', () => {
+    const decls = Object.entries(cargos).flatMap(([path, text]) =>
+      text
+        .split('\n')
+        .filter((l) => /^\s*zeroize\s*[.=]/.test(l) && !l.trim().startsWith('#'))
+        .map((l) => `${path} → ${l.trim()}`),
+    );
+    // 防空扫：一处都没扫到 = 正则写错了，后面的循环零次执行会静默通过。
+    expect(decls.length).toBeGreaterThan(0);
+    for (const decl of decls) {
+      expect(decl, `zeroize 声明不得含 serde：${decl}`).not.toMatch(/\bserde\b/);
+    }
+  });
+
+  it('Rust DTO 里没有密钥材料字段（`BiometricStatusDto` 的设计前提）', () => {
+    // `    pub <name>:` 在本仓只出现在 struct 定义内（impl 块不会这么写）。
+    const fields = [...dtoRs.matchAll(/^\s{4}pub ([a-z][a-z0-9_]*)\s*:/gm)].map((m) => m[1]);
+    // 防空扫 + 保证扫描面确实覆盖了 DTO 文件。
+    expect(fields.length).toBeGreaterThan(40);
+    for (const bad of FORBIDDEN_FIELDS) {
+      expect(fields, `dto.rs 出现了密钥字段 ${bad}`).not.toContain(bad);
+    }
+  });
+
+  it('TS 侧 DTO 里同样没有密钥材料字段（前端拿到也等于已经泄漏）', () => {
+    const fields = [...typesTs.matchAll(/^\s{2}([a-z][a-z0-9_]*)\??\s*:/gm)].map((m) => m[1]);
+    expect(fields.length).toBeGreaterThan(40);
+    for (const bad of FORBIDDEN_FIELDS) {
+      expect(fields, `types.ts 出现了密钥字段 ${bad}`).not.toContain(bad);
+    }
+  });
+
+  it('`BiometricStatusDto` 字段数恒为 5（它是最容易长出密钥字段的那个 DTO）', () => {
+    // 这个 DTO 直接围绕封印/VK 打转，加字段的诱因最强；字段数一变就该有人来解释。
+    expect(structFields(dtoRs, 'BiometricStatusDto')).toHaveLength(5);
+    expect(interfaceFields(typesTs, 'BiometricStatusDto')).toHaveLength(5);
+  });
+
+  it('没有任何命令把裸二进制或密钥容器交给 IPC', () => {
+    const all = Object.values(rustTree).join('\n');
+    // VK 是 32 字节数组，最可能的泄露形态就是「序列化成字节数组直接回」。
+    expect(all).not.toMatch(/IpcResult<\s*Vec<u8>\s*>/);
+    expect(all).not.toMatch(/IpcResult<\s*\[u8/);
+    expect(all).not.toMatch(/IpcResult<\s*Zeroizing/);
+    expect(all).not.toMatch(/IpcResult<\s*VaultKey/);
+  });
+});

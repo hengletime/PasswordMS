@@ -1972,3 +1972,103 @@ HelloGate::request()
 2. **不删 `run_on_sta` / `pump`**：见 34.2，删了功能直接坏。
 3. **窗口重建后不重新登记 HWND**：当前单窗口、不重建，没有触发条件；将来若支持多窗口必须补
    （`WindowEvent` 里重新登记）。
+
+### 34.7 真机验证（1.4.9 安装版，2026-10-29）
+
+| 项 | 结果 |
+|---|---|
+| 开启快速解锁 → Hello 弹框 → 认证 | ✅ 正常，无报错 |
+| 锁定 → Hello 解锁 | ✅ 进入应用 |
+| 自动化预检：`note_main_window` 是否登记到句柄 | ✅ `passwordms.log` 出现 `bio: 主窗口句柄已登记 hwnd=4458462` |
+| 封印类型在本轮是否复核 | ❌ 未复核。本轮只走「已开启状态下的解锁」，未重新写入封印，故 `platform_subtype` 仍为 §33 验过的 `windows-tpm2-seal`——属**沿用**上一次观测，不是本次实测 |
+
+**必须如实交代的一点**：单显示器、窗口前置的正常场景下，interop 版与 UWP 版的可见行为**没有区别**。
+本次真机验证证明的是**「没有变坏」**，而不是「看到了变好」。收益（对话框归属主窗口）只在多显示器、
+窗口失焦、最小化这类边界场景才体现，而这些场景没有在真机上逐一走过——**不声称已验证**。
+
+真正被这次验证钉住的，是自动化拿不到的那一环：`RequestVerificationForWindowAsync` 在真实
+HWND 上能被调用、能弹框、能返回 `Verified`，且与 `TPM_LOCK` 不互锁（弹框期间不占 TPM 锁，
+否则会死等）。这三点只有真机点一次才能确认。
+
+## 35. VK 不跨 JS 边界：从「设计意图」变成「物理屏障 + 可执行断言」（1.4.9，2026-10-29）
+
+> 来源：`docs/03` §13.10 第 3 条（原表述：「在 `ipc-contract.test.ts` 或等价守门中检查
+> 命令返回类型不含 `vk` 字段」）。**这个表述不够**，落地时改成了更强的东西，理由见 35.2。
+
+### 35.1 先说清一件事：命令层是**拿得到** VK 的
+
+`Repository::vault_key() -> &VaultKey` 是 `pub` 的，命令层实际调用了三处：
+
+| 调用点 | 用途 | VK 是否出海 |
+|---|---|---|
+| `biometric_cmd::biometric_enable` | 交给 `biometric::enable` 做封印（§18.5 约束 9 要求与 target 同源） | 否 |
+| `sync_cmd::sync_start_pairing` | `vault_key()[..].to_vec()`，喂 `load_or_create_identity` 包身份私钥 | 否（DTO 只含 qr/ip/port/session_code） |
+| `sync_cmd::sync_accept_pair` | 与 `joiner.host_vault_key()` 比对、`adopt_vault_key` | 否 |
+
+所以「命令层根本拿不到 VK」**是错的**，不能拿它当不变量——写成断言只会是假绿。
+这三处都是必要的（包裹/封印本来就要 VK），收窄 `vault_key()` 的可见性会牵动同步与生物识别
+两条主线，属独立重构，**本轮不做**，如实登记在 35.4。
+
+### 35.2 真正的屏障：`Zeroizing` 没有 `Serialize`
+
+```rust
+// crates/passwordms-core/src/crypto/keys.rs
+pub type VaultKey = Zeroizing<[u8; KEY_LEN]>;
+```
+
+zeroize 1.9.1 的 `src/lib.rs`：
+
+```rust
+#[cfg(feature = "serde")]
+impl<Z> serde::Serialize for Zeroizing<Z> where Z: Zeroize + serde::Serialize + ?Sized { … }
+```
+
+而 `serde` 在 zeroize 的 `Cargo.toml` 里是 **optional dependency**（隐式 feature），
+本项目只开 `derive`：
+
+```toml
+zeroize = { version = "1.8", features = ["derive"] }
+```
+
+**结论：VK 无法被 serde 序列化 ⇒ 物理上过不了 Tauri IPC。**这比「DTO 里别写 vk 字段」强一个
+数量级——后者靠人守，前者靠类型系统。
+
+但它有个致命弱点：**只要在 Cargo.toml 加一个词就消失，而且消失时全仓一片绿、功能毫无变化**。
+这正是必须机器守门的形状。
+
+### 35.3 新增 6 例断言（`src/lib/ipc-contract.test.ts`）
+
+| 断言 | 钉住什么 | 对应翻车形态 |
+|---|---|---|
+| 读到根与 core 两个 Cargo.toml | 防空扫（glob 写错 → 后面全部零次空转） | 测试自己坏掉 |
+| `zeroize` 声明不含 `serde` | 物理屏障存在 | 有人为「顺手打个日志」给 zeroize 开 serde |
+| Rust DTO 无密钥字段（9 个精确词） | 类型换成 `String` 时屏障不适用 | 新建 `{ vk: String }` DTO |
+| TS 侧同词表 | 前端拿到即已泄露 | 只改 Rust 忘改 / 只改 TS |
+| `BiometricStatusDto` 字段数恒为 5 | 最容易长出密钥字段的那个 DTO | 悄悄加一个字段 |
+| 命令不返回 `Vec<u8>` / `[u8` / `Zeroizing` / `VaultKey` | 绕过 DTO 层的直传 | 直接回字节数组 |
+
+词表是**精确匹配**（不做子串），否则 `device_fingerprint` 之类会误伤；已核实现有
+`dto.rs` / `types.ts` 对 9 个词零命中。
+
+**变异验证（三条全红，恢复后全绿）**：
+
+| 变异 | 结果 |
+|---|---|
+| 根 `Cargo.toml` zeroize 加 `"serde"` | `zeroize 不得启用 serde` 红，报错含具体声明行 |
+| `BiometricStatusDto` 加 `pub vk: String` | **两条**同时红（词表 + 字段数） |
+| `system_cmd` 某命令返回 `IpcResult<Vec<u8>>` | `没有任何命令把裸二进制…` 红 |
+
+前端全量 **437 例全绿**（431 + 新增 6），`npm run check` 0 error 0 warning，CSS 契约 PASS。
+
+### 35.4 已知缺口（登记，不掩盖）
+
+1. **`Repository::vault_key()` 是 `pub`**：命令层手里有 VK 字节，只要有人手工
+   `to_vec()` + base64 塞进某个 DTO，上面的断言**抓不到**（它只认词表和返回类型）。
+   要根治得把 `vault_key()` 降为 `pub(crate)`，把「包身份私钥」「封印」这两个需求改成
+   core 内部的专用方法。触及同步与生物识别两条主线，属独立重构。
+2. **断言只看 Cargo.toml 的 `zeroize` 单行声明**：若有人把 features 拆成多行 TOML 写法，
+   行匹配会漏。代码审查时看到 `zeroize` 或 `Zeroizing` 相关改动必须多看一眼。
+3. **不覆盖 `Option<VK>` / 泛型包装**：`IpcResult<Option<Zeroizing<…>>>` 这类形态没进正则。
+   现实中不会出现（DTO 是唯一出境通道，且 DTO 已被词表挡住），但正则确实不是全域覆盖。
+
+以上三条都是「纵深防御的层次不够深」，**不影响当前结论**：现状下 VK 无法跨 IPC，有断言守着。
