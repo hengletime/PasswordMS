@@ -11,7 +11,7 @@ use zeroize::Zeroizing;
 
 use crate::constants::SYNC_TIME_WINDOW_SECS;
 use crate::crypto::keys;
-use crate::error::{CoreError, CoreResult};
+use crate::error::{stage_io, CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::sync_state::{DeviceSyncState, PairedDevice};
 use crate::store::repository::Repository;
@@ -289,9 +289,7 @@ pub fn pair(
         return Err(CoreError::PairTokenExpired);
     }
     // D-44：多候选 IP 逐个尝试（主选在前）。多网卡 Host 广播的第一个地址可能
-    // 手机根本路由不到（如 WSL/Hyper-V 虚拟网卡）；每个候选 4 秒短超时，
-    // 全部失败时抛出**最后一个**连接错误（保留 io kind → 对应网络文案），
-    // 不再折叠成「同步已中止」。
+    // 手机根本路由不到（如 WSL/Hyper-V 虚拟网卡）；每个候选 4 秒短超时。
     let mut candidates: Vec<String> = Vec::new();
     for ip in qr.ips.iter().chain(std::iter::once(&qr.ip)) {
         if !candidates.contains(ip) {
@@ -299,7 +297,9 @@ pub fn pair(
         }
     }
     let mut connected: Option<(TcpStream, String)> = None;
-    let mut last_err: Option<CoreError> = None;
+    // D-138：逐候选记录 connect 阶段错误（统一 stage 标注 → 全部失败时映射
+    // err.network_unreachable，与 D-57 对 sync_now 的裁定一致）。
+    let mut errs: Vec<CoreError> = Vec::new();
     for ip in &candidates {
         match transport::connect_with_timeout(
             ip,
@@ -313,12 +313,23 @@ pub fn pair(
                 connected = Some((stream, ip.clone()));
                 break;
             }
-            Err(e) => last_err = Some(e),
+            Err(e) => errs.push(stage_io(e, "connect")),
         }
     }
     let (mut stream, host_ip) = match connected {
         Some((s, ip)) => (s, ip),
-        None => return Err(last_err.unwrap_or(CoreError::SyncAborted)),
+        // D-138：不再「最后一个候选说了算」——候选表末位常是 WSL/Hyper-V 虚拟网卡
+        // 地址，对端永远超时，把真实错误（如「连接被拒 = 对端可达但已离开配对等待页」）
+        // 掩盖成笼统的「网络响应超时」（主人实测排查一整天）。选错优先级：
+        // 连接被拒 > 其它非超时错误 > 超时（全部 candidates 均试尽后才走到这里）。
+        None => {
+            let refused = errs.iter().position(|e| io_kind_contains(e, "refused"));
+            let other = errs.iter().position(|e| !io_kind_contains(e, "timedout"));
+            match refused.or(other) {
+                Some(i) => return Err(errs.swap_remove(i)),
+                None => return Err(errs.pop().unwrap_or(CoreError::SyncAborted)),
+            }
+        }
     };
     stream
         .set_read_timeout(Some(Duration::from_secs(30)))
@@ -404,5 +415,57 @@ fn reject_to_error(code: &str) -> CoreError {
         ERR_PAIR_TOKEN_EXPIRED => CoreError::PairTokenExpired,
         ERR_PAIR_TOKEN_INVALID => CoreError::PairTokenInvalid,
         _ => CoreError::SyncAborted,
+    }
+}
+
+/// D-138：Io 载荷（`io:Kind`，可能带 `stage|` 前缀）归一化后是否含某关键词。
+/// 归一化口径与 `error.rs` message_key 的映射一致：去非字母数字、小写——
+/// `io:TimedOut` / `io:timed out` / `connect|io:timed out` 都能命中 "timedout"。
+fn io_kind_contains(err: &CoreError, needle: &str) -> bool {
+    match err {
+        CoreError::Io(kind) => kind
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .contains(needle),
+        _ => false,
+    }
+}
+
+/// D-138：候选选错策略的归一化判据（Windows「timed out」/ Linux「TimedOut」/
+/// 带 `connect|` 阶段前缀三种形态都必须命中）。
+#[cfg(test)]
+mod io_kind_tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_platform_and_staged_forms() {
+        assert!(io_kind_contains(
+            &CoreError::Io("io:TimedOut".into()),
+            "timedout"
+        ));
+        assert!(io_kind_contains(
+            &CoreError::Io("io:timed out".into()),
+            "timedout"
+        ));
+        assert!(io_kind_contains(
+            &CoreError::Io("connect|io:timed out".into()),
+            "timedout"
+        ));
+        assert!(io_kind_contains(
+            &CoreError::Io("io:ConnectionRefused".into()),
+            "refused"
+        ));
+        assert!(io_kind_contains(
+            &CoreError::Io("connect|io:connection refused".into()),
+            "refused"
+        ));
+        // 非超时/非拒连的错误不得误判。
+        assert!(!io_kind_contains(
+            &CoreError::Io("io:TimedOut".into()),
+            "refused"
+        ));
+        assert!(!io_kind_contains(&CoreError::SyncAborted, "timedout"));
     }
 }

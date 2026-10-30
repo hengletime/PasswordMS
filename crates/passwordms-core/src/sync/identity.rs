@@ -82,6 +82,16 @@ fn write_identity_file(path: &Path, bytes: &[u8]) -> CoreResult<()> {
     Ok(())
 }
 
+/// 封装并原子落盘（D-139：配对加入采纳对端 VK 后重包裹身份文件用）。
+pub fn store_identity_file(
+    path: &Path,
+    secret: &[u8; KEY_LEN],
+    vault_key: &[u8],
+) -> CoreResult<()> {
+    let wrapped = seal_identity_bytes(secret, vault_key)?;
+    write_identity_file(path, &wrapped)
+}
+
 /// 加载或创建 Host 身份私钥（文件不存在则生成并落盘为新格式）。
 ///
 /// - 新格式 → 用 VK 解封；
@@ -89,6 +99,13 @@ fn write_identity_file(path: &Path, bytes: &[u8]) -> CoreResult<()> {
 ///   迁移失败的唯一后果是下次再迁一次）；
 /// - 文件不存在 / 全部不可解析 → 生成新身份落盘（旧格式解析失败视为文件损坏，
 ///   重新生成等价于重置身份——与旧行为一致，对端只需重新配对）。
+///
+/// 【D-139】新格式文件**解封失败**（Crypto：包裹它的 VK 已不在；Validation：形状损坏）
+/// 同样按「损坏等价重置」处理，落一份新身份——包裹密钥随「配对加入采纳对端 VK」
+/// 永久消失后，这份私钥再也取不回来，保持报错只会让 Host 侧从此永远
+/// 「加密操作失败」（主人实测：热点配对成功后生成二维码必现）。
+/// **只吞打开类失败**；`std::fs::read` 的 IO 错误照旧上抛——磁盘抖动时不得把
+/// 好文件当损坏重置。
 pub fn load_or_create_identity_file(
     path: &Path,
     vault_key: &[u8],
@@ -96,7 +113,12 @@ pub fn load_or_create_identity_file(
     if path.exists() {
         let raw = std::fs::read(path)?;
         if raw.starts_with(IDENTITY_MAGIC) {
-            return open_identity_bytes(&raw, vault_key);
+            match open_identity_bytes(&raw, vault_key) {
+                Ok(secret) => return Ok(secret),
+                // D-139：打开类失败（密钥丢失/形状损坏）→ 落入下方「新建」路径重置。
+                Err(CoreError::Crypto(_) | CoreError::Validation(_)) => {}
+                Err(e) => return Err(e),
+            }
         }
         // 旧格式：Base64 裸私钥。
         use base64::engine::general_purpose::STANDARD;
@@ -201,6 +223,66 @@ mod tests {
         assert!(raw.starts_with(IDENTITY_MAGIC), "新建即新格式");
         let second = load_or_create_identity_file(&path, &key).unwrap();
         assert_eq!(&first[..], &second[..], "已存在的身份不得重新生成");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 【D-139】文件在、但 VK 已变（配对加入采纳对端 VK 后旧 VK 永久丢失）：
+    /// 加载不得报错卡死 Host 侧，而是重置出一份新身份并以当前 VK 落盘。
+    #[test]
+    fn unopenable_identity_resets_instead_of_erroring() {
+        let dir = std::env::temp_dir().join(format!("pms-d139-reset-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("identity");
+        let vk_old = vk();
+        let vk_new = vk();
+        let stale = load_or_create_identity_file(&path, &vk_old).unwrap();
+
+        // 旧 VK 已丢，新 VK 加载：不再报 Crypto，而是重置。
+        let reset = load_or_create_identity_file(&path, &vk_new).unwrap();
+        assert_ne!(&reset[..], &stale[..], "旧私钥取不回，必须是新身份");
+
+        // 重置后的文件以新 VK 稳定可读（幂等，不再反复重置）。
+        let again = load_or_create_identity_file(&path, &vk_new).unwrap();
+        assert_eq!(&reset[..], &again[..], "重置一次后必须稳定");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 【D-139】只有「打开类失败」才重置；`fs::read` 的 IO 失败照旧上抛——
+    /// 磁盘抖动不得把好文件当损坏。用「同路径是个目录」构造 read 失败。
+    #[test]
+    fn io_error_on_read_still_propagates() {
+        let dir = std::env::temp_dir().join(format!("pms-d139-io-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("identity");
+        std::fs::create_dir_all(&path).unwrap(); // 目录：read 必 IO 失败
+        let result = load_or_create_identity_file(&path, &vk());
+        assert!(
+            matches!(result, Err(CoreError::Io(_))),
+            "IO 错误必须上抛，不得重置"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 【D-139】store_identity_file：采纳 VK 后重包裹的回环——新 VK 可读回同一私钥。
+    #[test]
+    fn store_identity_file_rewrap_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("pms-d139-rewrap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("identity");
+        let vk_old = vk();
+        let vk_new = vk();
+        let secret = load_or_create_identity_file(&path, &vk_old).unwrap();
+
+        store_identity_file(&path, &secret, &vk_new).unwrap();
+        let reopened = load_or_create_identity_file(&path, &vk_new).unwrap();
+        assert_eq!(&reopened[..], &secret[..], "重包裹后私钥值不变");
+        // 旧 VK 已解不开（包裹密钥换了）。
+        assert!(load_or_create_identity_file(&path, &vk_old).is_ok()); // 自愈路径，但私钥已换
+        let by_old = load_or_create_identity_file(&path, &vk_old).unwrap();
+        assert_ne!(
+            &by_old[..],
+            &secret[..],
+            "旧 VK 加载只能触发重置，取不回原私钥"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -24,10 +24,27 @@ use crate::error::{lock_err, IpcError, IpcResult};
 use crate::state::{ensure_resync_listener, identity_path, AppState};
 
 /// F-09 Host：生成一次性令牌并展示二维码。
+///
+/// D-139：错误**留痕**（stderr + 数据目录 passwordms.log）——此前本命令失败静默，
+/// 「加密操作失败」这类错误在 logcat / 日志里零痕迹，排查无从下手（与
+/// `sync_join` 的留痕对称）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn sync_start_pairing(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+) -> IpcResult<PairingDto> {
+    let result = sync_start_pairing_impl(&app, &state);
+    if let Err(e) = &result {
+        // IpcError 的 Debug 只有 code + message_key，无隐私载荷。
+        eprintln!("[sync_start_pairing] failed: {e:?}");
+        crate::state::append_log(&app, &format!("[sync_start_pairing] failed: {e:?}"));
+    }
+    result
+}
+
+fn sync_start_pairing_impl(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, AppState>,
 ) -> IpcResult<PairingDto> {
     // 必须处于解锁态；同时取出 VK（身份私钥的包裹密钥，D-96）。
     //
@@ -45,9 +62,9 @@ pub fn sync_start_pairing(
     };
 
     // 确保持久重同步监听器在线，并把其端口通告给 Joiner（D-11）。
-    let sync_port = ensure_resync_listener(&app)?;
+    let sync_port = ensure_resync_listener(app)?;
 
-    let identity = load_or_create_identity(&app, &host_vk[..])?;
+    let identity = load_or_create_identity(app, &host_vk[..])?;
     // 若已有配对会话，先作废。
     *state.pairing.lock().map_err(lock_err)? = None;
 
@@ -156,7 +173,44 @@ fn sync_join_impl(
                 || repo.matches_vault_key(joiner.host_vault_key())
         };
         if !already_paired {
+            // D-139：身份文件是「本机旧 VK」包裹的。采纳对端 VK 后若不重包裹，
+            // 旧 VK 随采纳永久消失，这份私钥再也解不开——之后本机每次当 Host
+            // （生成二维码）都报「加密操作失败」，且永不自愈（主人实测）。
+            // 趁旧 VK 还在内存里：采纳**前**先解开身份私钥，采纳**后**用新 VK
+            // 包回去——长期身份保住，对端无需重新配对。
+            // 文件不存在 / 已无法用旧 VK 解开（历史遗留的损坏态）→ 跳过：
+            // 下次 Host 加载时按 D-139 的「损坏等价重置」自愈重建。
+            let old_vk = {
+                let repo = session.repo()?;
+                Zeroizing::new(repo.vault_key().to_vec())
+            };
             session.adopt_vault_key(joiner.host_vault_key())?;
+            let ident_path = identity_path(app)?;
+            match passwordms_core::sync::identity::load_or_create_identity_file(
+                &ident_path,
+                &old_vk[..],
+            ) {
+                Ok(secret) => {
+                    let new_vk: &[u8] = &session.repo()?.vault_key()[..];
+                    if let Err(e) = passwordms_core::sync::identity::store_identity_file(
+                        &ident_path,
+                        &secret,
+                        new_vk,
+                    ) {
+                        // 重包裹落盘失败不阻断配对：下次 Host 加载按 D-139 自愈重建。
+                        let msg = format!("[identity] rewrap after adopt failed: {e:?}");
+                        eprintln!("{msg}");
+                        crate::state::append_log(app, &msg);
+                    }
+                }
+                Err(e) => {
+                    let msg = format!(
+                        "[identity] unreadable before adopt (will reset on next host): {e:?}"
+                    );
+                    eprintln!("{msg}");
+                    crate::state::append_log(app, &msg);
+                }
+            }
             // D-113（`docs/08` §18.5 约束 2）：采纳对端 VK 之后，现有的生物识别封印封的是
             // **换 VK 之前那个 VK**。core 的 `bind` 已让它必然被判失效（不会交出错误密钥），
             // 但一条「已失效」的封印留在盘上只会让用户困惑，且是多余的旧密钥密文。

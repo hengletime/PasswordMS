@@ -1068,6 +1068,45 @@ v1.4.16 那条守门断言是「设置页**必须**包含 `settings.sync_manual_
 
 **当前口径**：引导用户**从手机发起**（文案已写进 `err.network_unreachable` 四语言 + README）。
 
+### 13.20 D-139/D-138 + 配对刷新：今晚排查一整天的三个收获（v1.4.19，2026-10-30）
+
+排查背景见 `docs/02` §3.27。实现注记：
+
+**D-139 身份重包裹（core + 命令层）**
+- core `identity.rs`：新增 `store_identity_file`（封 + 原子写，复用既有 `write_identity_file`）；
+  `load_or_create_identity_file` 新格式解封失败（Crypto/Validation）→ 落新身份（自愈），
+  IO 错误照旧上抛。测试 4 例：`unopenable_identity_resets_instead_of_erroring`（含
+  「重置一次后必须稳定」的幂等锚点）/ `io_error_on_read_still_propagates`（用「同路径是
+  目录」构造 read 失败）/ `store_identity_file_rewrap_roundtrip` / 旧例全保留。
+- 命令层 `sync_join_impl`：采纳**前** `Zeroizing::new(repo.vault_key().to_vec())` 取旧 VK，
+  采纳**后** `store_identity_file(path, secret, new_vk)` 包回。两步都可能失败——失败不阻断
+  配对，落日志交给加载点自愈（两层互为兜底）。
+- **守门真红一次**：`ipc-contract.test.ts` 的「命令层取 VK 调用点恒为 2 处」当场拦下新增的
+  2 处——这正是它存在的意义。白名单 2→4，每处的理由写进注释（重包裹需要两把 VK，
+  均不跨 IPC）。变异验证：新增第 5 处调用时它必红。
+
+**D-138 候选选错（core `client.rs`）**
+- 逐候选错误 `stage_io(e, "connect")` 入 `errs: Vec<CoreError>`；全败时
+  `position(refused) → position(非 timedout) → pop()` 三级选取，`swap_remove` 取走
+  （`CoreError` 非 Clone，不能 `find().cloned()`——第一次编译就红在这里）。
+- `io_kind_contains` 归一化判据单测 1 例 8 断言（Windows/Linux/带前缀三种形态全命中）。
+- 真实错误分布回顾：今晚手机看到的全是「网络响应超时」（末位 WSL 候选的 connect 超时
+  未带 connect 前缀 → `err.network_timeout`），修后同场景显示 `err.network_unreachable`
+  （含「改在对端发起」指引），若对端可达但会话不在则显示 `err.network_refused`。
+
+**配对完成刷新（前端）**
+- `pairing://ended` 的 `completed` 分支补 `vault.load()` + `sync.loadDevices()` +
+  `sync.loadConflicts()`（与 `sync://applied` 同口径）。守门在 `pairing-state.test.ts`
+  新 describe：提取 `listen(PAIRING_ENDED_EVENT)` 回调体，断言 `if (next.completed)`
+  分支内含三件套调用。
+
+**`sync_start_pairing` 留痕（命令层）**：主体抽 `sync_start_pairing_impl`，命令壳统一
+`eprintln! + append_log`（IpcError Debug 无隐私载荷），与 `sync_join` 对称。
+
+**D-136 措辞更正（core）**：`is_sync_port` 轨迹与文档注释改为只陈述事实不下结论
+（Android 临时端口 32768-60999，区间外可能是对端真实端口）；`sync_port_range.rs` 3 例
+测的是函数本身，不受措辞影响，全绿未动。
+
 ## 14. IPC 契约不变量：`rename_all = "snake_case"` 必须 100% 覆盖
 
 > 2026-10-21（D-72）由前端工程师以证据顶回既定错误后的定论。**这是一条不变量，不是一条约定**——

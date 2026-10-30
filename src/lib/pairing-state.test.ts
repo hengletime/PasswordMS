@@ -190,3 +190,15 @@ describe('D-75 ③：PairShow 的成功态分支', () => {
     expect(tpl).toContain('sync.pairEnded');
   });
 });
+
+describe('配对完成必须刷新（2026-10-30 主人实测缺陷）', () => {
+  it('completed 分支必须重载条目/设备列表/冲突箱——否则同步页显示「没有已配对设备/从未同步」，切一圈设置页才冒出来', () => {
+    const body = pairingEndedHandler(storeSrc);
+    const at = body.indexOf('if (next.completed)');
+    expect(at, 'completed 分支应存在').toBeGreaterThan(-1);
+    const branch = body.slice(at);
+    expect(branch).toContain('vault.load()');
+    expect(branch).toContain('sync.loadDevices()');
+    expect(branch).toContain('sync.loadConflicts()');
+  });
+});

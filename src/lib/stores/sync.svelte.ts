@@ -320,6 +320,15 @@ if (typeof window !== 'undefined') {
     }
     sync.pairCompleted = next.completed;
     sync.pairEnded = next.ended;
+    // 配对完成必须刷新（2026-10-30 主人实测缺陷）：`completed` 意味着首轮同步已把
+    // 数据写进本机库、`PairedDevice` 也落了库——但 store 还停在配对前的旧缓存，
+    // 同步页显示「没有已配对设备 / 从未同步」，切一圈设置页才冒出来。
+    // 与下方 `sync://applied` 的刷新同口径：条目 + 设备列表 + 冲突箱。
+    if (next.completed) {
+      void vault.load();
+      void sync.loadDevices();
+      void sync.loadConflicts();
+    }
   });
 
   // v1.2.4 根因 A：**对端（手机）发起的重同步**把数据写进了本机库，但本机前端 store

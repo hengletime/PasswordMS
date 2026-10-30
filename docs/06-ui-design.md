@@ -1524,6 +1524,7 @@ Rust 侧为什么必须写两份实现、不能共用一份，见 `docs/02-arch.
   - **成功态约束**：`pairCompleted && pairing !== null` 时**不渲染二维码**（已扫过，留着会让人以为还能再扫），显示「配对成功」+ `sync.pair_completed_hint` + 会话码（`hasSessionCode()` 判空后）+ 主按钮「完成」（`sync.endPairing()`）。按钮文案 `sync.pair_done`。
   - **退出路径**：点「完成」/ 重新生成二维码 / 取消配对 / 锁定，四条路都必须让 `pairCompleted` 回到 `false`（否则下一轮二维码旁边会挂着上一轮的成功提示）。
   - **失败态不回归**：`aborted` 仍清屏 + 提示 `sync.pair_ended`「请重新生成二维码」。
+  - **D-140（v1.4.19）**：`completed` 分支此前只更新配对面板，设备列表/冲突列表原地不动（主人的实测原话：「我看到电脑上没有一个已配对设备，状态是从未同步」）——现补齐 `vault.load()` + `sync.loadDevices()` + `sync.loadConflicts()` 三件套刷新，守门见 `pairing-state.test.ts`（completed 分支必须含三件套调用）。不改布局，只补数据刷新。
 
 
 ### 6.14 TOTP 密钥入库校验与展示错误态（D-97，v2.24）
