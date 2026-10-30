@@ -4,6 +4,12 @@
     <!-- 扫码配对（F-09）：WebView 里 getUserMedia 需要相机权限。
          缺此声明时 wry 的运行时 requestPermissions 必被系统拒绝 → 前端收到 NotAllowedError。 -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- D-131：局域网地址发现（`sync/discovery.rs` 的 UDP 广播）在 Android 上需要
+         MulticastLock，而拿这个锁必须先声明本权限。缺它时 `WifiManager.createMulticastLock`
+         抛 SecurityException —— 表现为「手机收不到电脑的广播」，即对端换 IP 后永远找不回来。
+         `ACCESS_WIFI_STATE` 是普通权限（不弹授权框），部分 ROM 上访问 WifiManager 需要它一起声明。 -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

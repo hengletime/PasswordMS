@@ -7,6 +7,7 @@
   import { formatDateTime } from '../../lib/constants';
   import { syncButtonState } from '../../lib/device-label';
   import { sync } from '../../lib/stores/sync.svelte';
+  import { settings } from '../../lib/stores/settings.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
 
   async function refresh(): Promise<void> {
@@ -61,6 +62,39 @@
       {/each}
     </ul>
   {/if}
+
+  <!-- D-130：自动同步的**如实回执**。原实现失败全部吞掉，界面上只剩「上次同步时间没变」，
+       而「没变」同时对应「没跑」「跑了失败」「跑成功了但没变更」三种现实 —— 用户只能猜。 -->
+  <div class="sync-auto">
+    <div class="sync-auto-line">
+      <span class="pms-label">{ui.t('sync.auto_title')}</span>
+      <span class="sync-auto-state">
+        {ui.t('sync.auto_switch_line', {
+          auto: settings.value.auto_sync ? ui.t('sync.auto_state_on') : ui.t('sync.auto_state_off'),
+          onstart: settings.value.sync_on_start ? ui.t('sync.auto_state_on') : ui.t('sync.auto_state_off'),
+        })}
+      </span>
+    </div>
+    <div class="sync-auto-line">
+      <span class="pms-label">{ui.t('sync.auto_last')}</span>
+      {#if sync.autoLast === null}
+        <span class="sync-auto-state">{ui.t('sync.auto_not_yet')}</span>
+      {:else}
+        {@const a = sync.autoLast}
+        <span class="sync-auto-state" class:is-bad={!a.ok}>
+          {formatDateTime(a.at, ui.locale)} · {a.ok
+            ? a.okCount === a.total
+              ? ui.t('sync.auto_ok', { n: a.okCount })
+              : ui.t('sync.auto_partial', { ok: a.okCount, total: a.total })
+            : ui.t('sync.auto_failed', { total: a.total })}{#if !a.ok && a.errorKey}&nbsp;· {ui.t(a.errorKey)}{/if}
+        </span>
+      {/if}
+    </div>
+    {#if sync.autoLast !== null && !sync.autoLast.ok}
+      <!-- 这条是给「为什么同步不上」的**行动指引**，不是免责声明。 -->
+      <p class="pms-meta sync-auto-hint">{ui.t('sync.auto_failed_hint')}</p>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -116,5 +150,35 @@
   }
   .sync-name {
     font-size: 0.88rem;
+  }
+  /* D-130：自动同步回执区。与上方设备列表之间用一条分隔线隔开——
+     它是「诊断信息」，不是可点的操作，混在列表里会被当成又一条设备。 */
+  .sync-auto {
+    margin-top: 0.9rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--pms-border);
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+  .sync-auto-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.82rem;
+  }
+  .sync-auto-state {
+    color: var(--pms-fg);
+    text-align: right;
+    /* 失败原因可能较长（含错误文案），允许换行而不是挤出卡片。 */
+    overflow-wrap: anywhere;
+  }
+  .sync-auto-state.is-bad {
+    color: var(--pms-danger);
+  }
+  .sync-auto-hint {
+    margin: 0.15rem 0 0;
+    line-height: 1.5;
   }
 </style>

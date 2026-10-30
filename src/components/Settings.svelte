@@ -528,6 +528,33 @@
     await settings.save($state.snapshot(draft));
   }
 
+  /**
+   * D-130：同步两个开关**勾选即保存**（主人实测反馈）。
+   *
+   * 为什么单独一条路，不走 `saveSettings()`：
+   * 1. 这两个开关是「行为开关」，不是「参数值」。勾上之后用户的心理预期是立刻生效，
+   *    而设置页底部那个保存按钮离它隔了整屏——主人原话「用户易忽视保存按钮」。
+   *    真实现场就是勾了、以为开了，下次解锁什么也没发生。
+   * 2. **只写这两个字段**，基于 `settings.value`（已保存值）而不是 `$state.snapshot(draft)`：
+   *    若用户还改了别的字段没保存，顺手勾一下开关**不该**把那半截改动一起落盘。
+   *
+   * 失败必须回滚 checkbox 并提示：否则界面显示「已勾选」而库里是 false，
+   * 与本次缺陷（UI 承诺了不存在的行为）是同一类错误。
+   */
+  async function saveSyncPrefs(): Promise<void> {
+    const next = $state.snapshot(settings.value);
+    next.auto_sync = draft.auto_sync;
+    next.sync_on_start = draft.sync_on_start;
+    // 用 `saveQuiet` 而不是 `save`：勾两次弹两条「设置已保存」是噪音。
+    const ok = await settings.saveQuiet(next);
+    if (!ok) {
+      // 回滚到服务端真值（`saveQuiet` 失败时 `settings.value` 未变）。
+      draft.auto_sync = settings.value.auto_sync;
+      draft.sync_on_start = settings.value.sync_on_start;
+      ui.toast('error', 'settings.save_instant_failed');
+    }
+  }
+
   async function changePassword(): Promise<void> {
     if (newPassword !== newPassword2) {
       ui.toast('error', 'create.mismatch');
@@ -938,14 +965,21 @@
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_sync')}</h3>
+    <!-- D-130：这一组是勾选即存（不进底部保存按钮那条路），必须当场说明，
+         否则用户仍会去找保存按钮。 -->
+    <p class="pms-meta set-instant-hint">{ui.t('settings.sync_instant_hint')}</p>
     <!-- D-110：复选框行标 `.is-check`——窄屏堆叠只适用含控件的行，复选框行必须登记行类型覆盖回来。 -->
     <div class="set-row is-check">
       <span class="set-label">{ui.t('settings.auto_sync')}</span>
-      <label class="pms-check"><input type="checkbox" bind:checked={draft.auto_sync} /></label>
+      <label class="pms-check">
+        <input type="checkbox" bind:checked={draft.auto_sync} onchange={() => void saveSyncPrefs()} />
+      </label>
     </div>
     <div class="set-row is-check">
       <span class="set-label">{ui.t('settings.sync_on_start')}</span>
-      <label class="pms-check"><input type="checkbox" bind:checked={draft.sync_on_start} /></label>
+      <label class="pms-check">
+        <input type="checkbox" bind:checked={draft.sync_on_start} onchange={() => void saveSyncPrefs()} />
+      </label>
     </div>
   </div>
 
@@ -1234,6 +1268,11 @@
   .set-card {
     padding: 1rem;
     margin-bottom: 1rem;
+  }
+  /* D-130：同步组的「勾选即存」提示。与 `h3` 的 0.7rem 下边距合并成一档，
+     避免标题与提示之间出现双倍空隙。 */
+  .set-instant-hint {
+    margin: -0.35rem 0 0.7rem;
   }
   h3 {
     margin: 0 0 0.7rem;

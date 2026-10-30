@@ -462,6 +462,9 @@ export const zhCN = {
     update_failed: '检查失败，请稍后重试。',
     update_download: '前往下载',
     saved: '设置已保存',
+    // D-130：同步两个开关改为勾选即存（不进底部保存按钮那条路）。
+    sync_instant_hint: '这两项勾选后立即保存，无需点下方保存按钮。请在另一台设备上也打开——两端都开，才会互相主动同步。',
+    save_instant_failed: '保存失败，开关已恢复原状，请重试。',
   },
   sync: {
     title: '同步',
@@ -499,6 +502,19 @@ export const zhCN = {
     last_sync: '上次同步',
     pending: '待同步变更',
     device_count: '设备数',
+    // D-130：自动同步的**如实回执**。原实现失败全静默，界面只剩「上次同步时间没变」，
+    // 而「没变」同时对应「没跑」「跑了失败」「跑成功了但没变更」三种现实。
+    auto_title: '开关状态',
+    auto_switch_line: '自动同步 {auto} · 启动时同步 {onstart}',
+    auto_state_on: '已开启',
+    auto_state_off: '未开启',
+    auto_last: '上次自动同步',
+    auto_not_yet: '本次解锁后还没跑过',
+    auto_ok: '成功（{n} 台）',
+    auto_partial: '部分成功（{ok}/{total} 台）',
+    auto_failed: '全部失败（{total} 台）',
+    auto_failed_hint:
+      '对端锁屏或没有运行时，本机连不上它——这是同步失败最常见的原因。请解锁对端并保持 PasswordMS 在运行，本机会自动重试（最慢 5 分钟一次）。若两端不在同一 Wi‑Fi，也会连不上。',
     result_applied: '已合并 {n} 条',
     result_conflicts: '产生 {n} 个冲突',
     adopt_requires_empty: '本机保险库非空（{n} 条），无法直接采用对端密钥。若两台设备此前已配对，请改用「设备 → 立即同步」；若各自是独立保险库，则无法直接合并，请先导出并清空一方，或改用对端重新创建保险库。',

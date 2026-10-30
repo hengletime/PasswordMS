@@ -16,9 +16,10 @@
 //    节流最坏只是「晚一分钟」，不会越跑越偏。
 // 3. 到期判定走纯函数 `isAutoSyncDue`，四条否决理由各自独立：开关关、无配对设备、
 //    手动同步在飞（不插队）、未到下次允许时刻。
-// 4. 跑完按结果排下次：成功 `+AUTO_SYNC_INTERVAL_MS`，失败 `+AUTO_SYNC_FAIL_BACKOFF_MS`。
-//    对端离线是自动同步的**常态**（笔记本合上、手机不在同一局域网），退避是为了别每
-//    五分钟对着一个不在线的地址敲门。
+// 4. 跑完按结果排下次：成功 `+AUTO_SYNC_INTERVAL_MS`，失败按**连续失败次数**渐进退避
+//    （见 `failBackoffMs`：2 → 4 → 5 分钟封顶）。对端离线是自动同步的**常态**
+//    （手机锁屏会关掉重同步监听），但也不能像原实现那样一律等 15 分钟——
+//    用户解锁手机后要等十几分钟才有下一次机会，实测结论就是「这功能没实现」。
 // 5. `stop()`：锁定 / 离开主界面时调用，取消心跳并清空「本会话已跑过」标记。
 
 /** 一次到期判定的输入（纯数据，便于单测逐条钉住）。 */
@@ -60,12 +61,35 @@ export function isAutoSyncDue(gate: AutoSyncGate): boolean {
 
 /** 定时同步间隔：5 分钟。PRD 只要求「有节流策略」，此处取常见口令管理器量级。 */
 export const AUTO_SYNC_INTERVAL_MS = 5 * 60_000;
-/** 失败退避：15 分钟（对端离线时别每 5 分钟敲门）。 */
-export const AUTO_SYNC_FAIL_BACKOFF_MS = 15 * 60_000;
+/**
+ * 失败重试的起始间隔：2 分钟。
+ *
+ * **D-130 修正**：原实现失败退避固定 15 分钟，实测证明这个值在真实场景里是错的。
+ * 对端（手机）**锁屏时会关闭重同步监听**，所以「解锁电脑时手机恰好锁着」是常态而非异常——
+ * 主人实测：电脑解锁 → 启动时同步失败 → 15 分钟内他解锁手机、改条目、再回电脑，仍然什么都没发生，
+ * 因为下一次重试还排在 13 分钟后。2 分钟起跳，让「他解锁手机」这个动作最多 2 分钟就被感知到。
+ */
+export const AUTO_SYNC_FAIL_BACKOFF_START_MS = 2 * 60_000;
+/** 失败重试间隔上限：5 分钟（与成功间隔同档，避免无限翻倍成「一小时才试一次」）。 */
+export const AUTO_SYNC_FAIL_BACKOFF_MAX_MS = 5 * 60_000;
 /** 心跳周期：60 秒（只做「要不要跑」的判定，不承担计时精度）。 */
 export const AUTO_SYNC_TICK_MS = 60_000;
 /** 两次自动同步之间的最小间隔，防 $effect 重跑导致的连击。 */
 export const AUTO_SYNC_MIN_GAP_MS = 60_000;
+
+/**
+ * 连续失败 `failures` 次后的重试间隔（2 → 4 → 5 封顶）。
+ *
+ * 单独抽成导出函数是为了让单测能直接钉住整条曲线，而不必靠推时钟去反推。
+ */
+export function failBackoffMs(failures: number): number {
+  if (failures <= 0) {
+    return 0;
+  }
+  // 2^0=1 → 2min，2^1 → 4min，2^2 → 8min（被上限截成 5min），之后恒为上限。
+  const raw = AUTO_SYNC_FAIL_BACKOFF_START_MS * 2 ** (failures - 1);
+  return raw > AUTO_SYNC_FAIL_BACKOFF_MAX_MS ? AUTO_SYNC_FAIL_BACKOFF_MAX_MS : raw;
+}
 
 /** 自动同步所需的外部依赖（组件注入真实实现，测试注入假时钟）。 */
 export interface AutoSyncDeps {
@@ -103,6 +127,8 @@ export function createAutoSync(deps: AutoSyncDeps): AutoSyncController {
   let running = false;
   let nextDue: number | null = null;
   let cancelTick: (() => void) | null = null;
+  /** 连续失败次数（成功即清零，驱动 `failBackoffMs`）。 */
+  let failures = 0;
 
   function clearTick(): void {
     if (cancelTick !== null) {
@@ -132,7 +158,13 @@ export function createAutoSync(deps: AutoSyncDeps): AutoSyncController {
     } catch {
       ok = false; // 静默同步不该抛；真抛了也只当失败，不让异常打断心跳
     }
-    const wait = ok ? AUTO_SYNC_INTERVAL_MS : AUTO_SYNC_FAIL_BACKOFF_MS;
+    // D-130：连续失败计数驱动渐进退避；一次成功即清零（对端回来了就别再拉长间隔）。
+    if (ok) {
+      failures = 0;
+    } else {
+      failures += 1;
+    }
+    const wait = ok ? AUTO_SYNC_INTERVAL_MS : failBackoffMs(failures);
     const gap = wait > AUTO_SYNC_MIN_GAP_MS ? wait : AUTO_SYNC_MIN_GAP_MS;
     // 从「开跑时刻」起算而不是「跑完时刻」：慢速同步（大库）不该把间隔越推越后。
     nextDue = startedAt + gap;
@@ -172,6 +204,7 @@ export function createAutoSync(deps: AutoSyncDeps): AutoSyncController {
       startedThisSession = true;
       running = true;
       nextDue = null;
+      failures = 0;
 
       const s = deps.getSettings();
       const dueNow = isAutoSyncDue({
@@ -190,6 +223,7 @@ export function createAutoSync(deps: AutoSyncDeps): AutoSyncController {
       running = false;
       startedThisSession = false;
       nextDue = null;
+      failures = 0;
       clearTick();
     },
     nextDueAt(): number | null {
