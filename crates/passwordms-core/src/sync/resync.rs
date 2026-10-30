@@ -287,16 +287,26 @@ pub fn resync_with_peer_access(
         (Some(ip), Some(port)) => Some((ip.clone(), port)),
         _ => None,
     };
+    // D-132 诊断：配对记录里的地址是排查第一现场——「连的是哪个 IP:端口」以前只存在于
+    // 内存里，日志一个字都没有，真机出问题时只能靠猜。
+    match &static_addr {
+        Some((ip, port)) => discovery::trace(format!("peer: 配对记录地址 {ip}:{port}")),
+        None => discovery::trace("peer: 配对记录无地址，直接走发现"),
+    }
     let used_addr: (String, u16);
     let mut stream = match static_addr {
         Some((ip, port)) => match transport::connect_with_timeout(&ip, port, connect_timeout) {
             Ok(s) => {
+                discovery::trace(format!("connect: 静态地址 {ip}:{port} 直连成功"));
                 used_addr = (ip, port);
                 s
             }
             Err(first_err) => {
                 // 记下**静态那次**的错误（已按 connect 阶段标注），发现无果时原样返回。
                 let first_err = stage_io(first_err, "connect");
+                discovery::trace(format!(
+                    "connect: 静态地址 {ip}:{port} 失败（{connect_timeout:?} 超时）→ 尝试局域网发现"
+                ));
                 match discover_addr(&prep.sync_key, discovery_mode, local_port)? {
                     Some((ip, port)) => {
                         let s = transport::connect_with_timeout(&ip, port, connect_timeout)
@@ -507,13 +517,27 @@ fn discover_addr(
         Some(local_port)
     };
     let wait = Duration::from_millis(DISCOVERY_WAIT_MS);
-    match mode {
+    let mode_name = match mode {
+        DiscoveryMode::Disabled => "disabled",
+        DiscoveryMode::Broadcast => "broadcast",
+        DiscoveryMode::Unicast(_) => "unicast",
+    };
+    discovery::trace(format!("discovery: mode={mode_name} 开始查找对端"));
+    let out = match mode {
         DiscoveryMode::Disabled => Ok(None),
         DiscoveryMode::Broadcast => discovery::discover_peer(sync_key, wait, self_port),
         DiscoveryMode::Unicast(targets) => {
             discovery::discover_peer_with(sync_key, targets, wait, self_port)
         }
+    };
+    match &out {
+        Ok(Some((ip, port))) => {
+            discovery::trace(format!("discovery: 找到对端 {ip}:{port}"));
+        }
+        Ok(None) => discovery::trace("discovery: 未找到对端（无任何应答）"),
+        Err(e) => discovery::trace(format!("discovery: 出错 {e:?}")),
     }
+    out
 }
 
 /// 持久重同步监听器（响应方侧）。

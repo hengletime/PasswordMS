@@ -609,3 +609,75 @@ fn discovery_ignores_self_reply() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ===== ⑧ 多轮重播：窗口内必须真的反复广播（D-132）=====
+
+/// v1.4.14 真机现象：两端都在同一网段、版本一致、防火墙放行，但每次 `sync_now`
+/// 都是「4s 连接超时 + 1.5s 发现空等、零应答」。当时只发**一轮**广播，丢一次就
+/// 彻底救不回来。本用例钉住「窗口内持续重播」这个行为本身。
+///
+/// 怎么让请求方**收不到应答却继续重播**：用 `self_port` 自过滤——应答方照常应答
+/// （`replied` 能数到），但请求方按"D-74 自己应答自己"规则丢弃，于是它会一直等到
+/// 窗口结束，中途按轮次重播。这样就能用「应答方收到几次请求」直接量出广播轮数。
+#[test]
+fn discovery_rebroadcast_repeats_within_window() {
+    let dir = temp_dir("rebcast");
+    let mut a = Session::create(&dir.join("a.vault"), PWD_A, true).unwrap();
+    let mut b = Session::create(&dir.join("b.vault"), PWD_B, true).unwrap();
+    share_vk(&a, &mut b);
+    let sync_key = pair_rows(&mut a, &mut b);
+
+    let (mut server, discovery_addr, tcp_port) = server_with_discovery();
+
+    // ① 单轮（`discover_peer_with`）：一次请求只广播一次 → 应答方只收到 1 个请求。
+    let key_single: ItemKey = Zeroizing::new(*sync_key);
+    let single = std::thread::spawn(move || {
+        discovery::discover_peer_with(
+            &key_single,
+            &[discovery_addr],
+            Duration::from_millis(1000),
+            Some(tcp_port),
+        )
+        .unwrap()
+    });
+    let n_single = {
+        let repo = b.repo().unwrap();
+        poll_until(&mut server, repo, Duration::from_millis(1000), 0)
+    };
+    let single_result = single.join().unwrap();
+    assert!(
+        single_result.is_none(),
+        "构造前提：自应答必须被过滤（否则请求方拿到结果就停了，下面数不出轮数）"
+    );
+    assert_eq!(
+        n_single, 1,
+        "单轮入口在一个窗口内只能广播一次（这是测试与『单发语义』的契约，实际收到 {n_single} 次）"
+    );
+
+    // ② 多轮（`discover_peer_retrying`）：同窗口内应收到多次请求。
+    //    窗口 1000ms、间隔 400ms → 预期 3 轮；断言取 >= 2 是为了不被限速窗口误伤，
+    //    同时仍能与单轮的 1 次明确区分开。
+    let key_multi: ItemKey = Zeroizing::new(*sync_key);
+    let multi = std::thread::spawn(move || {
+        discovery::discover_peer_retrying(
+            &key_multi,
+            &[discovery_addr],
+            Duration::from_millis(1000),
+            Some(tcp_port),
+        )
+        .unwrap()
+    });
+    let n_multi = {
+        let repo = b.repo().unwrap();
+        poll_until(&mut server, repo, Duration::from_millis(1000), 0)
+    };
+    let multi_result = multi.join().unwrap();
+    assert!(multi_result.is_none(), "构造前提：多轮组的自应答同样被过滤");
+    assert!(
+        n_multi >= 2,
+        "窗口内必须持续重播（单轮只 1 次；实际收到 {n_multi} 次）—— \
+         若这里是 1，说明重播没生效，v1.4.14 的『丢一轮即永久失联』会原样回来"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

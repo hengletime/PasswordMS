@@ -36,6 +36,7 @@
 //!
 //! 两个 label 必须不同：否则应答可被当作请求回灌（反射/重放面）。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -60,6 +61,50 @@ type HmacSha256 = Hmac<Sha256>;
 pub const LABEL_REQ: &[u8] = b"pmsd1/req";
 /// 应答侧域分离标签（必须与 [`LABEL_REQ`] 不同）。
 pub const LABEL_RESP: &[u8] = b"pmsd1/resp";
+
+/// 发现广播的最大轮数（首轮 + 重播）。见 [`discover_peer_with`] 的多轮重播注释。
+const DISCOVERY_BROADCAST_ROUNDS: u32 = 5;
+/// 相邻两轮广播的间隔。
+const DISCOVERY_REBROADCAST_INTERVAL: Duration = Duration::from_millis(400);
+
+// ---------------------------------------------------------------------------
+// 诊断轨迹（D-132）
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// 本线程的发现轨迹。**纯诊断，不参与任何判定**。
+    ///
+    /// # 为什么要专门做这个东西
+    ///
+    /// core 层没有日志设施，发现失败时上层只能拿到一句 `err.network_unreachable`：
+    /// 「广播发到几块网卡」「每块网卡 send 成不成功」「收到几个包」「tag 对不上」
+    /// 全部丢失。v1.4.14 两端全败时，光靠日志完全无法区分「手机没收到广播」和
+    /// 「手机回了但应答到不了」——这是排查真正的卡点。
+    ///
+    /// 用 `thread_local` 而非全局：发现与重同步都在 `spawn_blocking` 的同一线程上
+    /// 顺序执行，`sync_now` 跑完 `drain_trace()` 一次即可，不会与其他请求串台。
+    static TRACE: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// 记录一条轨迹（上限 200 条，超出静默丢弃——诊断不能反过来拖累主流程）。
+pub(crate) fn trace(msg: impl Into<String>) {
+    TRACE.with(|t| {
+        let mut v = t.borrow_mut();
+        if v.len() < 200 {
+            v.push(msg.into());
+        }
+    });
+}
+
+/// 取走本线程已累积的轨迹（调用方负责落盘）。
+pub fn drain_trace() -> Vec<String> {
+    TRACE.with(|t| std::mem::take(&mut *t.borrow_mut()))
+}
+
+/// 开始一次新同步前清空轨迹，避免上一轮残留混进本次日志。
+pub fn clear_trace() {
+    TRACE.with(|t| t.borrow_mut().clear());
+}
 
 /// `q` 的固定长度（随机数，本次等待窗口内唯一）。
 const QUERY_LEN: usize = 32;
@@ -163,7 +208,23 @@ pub fn discover_peer(
     self_port: Option<u16>,
 ) -> CoreResult<Option<(String, u16)>> {
     let targets = broadcast_targets();
-    discover_peer_with(sync_key, &targets, wait, self_port)
+    discover_peer_retrying(sync_key, &targets, wait, self_port)
+}
+
+/// 多轮重播版（生产路径入口，同时暴露给「重播能救回丢包」的回归测试）。
+pub fn discover_peer_retrying(
+    sync_key: &ItemKey,
+    targets: &[SocketAddr],
+    wait: Duration,
+    self_port: Option<u16>,
+) -> CoreResult<Option<(String, u16)>> {
+    discover_rounds(
+        sync_key,
+        targets,
+        wait,
+        self_port,
+        DISCOVERY_BROADCAST_ROUNDS,
+    )
 }
 
 /// 可注入目标版本的 [`discover_peer`]（**测试必须用它**）。
@@ -182,6 +243,29 @@ pub fn discover_peer_with(
     wait: Duration,
     self_port: Option<u16>,
 ) -> CoreResult<Option<(String, u16)>> {
+    // **单轮**：保持 v1.4.14 及之前的语义（只发一次）。
+    //
+    // 为什么单独留这个入口而不是统一多轮：测试断言的是「一份请求对应一份应答」这个
+    // 单元行为，多轮重播会往应答方的 socket 缓冲里塞进上一轮的遗留请求——下一轮
+    // `poll` 先消费到旧 `q`、回了旧包，新那轮的应答反而被顶掉（`discovery_ignores_self_reply`
+    // 的对照组就是被这个打红的）。所以「发几轮」是**调用方的策略**，不是发现单元的语义。
+    discover_rounds(sync_key, targets, wait, self_port, 1)
+}
+
+/// 在等待窗口内**持续重播**的发现实现（生产路径唯一入口）。
+///
+/// # 为什么要重播
+///
+/// UDP 广播不保证送达：WiFi 省电会丢、AP 缓冲溢出会丢、手机刚从 Doze 唤醒时射频
+/// 还没就绪也会丢。v1.4.14 只发一轮，等于把「换网后能不能自愈」押在一次运气上——
+/// 真机观测到的正是 4s 连接超时 + 1.5s 空等、零应答。
+fn discover_rounds(
+    sync_key: &ItemKey,
+    targets: &[SocketAddr],
+    wait: Duration,
+    self_port: Option<u16>,
+    max_rounds: u32,
+) -> CoreResult<Option<(String, u16)>> {
     let q = rng::random_bytes(QUERY_LEN)?;
     let request = DiscoveryRequest {
         v: DISCOVERY_VERSION,
@@ -192,48 +276,120 @@ pub fn discover_peer_with(
 
     let socket = match UdpSocket::bind(("0.0.0.0", 0)) {
         Ok(s) => s,
-        Err(_) => return Ok(None),
+        Err(e) => {
+            trace(format!("discovery: bind 0.0.0.0:0 失败 err={e}"));
+            return Ok(None);
+        }
     };
     let _ = socket.set_broadcast(true);
-    for target in targets {
-        // 单个目标失败不影响其它网卡（接口已消失 / 无广播权限 / 无路由）。
-        let _ = socket.send_to(&payload, target);
-    }
+    let local = socket
+        .local_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "?".to_string());
+    trace(format!(
+        "discovery: start local={local} targets={} wait={}ms self_port={self_port:?}",
+        targets.len(),
+        wait.as_millis()
+    ));
 
+    // 多轮重播（D-132）：见 [`discover_rounds`] 的文档注释。窗口内等不到包就重发，
+    // 收到合法应答立即返回。
     let deadline = Instant::now() + wait;
+    let mut next_broadcast = Instant::now();
+    let mut rounds = 0u32;
+    let mut recv_total = 0u32;
+    let mut bad_json = 0u32;
+    let mut bad_q = 0u32;
+    let mut bad_tag = 0u32;
+    let mut self_reply = 0u32;
     let mut buf = [0u8; RECV_BUF];
+
     loop {
         let now = Instant::now();
         if now >= deadline {
+            trace(format!(
+                "discovery: timeout rounds={rounds} recv={recv_total} bad_json={bad_json} \
+                 bad_q={bad_q} bad_tag={bad_tag} self={self_reply} → 无应答"
+            ));
             return Ok(None);
         }
-        let remaining = deadline.saturating_duration_since(now);
-        let slice = remaining.max(Duration::from_millis(1));
+        if now >= next_broadcast && rounds < max_rounds {
+            rounds += 1;
+            let mut sent = 0u32;
+            let mut send_err = 0u32;
+            let mut first_err = String::new();
+            for target in targets {
+                // 单个目标失败不影响其它网卡（接口已消失 / 无广播权限 / 无路由），
+                // 但必须留痕——「某块网卡 send 一直失败」正是换网后自愈失效的典型形态。
+                match socket.send_to(&payload, target) {
+                    Ok(_) => sent += 1,
+                    Err(e) => {
+                        send_err += 1;
+                        if first_err.is_empty() {
+                            first_err = format!("{target}→{e}");
+                        }
+                    }
+                }
+            }
+            if rounds == 1 || send_err > 0 {
+                trace(format!(
+                    "discovery: 第{rounds}轮 广播 sent={sent} err={send_err}{}",
+                    if first_err.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" 首个错误={first_err}")
+                    }
+                ));
+            }
+            next_broadcast = now + DISCOVERY_REBROADCAST_INTERVAL;
+        }
+
+        // 收包等待 = min(距窗口末, 距下次重播)，保证不会因为等包而错过重播时机。
+        let until_deadline = deadline.saturating_duration_since(Instant::now());
+        let until_rebroadcast = next_broadcast.saturating_duration_since(Instant::now());
+        let slice = until_deadline
+            .min(until_rebroadcast)
+            .max(Duration::from_millis(1));
         if socket.set_read_timeout(Some(slice)).is_err() {
+            trace("discovery: set_read_timeout 失败");
             return Ok(None);
         }
         let (n, src) = match socket.recv_from(&mut buf) {
             Ok(v) => v,
-            // 超时或任何读错误：本轮发现结束（不区分，见方法文档）。
-            Err(_) => return Ok(None),
+            // 超时不是错误：回循环顶部判断「该重播了」还是「窗口已尽」。
+            Err(_) => continue,
         };
+        recv_total += 1;
         let Ok(resp) = serde_json::from_slice::<DiscoveryResponse>(&buf[..n]) else {
+            bad_json += 1;
             continue;
         };
         // `q` 不符 → 同一网段可能有另一台设备正在发现，丢弃继续等。
         if resp.v != DISCOVERY_VERSION || resp.q != q {
+            bad_q += 1;
             continue;
         }
         let expected = response_tag(sync_key, &q)?;
         if !tag_eq(&expected, &resp.tag) {
+            // 这一条最有诊断价值：收到了应答但 key 对不上，意味着**对方根本不是
+            // 持同一把 sync_key 的已配对设备**（旧配对残留 / 重新配对后另一端没更新）。
+            bad_tag += 1;
+            trace(format!(
+                "discovery: 收到 {src} 的应答但 tag 不匹配（对端不持有本 key）"
+            ));
             continue;
         }
         // 自己应答自己：端口与本机 TCP 监听口相同且来源是本机地址 → 丢弃。
         if let Some(own) = self_port {
             if resp.port == own && is_local_ip(src.ip()) {
+                self_reply += 1;
                 continue;
             }
         }
+        trace(format!(
+            "discovery: 命中 {src} port={} rounds={rounds} recv={recv_total}",
+            resp.port
+        ));
         return Ok(Some((src.ip().to_string(), resp.port)));
     }
 }

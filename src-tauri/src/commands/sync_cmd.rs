@@ -237,6 +237,9 @@ pub fn rename_paired_device(
 pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<SyncResultDto> {
     use std::sync::atomic::Ordering;
     let app_log = app.clone();
+    // D-132：日志里必须带设备 id，否则 2 台对端连续失败时无法分辨是哪台、
+    // 也无法对应「设备」页里的那一行。
+    let dev_for_log = device_id.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         // v1.2.4（根因 B）：本机持久重同步监听端口要随 HELLO 通告给对端，
@@ -273,15 +276,26 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
                 blobs: outcome.blobs,
             })
         };
+        passwordms_core::sync::discovery::clear_trace();
         let result = run();
         state.sync_busy.store(false, Ordering::SeqCst);
+        // D-132：把发现轨迹落盘。成功时也有价值——"靠发现把地址换成了新的"
+        // 是要写进文档的事实；失败时它是唯一能区分「手机没收到广播」与
+        // 「手机回了但应答到不了」的依据。合并成一行，避免几十次文件开关。
+        let traces = passwordms_core::sync::discovery::drain_trace();
+        if !traces.is_empty() {
+            crate::state::append_log(&app, &format!("[sync] 轨迹: {}", traces.join(" | ")));
+        }
         result
     })
     .await
     .map_err(|e| IpcError::internal(&format!("spawn_blocking sync_now: {e}")))?;
     if let Err(e) = &result {
         eprintln!("[sync_now] failed: {e:?}");
-        crate::state::append_log(&app_log, &format!("[sync_now] failed: {e:?}"));
+        crate::state::append_log(
+            &app_log,
+            &format!("[sync_now] failed: device={dev_for_log} err={e:?}"),
+        );
     }
     result
 }
