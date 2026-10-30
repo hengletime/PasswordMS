@@ -25,7 +25,6 @@
   import SyncStatus from './sync/SyncStatus.svelte';
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
   import { createAutoLock } from '../lib/auto-lock';
-  import { createAutoSync } from '../lib/auto-sync';
   import { api } from '../lib/ipc';
   import { session } from '../lib/stores/session.svelte';
   import { settings } from '../lib/stores/settings.svelte';
@@ -66,29 +65,13 @@
 
   // 解锁后加载数据（会话状态由 App 驱动）。
   //
-  // D-129：自动同步的启动**必须等这五路加载完**。`createAutoSync.start()` 一进来就要读
-  // `settings.value.sync_on_start` 与已配对设备数，早一秒读到的都是 store 默认值
-  // （开关 false、设备 0 台），于是「启动时同步」永远不会发生——那正是本次要修的缺陷
-  // 换了个地方重演。所以 `start()` 挂在这个 then 上，而不是直接写在挂载处。
-  $effect((): (() => void) => {
+  // **D-133（v1.4.16）**：原实现在这个 `.then` 上挂自动同步调度器的 `start()`，
+  // 自动同步已随本次回退删除（理由见 `docs/02-arch.md` §3.21 的回退说明）。
+  $effect((): void => {
     if (session.status.locked) {
-      return (): void => {};
+      return;
     }
-    // 锁定可能发生在 `loadAfterUnlock()` 的 await 期间（用户刚解锁立刻按锁定/超时自动锁）。
-    // 若不拦，`.then` 会在 cleanup 的 `stop()` **之后**才执行 `start()` —— 心跳从此无人取消，
-    // 每 60 秒空转一次直到进程退出；再次解锁还会叠加第二个心跳。`disposed` 挡的就是这个。
-    let disposed = false;
-    void loadAfterUnlock().then((): void => {
-      if (disposed) {
-        return;
-      }
-      void autoSync.start();
-    });
-    return (): void => {
-      disposed = true;
-      // 锁定 / 离开主界面：立即停心跳（下一次解锁由 `start()` 重新开）。
-      autoSync.stop();
-    };
+    void loadAfterUnlock();
   });
 
   /**
@@ -114,26 +97,6 @@
       ui.toast('error', 'err.load_partial');
     }
   }
-
-  // ===== D-129 同步自动化（「启动时同步」/「自动同步」两个开关的执行层）=====
-  // 与 autoLock 同一形态：逻辑全在 `lib/auto-sync.ts`（可注入假时钟单测），这里只注入真实依赖。
-  // 读的是 `settings.value`（**已保存值**），不是设置页的编辑草稿——草稿没保存就不该生效。
-  const autoSync = createAutoSync({
-    getSettings: (): { auto_sync: boolean; sync_on_start: boolean } => ({
-      auto_sync: settings.value.auto_sync,
-      sync_on_start: settings.value.sync_on_start,
-    }),
-    getDeviceCount: (): number => sync.devices.length,
-    isBusy: (): boolean => sync.syncingDeviceId !== null || sync.autoBusy,
-    runOnce: (): Promise<boolean> => sync.syncQuiet(),
-    now: (): number => Date.now(),
-    schedule: (fn, ms): (() => void) => {
-      const id = window.setTimeout(fn, ms);
-      return (): void => {
-        window.clearTimeout(id);
-      };
-    },
-  });
 
   // ===== D-61 自动锁定（A 案：闲置达档位即锁，无「从不」档）=====
   // 本组件只在 main 路由挂载（App.svelte 条件渲染）——锁定/切页即卸载，

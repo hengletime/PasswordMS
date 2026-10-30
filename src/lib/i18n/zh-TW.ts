@@ -356,8 +356,8 @@ export const zhTW = {
     auto_lock: '自動鎖定（分鐘）',
     auto_lock_updated: '自動鎖定時間已更新（{n} 分鐘）',
     auto_lock_failed: '讀取失敗：目前顯示的是預設值，無法取得實際設定。',
-    auto_sync: '自動同步',
-    sync_on_start: '啟動時同步',
+    // D-133：自動同步已回退為手動同步，兩個開關隨之刪除。
+    sync_manual_only: '同步只在你點「立即同步」時發生。',
     change_password: '修改主密碼',
     // D-114：改密成功必須有**留在原地**的明確回執（原先只 toast 一句 `common.ok`＝「確定」）。
     password_changed: '主密碼已修改，下次解鎖請使用新密碼。',
@@ -409,8 +409,6 @@ export const zhTW = {
     update_failed: '檢查失敗，請稍後重試。',
     update_download: '前往下載',
     saved: '設定已儲存',
-    sync_instant_hint: '這兩個選項勾選後立即儲存，無需再按下方儲存按鈕。請在另一台裝置上也開啟——兩端都開，才會互相主動同步。',
-    save_instant_failed: '儲存失敗，開關已還原，請重試。',
   },
   sync: {
     title: '同步',
@@ -446,17 +444,15 @@ export const zhTW = {
     last_sync: '上次同步',
     pending: '待同步變更',
     device_count: '裝置數',
-    auto_title: '開關狀態',
-    auto_switch_line: '自動同步 {auto} · 啟動時同步 {onstart}',
-    auto_state_on: '已開啟',
-    auto_state_off: '未開啟',
-    auto_last: '上次自動同步',
-    auto_not_yet: '本次解鎖後還沒執行過',
-    auto_ok: '成功（{n} 台）',
-    auto_partial: '部分成功（{ok}/{total} 台）',
-    auto_failed: '全部失敗（{total} 台）',
-    auto_failed_hint:
-      '對端鎖屏或沒有執行時，本機連不上它——這是同步失敗最常見的原因。請解鎖對端並保持 PasswordMS 保持執行，本機會自動重試（最慢 5 分鐘一次）。若兩端不在同一 Wi‑Fi，也會連不上。',
+    // D-134：手動同步的行動指引 + 本機網路。
+    local_net: '本機網路',
+    net_unknown: '未取得',
+    listen_port: '監聽埠 {port}',
+    not_listening: '未在監聽',
+    discovery_off: '區域網路自動發現未啟用（UDP {port} 埠綁定失敗），換網後本機不會回應對端的自動尋找。',
+    addr_unknown: '未記錄位址',
+    manual_sync_hint:
+      '同步前請讓另一台裝置解鎖、並保持 PasswordMS 停在前景——手機螢幕熄滅後系統會切斷它的網路，本機既連不上、也收不到任何回應。兩端「本機網路」中的位址應屬於同一網段；若對端位址長期對不上，請重新掃碼配對。',
     result_applied: '已合併 {n} 筆',
     result_conflicts: '產生 {n} 個衝突',
     adopt_requires_empty: '本機保險庫非空（{n} 筆），無法直接採用對方的金鑰。若兩台裝置此前已配對，請改用「裝置 → 立即同步」；若各自是獨立保險庫，則無法直接合併，請先匯出並清空一方，或改用對方重新建立保險庫。',

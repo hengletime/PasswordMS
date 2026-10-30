@@ -305,6 +305,31 @@ pub fn stop_resync_listener(app: &tauri::AppHandle) {
     };
 }
 
+/// 读取当前重同步监听器的**只读**网络信息（D-134）。
+///
+/// 返回 `(监听端口, UDP 发现应答是否可用)`；监听器未启动（锁定态 / 尚未解锁过）时
+/// 返回 `(None, false)`。
+///
+/// **为什么不能用 [`ensure_resync_listener`]**：那个函数会在没有监听器时**顺手创建**
+/// 一个——诊断命令绝不能有这种副作用（一次「看一眼本机端口」的点击不该把监听器拉起来，
+/// 更不该因此在锁定态留下一个活着的 socket）。这里只读既有 handle。
+///
+/// 锁中毒时按「没有监听器」返回：诊断信息本就允许降级，不让它把调用方拖进错误分支。
+pub fn resync_net_info(app: &tauri::AppHandle) -> (Option<u16>, bool) {
+    let state = app.state::<AppState>();
+    let guard = match state.resync.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    match guard.as_ref() {
+        Some(handle) => (
+            Some(handle.server.port()),
+            handle.server.discovery_enabled(),
+        ),
+        None => (None, false),
+    }
+}
+
 /// 后台轮询线程：非阻塞接受入站重同步连接，直到收到停止信号。
 ///
 /// **O2 三段式**：`poll_accept` 与 UDP 发现应答**不持 session 锁**；连接建立后

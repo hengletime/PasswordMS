@@ -113,6 +113,15 @@ impl Default for HealthConfig {
 }
 
 /// 保险库偏好设置。
+///
+/// **D-133（v1.4.16）**：`auto_sync` / `sync_on_start` 两个字段已删除。
+/// 它们自 v1.0 起只有定义与默认值，v1.4.13 才接上真正的调度器；但真机结论是
+/// **自动同步在手机上必须常驻前台服务才成立**，代价（常驻通知 + 耗电）大于收益，
+/// 主人决定回退为手动同步。字段一并删除而不是留着不用——留着就是「配置项承诺了
+/// 一个不存在的行为」，与本次缺陷同类。
+///
+/// 兼容性：serde 默认忽略未知字段，旧库里的这两个键在反序列化时被丢弃、
+/// 下次保存即消失，无需迁移。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VaultSettings {
     #[serde(default)]
@@ -121,10 +130,6 @@ pub struct VaultSettings {
     pub health: HealthConfig,
     #[serde(default = "default_clipboard_ttl")]
     pub clipboard_clear_secs: u16,
-    #[serde(default)]
-    pub auto_sync: bool,
-    #[serde(default)]
-    pub sync_on_start: bool,
 }
 
 fn default_clipboard_ttl() -> u16 {
@@ -137,8 +142,6 @@ impl Default for VaultSettings {
             generator: GeneratorOptions::default(),
             health: HealthConfig::default(),
             clipboard_clear_secs: CLIPBOARD_TTL_SECS,
-            auto_sync: false,
-            sync_on_start: false,
         }
     }
 }

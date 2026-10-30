@@ -21,8 +21,6 @@ export function defaultSettings(): VaultSettings {
     },
     health: { weak_max_len: 8, stale_days: 180 },
     clipboard_clear_secs: 30,
-    auto_sync: false,
-    sync_on_start: false,
   };
 }
 

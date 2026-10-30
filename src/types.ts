@@ -161,6 +161,10 @@ export interface DeviceDto {
   fingerprint: string;
   paired_at: number;
   last_sync_at?: number | null;
+  /** D-134：配对记录里保存的对端 IPv4（null = 没记下地址）。 */
+  peer_ip?: string | null;
+  /** D-134：配对记录里保存的对端重同步端口（null = 从未协商）。 */
+  peer_port?: number | null;
 }
 
 /** 生成器选项。 */
@@ -186,8 +190,20 @@ export interface VaultSettings {
   generator: GeneratorOptions;
   health: HealthConfig;
   clipboard_clear_secs: number;
-  auto_sync: boolean;
-  sync_on_start: boolean;
+  // D-133（v1.4.16）：`auto_sync` / `sync_on_start` 已随自动同步一起回退删除。
+  // 旧库里残留的这两个键会被 Rust 侧 serde 忽略，下次保存即消失。
+}
+
+/** D-134：本机同步网络信息（只读诊断，`sync_net_info`）。 */
+export interface SyncNetInfoDto {
+  /** 本机全部局域网 IPv4。 */
+  local_ips: string[];
+  /** 当前重同步监听端口（null = 监听器未启动）。 */
+  listen_port: number | null;
+  /** UDP 发现应答器是否绑定成功。 */
+  discovery_enabled: boolean;
+  /** 配对时的固定发现端口（两端应一致）。 */
+  discovery_port: number;
 }
 
 /** 体检报告。 */

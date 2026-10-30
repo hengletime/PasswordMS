@@ -390,8 +390,8 @@ export const zhCN = {
     auto_lock: '自动锁定（分钟）',
     auto_lock_updated: '自动锁定档位已更新（{n} 分钟）',
     auto_lock_failed: '读取失败：当前显示的是兜底档位，库里实际档位未能取得。',
-    auto_sync: '自动同步',
-    sync_on_start: '启动时同步',
+    // D-133：自动同步已回退成手动同步，两个开关随之删除；这里只留一句事实说明。
+    sync_manual_only: '同步只在你点「立即同步」时发生。',
     change_password: '修改主密码',
     // D-114：改密成功必须有**留在原地**的明确回执（原先只 toast 一句 `common.ok` =「确定」，
     // 三秒消失，主人实测「右下角一闪而过，看不出到底成没成」）。
@@ -463,8 +463,6 @@ export const zhCN = {
     update_download: '前往下载',
     saved: '设置已保存',
     // D-130：同步两个开关改为勾选即存（不进底部保存按钮那条路）。
-    sync_instant_hint: '这两项勾选后立即保存，无需点下方保存按钮。请在另一台设备上也打开——两端都开，才会互相主动同步。',
-    save_instant_failed: '保存失败，开关已恢复原状，请重试。',
   },
   sync: {
     title: '同步',
@@ -502,19 +500,17 @@ export const zhCN = {
     last_sync: '上次同步',
     pending: '待同步变更',
     device_count: '设备数',
-    // D-130：自动同步的**如实回执**。原实现失败全静默，界面只剩「上次同步时间没变」，
-    // 而「没变」同时对应「没跑」「跑了失败」「跑成功了但没变更」三种现实。
-    auto_title: '开关状态',
-    auto_switch_line: '自动同步 {auto} · 启动时同步 {onstart}',
-    auto_state_on: '已开启',
-    auto_state_off: '未开启',
-    auto_last: '上次自动同步',
-    auto_not_yet: '本次解锁后还没跑过',
-    auto_ok: '成功（{n} 台）',
-    auto_partial: '部分成功（{ok}/{total} 台）',
-    auto_failed: '全部失败（{total} 台）',
-    auto_failed_hint:
-      '对端锁屏或没有运行时，本机连不上它——这是同步失败最常见的原因。请解锁对端并保持 PasswordMS 在运行，本机会自动重试（最慢 5 分钟一次）。若两端不在同一 Wi‑Fi，也会连不上。',
+    // D-134：手动同步的**行动指引**与**本机网络**。手动同步失败最常见的原因是另一台
+    // 设备息屏后被 Android 掐掉后台网络（静默丢包：不回 RST、也不回发现应答），而用户
+    // 看到的只有一句「网络不可达」。把两端各自的地址/端口摆出来，用户才能自己对照。
+    local_net: '本机网络',
+    net_unknown: '未取到',
+    listen_port: '监听端口 {port}',
+    not_listening: '未在监听',
+    discovery_off: '局域网自动发现未启用（UDP {port} 端口绑定失败），换网后本机不会应答对端的自动查找。',
+    addr_unknown: '未记录地址',
+    manual_sync_hint:
+      '同步前请让另一台设备解锁、并保持 PasswordMS 停在前台——手机息屏后系统会掐断它的网络，本机既连不上、也收不到任何应答。两端「本机网络」里的地址应属于同一网段；若对端地址长期对不上，请重新扫码配对。',
     result_applied: '已合并 {n} 条',
     result_conflicts: '产生 {n} 个冲突',
     adopt_requires_empty: '本机保险库非空（{n} 条），无法直接采用对端密钥。若两台设备此前已配对，请改用「设备 → 立即同步」；若各自是独立保险库，则无法直接合并，请先导出并清空一方，或改用对端重新创建保险库。',

@@ -5,7 +5,7 @@
 //! **直连重同步**：`sync_now` 读取已配对设备地址 → 建立连接 → 复用 sync 层握手（会话密钥
 //! 派生 + 双向确认）→ 拉取/推送变更 → 合并（冲突入冲突箱）→ 更新游标（修复 D-11）。
 
-use passwordms_core::constants::{SYNC_PORT_MAX, SYNC_PORT_MIN};
+use passwordms_core::constants::{DISCOVERY_PORT, SYNC_PORT_MAX, SYNC_PORT_MIN};
 use passwordms_core::crypto::rng;
 use passwordms_core::model::conflict::ConflictChoice;
 use passwordms_core::model::now_ms;
@@ -17,7 +17,9 @@ use passwordms_core::sync::server::SyncServer;
 use tauri::Manager;
 use zeroize::Zeroizing;
 
-use crate::dto::{ConflictDto, DeviceDto, PairResultDto, PairingDto, SyncResultDto, SyncStatusDto};
+use crate::dto::{
+    ConflictDto, DeviceDto, PairResultDto, PairingDto, SyncNetInfoDto, SyncResultDto, SyncStatusDto,
+};
 use crate::error::{lock_err, IpcError, IpcResult};
 use crate::state::{ensure_resync_listener, identity_path, AppState};
 
@@ -298,6 +300,25 @@ pub async fn sync_now(app: tauri::AppHandle, device_id: String) -> IpcResult<Syn
         );
     }
     result
+}
+
+/// D-134：本机同步网络信息（只读诊断）。
+///
+/// 为什么必须把它上屏：手动同步失败时用户手上只有一句「网络不可达」，而真正要判断的
+/// 只有一件事——**电脑记的地址和手机此刻的地址/端口是不是同一个**。这两个字
+/// （`local_ips` 与 `listen_port`）原来只埋在日志和 core 结构里，两端各看一眼就能定性。
+///
+/// 刻意**不取 session 锁**：它不读库、只读网络状态，且要在「同步失败后立刻刷新」
+/// 这种时序下可用；这些信息（局域网 IP）本来就在配对二维码里明文展示，无新增暴露面。
+#[tauri::command(rename_all = "snake_case")]
+pub fn sync_net_info(app: tauri::AppHandle) -> IpcResult<SyncNetInfoDto> {
+    let (listen_port, discovery_enabled) = crate::state::resync_net_info(&app);
+    Ok(SyncNetInfoDto {
+        local_ips: passwordms_core::sync::transport::local_ipv4s(),
+        listen_port,
+        discovery_enabled,
+        discovery_port: DISCOVERY_PORT,
+    })
 }
 
 /// F-09 同步状态查询。

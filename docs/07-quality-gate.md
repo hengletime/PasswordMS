@@ -79,6 +79,29 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 > 验证：连跑 3 次比值 **0.974 / 0.990 / 1.005**；第 3 次整机抖动（三路径中位数全冲到 2500、p10 全在 1700）比值仍 1.005 —— 因为负载对三条路径等量施加。
 > **判据**：一条时序测试若把「整机负载」记成「路径差异」，它就是在随机报红；改采样口径不算放宽阈值，改阈值才算。
 
+### 1.2b 最近一次完整实跑（2026-10-30 11:40 起 · v1.4.16 · D-133/D-134）
+
+> 口径：`bash scripts/gate-all.sh --keep-going` 一次跑完 8 门，文件树在起跑前已静止（构建产物晚于全部源码）。
+> 本节只记**这一次**的定值，引用请连时间一起引。
+
+| # | 门 | 本次实测（v1.4.16） | 判定 |
+|---|----|------|------|
+| 1 | 前端单测 | **53 文件 475/475 通过**（较 v1.4.15 的 487：删 `auto-sync.test.ts` 20 例（D-133 回退）、新增 `d133-d134-sync-guard.test.ts` 8 例） | ✅ 5s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 9s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（同既有浅色按钮对比度项） | ✅ 1s |
+| 4 | fmt | **0 处差异** | ✅ 1s |
+| 5 | Rust 全量 | **283 通过 / 0 失败**（`cargo test -p passwordms-core`，30 条 `test result` 行） | ✅ 505s |
+| 6 | clippy | **0 warning**（`--workspace --all-targets`） | ✅ 17s |
+| 7 | 体积门-桌面 | 历史 MSI/NSIS 逐个达标；v1.4.16 正式产物 MSI **2.77 MiB** + NSIS **1.95 MiB** | ✅ 12s |
+| 8 | 体积门-Android | 10 个历史 APK 逐个达标；v1.4.16 APK **7.37 MB**（7,725,483 B）≤ 12 MB | ✅ 4s |
+
+**总判定：PASS（8 门全过 / 0 失败 / 0 跳过）。**
+
+> ⚠️ `cargo test --workspace` 在本机**不可用**：`passwordms`（cdylib）作为测试目标链接时报
+> `ld: error: export ordinal too large`（windows-gnu + cdylib 的既有环境问题，与本轮改动无关）。
+> 因此 Rust 门固定跑 `-p passwordms-core`（业务逻辑与守门用例全都在这个 crate 里），
+> 命令层靠 clippy + 前端 `ipc-contract.test.ts`（命令名/属性计数/`rename_all` 全比对）兜住。
+
 ### 1.3 Rust 全量 149 例逐 target 累加（2026-10-22 14:10 实跑，148 通过 + 1 `#[ignore]`）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。

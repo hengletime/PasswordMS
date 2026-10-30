@@ -10,20 +10,6 @@ import { PEER_SYNC_APPLIED_EVENT, shouldReloadAfterPeerSync } from '../sync-appl
 import { vault } from './vault.svelte';
 import { ui } from './ui.svelte';
 
-/** D-130：一次自动同步的结果快照（供状态页展示，回答「到底跑没跑」）。 */
-export interface AutoSyncOutcome {
-  /** 结束时刻（毫秒）。 */
-  at: number;
-  /** 是否至少一台成功。 */
-  ok: boolean;
-  /** 本次遍历的设备总数。 */
-  total: number;
-  /** 成功台数。 */
-  okCount: number;
-  /** 第一台失败设备的错误文案 key（全成功时为 null）。 */
-  errorKey: string | null;
-}
-
 /** 同步 store。 */
 class SyncStore {
   /** 当前 Host 配对信息（null = 未在配对）。 */
@@ -67,26 +53,6 @@ class SyncStore {
    * `syncButtonState()`（`src/lib/device-label.ts`，有单测守门）。
    */
   syncingDeviceId = $state<string | null>(null);
-  /**
-   * D-129：自动同步（静默）是否在跑。
-   *
-   * 为什么与 `syncingDeviceId` 分开：那个字段驱动设备行按钮的转圈，自动同步在后台跑时
-   * 不该让任何按钮转起来（用户没点，却看到「正在同步…」）。但两者必须**互斥**——
-   * 一个后台同步和一个手动同步同时推进同一份 `DeviceSyncState` 会产生 seq/base 竞态
-   * （后端 `sync_busy` 也会挡，但前端先让路可以少一次注定失败的 IPC）。
-   */
-  autoBusy = $state(false);
-  /**
-   * D-130：**上一次自动同步的结果**（null = 本次解锁还没跑过）。
-   *
-   * 为什么必须留这份状态（主人实测反馈「等了很久也没自动同步」）：原实现里
-   * `syncQuiet` 把所有失败吞进空 `catch`，界面上唯一的痕迹是「上次同步时间没变」——
-   * 而「没变」同时对应三种完全不同的现实：没跑、跑了失败、跑成功了但没有变更。
-   * 用户无法区分，只能猜，于是结论必然是「这个功能没实现」。
-   *
-   * 它只记时间/成败/失败原因，**不弹 toast**——自动同步每几分钟一次，弹窗是骚扰。
-   */
-  autoLast = $state<AutoSyncOutcome | null>(null);
   /**
    * D-69：上一次 join 成功时拿到的**会话码**，供 `PairScan` 与电脑屏逐字核对。
    *
@@ -289,65 +255,6 @@ class SyncStore {
     }
   }
 
-  /**
-   * D-129：自动同步用的**静默**同步（不弹任何 toast），返回「是否至少一台成功」。
-   *
-   * 与 `syncNow` 的三点区别，每一点都是刻意的：
-   * 1. **不弹提示**。自动同步每 5 分钟一次，成功弹一条等于骚扰；失败弹一条更糟——
-   *    对端离线是自动同步的**常态**（手机不在同一局域网、笔记本合上了），不是错误。
-   * 2. **遍历全部已配对设备**。`syncNow` 同步的是用户点的那一台；自动同步没有「用户点的那台」。
-   * 3. **不占 `syncingDeviceId`**。那是设备行按钮的转圈态，自动同步不该让按钮转起来。
-   *    用独立的 `autoBusy` 防重入，并**让路**给手动同步（用户在等的就是他点的那台）。
-   *
-   * `vault.load` 用静默模式：自动同步期间不该因为一次读库失败弹红字。
-   * 编辑器草稿是独立 `$state` 拷贝（`ItemEditor.svelte:28-34`），reload 不会冲掉它。
-   */
-  async syncQuiet(): Promise<boolean> {
-    if (this.autoBusy || this.syncingDeviceId !== null) {
-      return false; // 已在跑 / 手动同步占用中：这一拍直接放弃，等下一拍
-    }
-    this.autoBusy = true;
-    let okCount = 0;
-    let applied = 0;
-    let errorKey: string | null = null;
-    // 快照：遍历期间若会话被锁定，`sync.reset()` 会清空 `devices`，
-    // 直接迭代响应式数组会在中途丢元素。
-    const targets = [...this.devices];
-    try {
-      for (const device of targets) {
-        try {
-          const result = await api.sync.now(device.device_id);
-          okCount += 1;
-          applied += result.applied;
-        } catch (err) {
-          // 静默：单台失败不影响其余设备，也不上屏；但**必须记下原因**
-          // （D-130：原实现连这里都空着，导致「为什么没同步」无处可说）。
-          if (errorKey === null) {
-            errorKey = toAppError(err).messageKey;
-          }
-        }
-      }
-      if (applied > 0) {
-        // D-47：同步进来的数据必须立即上屏，否则要切页才刷新。
-        await vault.load(true);
-      }
-      if (okCount > 0) {
-        await this.loadStatus(true);
-        await this.loadConflicts(true);
-      }
-    } catch {
-      // 装载/刷新失败：不弹提示，调度器会按失败退避。
-      if (errorKey === null) {
-        errorKey = 'err.unknown';
-      }
-    } finally {
-      this.autoBusy = false;
-      // D-130：无论成败都留痕（含 total=0 的情形），状态页据此如实显示。
-      this.autoLast = { at: Date.now(), ok: okCount > 0, total: targets.length, okCount, errorKey };
-    }
-    return okCount > 0;
-  }
-
   /** 读取某冲突的当前选择。 */
   choiceOf(conflictId: string): ConflictChoice | null {
     return this.choices[conflictId] ?? DEFAULT_CONFLICT_CHOICE;
@@ -388,11 +295,6 @@ class SyncStore {
     this.choices = {};
     // D-66：锁定会中断所有在飞的同步，忙碌态必须一并复位（否则解锁后按钮永久置灰）。
     this.syncingDeviceId = null;
-    // D-129：自动同步的占用标记同理（否则锁定再解锁后 `syncQuiet` 永远提前返回）。
-    this.autoBusy = false;
-    // D-130：上一次自动同步的结果不跨解锁（与「上次同步时间」不同——那是库里的持久事实，
-    // 这只是「本会话跑过没」的运行时痕迹，留着会让用户以为刚跑过）。
-    this.autoLast = null;
     // D-69：上一次配对的会话码不该跨解锁残留（下次解锁看到的应是空白，而非旧数据）。
     this.lastPairSessionCode = null;
     this.lastPairDeviceName = '';

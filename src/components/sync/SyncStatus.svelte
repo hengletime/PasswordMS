@@ -2,17 +2,51 @@
   // 同步状态与手动同步（F-09）。失败原因按错误码映射为文案（由 store 统一 Toast）。
   // D-66：「立即同步」的忙碌态**按设备隔离**（`sync.syncingDeviceId`）——
   // 被点的那台转圈 + `sync.syncing`，其余台只置灰不转圈（判定见 lib/device-label.ts）。
+  // D-134：页面常驻「本机网络」与每台设备的「配对记录地址」——手动同步失败时，
+  // 用户唯一能自己判断的是「两端地址/端口是否对得上」，看不到就只剩一句「网络不可达」。
+  import { onMount } from 'svelte';
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
   import { formatDateTime } from '../../lib/constants';
   import { syncButtonState } from '../../lib/device-label';
+  import { api } from '../../lib/ipc';
   import { sync } from '../../lib/stores/sync.svelte';
-  import { settings } from '../../lib/stores/settings.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
+  import type { SyncNetInfoDto } from '../../types';
+
+  /** 本机网络诊断（只读）。`null` = 尚未取到（不显示，也不据此下结论）。 */
+  let net = $state<SyncNetInfoDto | null>(null);
+
+  async function refreshNet(): Promise<void> {
+    try {
+      net = await api.sync.netInfo();
+    } catch {
+      // 诊断取不到不影响同步本身：保持上一份，绝不让它把页面变成错误态。
+    }
+  }
 
   async function refresh(): Promise<void> {
     await sync.loadStatus();
     await sync.loadDevices();
+    await refreshNet();
+  }
+
+  /** 点「立即同步」：无论成败都顺手刷新本机网络——失败时用户要看的正是那两个数。 */
+  async function syncOne(deviceId: string): Promise<void> {
+    await sync.syncNow(deviceId);
+    await refreshNet();
+  }
+
+  onMount((): void => {
+    void refreshNet();
+  });
+
+  /** 设备行的「配对记录地址」：IP 与端口可能各自缺失，缺哪个就显示未知。 */
+  function recordedAddr(ip?: string | null, port?: number | null): string {
+    if (!ip) {
+      return ui.t('sync.addr_unknown');
+    }
+    return port ? `${ip}:${port}` : ip;
   }
 </script>
 
@@ -48,8 +82,11 @@
       {#each sync.devices as device (device.device_id)}
         {@const st = syncButtonState(sync.syncingDeviceId, device.device_id)}
         <li class="sync-row">
-          <span class="sync-name">{device.device_name}</span>
-          <button class="pms-btn is-sm" type="button" onclick={() => void sync.syncNow(device.device_id)} disabled={st.disabled}>
+          <span class="sync-who">
+            <span class="sync-name">{device.device_name}</span>
+            <span class="sync-addr">{recordedAddr(device.peer_ip, device.peer_port)}</span>
+          </span>
+          <button class="pms-btn is-sm" type="button" onclick={() => void syncOne(device.device_id)} disabled={st.disabled}>
             {#if st.syncing}
               <Spinner size={13} />
               {ui.t('sync.syncing')}
@@ -63,37 +100,31 @@
     </ul>
   {/if}
 
-  <!-- D-130：自动同步的**如实回执**。原实现失败全部吞掉，界面上只剩「上次同步时间没变」，
-       而「没变」同时对应「没跑」「跑了失败」「跑成功了但没变更」三种现实 —— 用户只能猜。 -->
-  <div class="sync-auto">
-    <div class="sync-auto-line">
-      <span class="pms-label">{ui.t('sync.auto_title')}</span>
-      <span class="sync-auto-state">
-        {ui.t('sync.auto_switch_line', {
-          auto: settings.value.auto_sync ? ui.t('sync.auto_state_on') : ui.t('sync.auto_state_off'),
-          onstart: settings.value.sync_on_start ? ui.t('sync.auto_state_on') : ui.t('sync.auto_state_off'),
-        })}
+  <!-- D-134：本机网络。与设备列表之间用分隔线隔开——它是「诊断信息」，不是可点的操作。 -->
+  <div class="sync-net">
+    <div class="sync-net-line">
+      <span class="pms-label">{ui.t('sync.local_net')}</span>
+      <span class="sync-net-value">
+        {#if net === null}
+          {ui.t('sync.net_unknown')}
+        {:else}
+          {net.local_ips.length > 0 ? net.local_ips.join(' / ') : ui.t('sync.net_unknown')}
+          <span class="sync-net-sep">·</span>
+          {#if net.listen_port === null}
+            {ui.t('sync.not_listening')}
+          {:else}
+            {ui.t('sync.listen_port', { port: net.listen_port })}
+          {/if}
+        {/if}
       </span>
     </div>
-    <div class="sync-auto-line">
-      <span class="pms-label">{ui.t('sync.auto_last')}</span>
-      {#if sync.autoLast === null}
-        <span class="sync-auto-state">{ui.t('sync.auto_not_yet')}</span>
-      {:else}
-        {@const a = sync.autoLast}
-        <span class="sync-auto-state" class:is-bad={!a.ok}>
-          {formatDateTime(a.at, ui.locale)} · {a.ok
-            ? a.okCount === a.total
-              ? ui.t('sync.auto_ok', { n: a.okCount })
-              : ui.t('sync.auto_partial', { ok: a.okCount, total: a.total })
-            : ui.t('sync.auto_failed', { total: a.total })}{#if !a.ok && a.errorKey}&nbsp;· {ui.t(a.errorKey)}{/if}
-        </span>
-      {/if}
-    </div>
-    {#if sync.autoLast !== null && !sync.autoLast.ok}
-      <!-- 这条是给「为什么同步不上」的**行动指引**，不是免责声明。 -->
-      <p class="pms-meta sync-auto-hint">{ui.t('sync.auto_failed_hint')}</p>
+    {#if net !== null && !net.discovery_enabled}
+      <!-- 发现应答没起来 = 这台设备不会回应别人的「换网后自动找对端」广播。 -->
+      <p class="pms-meta sync-net-warn">{ui.t('sync.discovery_off', { port: net.discovery_port })}</p>
     {/if}
+    <!-- 这条是**行动指引**，不是免责声明：手动同步最常见的失败原因是另一台设备息屏后
+         被系统掐掉后台网络，用户看到的却只有一句「网络不可达」。 -->
+    <p class="pms-meta">{ui.t('sync.manual_hint')}</p>
   </div>
 </div>
 
@@ -148,12 +179,23 @@
     border-radius: var(--pms-r);
     background: var(--pms-surface);
   }
+  /* 名称与记录地址上下叠放：地址是次要信息，但必须留在同一行里才好对照。 */
+  .sync-who {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+  }
   .sync-name {
     font-size: 0.88rem;
   }
-  /* D-130：自动同步回执区。与上方设备列表之间用一条分隔线隔开——
-     它是「诊断信息」，不是可点的操作，混在列表里会被当成又一条设备。 */
-  .sync-auto {
+  .sync-addr {
+    font-size: 0.75rem;
+    color: var(--pms-muted);
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .sync-net {
     margin-top: 0.9rem;
     padding-top: 0.75rem;
     border-top: 1px solid var(--pms-border);
@@ -161,24 +203,25 @@
     flex-direction: column;
     gap: 0.35rem;
   }
-  .sync-auto-line {
+  .sync-net-line {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
     gap: 0.75rem;
     font-size: 0.82rem;
   }
-  .sync-auto-state {
+  .sync-net-value {
     color: var(--pms-fg);
     text-align: right;
-    /* 失败原因可能较长（含错误文案），允许换行而不是挤出卡片。 */
+    font-variant-numeric: tabular-nums;
+    /* 多网卡机器会列出多条地址，必须允许换行而不是挤出卡片。 */
     overflow-wrap: anywhere;
   }
-  .sync-auto-state.is-bad {
-    color: var(--pms-danger);
+  .sync-net-sep {
+    margin: 0 0.3rem;
+    color: var(--pms-muted);
   }
-  .sync-auto-hint {
-    margin: 0.15rem 0 0;
-    line-height: 1.5;
+  .sync-net-warn {
+    color: var(--pms-warning);
   }
 </style>

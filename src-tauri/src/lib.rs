@@ -258,6 +258,8 @@ pub fn run() {
             commands::sync_cmd::unpair,
             commands::sync_cmd::sync_now,
             commands::sync_cmd::sync_status,
+            // D-134：本机同步网络信息（只读诊断，手动同步失败时定性用）
+            commands::sync_cmd::sync_net_info,
             commands::sync_cmd::list_conflicts,
             commands::sync_cmd::resolve_conflict,
             // settings

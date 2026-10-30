@@ -386,8 +386,8 @@ export const enUS: Messages = {
     auto_lock: 'Auto-lock (minutes)',
     auto_lock_updated: 'Auto-lock updated ({n} min)',
     auto_lock_failed: 'Could not read this setting; the value shown is the default.',
-    auto_sync: 'Auto sync',
-    sync_on_start: 'Sync on start',
+    // D-133: auto-sync was rolled back to manual sync; the two switches were removed with it.
+    sync_manual_only: 'Sync runs only when you tap "Sync now".',
     change_password: 'Change master password',
     // D-114: success must leave a persistent, explicit receipt (it used to toast `common.ok`).
     password_changed: 'Master password changed. Use the new one the next time you unlock.',
@@ -456,8 +456,6 @@ export const enUS: Messages = {
     update_failed: 'Check failed. Please try again later.',
     update_download: 'Get the new version',
     saved: 'Settings saved',
-    sync_instant_hint: 'These two save as soon as you tick them — no need to press the save button below. Turn them on for the other device too: only then will both sides sync proactively.',
-    save_instant_failed: 'Save failed. The switch was restored; please try again.',
   },
   sync: {
     title: 'Sync',
@@ -495,17 +493,15 @@ export const enUS: Messages = {
     last_sync: 'Last sync',
     pending: 'Pending changes',
     device_count: 'Devices',
-    auto_title: 'Switch state',
-    auto_switch_line: 'Auto sync {auto} · Sync on start {onstart}',
-    auto_state_on: 'on',
-    auto_state_off: 'off',
-    auto_last: 'Last auto sync',
-    auto_not_yet: 'Not run since this unlock',
-    auto_ok: 'Succeeded ({n} device(s))',
-    auto_partial: 'Partly succeeded ({ok}/{total} devices)',
-    auto_failed: 'All failed ({total} devices)',
-    auto_failed_hint:
-      'The peer cannot be reached while it is locked or not running — this is the most common cause of a failed sync. Unlock the peer and keep PasswordMS running; this device retries automatically (at most every 5 minutes). Two devices on different Wi-Fi networks cannot reach each other either.',
+    // D-134: action guidance + local network readout for manual sync.
+    local_net: 'This device',
+    net_unknown: 'not available',
+    listen_port: 'port {port}',
+    not_listening: 'not listening',
+    discovery_off: 'LAN auto-discovery is off (binding UDP {port} failed); after a network change this device will not answer peers looking for it.',
+    addr_unknown: 'no address recorded',
+    manual_sync_hint:
+      'Before syncing, unlock the other device and keep PasswordMS in the foreground — once a phone screen turns off, the system cuts off its network, so this device can neither connect nor get any reply. The addresses under "This device" on both ends should be in the same subnet; if the recorded peer address keeps mismatching, pair again by scanning the code.',
     result_applied: 'Merged {n} items',
     result_conflicts: '{n} conflicts detected',
     adopt_requires_empty: 'The local vault is not empty ({n} items), so the peer key cannot be adopted directly. If these devices were paired before, use "Devices → Sync now" instead; if they are separate vaults, they cannot be merged directly — export and clear one side first, or re-create the vault from the peer.',

@@ -161,6 +161,10 @@ impl From<ConflictEntry> for ConflictDto {
 }
 
 /// 已配对设备 DTO。
+///
+/// **D-134**：`peer_ip` / `peer_port` 上屏。手动同步失败时最需要回答的问题是
+/// 「我记的地址和对方现在用的地址是不是同一个」——这两个值原来只存在于 core 的
+/// `PairedDevice` 和日志里，界面上看不到，用户只能看到一句「网络不可达」。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceDto {
     pub device_id: String,
@@ -168,6 +172,10 @@ pub struct DeviceDto {
     pub fingerprint: String,
     pub paired_at: i64,
     pub last_sync_at: Option<i64>,
+    /// 配对记录里保存的对端 IPv4（`None` = 从未记下地址）。
+    pub peer_ip: Option<String>,
+    /// 配对记录里保存的对端重同步端口（`None` = 从未协商过）。
+    pub peer_port: Option<u16>,
 }
 
 impl From<PairedDevice> for DeviceDto {
@@ -178,8 +186,28 @@ impl From<PairedDevice> for DeviceDto {
             fingerprint: d.fingerprint,
             paired_at: d.paired_at,
             last_sync_at: d.last_sync_at,
+            peer_ip: d.peer_ip,
+            peer_port: d.peer_port,
         }
     }
+}
+
+/// 本机同步网络信息（**只读诊断**，D-134）。
+///
+/// 为什么要新开一个命令而不是塞进 `sync_status`：这个值要在**未解锁**时也能回答
+/// 「我在不在监听」吗？——不需要，同步本来就只在解锁期存在。但 `sync_status`
+/// 的语义是「库里的同步事实」，而这份是「本机此刻的网络事实」，混在一起会让
+/// 调用方在缓存/刷新时取到两个不同时钟的量。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncNetInfoDto {
+    /// 本机全部局域网 IPv4（多网卡机器会有多条）。
+    pub local_ips: Vec<String>,
+    /// 当前重同步 TCP 监听端口（`None` = 监听器未启动/已随锁定停止）。
+    pub listen_port: Option<u16>,
+    /// UDP 发现应答器是否绑定成功（`false` = 端口被占/无权限，未启用的机器不会应答别人的发现广播）。
+    pub discovery_enabled: bool,
+    /// 配对时的固定发现端口（供用户核对两端一致）。
+    pub discovery_port: u16,
 }
 
 /// 体检报告 DTO（复用核心结构）。

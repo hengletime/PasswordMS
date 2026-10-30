@@ -293,8 +293,9 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // 的 target 条件依赖段），函数体内塞 cfg 分支也会把桌面 API 引用留进移动端编译单元。
     // 所以 `commands/prefs_cmd.rs` 给了 `cfg(desktop)` + `cfg(not(desktop))` **两套同名同签名
     // 实现**，各带一份属性 ⇒ 4 个名字 × 2 = 8 个属性，属性总数 63 + 8 = 71。
-    expect(total).toBe(71);
-    expect(withAttr).toBe(71);
+    // D-134（本机同步网络信息）：+1（sync_net_info），属性 71 → 72、命令名 67 → 68。
+    expect(total).toBe(72);
+    expect(withAttr).toBe(72);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会是 71/71，但前端在 Android 上 invoke
@@ -303,8 +304,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(71);
-    expect(new Set(names).size).toBe(67);
+    expect(names.length).toBe(72);
+    expect(new Set(names).size).toBe(68);
   });
 });
 

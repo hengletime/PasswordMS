@@ -25,6 +25,7 @@ import type {
   PairResultDto,
   PrefsDto,
   StatusDto,
+  SyncNetInfoDto,
   SyncResultDto,
   SyncStatusDto,
   TemplateTexts,
@@ -240,6 +241,8 @@ export const sync = {
   now: (deviceId: string): Promise<SyncResultDto> =>
     invoke<SyncResultDto>('sync_now', { device_id: deviceId }),
   status: (): Promise<SyncStatusDto> => invoke<SyncStatusDto>('sync_status'),
+  // D-134：本机同步网络信息（只读诊断）：本机 IPv4、监听端口、发现应答是否可用。
+  netInfo: (): Promise<SyncNetInfoDto> => invoke<SyncNetInfoDto>('sync_net_info'),
   listConflicts: (): Promise<ConflictDto[]> => invoke<ConflictDto[]>('list_conflicts'),
   // D-112：copySuffix 为 KeepBoth 副本标题后缀（前端按 UI 语言传 i18n 文案）。
   resolveConflict: (conflictId: string, choice: ConflictChoice, copySuffix: string): Promise<void> =>

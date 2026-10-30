@@ -1517,7 +1517,11 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
 
 ---
 
-### 3.21 D-129：同步自动化——两个「假开关」终于有消费点（1.4.13，2026-10-29）
+### 3.21 D-129：同步自动化——两个「假开关」终于有消费点（1.4.13，2026-10-29；**1.4.16 已回退，见 §3.23**）
+
+> **本节已作废（v1.4.16 / D-133）。** 自动同步整条链路（`src/lib/auto-sync.ts`、`syncQuiet()`、
+> 两个设置开关、状态页回执）已随 D-133 一并删除，同步回到「点『立即同步』才发生」。
+> 保留本节是为了留下**为什么当初做、又为什么撤**的完整链条，回退理由见 §3.23。
 
 #### 3.21.1 缺陷：开关能存能读，全仓没有人读它做事
 
@@ -1751,6 +1755,97 @@ seq/base 竞态（后端 `sync_busy` 也会挡，前端先让路能少一次注�
 > `recv=0` 是「广播没到 / 对方不应答」；`bad_tag>0` 是「对方持有的 `sync_key` 与本机不一致」
 > （旧配对残留或重配对未同步），两者修法完全不同。
 
+### 3.24 D-133 / D-134：自动同步回退 + 手动同步的网络信息上屏（1.4.16，2026-10-30）
+
+#### 3.24.1 真机取证（v1.4.15 双端，全部实测，不是推断）
+
+主人回传的轨迹（10:36:03 与 10:37:20 两次，间隔 37s）：
+
+```
+[sync] 轨迹: peer: 配对记录地址 192.168.1.102:46879 | connect: 静态地址 192.168.1.102:46879 失败（4s 超时）
+→ 尝试局域网发现 | discovery: start local=0.0.0.0:51434 targets=5 wait=2500ms self_port=Some(38931)
+| discovery: 第1轮 广播 sent=5 err=0
+| discovery: timeout rounds=5 recv=25 bad_json=0 bad_q=0 bad_tag=0 self=25 → 无应答
+```
+
+`recv=25` 与 `self=25` **完全相等**，且 `bad_json=0`：这 25 个包全部解析成了合法
+`DiscoveryResponse`、通过 `q` 与 `tag` 校验、再被「自己应答自己」规则丢弃
+（`resp.port == 38931` 且源 IP 是本机）。即 **5 个广播目标 × 5 轮 = 25 次发送，25 次都由本机
+自己的 responder 应答**，对端 ip 一个包都没回来（连畸形包都没有）。广播链路在本机侧完全通畅。
+
+同一时刻对那台手机做的网络探测（在本机执行，脚本与结论都可复现）：
+
+| 探测 | 结果 | 含义 |
+|---|---|---|
+| 本机 IPv4 | `192.168.1.103/24`（WLAN） | 与手机 `192.168.1.102` **同网段** |
+| `ping 192.168.1.102` × 10 | 10/10 通，RTT 17–111ms | 手机在线；抖动幅度 = 射频在省电唤醒 |
+| TCP → `192.168.1.102:9`（对照组） | 2.4s **收到 RST** | 手机内核活着，会回拒绝 |
+| TCP → `192.168.1.102:46879`（同步口） | 3.5s **超时，连 RST 都没有** | SYN 被**静默丢弃**，不是「端口没开」 |
+
+对照组是关键：**同一台设备**对没监听的端口会立刻回 RST，对同步口却连 RST 都不给。
+没监听只会得到 RST，`TcpListener` 的 backlog 是 std 默认的 128（不可能被几次 SYN 塞满），
+所以只剩一种解释：**这个 App 的 socket 上的包被系统按 UID 丢掉了**——Android 的
+Doze / 应用待机桶 / 后台数据限制就是这个形态（静默丢包，不回 RST，也不回 ICMP 错误）。
+UDP 发现同理由此归零，两个症状是**同一个原因**。
+
+据此排除的假设：跨网段（同 /24）、密钥不一致（`bad_tag=0`）、防火墙/路由（本机 25 个自答全通）、
+「手机没装 1.4.15 缺 `MulticastLock`」（APK 内 `CHANGE_WIFI_MULTICAST_STATE`、
+`ACCESS_WIFI_STATE`、dex 里的 `createMulticastLock` 与 `passwordms-lan-discovery` 均已核实进包；
+且组播锁只管收广播帧，管不了 TCP SYN 被丢——TCP 也是死的）。
+
+#### 3.24.2 结论与决策：自动同步回退（D-133）
+
+要让手机在息屏状态下仍可被局域网找到，Android 上只有一条正经路子：**前台服务 +
+`WifiLock(HIGH_PERF)` + `MulticastLock` + 电池优化白名单**。代价是一条常驻通知与持续耗电。
+
+主人裁定：**「不行的话就不要自动同步了，回退到手动同步，收益不大。」**
+
+于是 v1.4.16 做了**完整回退**，删掉的是功能，不是「留个开关不接线」：
+
+| 位置 | 删除内容 |
+|---|---|
+| `src/lib/auto-sync.ts` + 单测 | 调度器本体（`createAutoSync` / `isAutoSyncDue` / `failBackoffMs` / 全部常量） |
+| `MainLayout.svelte` | `createAutoSync` 实例与 `$effect` 接线（保留 `loadAfterUnlock()`） |
+| `stores/sync.svelte.ts` | `autoBusy` / `autoLast` / `AutoSyncOutcome` / `syncQuiet()` |
+| `Settings.svelte` | 「自动同步 / 启动时同步」两个复选框、`saveSyncPrefs()`、勾选即存提示 |
+| `SyncStatus.svelte` | 开关状态行 + 上次自动同步回执行 |
+| `types.ts` / `stores/settings.svelte.ts` / `crates/.../model/vault.rs` | `auto_sync` / `sync_on_start` 字段 |
+| i18n × 4 | `settings.auto_sync` / `sync_on_start` / `sync_instant_hint` / `save_instant_failed` / `sync.auto_*` 共 14 键 |
+
+**兼容性**：serde 默认忽略未知字段，旧库里的两个键在反序列化时被丢弃、下次保存即消失，无需迁移。
+
+设置页保留一句事实说明（`settings.sync_manual_only`「同步只在你点『立即同步』时发生」）——
+回退之后不能让用户只看到「开关不见了」。
+
+#### 3.24.3 手动同步必须可读（D-134）
+
+回退之后，手动同步就是唯一路径，而它现在**失败时只给一句「网络不可达」**。用户手上没有任何
+可以自己判断的信息。本轮把两个「对照量」上屏：
+
+1. **本机网络**（`sync_net_info`，只读）：本机全部 IPv4 + 当前重同步监听端口 +
+   UDP 发现应答是否可用。`listen_port === null` 单独显示「未在监听」，不与「端口是 0」混同。
+2. **每台设备的配对记录地址**：`DeviceDto` 增加 `peer_ip` / `peer_port`（`PairedDevice` 里本来就有，
+   只是从没上过屏），设备行显示 `192.168.1.102:46879`；缺地址时显示「未记录地址」而不是留白。
+
+两端各看一眼就能定性：地址/端口对不上 = 记录过期（重新配对或等发现自愈）；
+对得上但连不上 = 对端被系统掐了网络（页面上给出「解锁对端并保持前台」的行动指引）。
+
+`sync_net_info` **刻意不取 session 锁、也不调用 `ensure_resync_listener`**：诊断命令绝不能有
+「顺手把监听器拉起来」的副作用。它读的是 `state.resync` 里既有的 handle。
+
+#### 3.24.4 守门
+
+`src/lib/d133-d134-sync-guard.test.ts` 8 例，正负成对（负向断言单独存在会在「整块被删」时假绿）：
+
+| 断言 | 变异验证 |
+|---|---|
+| 设置页不得再出现 `auto_sync` / `sync_on_start`，且必须含 `settings.sync_manual_only` | 重新加回 `pub auto_sync` → 红 |
+| `MainLayout` 不得再出现 `auto-sync` / `createAutoSync`，且 `loadAfterUnlock()` 仍在 | — |
+| `VaultSettings` 不得再有这两个字段（正向锚点：`clipboard_clear_secs` 仍在） | 同上一条红 |
+| `SyncStatus` 必须渲染 `peer_ip` / `peer_port` / `local_net` / `listen_port` | 把地址换回 `device.device_name` → 红 |
+
+两条变异已实测真红，还原后字节一致并复绿。
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。
@@ -1933,7 +2028,8 @@ pub struct KdfParams { pub algorithm: String, pub memory_kib: u32, pub iteration
 pub struct WrappedKey { pub nonce: Vec<u8>, pub ct: Vec<u8> }   // serde → base64
 pub struct VaultSettings {
   pub generator: GeneratorOptions, pub health: HealthConfig,
-  pub clipboard_clear_secs: u16, pub auto_sync: bool, pub sync_on_start: bool,
+  pub clipboard_clear_secs: u16,
+  // D-133（v1.4.16）：auto_sync / sync_on_start 已随自动同步回退删除。
 }
 ```
 
@@ -2086,11 +2182,11 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `sync_start_pairing` | — | `PairingDto{qr_svg,ip,port,expires_at}` | F-09 Host |
 | `sync_cancel_pairing` | — | `()` | 取消并作废令牌 |
 | `sync_join` | `{qr_payload}` | `PairResultDto` | F-09 Joiner |
-| `sync_accept_pair` | `{session_id}` | `()` | 确认配对 |
-| `list_paired_devices` | — | `Vec<DeviceDto>` | F-09 |
+| `list_paired_devices` | — | `Vec<DeviceDto>` | F-09（D-134：含 `peer_ip` / `peer_port`） |
 | `unpair` | `{device_id}` | `()` | O-07 废弃共享密钥 |
 | `sync_now` | `{device_id}` | `SyncResultDto` | 手动同步 |
-| `sync_status` | — | `SyncStatusDto` | 状态查询 |
+| `sync_status` | — | `SyncStatusDto` | 状态查询（库里的事实） |
+| `sync_net_info` | — | `SyncNetInfoDto` | D-134：本机 IPv4 / 监听端口 / 发现应答是否可用（只读诊断，不取 session 锁、不拉起监听器） |
 | `list_conflicts` | — | `Vec<ConflictDto>` | 冲突箱 |
 | `resolve_conflict` | `{conflict_id,choice,copy_suffix}` | `()` | 三选一（D-112：copy_suffix=KeepBoth 副本标题后缀，前端 i18n 传入） |
 | `get_settings` / `update_settings` | `VaultSettings` | `VaultSettings` | 设置 |
