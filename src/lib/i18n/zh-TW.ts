@@ -295,7 +295,6 @@ export const zhTW = {
     group_security: '安全性',
     group_generator: '產生器預設值',
     group_health: '健檢門檻值',
-    group_sync: '同步',
     group_about: '關於',
     group_system: '系統整合',
     hotkey: '全域熱鍵',
@@ -357,7 +356,6 @@ export const zhTW = {
     auto_lock_updated: '自動鎖定時間已更新（{n} 分鐘）',
     auto_lock_failed: '讀取失敗：目前顯示的是預設值，無法取得實際設定。',
     // D-133：自動同步已回退為手動同步，兩個開關隨之刪除。
-    sync_manual_only: '同步只在你點「立即同步」時發生。',
     change_password: '修改主密碼',
     // D-114：改密成功必須有**留在原地**的明確回執（原先只 toast 一句 `common.ok`＝「確定」）。
     password_changed: '主密碼已修改，下次解鎖請使用新密碼。',
@@ -568,7 +566,7 @@ export const zhTW = {
     network_timeout: '網路回應逾時：請確認兩台裝置在同一區域網路、對方仍停在配對等待頁，然後重試。',
     network_refused: '連線被拒絕：對方可能已離開配對頁，或防火牆攔下了連接埠，請對方重新顯示 QR 碼。',
     network_broken: '連線中途斷開：請在兩台裝置上重新發起配對。',
-    network_unreachable: '無法連線到對方裝置：請確認兩台裝置連的是同一個 Wi‑Fi（同一網段）；Windows 防火牆需放行 PasswordMS（私人網路）。若剛剛在另一台裝置上同步成功過，請再試一次；仍失敗請重新配對。',
+    network_unreachable: '無法連線到對方裝置：請確認兩台裝置連的是同一個 Wi‑Fi（同一網段）；Windows 防火牆需放行 PasswordMS（私人網路）。若對方是已鎖屏或休眠的手機，它收不到任何請求——請改為在對面那台裝置上點「立即同步」（手機亮著螢幕才發得出去）。仍失敗請重新配對。',
     crypto: '加密操作失敗。',
     internal: '發生內部錯誤。',
     unknown: '發生未知錯誤。',

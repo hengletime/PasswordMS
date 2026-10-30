@@ -315,7 +315,6 @@ export const zhCN = {
     group_security: '安全',
     group_generator: '生成器默认值',
     group_health: '体检阈值',
-    group_sync: '同步',
     group_about: '关于',
     group_system: '系统集成',
     hotkey: '全局热键',
@@ -391,7 +390,6 @@ export const zhCN = {
     auto_lock_updated: '自动锁定档位已更新（{n} 分钟）',
     auto_lock_failed: '读取失败：当前显示的是兜底档位，库里实际档位未能取得。',
     // D-133：自动同步已回退成手动同步，两个开关随之删除；这里只留一句事实说明。
-    sync_manual_only: '同步只在你点「立即同步」时发生。',
     change_password: '修改主密码',
     // D-114：改密成功必须有**留在原地**的明确回执（原先只 toast 一句 `common.ok` =「确定」，
     // 三秒消失，主人实测「右下角一闪而过，看不出到底成没成」）。
@@ -643,7 +641,7 @@ export const zhCN = {
     network_broken: '连接中途断开：请在两台设备上重新发起配对。',
     // v1.2.4 根因 C：原文「无法连接到电脑…请确认手机与电脑…」写死了方向，
     // 电脑端触发同一条错误时读起来完全反了。改为**方向中性**：两端都用同一条文案。
-    network_unreachable: '无法连接到对端设备：请确认两台设备连的是同一个 Wi‑Fi（同一网段）；Windows 防火墙需放行 PasswordMS（专用网络）。若刚刚在另一台设备上同步成功过，请再试一次；仍失败请重新配对。',
+    network_unreachable: '无法连接到对端设备：请确认两台设备连的是同一个 Wi‑Fi（同一网段）；Windows 防火墙需放行 PasswordMS（专用网络）。若对端是已锁屏或休眠的手机，它收不到任何请求——请改为在对面那台设备上点「立即同步」（手机亮着屏才发得出去）。仍失败请重新配对。',
     crypto: '加密操作失败。',
     internal: '发生内部错误。',
     unknown: '发生未知错误。',

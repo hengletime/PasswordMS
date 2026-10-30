@@ -22,7 +22,10 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-use crate::constants::{DISCOVERY_WAIT_MS, QR_PROTOCOL_VERSION, SYNC_TIME_WINDOW_SECS};
+use crate::constants::{
+    is_sync_port, DISCOVERY_WAIT_MS, QR_PROTOCOL_VERSION, SYNC_PORT_MAX, SYNC_PORT_MIN,
+    SYNC_TIME_WINDOW_SECS,
+};
 use crate::crypto::keys::{self, ItemKey};
 use crate::crypto::rng;
 use crate::error::{stage_io, CoreError, CoreResult};
@@ -283,6 +286,19 @@ pub fn resync_with_peer_access(
     // "仍失败请重新配对"）。多一个变体只会重复造文案，还要动 `code()`/`message_key()`
     // 两个穷举 match 与前端 i18n。
     let connect_timeout = Duration::from_secs(crate::constants::SYNC_CONNECT_TIMEOUT_SECS);
+    // D-136 诊断：配对记录里的端口落在**当前选取区间外**时，几乎一定是历史残留
+    // （每次启动重选端口，记录只在上次成功同步时写回）。这里**只标注、不改行为**——
+    // 曾试过「区间外就跳过静态连接直接进发现」，被既有测试当场拦下：
+    // 本机动态端口范围被 WSL2/Hyper-V 改成 1024-65535，测试里 `bind(0)` 拿到的 29581
+    // 完全可连，却会被那条判定当成非法地址丢掉。「协议从哪个区间选端口」不等于
+    // 「对端的端口必须落在该区间」，拿它做连接决策是假阴性，比原问题更糟。
+    if let (Some(ip), Some(port)) = (&prep.peer_ip, prep.peer_port) {
+        if !is_sync_port(port) {
+            discovery::trace(format!(
+                "peer: 记录地址 {ip}:{port} 端口不在 {SYNC_PORT_MIN}-{SYNC_PORT_MAX}（多半是历史残留，对端重启后会重选端口）"
+            ));
+        }
+    }
     let static_addr = match (&prep.peer_ip, prep.peer_port) {
         (Some(ip), Some(port)) => Some((ip.clone(), port)),
         _ => None,

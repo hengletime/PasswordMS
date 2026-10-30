@@ -319,7 +319,6 @@ export const enUS: Messages = {
     group_security: 'Security',
     group_generator: 'Generator defaults',
     group_health: 'Health thresholds',
-    group_sync: 'Sync',
     group_about: 'About',
     group_system: 'System integration',
     hotkey: 'Global hotkey',
@@ -387,7 +386,6 @@ export const enUS: Messages = {
     auto_lock_updated: 'Auto-lock updated ({n} min)',
     auto_lock_failed: 'Could not read this setting; the value shown is the default.',
     // D-133: auto-sync was rolled back to manual sync; the two switches were removed with it.
-    sync_manual_only: 'Sync runs only when you tap "Sync now".',
     change_password: 'Change master password',
     // D-114: success must leave a persistent, explicit receipt (it used to toast `common.ok`).
     password_changed: 'Master password changed. Use the new one the next time you unlock.',
@@ -632,7 +630,7 @@ export const enUS: Messages = {
     network_broken: 'Connection dropped mid-handshake: start pairing again on both devices.',
     // v1.2.4 root cause C: the old wording hard-coded a direction ("the computer"), which is
     // backwards when the PC is the one showing it. Now direction-neutral.
-    network_unreachable: 'Cannot reach the peer device: make sure both devices are on the same Wi‑Fi network (same subnet), and that Windows Firewall allows PasswordMS (private networks). If a sync just succeeded on the other device, try again; if it still fails, re-pair.',
+    network_unreachable: 'Cannot reach the peer device: make sure both devices are on the same Wi‑Fi network (same subnet), and that Windows Firewall allows PasswordMS (private networks). If the peer is a locked or sleeping phone it receives nothing — start the sync from that device instead (a phone must be awake to send). If it still fails, re-pair.',
     crypto: 'A cryptographic operation failed.',
     internal: 'An internal error occurred.',
     unknown: 'An unknown error occurred.',

@@ -46,12 +46,19 @@ describe('文件均可读取（否则下面的负向断言全是假绿）', () =
 });
 
 describe('D-133：自动同步回退彻底 —— 开关、接线、字段三处都不许留下', () => {
-  it('设置页不再绑定 auto_sync / sync_on_start，且如实写明「只在点立即同步时发生」', () => {
+  it('设置页不再绑定 auto_sync / sync_on_start，且「同步」组卡片已整体移除', () => {
     // 负向：两个字段名在设置页里彻底消失（含 checkbox 的 bind:checked）。
     expect(settingsSrc).not.toContain('auto_sync');
     expect(settingsSrc).not.toContain('sync_on_start');
-    // 正向锚点：回退之后必须**有一句事实说明**，否则用户只会觉得「开关不见了」。
-    expect(settingsSrc).toContain("ui.t('settings.sync_manual_only')");
+    // D-136（v1.4.18，主人实测判定）：v1.4.16 回退后留下的「同步」卡片只剩一句
+    // 「同步只在你点立即同步时发生」，没有任何可操作控件——主人原话「放着已经没有意义了」。
+    // 删掉卡片后，这里**不能再用「必须出现那句文案」作正向锚点**：那样会把空壳文案
+    // 钉死在代码里，下次谁想删都得先改测试（等于用测试保护一个没人要的东西）。
+    // 改为钉住「组标题键与说明键都不许回来」。
+    expect(settingsSrc).not.toContain("settings.group_sync");
+    expect(settingsSrc).not.toContain("settings.sync_manual_only");
+    // 正向锚点：删的是同步组，不是整个设置页——其他设置组必须还在。
+    expect(settingsSrc).toContain("ui.t('settings.group_health')");
   });
 
   it('主界面不再挂自动同步调度器，但仍保留解锁后的五路加载', () => {

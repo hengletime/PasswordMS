@@ -12,11 +12,11 @@ English | [简体中文](README.zh-CN.md)
 
 - **Zero-knowledge encryption**: whole-vault encryption (Argon2id key derivation + XChaCha20-Poly1305 authenticated encryption). The master password is never uploaded and cannot be recovered.
 - **Two platforms**: Windows 10/11 (installer / portable version) + Android (arm64)
-- **LAN sync**: QR-code pairing, end-to-end encrypted — data never touches any cloud server
+- **LAN sync**: QR-code pairing, end-to-end encrypted — data never touches any cloud server (manual trigger; see "How sync works" below)
 - **Auto-lock**: locks automatically after inactivity (1 / 5 / 15 minutes); Android locks immediately when returning from background after timeout
 - **Attachments**: login / note entries can carry attachments (up to 16 per entry, ≤ 20 MB each), encrypted with the vault
 - **Trash**: soft delete → restore → delete permanently; attachments are cleaned up alongside entries
-- **Tiny footprint**: desktop installer ≈ 1.6 MB, APK ≈ 6.9 MB
+- **Tiny footprint**: desktop installer ≈ 2.0 MB, APK ≈ 7.4 MB
 
 ## 📦 Download
 
@@ -36,7 +36,27 @@ Grab the latest build from [Releases](https://github.com/hengletime/PasswordMS/r
 1. Download and install (or unzip the portable version)
 2. Create a vault on first launch and set a **master password** — memorize it: **there is no recovery mechanism whatsoever**
 3. Add login / note entries; drag in attachments as needed
-4. Multi-device sync: `Devices → Pair new device`, then scan the QR code from the other device (both devices must be on the same LAN)
+4. Multi-device sync: `Devices → Pair new device`, then scan the QR code from the other device (both devices must be on the same LAN). Sync is **manual** — either side can trigger it; see the next section
+
+## 🔄 How sync works (one hard limitation)
+
+**There is no background auto-sync.** Sync happens only when you tap "Sync now". This is a deliberate trade-off: once a phone's screen turns off, Android silently drops that app's network traffic. That claim is backed by a measured comparison — while the phone is **awake**, a connection attempt to a port nobody listens on comes back with an immediate `RST` (the network works and the kernel refuses properly); once the phone is **asleep**, a sweep of 16,405 ports gets zero replies, not even `RST` (`ping` still works, because ICMP is not subject to per-app network restrictions). Keeping the device always reachable would require a resident foreground service (permanent notification + battery cost), which is not worth it.
+
+**Either side can start a sync, but the peer must be awake:**
+
+| Where you tap "Sync now" | Result |
+|---|---|
+| Desktop → phone | Only works while the phone is **awake with PasswordMS in the foreground**; a locked or sleeping phone receives nothing at all |
+| Phone → desktop | The desktop is normally always awake, so this direction is **far more reliable** |
+
+So if "Sync now" on the desktop does nothing, **pick up the phone, turn the screen on, open PasswordMS and tap "Sync now" in the sync page** — just reverse the direction.
+
+Other requirements and notes:
+
+- Both devices must be on the **same Wi‑Fi** (same subnet)
+- After switching networks or IPs, the address stored at pairing becomes stale; one sync attempt performs LAN discovery and updates it (the new address is only saved after a successful sync)
+- If the two sides keep showing different addresses, or discovery never gets a reply: **re-scan the pairing QR code** to recover immediately
+- The sync page shows this device's IP, the current listening port, and the recorded address of every paired device — compare both ends to tell "stale address" apart from "peer is away"
 
 ## 🔐 Security Model
 

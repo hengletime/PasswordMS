@@ -936,15 +936,6 @@
     </div>
   </div>
 
-  <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_sync')}</h3>
-    <!-- **D-133（v1.4.16）**：这里原本有「自动同步 / 启动时同步」两个复选框。
-         自动同步依赖手机端常驻前台服务（息屏后 Android 会掐掉后台应用的网络），
-         代价大于收益，已整体回退：同步只在本机点「立即同步」时发生。
-         开关随功能一起删掉，而不是留一个永远不被读取的勾选框。 -->
-    <p class="pms-meta">{ui.t('settings.sync_manual_only')}</p>
-  </div>
-
   <button class="pms-btn is-primary" type="button" onclick={() => void saveSettings()}>
     {ui.t('common.save')}
   </button>
