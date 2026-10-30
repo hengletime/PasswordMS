@@ -81,21 +81,24 @@
     };
   });
 
-  async function copyText(text: string, withCountdown: boolean): Promise<void> {
+  /**
+   * 复制：用户名与密码走**同一条**路径——都按用户配置的 TTL 到期清空并显示倒计时
+   * （PRD F-06「分别一键复制用户名 / 密码，30 秒后自动清空」）。
+   *
+   * 【D-135】原实现对用户名传 `copy_secret(text, 0)`：前端把 0 当「不清空」，后端却读成
+   * 「0 秒后清空」——写进去的同一瞬间被自己的兜底线程清掉。于是 toast 报「已复制」、
+   * 用户粘出来是空的。**两端对同一个参数的理解不一致，比参数本身错更隐蔽**。
+   */
+  async function copyText(text: string): Promise<void> {
     if (text.length === 0) {
       return;
     }
-    if (withCountdown) {
-      const ttl = settings.value.clipboard_clear_secs;
-      await copySecretWithAutoClear(text, ttl, (remaining: number): void => {
-        copyCountdown = remaining;
-      });
-      ui.toast('success', 'common.copied_countdown', { n: ttl });
-    } else {
-      await api.system.copySecret(text, 0);
-      ui.toast('success', 'common.copied');
-    }
-    // #531：使用埋点（密码 / 用户名 / TOTP 的复制都走这里）。后端 60s 节流；
+    const ttl = settings.value.clipboard_clear_secs;
+    await copySecretWithAutoClear(text, ttl, (remaining: number): void => {
+      copyCountdown = remaining;
+    });
+    ui.toast('success', 'common.copied_countdown', { n: ttl });
+    // #531：使用埋点（密码 / 用户名的复制都走这里）。后端 60s 节流；
     // 复制已成功才埋 —— 失败不算「使用」。
     if (item !== null) {
       void vault.recordItemUsage(item.item_id);
@@ -264,7 +267,7 @@
             class="pms-icon-btn"
             type="button"
             aria-label={ui.t('item.copy_username')}
-            onclick={() => void copyText(item.kind.type === 'login' ? item.kind.username ?? '' : '', false)}
+            onclick={() => void copyText(item.kind.type === 'login' ? item.kind.username ?? '' : '')}
           >
             <Icon name="copy" size={16} />
           </button>
@@ -287,7 +290,7 @@
             class="pms-icon-btn"
             type="button"
             aria-label={ui.t('item.copy_password')}
-            onclick={() => void copyText(item.kind.type === 'login' ? item.kind.password ?? '' : '', true)}
+            onclick={() => void copyText(item.kind.type === 'login' ? item.kind.password ?? '' : '')}
           >
             <Icon name="copy" size={16} />
           </button>

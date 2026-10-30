@@ -108,6 +108,8 @@
         note = { text: t('quick.no_username'), tone: 'warn' };
         return;
       }
+      // D-135：用户名与密码一致，都按用户配置的 TTL 到期清空（PRD F-06）。
+      // 小窗没有倒计时 UI，清空由后端兜底线程按代际号负责。
       await api.system.copySecret(value, clipboardSecs);
       // 频度埋点：小窗取过的条目也该在主列表里往前排（后端 60s 节流，失败无所谓）。
       void api.items.recordUsage(hit.itemId).catch((): void => {});

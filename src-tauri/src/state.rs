@@ -5,11 +5,11 @@
 //! - `resync`：持久重同步监听器（修复 D-11；解锁期间运行）
 //! - `pending_imports`：解析后的导入预览缓存（`preview_token` 索引）
 //! - `clipboard`：本应用最后一次写入剪贴板的**明文副本**（A-03 到期比对用；零化载体，
-//!   锁定时清空）
+//!   锁定时清空）+ 写入代际号（D-135：旧代清理器不许清掉新写入的内容）
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use passwordms_core::import::ImportPreview;
@@ -22,6 +22,27 @@ use tauri::Manager;
 use zeroize::Zeroizing;
 
 use crate::error::{lock_err, IpcError, IpcResult};
+
+/// 剪贴板记忆值：本应用最后一次写入的明文 + 它的**代际号**（A-03 到期比对用）。
+///
+/// 明文以 `Zeroizing` 托管，替换 / 取出时自动覆写旧值。
+pub struct ClipboardMemory {
+    /// 写入序号（自增，永不复用）。清理方持号而来，号不对就不许动。
+    pub gen: u64,
+    /// 写入的明文（**不**回传 JS，只用于本机比对）。
+    pub text: Zeroizing<String>,
+}
+
+impl std::fmt::Debug for ClipboardMemory {
+    /// **不打印明文**（安全基线：`Debug` 不得输出任何密钥或明文），只给代际号与长度，
+    /// 排查「清理为什么没生效」时这两个数足够定位。
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClipboardMemory")
+            .field("gen", &self.gen)
+            .field("len", &self.text.len())
+            .finish()
+    }
+}
 
 /// 持久重同步监听器句柄。
 ///
@@ -43,7 +64,14 @@ pub struct AppState {
     /// 本应用最后一次写入剪贴板的内容（A-03 到期比对用）。
     ///
     /// 以 `Zeroizing` 托管，替换 / 清空时自动覆写旧值；锁定时一并清空。
-    pub clipboard: Mutex<Option<Zeroizing<String>>>,
+    ///
+    /// 【D-135】带**代际号**：每次写入分配一个自增 `gen`，`clear_*` 只清自己那一代。
+    /// 没有它就有个必现缺陷——复制密码 A（TTL 30s）→ 10 秒后复制用户名 B →
+    /// A 的兜底线程在 t=30 醒来，把**当时**的记忆值（B）与剪贴板比对相等、照清不误，
+    /// 于是 B 在用户手里莫名其妙变空。`gen` 让旧代数醒来就放手。
+    pub clipboard: Mutex<Option<ClipboardMemory>>,
+    /// 剪贴板写入代际计数器（只在 [`AppState::next_clipboard_gen`] 里 +1）。
+    pub clipboard_gen: AtomicU64,
     /// O2：同一时刻仅允许一场同步（被动 worker 与主动 `sync_now` 互斥）。
     ///
     /// 三段式去持锁化后，被动与主动交换可并发——两者会各自加载/推进同一份
@@ -81,6 +109,7 @@ impl AppState {
             resync_stop: Arc::new(AtomicBool::new(false)),
             pending_imports: Mutex::new(HashMap::new()),
             clipboard: Mutex::new(None),
+            clipboard_gen: AtomicU64::new(0),
             sync_busy: AtomicBool::new(false),
             biometric_busy: AtomicBool::new(false),
             last_activity_ms: AtomicI64::new(now_ms()),
@@ -96,6 +125,13 @@ impl AppState {
     /// 记录一次用户活动（auto-lock 闲置基准，D-108 3.4-6）。
     pub fn touch_activity(&self) {
         self.last_activity_ms.store(now_ms(), Ordering::SeqCst);
+    }
+
+    /// 分配一个新的剪贴板写入代际号（D-135）。
+    ///
+    /// 从 1 开始，永不为 0 —— 0 留给「调用方没有代际概念」的历史路径，便于日志辨认。
+    pub fn next_clipboard_gen(&self) -> u64 {
+        self.clipboard_gen.fetch_add(1, Ordering::SeqCst) + 1
     }
 
     /// **触碰会话锁**：刷新用户活动时间戳后取锁。

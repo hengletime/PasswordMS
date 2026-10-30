@@ -5,9 +5,9 @@
   // 手机屏算的是临时公钥的指纹，两者永远不等（详见 store 的 lastPairSessionCode 注释）。
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
-  import { formatDateTime } from '../../lib/constants';
-  import { hasSessionCode } from '../../lib/device-label';
+  import { CLIPBOARD_TTL_SECS, formatDateTime } from '../../lib/constants';
   import { api } from '../../lib/ipc';
+  import { hasSessionCode } from '../../lib/device-label';
   import { toAppError } from '../../lib/errors';
   import { sync } from '../../lib/stores/sync.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
@@ -25,7 +25,9 @@
       return;
     }
     try {
-      await api.system.copySecret(sync.pairing.qr_text, 0);
+      // D-135：这里原来传 0（想表达「不清空」），后端读成「0 秒后清空」→ 复制出来是空的。
+      // 现按 PRD F-06 统一口径走 30 秒 TTL：小窗 / 本页没有倒计时 UI，清空由后端兜底线程负责。
+      await api.system.copySecret(sync.pairing.qr_text, CLIPBOARD_TTL_SECS);
       ui.toast('success', 'common.copied');
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);

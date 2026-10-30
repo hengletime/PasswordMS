@@ -53,13 +53,17 @@ export function startCountdown(
  * 清空策略（A-03）：到期后调用 Rust 侧 `clear_secret_if_own`，仅当剪贴板内容**仍为
  * 本应用写入的内容**时才清空；若用户期间已复制了别的内容，则**不覆盖**。比对在 Rust
  * 侧完成，避免把剪贴板明文回传 JS。
+ *
+ * 【D-135】必须带上本次写入的**代际号** `gen`：清空是「按代」的。没有它，复制密码 A
+ * 后 10 秒又复制用户名 B，A 的定时器在 30 秒到期时会把 B（当时剪贴板里的内容）清成
+ * 空串——用户看到的就是「明明提示已复制，粘出来是空的」。
  */
 export async function copySecretWithAutoClear(
   text: string,
   ttlSecs: number = CLIPBOARD_TTL_SECS,
   onTick?: (remaining: number) => void,
 ): Promise<CountdownTimer> {
-  await api.system.copySecret(text, ttlSecs);
+  const gen = await api.system.copySecret(text, ttlSecs);
   return startCountdown(
     ttlSecs,
     (remaining: number): void => {
@@ -68,7 +72,7 @@ export async function copySecretWithAutoClear(
     (): void => {
       // D-106（豆包审查 3.5-3）：清空 IPC 失败不得静默——密码可能仍留在剪贴板，
       // 用户必须被告知手动清理。
-      api.system.clearSecretIfOwn().catch((): void => {
+      api.system.clearSecretIfOwn(gen).catch((): void => {
         ui.toast('error', 'err.clipboard_clear_failed');
       });
     },

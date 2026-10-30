@@ -1468,8 +1468,11 @@ UDP 广播收发**不需要**额外权限，`AndroidManifest.xml` 保持只有 `
   再调 `clear_owned_clipboard`（take+比对语义复用，与前端倒计时幂等协作——先到者清理、
   后到者空转）；`lib.rs` 由 `.run(ctx)` 改 `.build(ctx)` + `app.run(callback)`，
   在 `RunEvent::Exit` 同步调 `clear_owned_clipboard`（进程退出是最后一个清理窗口）。
-  前端 `clipboard.ts` 不动。
-- **守门**：外壳层逻辑（无 core 单测；依赖剪贴板系统状态，纯集成域）。
+- **D-135（1.4.17）修订**：TTL 改由 core 的 `auto_clear_delay_secs` 决定（`0` = **不安排**
+  清空，而不是「0 秒后清空」），且线程带**代际号**、只清自己那一代；前端 `clipboard.ts`
+  同步改为持号清理。原文「前端 `clipboard.ts` 不动」已不成立，详见 §3.25。
+- **守门**：TTL 策略已下沉到 core（`clipboard_policy.rs`），D-135 起由
+  `crates/passwordms-core/tests/clipboard_policy.rs` 覆盖；剪贴板读写本身仍属集成域。
 
 #### 3.20.6 条目统一明文上限（同步卡死防护）
 
@@ -1846,6 +1849,67 @@ UDP 发现同理由此归零，两个症状是**同一个原因**。
 
 两条变异已实测真红，还原后字节一致并复绿。
 
+### 3.25 D-135：复制用户名「提示已复制、粘贴是空的」（1.4.17，2026-10-30）
+
+#### 3.25.1 缺陷：同一个 `0`，两端两种理解
+
+主人实测（v1.4.15）：详情页点用户名旁的复制按钮 → toast 报「已复制」→ 粘贴为空；同一页的**密码**复制正常。
+
+根因不在某一侧单独出现，而在**参数语义分叉**：
+
+| 侧 | 写法 | 各自的理解 |
+|---|---|---|
+| 前端 `ItemDetail.copyText` | `api.system.copySecret(text, 0)` | 「不做自动清空」（该分支原本就只为用户名服务） |
+| 后端 `copy_secret` | `spawn_clipboard_fallback(app, ttl_secs)` | `Duration::from_secs(0)` → **立刻清空** |
+
+事件顺序（**必现**，不是竞态）：
+
+1. `write_text(text)` 写入用户名；
+2. 记忆值置为本次明文；
+3. spawn 线程 → `sleep(0)` 立即返回 → `clear_owned_clipboard` 读回内容 == 记忆值 → 写空串；
+4. IPC 返回，前端弹 toast「已复制」。
+
+第 3 步与第 4 步之间只隔一次 IPC 往返，用户永远来不及粘贴。密码走 30 秒所以正常——**「只有用户名复制不了」正是这个分叉的形状**。
+
+同一个 `0` 还有第二个受害者：`PairShow` 的「复制配对码」传 0，同样一直是空的（没人报，因为配对码多用手输 / 扫码）。
+
+#### 3.25.2 顺带修掉同源的第二个漏洞：清理没有「归属」
+
+`ttl_secs > 0` 时也有毛病——兜底线程醒来后拿的是**当时**的记忆值，不认「这是谁的活」：
+
+- 复制密码 A（TTL 30s）→ 10 秒后复制用户名 B → A 的线程在 t=30 醒来 → 读剪贴板 = B、记忆值 = B → **相等 → 清空**。
+- 用户看到的现象与本次缺陷一模一样：「刚才明明提示已复制」。
+
+修法：每次写入分配自增**代际号**（`ClipboardMemory { gen, text }`）：
+
+- `copy_secret` 返回 `gen`（`u64`），前端把它交给到期清理；
+- `clear_secret_if_own(gen)` 与兜底线程都只清**自己那一代**；
+- 代际判定必须在**锁内、`take` 之前**——先 take 再判会把新一代的记忆值偷走，之后新内容到期时无据可比，等于永久放弃清理（比原缺陷更危险）。
+
+#### 3.25.3 落点
+
+| 位置 | 改动 |
+|---|---|
+| `crates/passwordms-core/src/clipboard_policy.rs`（新） | `auto_clear_delay_secs(ttl)`：`0 → None`（不安排清理），其余 `Some(ttl)`；`NO_AUTO_CLEAR_SECS = 0` |
+| `src-tauri/src/state.rs` | `clipboard: Mutex<Option<ClipboardMemory>>` + `clipboard_gen: AtomicU64` + `next_clipboard_gen()`；`Debug` 手写**不输出明文**（安全基线） |
+| `src-tauri/src/commands/system_cmd.rs` | `copy_secret -> IpcResult<u64>`；`clear_secret_if_own(gen)`；`clear_owned_clipboard_for_gen(only_gen)`；锁定 / 退出仍走无过滤的 `clear_owned_clipboard`（本应用写过的一律收走） |
+| `src/lib/ipc.ts` / `src/lib/clipboard.ts` | `copySecret` 返回代际号，`clearSecretIfOwn(gen)` 原样带回 |
+| `ItemDetail.svelte` | 用户名与密码**统一**走同一个出口 `copyText(text)`：都按用户配置 TTL 清空 + 倒计时 |
+| `PairShow.svelte` / `QuickSearch.svelte` | 不再传 0：配对码用 `CLIPBOARD_TTL_SECS`，小窗用用户配置值 |
+
+> **口径**：PRD F-06「分别一键复制用户名 / 密码，剪贴板内容 30 秒后自动清空」与安全需求 §3.3「复制凭据后 30 秒自动清空」**都要求用户名也清**。所以这一版不是把用户名改成「永不清空」，而是让两条路径都按配置清、且**提示里明说倒计时**——用户知道「30 秒内要粘贴」，就不会再把正常清空误判成「复制失败」。
+
+#### 3.25.4 守门
+
+| 断言 | 变异验证 |
+|---|---|
+| `auto_clear_delay_secs(0) == None`；正数 `Some(ttl)`（负向对照：若全返回 `None`，密码永不清 = 安全缺陷） | 改成无条件 `Some(...)` → 红 |
+| 两次复制的到期清理**各带自己的代际号**，且不出现 `undefined` | `clearSecretIfOwn(gen)` → `clearSecretIfOwn()` → 红 |
+| 先复制的到期时不得用「最新一次」的号顶替（5s 到期报 2，再推 25s 报 1） | 同上 → 红 |
+| 三个复制入口源码里不得出现 `copySecret(…, 0)`；详情页用户名 / 密码必须同走 `copyText` | `PairShow` 改回 0 → 红 |
+
+Rust 两条在 `crates/passwordms-core/tests/clipboard_policy.rs`（外壳层 `src-tauri` 在本机无法作为测试目标链接，见 `docs/07` §1.2b）；前端三条在 `src/lib/d135-clipboard-guard.test.ts`。三处变异全部实测真红，还原后复绿。
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。
@@ -2169,7 +2233,8 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `get_auto_lock` | — | `u16` | D-61 读自动锁定档位（`Vault.auto_lock_minutes` 明文头部） |
 | `set_auto_lock` | `{minutes}` | `()` | D-61 设档位（仅 1/5/15，非法 `ERR_VALIDATION`；幂等） |
 | `generate_password` | `GeneratorOptions` | `{password}` | F-07 |
-| `copy_secret` | `{text,ttl_secs}` | `()` | F-06（含 30s 清空调度） |
+| `copy_secret` | `{text,ttl_secs}` | `u64` | F-06（返回**代际号**，到期清理时带回；`ttl_secs=0` = 不安排自动清空，见 §3.25） |
+| `clear_secret_if_own` | `{gen}` | `bool` | A-03 到期清空（**仅清 `gen` 那一代**，且仅当剪贴板仍是本应用写的内容） |
 | `open_url` | `{url}` | `()` | F-05（协议白名单） |
 | `totp_now` | `{secret}` | `{code,period,remaining}` | F-11 |
 | `import_preview` | `{source_path,format}` | `ImportPreviewDto` | F-14 预览（D-87：源编码容错 UTF-8 BOM/UTF-16/GBK） |

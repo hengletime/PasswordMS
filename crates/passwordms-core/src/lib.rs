@@ -24,6 +24,7 @@
 
 pub mod attachment_name;
 pub mod biometric;
+pub mod clipboard_policy;
 pub mod constants;
 pub mod crypto;
 pub mod error;

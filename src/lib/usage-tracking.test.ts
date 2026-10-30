@@ -29,10 +29,13 @@ describe('#531 复制埋点（record_item_usage）', () => {
     expect(fnAt, 'ItemDetail 应有 copyText').toBeGreaterThan(-1);
     const usageAt = src.indexOf('vault.recordItemUsage(item.item_id)');
     expect(usageAt, 'copyText 成功后必须埋点').toBeGreaterThan(fnAt);
-    // 埋点必须在两条复制分支之后（copySecretWithAutoClear / copySecret 都已 await）。
-    const branchAt = src.indexOf('await api.system.copySecret(text, 0)', fnAt);
-    expect(branchAt).toBeGreaterThan(fnAt);
-    expect(usageAt).toBeGreaterThan(branchAt);
+    // 埋点必须在复制调用之后（已 await）。D-135：用户名与密码统一走
+    // `copySecretWithAutoClear`（带代际号，到期只清自己那一代），不再有
+    // 「用户名传 0 → 后端当成 0 秒后清空」那条分支。
+    const copyAt = src.indexOf('await copySecretWithAutoClear(text, ttl', fnAt);
+    expect(copyAt, '复制应走 copySecretWithAutoClear').toBeGreaterThan(fnAt);
+    expect(usageAt).toBeGreaterThan(copyAt);
+    expect(src).not.toMatch(/copySecret\([^)]*,\s*0\s*\)/);
   });
 
   it('埋点走 vault store（ipc.ts 的 record_item_usage 由 ipc-contract 锚点与 store 透传测试守）', () => {

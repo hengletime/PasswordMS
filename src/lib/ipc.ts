@@ -41,10 +41,15 @@ export type ImportFormat = 'json' | 'csv';
 /** 系统类。 */
 export const system = {
   getStatus: (): Promise<StatusDto> => invoke<StatusDto>('get_status'),
-  copySecret: (text: string, ttlSecs: number): Promise<void> =>
-    invoke<void>('copy_secret', { text, ttl_secs: ttlSecs }),
+  // D-135：返回值是本次写入的**代际号**，清理时要原样带回（见 `clearSecretIfOwn`）。
+  // `ttlSecs = 0` 表示「不做自动清空」（用户名 / 配对码这类非敏感文本）。
+  copySecret: (text: string, ttlSecs: number): Promise<number> =>
+    invoke<number>('copy_secret', { text, ttl_secs: ttlSecs }),
   // A-03：仅当剪贴板仍为本应用写入的内容时才清空；返回是否已清空。
-  clearSecretIfOwn: (): Promise<boolean> => invoke<boolean>('clear_secret_if_own'),
+  // D-135：必须带 `gen`——只清理自己那一代。不带号就等于「谁都能清当前内容」，
+  // 于是 A 的定时器到期会顺手清掉 A 之后写入的 B。
+  clearSecretIfOwn: (gen: number): Promise<boolean> =>
+    invoke<boolean>('clear_secret_if_own', { gen }),
   openUrl: (url: string): Promise<void> => invoke<void>('open_url', { url }),
   vaultFileInfo: (): Promise<VaultFileInfoDto> => invoke<VaultFileInfoDto>('vault_file_info'),
   // D-76：保险库体积构成（只读：不解密 blob、不写任何字节）+ 压缩（重写容器，只留活跃帧）。
