@@ -121,6 +121,35 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 **总判定：PASS（8 门全过 / 0 失败 / 0 跳过），整轮墙钟 7 分 58 秒（其中 Rust 门 441s）。**
 
+### 1.2d 最近一次完整实跑（2026-10-30 出包前 · v1.4.18 · D-136）
+
+> 口径：`bash scripts/gate-all.sh --keep-going` 一次跑完 8 门，起跑前文件树静止。
+> 这是**第三次**干净跑才 PASS 的一轮——前两次的失败成因见本节末尾「本轮两次假失败」。
+
+| # | 门 | 本次实测（v1.4.18） | 判定 |
+|---|----|------|------|
+| 1 | 前端单测 | **54 文件 478/478 通过**（与 v1.4.17 持平：本轮只改造 `d133-d134-sync-guard.test.ts` 的既有断言，未新增文件） | ✅ 6s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 7s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（同既有浅色按钮对比度项，`3.74:1` 未达 AA） | ✅ 2s |
+| 4 | fmt | **0 处差异** | ✅ 1s |
+| 5 | Rust 全量 | **288 通过 / 0 失败 / 1 ignored**（较 v1.4.17 的 285：新增 `tests/sync_port_range.rs` 3 例；ignored 仍是 `real_vault_ledger`，需 `PMS_REAL_VAULT` 人工触发） | ✅ 405s |
+| 6 | clippy | **0 warning**（`--workspace --all-targets`） | ✅ 2s |
+| 7 | 体积门-桌面 | 历史 NSIS/MSI 逐个达标；1.4.18 正式产物 NSIS **1.95 MB**（2,044,554 B）+ MSI **2.77 MB**（2,904,064 B）≤ 10 MB | ✅ 12s |
+| 8 | 体积门-Android | 历史 APK 逐个达标；1.4.18 签名 APK **7.37 MB**（7,725,483 B）≤ 12 MB | ✅ 3s |
+
+**总判定：PASS（8 门全过 / 0 失败 / 0 跳过）。** 各门耗时相加约 438s（约 7 分 18 秒），Rust 门 405s 占 92%。
+
+**本轮两次假失败（都不是代码问题，别照着改代码）：**
+
+1. **Rust 门第一次 FAIL 是真失败**：`attachment_sync` 三例全红（`CoreError("ERR_IO", "connect|io:entity not found")`）。
+   成因是把「端口不在 49152–65535 ⇒ 跳过静态连接」接进了 `resync.rs` 的连接分支，而本机动态端口范围
+   被 WSL2/Hyper-V 改成 1024–65535，`bind(0)` 分到 29581——区间外却完全可连。**测试拦住的是一次会误杀
+   真实地址的改动**，最终只保留日志标注（见 `docs/03` §13.17.2）。
+2. **第二次 FAIL 是 rustc 卡死**：CPU 增量 0（20 分钟只耗 1.2s CPU），`taskkill` 后 `--keep-going` 继续跑
+   反而把整轮拖超时。单独复现 `cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm`
+   → **7m39s 全绿 exit 0**，证明与代码无关。**判据：`cargo test` 跑超过 10 分钟且 CPU 增量接近 0 就是卡死，
+   杀掉重跑，不要怀疑用例。**
+
 ### 1.3 Rust 全量 149 例逐 target 累加（2026-10-22 14:10 实跑，148 通过 + 1 `#[ignore]`）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。
