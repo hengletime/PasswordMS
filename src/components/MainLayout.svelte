@@ -26,6 +26,7 @@
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
   import { createAutoLock } from '../lib/auto-lock';
   import { api } from '../lib/ipc';
+  import { listScopeLabel } from '../lib/list-scope';
   import { session } from '../lib/stores/session.svelte';
   import { settings } from '../lib/stores/settings.svelte';
   import { sync } from '../lib/stores/sync.svelte';
@@ -271,6 +272,27 @@
   const showBack = $derived(inItems && !listState);
   // 移动端顶栏标题：当前分区名（桌面端仍显示 app.title）。
   const sectionLabel = $derived(NAV.find((e): boolean => e.key === ui.section)?.label ?? 'nav.items');
+  // D-157：移动端顶栏标题细化到「当前分组」。
+  //
+  // 手机端分组栏收在抽屉里、默认不可见，顶栏是唯一的位置提示。原来恒显示段落名
+  // （「全部条目」），进了「工作」组也照旧 —— 主人原话：「不知道当前处于哪一个分组」。
+  // 只在条目分区替换；健康 / 回收站 / 同步 / 设置没有分组概念，仍用段落名。
+  //
+  // 详情态不退回段落名：进条目后标题若从组名跳回「全部条目」，等于每点一次条目就丢一次
+  // 位置感。标题在列表→详情之间保持不变，配左侧返回箭头正好是一条面包屑。
+  const scopeLabel = $derived(
+    inItems
+      ? listScopeLabel(
+          {
+            folderId: vault.selectedFolderId,
+            favoriteOnly: vault.favoriteOnly,
+            ungroupedOnly: vault.ungroupedOnly,
+          },
+          vault.folders,
+          (key: string): string => ui.t(key),
+        )
+      : ui.t(sectionLabel),
+  );
   // 单栏切换判据：有选中条目或处于编辑态即「详情屏」。
   const showingDetail = $derived(vault.selectedItemId !== null || editing);
   // D-95 滑动返回启用条件：详情**查看**态（编辑/新建态手势关闭，防丢未保存内容）。
@@ -306,7 +328,7 @@
     <div class="topbar-brand">
       <span class="topbar-logo"><Logo size={28} /></span>
       <span class="topbar-title tb-title-desktop">{ui.t('app.title')}</span>
-      <span class="topbar-title tb-title-mobile">{ui.t(sectionLabel)}</span>
+      <span class="topbar-title tb-title-mobile">{scopeLabel}</span>
     </div>
 
     <nav class="topbar-nav">
@@ -695,7 +717,22 @@
       display: none;
     }
     .tb-title-mobile {
-      display: inline;
+      /* D-157：标题从「段落名」变成「分组名」后内容长度不再可控（组名由用户自由输入），
+         `display: inline` 下 text-overflow 不生效，长组名会顶开 ⋯ 按钮、把顶栏撑出横向
+         滚动条。改成可收缩的块级 flex item 并自带 ellipsis。 */
+      display: inline-block;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
+    }
+    /* 让上面这个 max-width: 100% 有参照物：`.topbar-brand` 默认 min-width:auto，
+       会被内容顶到不收缩。只在本媒体查询内放开，≥768px 布局一行不动。 */
+    .topbar-brand {
+      min-width: 0;
+      flex: 0 1 auto;
     }
     .topbar-more-wrap {
       display: block;

@@ -302,6 +302,36 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.13 门禁（D-157，2026-11-01 实跑）**：前端 `npm run test` **67 文件 584 例全绿**
+（较 1.5.12 的 65/572 新增 2 文件 12 例：`list-scope.test.ts` 8 例 +
+`d157-mobile-scope-title-guard.test.ts` 4 例）/ `npm run check` 0 error 0 warning /
+CSS 契约 0 FAIL 6 WARN（老账未动，本轮样式只改窄屏媒体查询内一条）/ Rust core 零改动 /
+`cargo fmt --all -- --check` 干净 / clippy 代码警告 0 / 体积门禁桌面 + APK 双过
+（MSI 2.78 MB、NSIS 1.96 MB、APK 7.33 MB，均远低于上限）。
+
+**1.5.13 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`42b40902`，versionCode 1005013 / versionName 1.5.13；**字节数与前四版
+完全相同，第五次**）/ NSIS `2,056,167 B`（`e20e7226`）/ MSI `2,916,352 B`（`3ab020ff`）/
+裸 exe `4,997,120 B`（`1cf72372`，ProductVersion 1.5.13）/ 绿色版 zip `2,422,770 B`
+（`ed1d9f55`）；**zip 内 exe 与裸 exe 哈希一致**（`1cf72372`）。
+`sha256sum -c target/SHA256SUMS-1.5.13.txt` 四文件全 OK。
+
+**包内取证（1.5.13）——本轮三个名字全换，且与前两版形成对照**：
+
+| 判据 | 位置 | 1.5.12 | 1.5.13 |
+|---|---|---|---|
+| `C9OX3AUS`（本次 `App-*.js`） | APK 内 `libpasswordms_lib.so` | **0** | **1** |
+| `C6Cyrhx7`（本次 `index-*.js`） | 同上 | **0** | **1** |
+| `jc_arBlM`（本次 `style-*.css`） | 同上 | **0** | **1** |
+| `BK01vCCU` / `CErjAN2L`（1.5.12 的 JS / CSS 名） | 同上 | 1 / 1 | **0 / 0** |
+| 版本串 `1.5.12` / `1.5.13` | 同上 | 1 / 0 | 0 / 1 |
+
+> **本轮 CSS 名也变了（`CErjAN2L` → `jc_arBlM`），与 1.5.12 的「CSS 名不变」正好互为对照**：
+> 1.5.12 只改模板条件、样式零改动 → CSS 内容哈希应当不变（实测确实不变）；本轮改了
+> `.tb-title-mobile` 的样式 → CSS 内容哈希应当变（实测确实变了）。**同一条判据在两种输入下
+> 给出两种结果**，才说明它测的是内容而不是「必然变化」。
+> 桌面 `passwordms.exe` 同样含 `C9OX3AUS` / `C6Cyrhx7` / `jc_arBlM` 各 1 次、`BK01vCCU` 0 次。
+
 **1.5.12 门禁（D-156，2026-10-31 实跑）**：前端 `npm run test` **65 文件 572 例全绿**
 （例数与 1.5.11 相同 —— 本轮只改 1 例断言的**语义**，没加新例）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮零样式改动）/

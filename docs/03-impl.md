@@ -1661,3 +1661,57 @@ D-152 定规则时针对读数，D-153 升级成入口时照搬了它，本轮�
 
 **全量**：前端 65 文件 572 例（例数不变，本轮只改语义）、`npm run check` 0/0、
 CSS 0 FAIL 6 WARN（与基线一致）。
+### 13.33 D-157：移动端顶栏标题显示当前分组（v1.5.13，2026-11-01）
+
+**改因**（主人）：「在手机端，由于左侧标题栏是隐藏的，在显示条目列表时，不知道当前处于
+哪一个分组。可以把顶部的『全部条目』改成当前分组名吗？」
+
+**改了三处**：
+
+| 文件 | 改动 |
+|---|---|
+| `src/lib/list-scope.ts`（新增） | 纯函数 `listScopeLabel(scope, folders, t)` → 作用域的可读名字 |
+| `src/components/MainLayout.svelte` | `scopeLabel` 派生；`tb-title-mobile` 绑它 |
+| `src/components/MainLayout.svelte` | `@media (max-width:767px)` 内 `.tb-title-mobile` 改 `inline-block` + ellipsis |
+
+```ts
+const scopeLabel = $derived(
+  inItems
+    ? listScopeLabel(
+        {
+          folderId: vault.selectedFolderId,
+          favoriteOnly: vault.favoriteOnly,
+          ungroupedOnly: vault.ungroupedOnly,
+        },
+        vault.folders,
+        (key: string): string => ui.t(key),
+      )
+    : ui.t(sectionLabel),
+);
+```
+
+**为什么抽纯函数而不是在模板里写三元链**：三态判定（组名 / 未分组 / 未知分组）与列表行、
+详情页**必须逐字一致**（`folder-label.ts` 是唯一真相）。模板里现写一份 `folders.find`，
+必然在某次改动里漂成两套答案。
+
+**为什么传 `vault.folders`（全量）而不是筛选后的列表**：`folders` 来自独立 IPC，与列表
+筛选无关；传筛选后的子集会把正常分组误判成「未知分组」。
+
+**为什么参数是结构而非 `vault` 实例**：字段名不同（store 上是 `selectedFolderId`），
+且纯函数可离屏单测，测试里不必拉起整个 store（`folder-label.ts` 同款理由）。
+
+**三个取舍**：详情态不退回段落名（否则每点一次条目丢一次位置感）；搜索不改标题
+（搜索是筛选条件、不是位置）；`folders` 为空时不退回「全部条目」（宁可显示「未知分组」
+也不显示一个确定错误的答案）。
+
+**CSS 坑**：`.tb-title-mobile` 原为 `display: inline`，`text-overflow: ellipsis` 对它不生效——
+组名是用户自由输入、宽度无上限，长组名会顶开右侧 ⋯ 按钮、把顶栏撑出横向滚动条（D-37 同型）。
+且 `.topbar-brand` 是 flex 容器，需 `min-width: 0` 才能被压到内容以下。两者都只写在窄屏媒体
+查询内，≥768px 逐像素不变。
+
+**守门**：`list-scope.test.ts` 8 例（八种输入 → 八种读法）+ `d157-mobile-scope-title-guard.test.ts`
+4 例（顶栏绑定、三位全传、只在 `inItems` 替换、ellipsis 且不得回 `inline`）。
+**变异 4 条全真红**：顶栏退回段落名、漏传 `favoriteOnly`、`display` 退回 `inline`、
+`folderId` 分支失效。
+
+**全量**：前端 67 文件 584 例、`npm run check` 0/0、CSS 0 FAIL 6 WARN（与基线一致）。
