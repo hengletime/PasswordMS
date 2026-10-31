@@ -1166,6 +1166,60 @@ v1.4.16 那条守门断言是「设置页**必须**包含 `settings.sync_manual_
 守门：`lib/d142-d143-guard.test.ts` 5 例（含“`allowBackup` 不许变 true”这条方向性断言），
 变异验证各做一次（Manifest 改 `true` → 真红 → 还原 → 绿）。
 
+### 13.23 D-144 / D-145：Android 导出保险库写不进去，留下 0 字节「备份」（v1.5.2，2026-10-31）
+
+#### 13.23.1 代码清单（四个文件）
+
+| 文件 | 改动 |
+|---|---|
+| `src-tauri/src/content_uri.rs` | 新增 `copy_from_file(app, src, uri) -> Result<u64>`：流式 `io::copy` → `drop(out)` 关 fd → **重新打开读 `metadata().len()` 比对**；不等返 `ERR_IO(content_write_size_mismatch)`；源文件 0 字节直接拒（`empty_source`） |
+| `src-tauri/src/commands/vault_cmd.rs` | `export_vault` 增 `app` 形参 + `#[cfg(target_os = "android")]` 的 `content://` 分支（锁内导出到临时文件 → 锁外写 provider → 删临时文件）；返回值 `()` → `u64`；新增 `backup_reject()` 按成因分叉文案；`restore_backup` 两条路径都改走它 |
+| `src/lib/ipc.ts` | `exportVault` 返回类型 `Promise<void>` → `Promise<number>`（wire 键不变） |
+| `src/lib/vault-export.ts` / `save-dialog.ts` | `SaveOutcome.saved` 带 `data`（`write` 的原样返回值）；0 字节判失败；成功文案带 `{size}` 插值 |
+| `src/lib/backup-reminder.ts`（新） | 「上次成功导出」记录：`recordBackup` / `lastBackup` / `shouldPromptBackup`，纯逻辑、storage 注入 |
+
+#### 13.23.2 三个实现细节，都是踩过才知道的
+
+**① `drop(out)` 必须在回读之前**
+
+SAF 的内容在 **close 时提交**。写完不关 fd 就去读 `metadata().len()`，
+读到的是提交前的长度（通常是 0）——**校验会假红，把好备份判成失败**。
+代码里为此写了注释，mentor 一眼能看出顺序不能动。
+
+**② 回读失败不等于导出失败**
+
+某些 provider 不给读权限（`ACTION_CREATE_DOCUMENT` 一般授读写，但不保证）。
+此时 `if let Ok(file) = ...` 拿不到就**跳过校验**、按成功返回：
+文件很可能是好的，误报失败会让用户反复重试到崩溃。
+**只有「读到了长度且不等于期望值」才是硬失败。**
+
+**③ 桌面侧也读一次 metadata，但 `unwrap_or(0)`**
+
+桌面 `fs::copy` 之后 stat 一次，拿不到就当 0——因为前端 `written === 0` 会判失败，
+这个兜底方向是**保守**的（宁可报可疑，不报假成功）。但桌面路径正常时必然拿得到真实长度。
+
+#### 13.23.3 守门为什么必须是源码级
+
+Android 专属分支在 Node 上**既不编译也不执行**，任何行为测试都测不到它的存在。
+`d144-guard.test.ts` 用 `import.meta.glob(?raw)` 读 5 个源文件，钉四件事：
+
+1. `export_vault` 函数体含 `starts_with("content://")`、`copy_from_file`、`remove_file`；
+2. 返回类型是 `IpcResult<u64>`（否则前端拿不到字节数）；
+3. `copy_from_file` 含 `drop(out)` + `meta.len()` + `content_write_size_mismatch` + `empty_source`；
+4. 前端 `written === 0` 判失败、`Promise<number>` 契约、备份记录接线。
+
+`fnBody()` 的截断规则要同时认 Rust 的 `///` 与 TS 的 `  //`——只用一种会让 TS 侧
+一路截到文件尾，把别人的 `Promise<void>` 算到 `exportVault` 头上（首轮就是这么假红的）。
+
+**变异验证**：把 `content_write_size_mismatch` 改名 → 守门真红 → 还原后绿。
+（注意：改名成 `..._TEMP` 这种**包含旧串**的新串不会红，断言是 `toContain`。）
+
+#### 13.23.4 遗留：自动化备份仍是空白
+
+本轮把「手动导出」修到可信，但没有**自动**备份。用户卸载时若最后一次导出是很久以前，
+仍然会丢数据。若要补，方向是「解锁时检查距上次备份天数 → 超期在主页提示」，
+而不是后台偷偷写文件（零知识产品不该有用户不知情的明文副本落盘）。
+
 ## 14. IPC 契约不变量：`rename_all = "snake_case"` 必须 100% 覆盖
 
 > 2026-10-21（D-72）由前端工程师以证据顶回既定错误后的定论。**这是一条不变量，不是一条约定**——

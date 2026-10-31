@@ -124,16 +124,77 @@ pub fn change_master_password(
 }
 
 /// O-03 导出保险库（需重新验证主密码；二次确认与明文风险提示由前端负责）。
+///
+/// 返回值为**实际写入目标的字节数**（D-144）：2026-10-31 真机事故里，Android 上
+/// 导出静默失败、盘上只剩 SAF 建好的 0 字节占位文件，用户以为备份成功、卸载清库后
+/// 才发现无库可恢复。前端拿这个数字直接摆在导出卡片上，比一句「确定」有用得多。
 #[tauri::command(rename_all = "snake_case")]
 pub fn export_vault(
+    app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     dest_path: String,
     master_password: String,
-) -> IpcResult<()> {
+) -> IpcResult<u64> {
+    #[cfg(not(target_os = "android"))]
+    let _ = &app;
+
+    // D-144：Android 保存对话框返回 `content://…`，ContentProvider URI 没有内核路径。
+    // 旧实现把整串当路径交给 `std::fs::copy`（见 core `Repository::export_vault`）→
+    // 在 Android 上必失败，而 SAF 的 `ACTION_CREATE_DOCUMENT` **已把目标文件建好**，
+    // 于是留下 0 字节文件 + 一条容易被忽略的「文件读写出错」。
+    // 现在：先在数据目录生成真备份，再流式写进 provider fd，写完回读长度校验。
+    #[cfg(target_os = "android")]
+    if dest_path.starts_with("content://") {
+        let tmp = vault_path(&app)?.with_file_name(format!("passwordms.export-{}.tmp", now_ms()));
+        // 锁内只做「导出到本地」——provider 写入可能慢，不持会话锁做 I/O。
+        let staged = {
+            let session = state.lock_session().map_err(lock_err)?;
+            let repo = session.repo()?;
+            repo.export_vault(&tmp, &master_password)
+                .map_err(IpcError::from)
+        };
+        let outcome =
+            staged.and_then(|()| crate::content_uri::copy_from_file(&app, &tmp, &dest_path));
+        // 临时文件是本机库的明文副本（虽仍是加密容器），成败都必须删掉。
+        let _ = std::fs::remove_file(&tmp);
+        return outcome;
+    }
+
     let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
     repo.export_vault(Path::new(&dest_path), &master_password)?;
-    Ok(())
+    // 桌面侧复制后同样回读一次：拿不到长度不算失败（路径可能是不支持 stat 的挂载点），
+    // 但拿得到就如实回报，前端才有可显示的事实。
+    Ok(std::fs::metadata(Path::new(&dest_path))
+        .map(|m| m.len())
+        .unwrap_or(0))
+}
+
+/// D-145：把「备份不可用」的三种成因翻成用户能行动的文案。
+///
+/// `restore_backup_from` 对空文件 / 非库文件 / 尾部截断一律返回 `Validation`，
+/// 而前端旧映射把 `Validation` 全译成「输入无效。」——用户手上明明是个 `.vault`
+/// 文件，却只被告知「输入无效」，无法判断该换个文件还是该重新导出。
+/// 这里按成因分叉：**空（0 字节）／不是备份文件／内容损坏**。
+fn backup_reject(path: &Path, err: CoreError) -> IpcError {
+    let detail = match &err {
+        CoreError::Validation(d) => d.as_str(),
+        _ => return IpcError::from(err),
+    };
+    // metadata 取不到时用 MAX 兜底（落「不是备份文件」），不要误判成空文件。
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    let key = if len == 0 {
+        "err.backup_empty"
+    } else if detail == "corrupt_vault_backup" {
+        "err.backup_corrupt"
+    } else {
+        "err.backup_not_vault"
+    };
+    IpcError {
+        code: err.code().to_string(),
+        message_key: key.to_string(),
+        record_count: None,
+    }
 }
 
 /// D-55 从备份恢复保险库文件（锁屏页「从备份恢复」入口）。
@@ -173,12 +234,13 @@ pub fn restore_backup(
     if source_path.starts_with("content://") {
         let tmp = dest.with_file_name(format!("passwordms.restore-{}.tmp", now_ms()));
         let outcome = crate::content_uri::copy_to_file(&app, &source_path, &tmp)
-            .and_then(|()| restore_backup_from(&tmp, &dest).map_err(IpcError::from));
+            .and_then(|()| restore_backup_from(&tmp, &dest).map_err(|e| backup_reject(&tmp, e)));
         let _ = std::fs::remove_file(&tmp);
         outcome?;
         return Ok(());
     }
-    restore_backup_from(Path::new(&source_path), &dest)?;
+    restore_backup_from(Path::new(&source_path), &dest)
+        .map_err(|e| backup_reject(Path::new(&source_path), e))?;
     Ok(())
 }
 

@@ -123,6 +123,69 @@ pub(crate) fn write_bytes(app: &AppHandle, uri: &str, data: &[u8]) -> Result<(),
     Ok(())
 }
 
+/// 把本地文件**流式拷贝**到 `content://` URI，并在关闭 fd 后**回读长度校验**（D-144）。
+///
+/// 需求来自真机事故（2026-10-31）：手机上「导出保险库」得到的是 **0 字节文件**，
+/// 用户以为备份成功，卸载清库后再拿它恢复才报「输入无效」——数据彻底没了。
+///
+/// 根因是 [`write_bytes`] 只被附件/密钥文档用到，**保险库导出走的是另一条路**
+/// （`vault_cmd::export_vault` → `std::fs::copy` → `Path::new("content://…")`），
+/// 在 Android 上根本没有内核路径，写入必失败；而 SAF 的 `ACTION_CREATE_DOCUMENT`
+/// **已经把目标文件建好了**，于是磁盘上留下一个 0 字节占位文件——「备份成功」的
+/// 假象就是这么来的。
+///
+/// 与 [`write_bytes`] 的两点差异：
+///
+/// 1. **流式**：保险库实测可达 24 MB（未压缩库），整份进内存是一次无谓尖峰；
+///    `io::copy` 的内存占用与文件大小无关。
+/// 2. **写完必验**：关闭 fd（SAF 于 close 时提交）后重新打开目标 URI 读 `metadata().len()`，
+///    与源文件长度比对，不等即返回 `ERR_IO`。**这是「假成功」的唯一硬防线**——
+///    写入失败却报成功的代价，用户已经付过一次了。
+///
+/// 回读本身可能失败（某些 provider 不给读权限），此时**不把导出判失败**：
+/// 文件很可能是好的，误报失败会让用户重试到崩溃。这类情况只留长度未知的事实。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn copy_from_file(
+    app: &AppHandle,
+    src: &std::path::Path,
+    uri: &str,
+) -> Result<u64, IpcError> {
+    let url = tauri::Url::parse(uri).map_err(|_| IpcError::io("invalid_content_uri"))?;
+    let expected = std::fs::metadata(src)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?
+        .len();
+    // 空源文件绝不写出：宁可让调用方报错，也不制造一个「看起来成功」的空备份。
+    if expected == 0 {
+        return Err(IpcError::io("empty_source"));
+    }
+    let mut opts = OpenOptions::new();
+    opts.write(true).truncate(true);
+    let mut out = app
+        .fs()
+        .open(FilePath::Url(url.clone()), opts)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    let mut input = std::fs::File::open(src)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    std::io::copy(&mut input, &mut out)
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    // `flush` 对 std::fs::File 是 no-op（无用户态缓冲），但保留它表达意图：
+    // 真正的提交发生在 close —— 下面的 `drop` 就是那次 close。
+    out.flush()
+        .map_err(|e| IpcError::from(passwordms_core::CoreError::from(e)))?;
+    drop(out);
+    // 关闭后回读：长度不等 = 写入没落地，必须让用户知道，不许报成功。
+    let mut verify_opts = OpenOptions::new();
+    verify_opts.read(true);
+    if let Ok(file) = app.fs().open(FilePath::Url(url), verify_opts) {
+        if let Ok(meta) = file.metadata() {
+            if meta.len() != expected {
+                return Err(IpcError::io("content_write_size_mismatch"));
+            }
+        }
+    }
+    Ok(expected)
+}
+
 /// 把 `content://` URI 指向的文件**流式拷贝**到本地路径（D-94：Android「从备份恢复」）。
 ///
 /// 需求来自真机反馈：锁屏页「从备份恢复」是全仓最后一个没接 `content://` 分支的

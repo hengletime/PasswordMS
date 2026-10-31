@@ -402,6 +402,11 @@ export const enUS: Messages = {
     export_password_required: 'Enter the current master password before exporting.',
     // D-143: uninstalling deletes the vault — this line is the only self-rescue reminder.
     uninstall_wipes_vault: 'Uninstalling the app, switching devices, or reinstalling the OS deletes the vault on this device. Before you do any of that, export an encrypted copy with the button below and keep it where you can find it again.',
+    export_ok_size: 'Backup saved: {size}. Make sure the file is where you chose it and that its size is not 0 B.',
+    export_empty_failed: 'The export wrote no data (0 bytes), so no backup was made. Choose a different location and try again.',
+    backup_last_ok: 'Last successful export: {time} ({size}).',
+    backup_stale_hint: 'It has been over {days} days — consider exporting a fresh copy.',
+    backup_never: 'No backup has ever been exported from this device. Uninstalling or switching devices will make the data unrecoverable.',
     vault_file: 'Vault file',
     size: 'Size',
     // D-73: the heading must explain itself — "what is this file for" beats a bare path.
@@ -587,6 +592,9 @@ export const enUS: Messages = {
     folder_not_found: 'Folder not found.',
     folder_name: 'Invalid folder name.',
     validation: 'Invalid input.',
+    backup_empty: 'This backup file is empty (0 bytes) — there is no data in it. Export a fresh backup and restore from that.',
+    backup_not_vault: 'This file is not a PasswordMS backup. Choose a .vault file created by Settings → Export vault.',
+    backup_corrupt: 'This backup file is damaged (incomplete contents). Try a different backup.',
     // D-97: TOTP secret validation failure (editor) and error state (detail page).
     totp_invalid:
       'Invalid TOTP secret: use a Base32 key (letters A-Z, digits 2-7, no 0/1/8/9), or paste an otpauth:// URI to extract it automatically.',

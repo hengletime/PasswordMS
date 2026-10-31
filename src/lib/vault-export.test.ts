@@ -4,17 +4,24 @@
 //   1. exportPassword 为空 → 导出 IPC（exportVault）**零调用** + 就地 error toast；
 //   2. 非空 → IPC 被调用且参数携带该密码；成功后 cleared=true（组件据此清空输入框）+ success toast；
 //   3. 用户取消（确认框/保存对话框）→ 不发 IPC；
-//   4. IPC 失败 → error toast、不清空。
+//   4. IPC 失败 → error toast、不清空；
+//   5. **D-144**：后端回报的字节数决定「成功」是真的还是假的 —— 正数才念体积并记录，
+//      0 字节一律判失败（2026-10-31 真机事故：SAF 留下 0 字节占位文件 + 一句「确定」）。
 // 守卫若被误删：空密码会一路走到 exportVault 替身，用例 1 断言 `invoked === false` 即红。
 
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  EXPORT_EMPTY_KEY,
   EXPORT_OK_KEY,
+  EXPORT_OK_WITH_SIZE_KEY,
   EXPORT_PASSWORD_REQUIRED_KEY,
   runVaultExport,
   type VaultExportDeps,
 } from './vault-export';
+
+/** 正常保险库的量级（8 KB 出头的真实小库），用来断言体积文案。 */
+const DEFAULT_BYTES = 8_208;
 
 /** 构造一套可观测替身依赖；confirm/对话框默认放行，密码默认非空。 */
 function makeDeps(overrides: Partial<VaultExportDeps> = {}): VaultExportDeps & {
@@ -26,8 +33,14 @@ function makeDeps(overrides: Partial<VaultExportDeps> = {}): VaultExportDeps & {
   const { exportVault: exportVaultOverride, ...rest } = overrides;
   const exportVault =
     exportVaultOverride ??
-    vi.fn(async (_dest: string, _password: string): Promise<void> => undefined);
-  const toast = vi.fn<(kind: 'info' | 'success' | 'error', messageKey: string) => void>();
+    vi.fn(async (_dest: string, _password: string): Promise<number> => DEFAULT_BYTES);
+  const toast = vi.fn<
+    (
+      kind: 'info' | 'success' | 'error',
+      messageKey: string,
+      params?: Record<string, string | number>,
+    ) => void
+  >();
   const deps: VaultExportDeps = {
     exportPassword: 'qa-master-password',
     confirm: async (): Promise<boolean> => true,
@@ -52,18 +65,45 @@ describe('runVaultExport —— D-51 导出守卫', () => {
     expect(deps.exportVault).not.toHaveBeenCalled();
     expect(deps.toast).toHaveBeenCalledTimes(1);
     expect(deps.toast).toHaveBeenCalledWith('error', EXPORT_PASSWORD_REQUIRED_KEY);
-    expect(result).toEqual({ invoked: false, cleared: false });
+    expect(result).toEqual({ invoked: false, cleared: false, bytes: null });
   });
 
-  it('非空密码：IPC 被调用且参数携带该密码；成功后 cleared=true + success toast', async () => {
+  it('非空密码：IPC 被调用且参数携带该密码；成功后 cleared=true + 带体积的 success toast', async () => {
     const deps = makeDeps({ exportPassword: 'qa-master-password' });
 
     const result = await runVaultExport(deps);
 
     expect(deps.exportVault).toHaveBeenCalledTimes(1);
     expect(deps.exportVault).toHaveBeenCalledWith('/tmp/passwordms-export.vault', 'qa-master-password');
+    // D-144：成功文案必须带上实际字节数（8,208 B → "8.0 KB"）。
+    expect(deps.toast).toHaveBeenCalledWith('success', EXPORT_OK_WITH_SIZE_KEY, {
+      size: '8.0 KB',
+    });
+    expect(result).toEqual({ invoked: true, cleared: true, bytes: DEFAULT_BYTES });
+  });
+
+  it('D-144：后端回报 0 字节 → 判失败（error toast、不清空、bytes=0）', async () => {
+    // 这正是 2026-10-31 的事故形态：写盘"成功"但一个字节都没落地。
+    // 若实现把 0 当成功，用户会再次相信一份空备份 —— 本用例就是那道闸。
+    const deps = makeDeps({
+      exportVault: vi.fn(async (): Promise<number> => 0),
+    });
+
+    const result = await runVaultExport(deps);
+
+    expect(deps.toast).toHaveBeenCalledWith('error', EXPORT_EMPTY_KEY);
+    expect(result).toEqual({ invoked: true, cleared: false, bytes: 0 });
+  });
+
+  it('D-144：拿不到字节数（旧包/替身返回非数字）→ 沿用旧成功文案，不误判失败', async () => {
+    const deps = makeDeps({
+      exportVault: vi.fn(async (): Promise<number> => undefined as unknown as number),
+    });
+
+    const result = await runVaultExport(deps);
+
     expect(deps.toast).toHaveBeenCalledWith('success', EXPORT_OK_KEY);
-    expect(result).toEqual({ invoked: true, cleared: true });
+    expect(result).toEqual({ invoked: true, cleared: true, bytes: null });
   });
 
   it('确认框取消：不发 IPC、无 toast', async () => {
@@ -73,7 +113,7 @@ describe('runVaultExport —— D-51 导出守卫', () => {
 
     expect(deps.exportVault).not.toHaveBeenCalled();
     expect(deps.toast).not.toHaveBeenCalled();
-    expect(result).toEqual({ invoked: false, cleared: false });
+    expect(result).toEqual({ invoked: false, cleared: false, bytes: null });
   });
 
   it('保存对话框取消：不发 IPC、无 toast', async () => {
@@ -83,7 +123,7 @@ describe('runVaultExport —— D-51 导出守卫', () => {
 
     expect(deps.exportVault).not.toHaveBeenCalled();
     expect(deps.toast).not.toHaveBeenCalled();
-    expect(result).toEqual({ invoked: false, cleared: false });
+    expect(result).toEqual({ invoked: false, cleared: false, bytes: null });
   });
 
   it('保存对话框 cancel（Android reject）→ 正常返回、不发 IPC（未捕获 rejection 回归锚点）', async () => {
@@ -102,13 +142,13 @@ describe('runVaultExport —— D-51 导出守卫', () => {
 
     expect(deps.exportVault).not.toHaveBeenCalled();
     expect(deps.toast).not.toHaveBeenCalled();
-    expect(result).toEqual({ invoked: false, cleared: false });
+    expect(result).toEqual({ invoked: false, cleared: false, bytes: null });
   });
 
   it('IPC 失败：error toast（统一错误码映射）、不清空', async () => {
     const deps = makeDeps({
       exportVault: vi.fn(
-        async (_dest: string, _password: string): Promise<void> => {
+        async (_dest: string, _password: string): Promise<number> => {
           throw new Error('unlock failed');
         },
       ),
@@ -118,6 +158,6 @@ describe('runVaultExport —— D-51 导出守卫', () => {
 
     expect(deps.exportVault).toHaveBeenCalledTimes(1);
     expect(deps.toast).toHaveBeenCalledWith('error', 'err.internal');
-    expect(result).toEqual({ invoked: true, cleared: false });
+    expect(result).toEqual({ invoked: true, cleared: false, bytes: null });
   });
 });

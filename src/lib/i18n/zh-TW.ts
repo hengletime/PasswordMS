@@ -370,6 +370,11 @@ export const zhTW = {
     export_password_required: '請先輸入目前主密碼再匯出。',
     // D-143：解除安裝即清庫的備援提醒。
     uninstall_wipes_vault: '解除安裝應用程式、換機或重新安裝系統都會刪除本機保險庫。請在動手前用下方按鈕匯出一份加密副本，存到自己找得回來的地方。',
+    export_ok_size: '備份已儲存：{size}。請確認這個檔案在你選的位置裡，而且大小不是 0 B。',
+    export_empty_failed: '匯出沒有寫入任何資料（0 位元組），備份未成功。請換一個儲存位置重試。',
+    backup_last_ok: '上次成功匯出：{time}（{size}）。',
+    backup_stale_hint: '已超過 {days} 天，建議再匯出一份。',
+    backup_never: '從未成功匯出過備份。解除安裝或換機將無法還原本機資料。',
     vault_file: '保險庫檔案',
     size: '大小',
     vault_file_hint: '本機全部項目都加密保存在這一個檔案裡；備份或換機就是複製它，檔名見下。',
@@ -527,6 +532,9 @@ export const zhTW = {
     folder_not_found: '群組不存在。',
     folder_name: '群組名稱無效。',
     validation: '輸入無效。',
+    backup_empty: '這個備份檔案是空的（0 位元組），裡面沒有資料。請重新匯出一份備份再還原。',
+    backup_not_vault: '這個檔案不是 PasswordMS 備份。請選擇由「設定 → 匯出保險庫」產生、以 .vault 結尾的檔案。',
+    backup_corrupt: '這個備份檔案已損壞（內容不完整）。請換一份備份再試。',
     totp_invalid:
       '動態密碼金鑰無效：須為 Base32 金鑰（字母 A-Z、數字 2-7，不含 0/1/8/9），或直接貼上 otpauth:// 連結自動擷取。',
     totp_invalid_detail: '動態密碼金鑰無效，請編輯項目修正。',

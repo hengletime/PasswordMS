@@ -2219,6 +2219,106 @@ Kimi 报告把这条写成「Android 默认行为」不准确——默认 `allow
 - 不做卸载前的自动导出：Android 没有可拦截的卸载回调；
   `ACTION_PACKAGE_REMOVED` 是广播（发给别人的），拿不到「我要被卸载了」的时机。
 
+### 3.31 D-144：Android 导出保险库得到 0 字节文件，「备份成功」是一场假象（1.5.2，2026-10-31）
+
+#### 3.31.1 事故链（四个环节，每一环都真实发生）
+
+主人装机实测的完整经过：
+
+| # | 环节 | 用户看到 | 真实情况 |
+|---|---|---|---|
+| 1 | 手机上点「导出保险库」 | 一句「确定」 | 写入**根本没发生** |
+| 2 | 打开文件管理器 | 有个 `passwordms-export.vault` | **0 字节**（SAF 建的空占位） |
+| 3 | 卸载应用（清库） | 没有「保留数据」提示 | 库随 `/data/data` 一起消失 |
+| 4 | 拿那份文件恢复 | 「输入无效。」 | 0 字节当然不是合法容器 |
+
+四环叠加的后果：**数据永久丢失**（若电脑端没有配套的库，就再无恢复路径）。
+这是本项目至今最严重的一次数据安全事故，性质与「UI 没刷新」完全不同。
+
+#### 3.31.2 根因：`export_vault` 少了一条 Android 分支
+
+`vault_cmd::export_vault` 的实现只有一行核心动作：
+
+```rust
+repo.export_vault(Path::new(&dest_path), &master_password)?;   // 内部 std::fs::copy
+```
+
+`Repository::export_vault` 做的是 `std::fs::copy(self.container.path(), dest_path)`——
+**纯本地路径语义**。而 Android 的保存对话框（`ACTION_CREATE_DOCUMENT`）返回的是
+`content://com.android.providers.downloads/document/…`，ContentProvider URI **没有内核路径**，
+`std::fs::copy` 必然失败。
+
+关键的一环让失败变得更危险：**SAF 在用户选定位置时就已经把目标文件建好了**。
+于是磁盘上留下一个 0 字节文件，而写入失败的错误提示（`ERR_IO` /「文件读写出错」）
+在「文件已出现」的心理预期下极容易被忽略。**这不是用户粗心，是产品没给他复查的凭据。**
+
+同一模块里 `content_uri::write_bytes` 早就存在（附件导出、密钥文档、导入模板都在用），
+但保险库导出走的是另一条路——**同一个仓库里两套写法，其中一套从没在真机上跑过闭环**。
+这是本次事故的结构性成因：`copy_to_file`（恢复方向）有 Android 分支，
+`export_vault`（导出方向）没有，而两者本该对称。
+
+#### 3.31.3 修法：三层，一层都不能少
+
+**① 补分支（`content_uri::copy_from_file`）**
+
+Android 上：先在数据目录生成真备份（`repo.export_vault` → 临时文件，锁内完成），
+再经 provider fd **流式**写进 `content://`（保险库实测可达 24 MB，整份进内存是无谓尖峰），
+最后删临时文件。桌面路径完全不变。
+
+**② 写完必验（这是「假成功」的唯一硬防线）**
+
+```rust
+drop(out);                       // 关闭 fd —— SAF 于 close 时提交内容
+// 重新打开目标 URI 读 metadata().len()，与源文件长度比对
+if meta.len() != expected { return Err(IpcError::io("content_write_size_mismatch")); }
+```
+
+顺序不可颠倒：**先 close 再回读**，否则读到的是未提交的长度。
+回读本身失败（部分 provider 不给读权限）**不判导出失败**——文件很可能是好的，
+误报失败会让用户反复重试；这种情况只放弃「长度已知」这个事实。
+
+**③ 把字节数交到用户眼前（`export_vault` 返回 `u64`）**
+
+- 成功 toast 从「确定」改为「备份已保存：{size}。请确认…大小不是 0 B。」；
+- 前端把 **0 字节直接判失败**（`EXPORT_EMPTY_KEY`），不给它冒充成功的机会；
+- 设置页新增一行**上次成功导出：时间（体积）**，从未导出则红字提示
+  （`src/lib/backup-reminder.ts`，localStorage 记录，卸载后随应用消失——这正是该让他看到的事实）。
+
+#### 3.31.4 D-145：恢复失败不再只会说「输入无效」
+
+`restore_backup_from` 对空文件 / 非库文件 / 尾部截断一律返回 `Validation`，
+前端旧映射把 `Validation` 全译成「输入无效。」——用户手上明明是个 `.vault` 文件，
+却无法判断该换个文件还是该重新导出。现在按成因分叉（`backup_reject`）：
+
+| 成因 | 文案键 | 用户该做什么 |
+|---|---|---|
+| 0 字节 | `err.backup_empty` | 这份备份是空的，重新导出 |
+| magic 不符 | `err.backup_not_vault` | 选错了文件 |
+| 帧流损坏 | `err.backup_corrupt` | 换一份备份 |
+
+`code` 仍是 `ERR_VALIDATION`（不新增错误码），只换 `message_key`——
+前端 `toAppError` 本就优先采用后端给的 `message_key`。
+
+#### 3.31.5 与 D-143 的关系：为什么「保留数据」这次没弹
+
+主人卸载时手机上是 **1.5.0**，而 `hasFragileUserData` 是 **1.5.1** 才加的，
+旧包自然不弹。因此这条**尚待真机复验**（装 1.5.2 后从「设置 → 应用 → 卸载」试）。
+必须同时说明平台局限：`hasFragileUserData` 只在系统卸载流程弹框，
+**从启动器长按卸载、商店卸载、`adb uninstall` 都不保证弹**。
+把数据安全全部押在这个系统框上是不负责任的——D-144 的三层修复（尤其是「导出必验 + 上次备份可见」）
+才是主力，系统框只是补充。
+
+#### 3.31.6 验证强度（诚实标注）
+
+- **代码级闭合**：`content_uri::copy_from_file` 含「空源拒绝 + 关 fd 后回读比对」；
+  `export_vault` 含 `content://` 分支与 `IpcResult<u64>` 返回；
+  前端 0 字节判失败、体积插值文案、备份记录三处齐备。
+- **守门 9 例**（`d144-guard.test.ts`，源码级）：这类「某平台少一条分支」的缺陷
+  行为测试**永远测不到**（Android 代码在 Node 上既不编译也不执行），只能钉接线。
+- **变异验证**：把 `content_write_size_mismatch` 改名 → 守门真红 → 还原后绿。
+- **真机未验**：待主人装 1.5.2 后实测「导出 → 看文件大小 → 恢复」闭环。
+  本轮**不声称已真机验证**。
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。
@@ -2252,6 +2352,9 @@ Kimi 报告把这条写成「Android 默认行为」不准确——默认 `allow
 | `src/lib/clipboard.ts` | 复制 + 30s 清空逻辑（调用 Rust 剪贴板命令，含「仅清自有内容」判定） |
 | `src/lib/qr.ts` | QR 展示（取 Rust SVG）与扫描（`jsqr` 解析摄像头帧） |
 | `src/lib/url-safety.ts` | F-05 URL 协议白名单校验（仅 http/https，其余拒绝） |
+| `src/lib/vault-export.ts` | 导出流程（守卫 + 确认 + 选目标 + IPC + 事后清空），D-144 起透传写入字节数 |
+| `src/lib/backup-reminder.ts` | 「上次成功导出」记录（时间 + 体积）、超期提醒判定（D-144） |
+| `src/lib/save-dialog.ts` | 「选目标 + 写盘」三态归一（cancelled / saved / failed），D-144 起 `saved` 带写入返回值 |
 | `src/lib/i18n/index.ts` | 极简 i18n：`t(key)` + 语言切换（默认 zh-CN） |
 | `src/lib/i18n/zh-CN.ts` | 简体中文文案 |
 | `src/lib/i18n/en-US.ts` | 英文文案（占位，MVP 不启用） |

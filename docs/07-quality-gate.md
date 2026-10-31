@@ -221,6 +221,56 @@ APK `7,729,579 B`（`748360bc`）/ NSIS `2,051,270 B`（`61796fd0`）/ MSI `2,90
 只能真机验（需从**系统设置**卸载 → 弹框 → 勾选保留 → 重装同签名 APK → 看库是否回来）。
 本轮**未做**该真机验证（会清掉主人手机上的真实数据），发布说明里据实标注为「待验证」。
 
+### 1.2h 最近一次完整实跑（2026-10-31 12:14 · v1.5.2 · D-144 / D-145）
+
+> 口径：`env -u NODE_OPTIONS bash scripts/gate-all.sh --keep-going`，整轮墙钟 **7 分 25 秒**，总判定 **PASS（8/8，无跳过）**。日志 `target/_gate_152.log`。
+> 本轮改 Rust（`content_uri.rs` / `vault_cmd.rs`）+ 前端（`ipc.ts` / `vault-export.ts` / `save-dialog.ts` / `Settings.svelte` / 四语言 / 新模块 + 测试）。
+> Rust 用例数 292 未变（只改实现不改用例）；前端 +21 例（490 → 511）。
+
+| # | 门 | 本次实测（v1.5.2） | 判定 |
+|---|----|------|------|
+| 1 | 前端单测 | **57 文件 511/511 通过**（v1.5.1 是 55/490；本轮 +2 文件 +21 例：`backup-reminder` 9 + `d144-guard` 9 + `vault-export` +2 + `save-dialog` +1） | ✅ 6s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 8s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（同既有浅色按钮对比度，未达 AA 正文 4.5 但过控件底线 3.0） | ✅ 2s |
+| 4 | fmt | **0 处差异** | ✅ 1s |
+| 5 | Rust 全量 | **292 通过 / 0 失败 / 1 ignored** | ✅ 404s |
+| 6 | clippy | **0 warning** | ✅ 5s |
+| 7 | 体积门-桌面 | 见下「实际产物」 | ✅ 14s |
+| 8 | 体积门-Android | 见下「实际产物」 | ✅ 4s |
+
+**首轮曾 FAIL 2 处（都是真红，不是假失败）**：
+
+1. `cargo fmt` diffs=1 —— `export_vault` 的 `and_then` 闭包被 rustfmt 要求单行；`cargo fmt --all` 解决。
+2. clippy `useless_conversion` —— `restore_backup` 里写了 `IpcError::from(backup_reject(...))`，
+   而 `backup_reject` 已返回 `IpcError`（标准库有 `impl<T> From<T> for T`，所以能编译，但无意义）。
+   去掉那层 `From` 即 0 warning。**这条值得记**：`map_err` 里包一层 `IpcError::from` 是习惯动作，
+   一旦内层函数已经产出 `IpcError`，它就从「必要转换」变成「噪音」。
+
+**变异验证记录（守门是否真会拦人）**：把 `content_write_size_mismatch` 改为
+`size_check_removed` → `d144-guard` 真红 → 还原后 9/9 绿。
+第一次改名用了 `content_write_size_mismatch_TEMP`，**因为新串包含旧串**，
+`toContain` 照样通过、没有变红——**变异验证的改名必须让关键字整体消失**。
+
+**1.5.2 实际产物（出包实测，非推算）**：
+APK `7,733,675 B`（`877d9398`，V3 签名）/ NSIS `2,048,513 B`（`cba711f0`）/
+MSI `2,908,160 B`（`f77f32a9`）/ 裸 exe `4,980,736 B`（`ad3543b4`）/
+绿色版 zip `2,412,423 B`（`1259d356`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**。
+
+**包内取证（这次的重点是「新代码真的进包了吗」）**：
+
+| 判据 | 读数 |
+|---|---|
+| APK 内 `.so` 含 `passwordms.export-`（D-144 新增的临时文件名） | ✅ 命中 1 次 |
+| APK 内 `.so` 含 `passwordms.restore-`（既有恢复分支，对照） | ✅ 命中 1 次 |
+| `dist/assets/*.js` 含四条新文案（`备份已保存` / `从未成功导出过备份` / `这个备份文件是空的` 等） | ✅ 全部命中 |
+| `dist/index.html` 12:19:45 → APK 12:23:25（前端产物先于打包） | ✅ 顺序正确 |
+| `build-android.sh` 对 `.so` 的四条断言（mtime ≥ 上游起点 / UPSTREAM_RC / magic / 字节数） | ✅ 4/4 |
+
+> 注意：`content_write_size_mismatch` / `empty_source` 在 `.so` 里**搜不到是正常的**——
+> `IpcError::io(_detail: &str)` 的形参带下划线（实现不用它），LLVM 内联后会消掉这些字面量。
+> 用「临时文件名格式串」作判据才是可靠的：它真被 `format!` 用到，必然留在 rodata。
+> 前端中文文案在 `.so` 里也搜不到——Tauri 对嵌入的 assets 做了压缩；判据要换成 `dist` 侧。
+
 ### 1.3 Rust 全量 149 例逐 target 累加（2026-10-22 14:10 实跑，148 通过 + 1 `#[ignore]`）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。

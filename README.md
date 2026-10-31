@@ -71,10 +71,11 @@ Other requirements and notes:
 
 1. **No master password recovery**: this software has no backdoor and offers no escrow. Forgetting the master password means the data is permanently unrecoverable. Keep it safe and back up regularly via `Settings → Export`.
 2. **Uninstalling takes the vault with it**: the vault is never backed up for you — on Android, `allowBackup` is deliberately **disabled** so the vault never reaches a third-party cloud. Deleting the app, switching devices, or reinstalling the OS therefore deletes the local vault file. **Export an encrypted copy first** via `Settings → Export vault` (restore it from the lock screen with "Restore from backup"). When uninstalling from system Settings, Android asks whether to keep app data — tick that box and reinstalling an APK with the same signature restores it in place; uninstalling from an app store or `adb uninstall` shows no such prompt.
-3. **Provided "as is"**: despite thorough testing, the software is not guaranteed defect-free. Use at your own risk and **back up important data regularly**.
-4. **Not professional security advice**: this software does not replace a full information-security strategy; use it on trusted devices and keep your OS and WebView2 runtime up to date.
-5. **LAN risks**: paired devices share encrypted data. Do not pair over untrusted networks (e.g. public Wi-Fi).
-6. By using this software you acknowledge and agree to the terms above. The software is released under the [MIT License](LICENSE), which applies alongside these terms.
+3. **Check the exported file size yourself**: Settings keeps showing "Last successful export: <time> (<size>)", and the success toast now states the size. **A 0 B backup is no backup at all** — that was exactly the Android export failure before 1.5.2, now fixed. The export is an encrypted copy: whoever holds it still needs the master password, but keep it somewhere safe.
+4. **Provided "as is"**: despite thorough testing, the software is not guaranteed defect-free. Use at your own risk and **back up important data regularly**.
+5. **Not professional security advice**: this software does not replace a full information-security strategy; use it on trusted devices and keep your OS and WebView2 runtime up to date.
+6. **LAN risks**: paired devices share encrypted data. Do not pair over untrusted networks (e.g. public Wi-Fi).
+7. By using this software you acknowledge and agree to the terms above. The software is released under the [MIT License](LICENSE), which applies alongside these terms.
 
 ## 🛠️ Building from Source
 

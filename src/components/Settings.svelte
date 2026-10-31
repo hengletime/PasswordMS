@@ -10,7 +10,15 @@
   import LegalDialog from './LegalDialog.svelte';
   import Modal from './common/Modal.svelte';
   import Spinner from './common/Spinner.svelte';
-  import { AUTO_LOCK_OPTIONS, formatBytes } from '../lib/constants';
+  import { AUTO_LOCK_OPTIONS, formatBytes, formatDateTime } from '../lib/constants';
+  import {
+    BACKUP_STALE_DAYS,
+    recordBackup,
+    lastBackup,
+    shouldPromptBackup,
+    type BackupRecord,
+    type BackupStorage,
+  } from '../lib/backup-reminder';
   import {
     bioCanOpenSettings,
     bioPlatformOf,
@@ -268,6 +276,15 @@
     return window.localStorage;
   }
 
+  /** D-144/D-146：备份记录的存储（与更新检查共用 localStorage，键名各自独立）。 */
+  function backupStorage(): BackupStorage | null {
+    // SSR / 测试环境无 window 时不记录，而不是抛错——这是辅助信息，不值得中断导出。
+    return typeof window === 'undefined' ? null : window.localStorage;
+  }
+
+  /** 上次成功导出的记录（进入设置页时读一次；导出成功后就地更新）。 */
+  let lastBackupRecord = $state<BackupRecord | null>(null);
+
   let updateEnabled = $state(false);
   /** idle / checking / uptodate / available / failed。 */
   let updateState = $state<'idle' | 'checking' | 'uptodate' | 'available' | 'failed'>('idle');
@@ -352,6 +369,12 @@
     }
     if (shouldAutoCheck(updateStorage())) {
       void runUpdateCheck(true);
+    }
+    // D-144/D-146：每次进设置页都重新读一次备份记录。
+    // 不放进上面那个 effect 的同一段判断里也可以，但这样只需一次挂载即可。
+    const store = backupStorage();
+    if (store !== null) {
+      lastBackupRecord = lastBackup(store);
     }
   });
   // D-61：自动锁定档位真持久化（`Vault.auto_lock_minutes` 明文头部）——
@@ -619,14 +642,23 @@
         ui.confirm('settings.export_confirm_title', 'settings.export_confirm_body'),
       pickDestination: (): Promise<string | null> =>
         save({ defaultPath: 'passwordms-export.vault' }),
-      exportVault: (dest: string, password: string): Promise<void> =>
+      exportVault: (dest: string, password: string): Promise<number> =>
         api.vault.exportVault(dest, password),
-      toast: (kind, messageKey): void => {
-        ui.toast(kind, messageKey);
+      toast: (kind, messageKey, params): void => {
+        ui.toast(kind, messageKey, params);
       },
     });
     if (result.cleared) {
       exportPassword = ''; // 导出成功后清空，避免明文主密码残留在组件状态里
+    }
+    // D-144：只认「真的写进去了多少字节」——记录后卡片上会显示时间与体积，
+    // 下次想确认「我到底备份成功过没有」不必凭记忆。
+    if (result.bytes !== null && result.bytes > 0) {
+      const storage = backupStorage();
+      if (storage !== null) {
+        recordBackup(storage, result.bytes, Date.now());
+      }
+      lastBackupRecord = { atMs: Date.now(), bytes: result.bytes };
     }
   }
 
@@ -983,6 +1015,22 @@
     <button class="pms-btn is-ghost" type="button" onclick={() => void exportVault()}>
       <Icon name="download" size={15} />{ui.t('settings.export_vault')}
     </button>
+    <!-- D-144/D-146：把「上一次备份到底成功了吗、写进去多少」变成一行可见事实。
+         2026-10-31 的事故里，用户唯一的反馈是「确定」，0 字节的文件没人发现；
+         有了这行，体积与时间都摆在眼前，`0 B` 或「从未导出」无处可藏。 -->
+    {#if lastBackupRecord !== null}
+      <p class="pms-hint" class:is-danger={shouldPromptBackup(lastBackupRecord, Date.now())}>
+        {ui.t('settings.backup_last_ok', {
+          time: formatDateTime(lastBackupRecord.atMs, ui.locale),
+          size: formatBytes(lastBackupRecord.bytes),
+        })}
+        {#if shouldPromptBackup(lastBackupRecord, Date.now())}
+          {ui.t('settings.backup_stale_hint', { days: BACKUP_STALE_DAYS })}
+        {/if}
+      </p>
+    {:else}
+      <p class="pms-hint is-danger">{ui.t('settings.backup_never')}</p>
+    {/if}
   </div>
 
   <div class="pms-card set-card">

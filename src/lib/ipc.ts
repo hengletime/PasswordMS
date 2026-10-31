@@ -92,8 +92,10 @@ export const vault = {
       old_password: oldPassword,
       new_password: newPassword,
     }),
-  exportVault: (destPath: string, masterPassword: string): Promise<void> =>
-    invoke<void>('export_vault', { dest_path: destPath, master_password: masterPassword }),
+  // D-144：返回**实际写入目标的字节数**。Android 上曾出现「报成功但文件 0 字节」，
+  // 调用方（设置页导出卡片）要把这个数字显示出来，让 0 字节无处可藏。
+  exportVault: (destPath: string, masterPassword: string): Promise<number> =>
+    invoke<number>('export_vault', { dest_path: destPath, master_password: masterPassword }),
   // D-55 从备份恢复：source_path 必须是 PasswordMS 导出的 .vault 备份（后端校验 magic）。
   restoreBackup: (sourcePath: string): Promise<void> =>
     invoke<void>('restore_backup', { source_path: sourcePath }),

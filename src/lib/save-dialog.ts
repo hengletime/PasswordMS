@@ -27,8 +27,14 @@ import { toAppError } from './errors';
 export type SaveOutcome =
   /** 用户取消（对话框 reject / resolve null / 空串）：不写盘、不报错、不 toast。 */
   | { kind: 'cancelled' }
-  /** 已写盘成功。 */
-  | { kind: 'saved' }
+  /**
+   * 已写盘成功。
+   *
+   * `data` 是 `write` 的原样返回值（D-144 起 `export_vault` 返回写入字节数）：
+   * 不解读、不校验，只透传——需要这个数字的调用点自己取，不需要的忽略即可。
+   * 这样「归一」这一层不必知道每个调用点写的是什么。
+   */
+  | { kind: 'saved'; data: unknown }
   /** 已选到目标但写盘失败：`messageKey` 是可直接 toast 的文案键。 */
   | { kind: 'failed'; messageKey: string };
 
@@ -86,8 +92,8 @@ export async function runSaveToDestination(deps: SaveDialogDeps): Promise<SaveOu
     return { kind: 'cancelled' };
   }
   try {
-    await deps.write(dest);
-    return { kind: 'saved' };
+    const data = await deps.write(dest);
+    return { kind: 'saved', data };
   } catch (err) {
     return { kind: 'failed', messageKey: toAppError(err).messageKey };
   }

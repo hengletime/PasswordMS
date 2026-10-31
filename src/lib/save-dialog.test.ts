@@ -87,8 +87,20 @@ describe('runSaveToDestination —— 取消/失败归一（D-71 / D-72）', () 
 
     const outcome = await runSaveToDestination(deps);
 
-    expect(outcome).toEqual({ kind: 'saved' });
+    expect(outcome).toEqual({ kind: 'saved', data: undefined });
     // 关键：Android 的 content:// URI 必须**原样**交给后端，前端不做任何解析/拼接。
     expect(deps.write).toHaveBeenCalledWith(dest);
+  });
+
+  it('D-144：write 的返回值原样透传（导出的字节数靠它送达调用点）', async () => {
+    const dest = '/home/u/passwordms-export.vault';
+    const deps = makeDeps({
+      pickDestination: vi.fn(async (): Promise<string | null> => dest),
+      write: vi.fn(async (): Promise<number> => 8_208),
+    });
+
+    const outcome = await runSaveToDestination(deps);
+
+    expect(outcome).toEqual({ kind: 'saved', data: 8_208 });
   });
 });
