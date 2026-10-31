@@ -17,6 +17,7 @@ export const zhTW = {
     copy: '複製',
     copied: '已複製',
     copied_countdown: '剪貼簿將在 {n} 秒後清空',
+    copied_countdown_field: '已複製{field}，剪貼簿將在 {n} 秒後清空',
     confirm: '確認',
     back: '返回',
     search: '搜尋',

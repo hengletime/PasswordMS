@@ -80,7 +80,8 @@ describe('D-135 调用点不得再传 TTL=0', () => {
     expect(detailKey, 'ItemDetail 必须在扫描面内').toBeDefined();
     const detail = components[detailKey as string];
     // 用户名与密码必须走同一个出口（同一出口才谈得上「两者行为一致」）。
-    expect(detail.match(/copyText\(item\.kind/g) ?? []).toHaveLength(2);
+    // D-146 起该调用拆成多行并多带一个字段名参数，按调用前缀计数。
+    expect(detail.match(/void copyText\(/g) ?? []).toHaveLength(2);
     expect(detail).toContain('await copySecretWithAutoClear(text, ttl');
   });
 });

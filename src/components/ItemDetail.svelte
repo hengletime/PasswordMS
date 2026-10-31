@@ -21,6 +21,14 @@
   let item = $derived(vault.selectedItem);
   let revealed = $state(false);
   let copyCountdown = $state(0);
+  /**
+   * 剪贴板里当前是哪个字段（D-146）。
+   *
+   * 与 `copyCountdown` 配对使用：只有两者同时成立提示行才渲染。它存在的理由是「复制了
+   * 什么」和「还剩几秒」是两个事实——之前只存秒数，复制用户名再把密码复制进剪贴板后，
+   * 提示行既说不出剪贴板里换成了密码，还会被两路定时器轮流写秒数。
+   */
+  let copiedField = $state<'username' | 'password' | null>(null);
   let totpCode = $state('');
   let totpRemaining = $state(0);
   // D-97（B）：密钥无效进入错误态——只弹一次 toast，行内给出可见错误行，
@@ -88,16 +96,25 @@
    * 【D-135】原实现对用户名传 `copy_secret(text, 0)`：前端把 0 当「不清空」，后端却读成
    * 「0 秒后清空」——写进去的同一瞬间被自己的兜底线程清掉。于是 toast 报「已复制」、
    * 用户粘出来是空的。**两端对同一个参数的理解不一致，比参数本身错更隐蔽**。
+   *
+   * 【D-146】`field` 是必需参数：剪贴板只有一格，提示必须说清**现在里面是什么**。上一轮
+   * 复制的倒计时由 `copySecretWithAutoClear` 在内部作废（旧代的 tick 不再转发），这里只需
+   * 把「当前字段」换过来；toast 走 `dedupeKey` 顶掉上一条，不再两条并排堆着。
    */
-  async function copyText(text: string): Promise<void> {
+  async function copyText(text: string, field: 'username' | 'password'): Promise<void> {
     if (text.length === 0) {
       return;
     }
     const ttl = settings.value.clipboard_clear_secs;
     await copySecretWithAutoClear(text, ttl, (remaining: number): void => {
       copyCountdown = remaining;
+      if (remaining === 0) {
+        // 到点就收起提示行：剪贴板已清空，再挂着「还剩 0 秒」是另一种谎话。
+        copiedField = null;
+      }
     });
-    ui.toast('success', 'common.copied_countdown', { n: ttl });
+    copiedField = field;
+    ui.toast('success', 'common.copied_countdown', { n: ttl }, 'clipboard-copy');
     // #531：使用埋点（密码 / 用户名的复制都走这里）。后端 60s 节流；
     // 复制已成功才埋 —— 失败不算「使用」。
     if (item !== null) {
@@ -267,7 +284,11 @@
             class="pms-icon-btn"
             type="button"
             aria-label={ui.t('item.copy_username')}
-            onclick={() => void copyText(item.kind.type === 'login' ? item.kind.username ?? '' : '')}
+            onclick={() =>
+              void copyText(
+                item.kind.type === 'login' ? item.kind.username ?? '' : '',
+                'username',
+              )}
           >
             <Icon name="copy" size={16} />
           </button>
@@ -290,14 +311,26 @@
             class="pms-icon-btn"
             type="button"
             aria-label={ui.t('item.copy_password')}
-            onclick={() => void copyText(item.kind.type === 'login' ? item.kind.password ?? '' : '')}
+            onclick={() =>
+              void copyText(
+                item.kind.type === 'login' ? item.kind.password ?? '' : '',
+                'password',
+              )}
           >
             <Icon name="copy" size={16} />
           </button>
         </div>
-        {#if copyCountdown > 0}
-          <p class="pms-hint is-warning">{ui.t('common.copied_countdown', { n: copyCountdown })}</p>
-        {/if}
+      {/if}
+
+      {#if copyCountdown > 0 && copiedField !== null}
+        <!-- D-146：提示行必须点名「现在剪贴板里是什么」。原先只写「将在 {n} 秒后清空」
+             且挂在密码行内，复制用户名时既错位、也不说清复制的是哪个字段。 -->
+        <p class="pms-hint is-warning" role="status">
+          {ui.t('common.copied_countdown_field', {
+            field: ui.t(copiedField === 'username' ? 'editor.field_username' : 'editor.field_password'),
+            n: copyCountdown,
+          })}
+        </p>
       {/if}
 
       {#if totpSecret}

@@ -1258,3 +1258,51 @@ Android 专属分支在 Node 上**既不编译也不执行**，任何行为测�
 该断言会以 `invoked 53 / registered 52` 的形式变红——**这是正确的红，不是需要被宽容的红**。
 处置只有一个：等后端注册进 `generate_handler!` 后自愈。**禁止**加白名单、跳过、或改软断言
 （那等于把「前端调了一个后端不存在的命令」这个最危险的状态放行）。
+
+### 13.24 D-146：剪贴板的倒计时只该有一条（v1.5.3，2026-10-31）
+
+#### 13.24.1 现象与判定
+
+主人实测：复制用户名 → 「剪贴板将在 30 秒后清空」→ 未到点又复制密码 → 提示**交替**
+刷新。判定为两个独立缺陷叠在一起：
+
+1. **多路写一个变量**：`ItemDetail.copyCountdown` 单槽，每个复制动作各持一个
+   `setInterval`，第二次复制后两路每秒轮流写它 → 数字来回跳。
+2. **没有「作废」概念**：剪贴板是单槽资源，第二轮写入成功即宣布第一轮的一切提示过时，
+   但代码只负责新增提示，从不撤销旧的（toast 只会 append）。
+
+#### 13.24.2 代码清单
+
+| 文件 | 改动 |
+|---|---|
+| `src/lib/clipboard.ts` | 模块级 `latestUiToken`；写入成功后领号，`onTick` 只在 `token === latestUiToken` 时转发。`onDone` 里的 `clear_secret_if_own(gen)` **无条件执行**（D-135 语义不变） |
+| `src/lib/stores/ui.svelte.ts` | `Toast` 增可选 `dedupeKey`；`toast()` 增第 4 可选参数，同键旧 toast 先滤掉再 append。不传 = 原行为 |
+| `src/components/ItemDetail.svelte` | 新增 `copiedField` 状态；`copyText(text, field)` 两处调用点传字段名；提示行移出密码块、文案改 `common.copied_countdown_field`、条件加 `copiedField !== null`；归零时清 `copiedField`；toast 传 `'clipboard-copy'` |
+| `src/components/PasswordGenerator.svelte` / `SecureNoteView.svelte` | toast 同键 |
+| 四语言 | `common.copied_countdown_field`（zh-CN / zh-TW / en-US / th） |
+
+#### 13.24.3 三个不能颠倒的次序
+
+**① 领号在 `copy_secret` 之后**
+
+写入失败（IPC 拒、锁屏……）不该抢走上一代的界面所有权。否则一次失败的复制会让当前
+那条倒计时凭空停住——用户以为剪贴板还热着，其实早过了。
+
+**② 清理的静默与清理本身解耦**
+
+旧代到点时剪贴板早已属于新代，`clear_secret_if_own(1)` 会因为代际号不符而什么都不做。
+**但如果把这次调用也塞进 `token === latestUiToken` 判断里，就退化成「旧代永远不清」**——
+一旦有一次 `copy_secret` 写入成功却没被后续写入覆盖（例如写入后 IPC 掉线），那一代就
+再没有任何清理机会。守门测试第 2 例专钉这一条。
+
+**③ toast 的 dedupeKey 是可选参数**
+
+默认 `undefined` = 保持堆叠。既有十几处 `ui.toast(kind, key, params)` 一个字都不用改，
+只有复制类（描述「剪贴板此刻是什么」这个单槽事实）才传键。
+
+#### 13.24.4 守门与变异
+
+`d146-clipboard-latest-ui.test.ts` 7 例，四条变异逐条真红（详见 `docs/06` §6.38.4）。
+另修 `d135-clipboard-guard.test.ts` 的计数断言：`copyText` 调用在 D-146 后拆成多行、
+多了字段参数，原 `/copyText\(item\.kind/` 会失配 —— 改按 `void copyText(` 前缀计数并
+保留「两个出口」的语义。

@@ -5,7 +5,7 @@ resolver = "2"
 members = ["crates/passwordms-core", "src-tauri"]
 
 [workspace.package]
-version = "1.5.2"
+version = "1.5.3"
 edition = "2021"
 license = "MIT"
 authors = ["PasswordMS"]

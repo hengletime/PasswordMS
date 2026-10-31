@@ -2143,3 +2143,60 @@ Android 那句说明文字（`settings.bio_manage_hint_android`，四语言）�
 
 **守门**：`src/lib/d144-guard.test.ts` 9 例 + `src/lib/backup-reminder.test.ts` 9 例
 （0 字节不记、坏 JSON 不抛、超期判定、时钟回拨）。
+
+### 6.38 复制提示必须跟着剪贴板走（D-146，1.5.3）
+
+**主人实测**：复制用户名 → 提示「剪贴板将在 30 秒后清空」→ 倒计时没走完又复制密码 →
+界面上两个剩余秒数**交替刷新**同一行提示。剪贴板里早已是密码，用户名那条提示在语义上
+已经作废。
+
+**这不是「提示不够准」，是两条独立的定时器在抢一个变量。**
+
+#### 6.38.1 根因：单槽资源，多路写入
+
+`ItemDetail.copyCountdown` 是**一个** `$state` 变量，而每个复制动作各自持有自己的
+`setInterval`。第二次复制后两个定时器并存，每秒轮流写同一个变量：旧代写 24、新代写 9、
+旧代写 23、新代写 8…… 视觉上就是数字来回跳。**用户永远等不到一个能读的倒计时。**
+
+更本质的一层：剪贴板只有一格。第二次复制成功那一刻，第一次复制的**一切提示**（toast
+文案、倒计时行）描述的都是已经不存在的事实，但代码里没有任何「作废」机制——旧的既不会
+消失，也不会被新一轮接管。
+
+#### 6.38.2 修法：界面只认最新一代
+
+`src/lib/clipboard.ts` 引入模块级 `latestUiToken`：每次写入成功领一个号，`onTick` 只在
+`token === latestUiToken` 时转发给调用方。
+
+**清理不能跟着静默一起停。** 旧代的定时器照旧跑完，到期仍然发
+`clear_secret_if_own(gen)`——归属判定在 Rust 侧按 `gen` 做，那时候剪贴板早已属于新代，
+这次调用会安全地什么都不做。**把「不打扰用户」误做成「不清理」是这一步最危险的走反方向**
+（守门测试专门钉住这条，见 6.38.4 变异②）。
+
+领号必须放在 `copy_secret` 成功**之后**：写入失败不该抢走上一代的界面所有权。
+
+#### 6.38.3 界面三处配套
+
+| 项 | 之前 | 现在 |
+|---|---|---|
+| 提示行位置 | 挂在 `{#if item.kind.password}` 块**内部** | 移到用户名/密码两行**之后**；只有「有密码的条目」才看得到的错位消失 |
+| 提示行文案 | 「剪贴板将在 {n} 秒后清空」 | 「已复制{field}，剪贴板将在 {n} 秒后清空」（`common.copied_countdown_field`）——**点名现在里面是什么** |
+| 渲染条件 | `copyCountdown > 0` | `copyCountdown > 0 && copiedField !== null`；到点归零时 `copiedField` 一并清空（剪贴板已空，不该再写「还剩 0 秒」） |
+| toast | 每次复制都 append，两条并排堆着 | 新增 `ui.toast(..., dedupeKey)`，复制类统一传 `'clipboard-copy'`：同键新 toast **顶掉**旧的，只留一条 |
+
+`dedupeKey` 是**可选**第 4 参数，不传 = 原来的堆叠行为，既有调用点一个都没动。
+三个复制入口（详情页 / 生成器 / 安全笔记）统一用同一个键——剪贴板只有一个，提示也就
+只该有一条。
+
+#### 6.38.4 守门
+
+`src/lib/d146-clipboard-latest-ui.test.ts` 7 例：旧代 tick 静默（断言第二次复制后收到的
+秒数全部 ≤ 新代 TTL 且单调递减到 0）/ 旧代仍清理 / 复制失败不抢所有权 / toast 去重 /
+不传键仍堆叠 / 三入口同键 / 提示行字段与秒数同为渲染条件。
+
+**四条变异全部真红**：去掉 token 守卫 → ①红；把关清理也塞进 token 判定 → ②红；
+删掉 toast 去重滤器 → toast 例红；提示条件去掉 `copiedField` → 源码断言例红。
+
+**改动位置**：`src/lib/clipboard.ts`（界面代）、`src/lib/stores/ui.svelte.ts`（dedupeKey）、
+`src/components/ItemDetail.svelte`（字段状态 + 提示行）、`PasswordGenerator.svelte` /
+`SecureNoteView.svelte`（toast 同键）、四语言 +1 键（`common.copied_countdown_field`）。
+CSS 零改动（复用既有 `.pms-hint.is-warning`）。

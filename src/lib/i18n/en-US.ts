@@ -19,6 +19,7 @@ export const enUS: Messages = {
     copy: 'Copy',
     copied: 'Copied',
     copied_countdown: 'Clipboard clears in {n}s',
+    copied_countdown_field: '{field} copied. Clipboard clears in {n}s',
     confirm: 'Confirm',
     back: 'Back',
     search: 'Search',

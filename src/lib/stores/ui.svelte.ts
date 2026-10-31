@@ -13,6 +13,8 @@ export interface Toast {
   kind: ToastKind;
   messageKey: string;
   params?: Record<string, string | number>;
+  /** 去重键：同键的新 toast 会顶掉旧的（D-146，见 `toast()`）。 */
+  dedupeKey?: string;
 }
 
 /** 确认框请求。 */
@@ -150,11 +152,25 @@ class UiStore {
   /**
    * 弹出 Toast（D-58a：时长按 kind + 渲染后文案长度自适应，见 `toastDurationMs`）。
    * `t()` 为本类方法且 `translate` 为纯函数，Node 测试环境无 window 依赖。
+   *
+   * 【D-146】传 `dedupeKey` 时，同键的旧 toast 会被**先撤走**再弹新的。复制类提示描述
+   * 的是「剪贴板此刻是什么」，是个单槽事实：第二次复制之后，第一条「将在 30 秒后清空」
+   * 已经不再对应剪贴板里的内容，让它继续挂着只会和新的那条一起堆叠。默认不传 =
+   * 保持原有堆叠行为，不改变任何既有调用点。
    */
-  toast(kind: ToastKind, messageKey: string, params?: Record<string, string | number>): number {
+  toast(
+    kind: ToastKind,
+    messageKey: string,
+    params?: Record<string, string | number>,
+    dedupeKey?: string,
+  ): number {
     this.seq += 1;
     const id = this.seq;
-    this.toasts = [...this.toasts, { id, kind, messageKey, params }];
+    const kept =
+      dedupeKey === undefined
+        ? this.toasts
+        : this.toasts.filter((t): boolean => t.dedupeKey !== dedupeKey);
+    this.toasts = [...kept, { id, kind, messageKey, params, dedupeKey }];
     const duration = toastDurationMs(kind, this.t(messageKey, params));
     setTimeout((): void => this.dismiss(id), duration);
     return id;

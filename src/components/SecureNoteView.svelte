@@ -18,7 +18,8 @@
       return;
     }
     await copySecretWithAutoClear(body);
-    ui.toast('success', 'common.copied');
+    // D-146：复制类提示是单槽事实，新的顶掉旧的，不并排堆着。
+    ui.toast('success', 'common.copied', undefined, 'clipboard-copy');
     // #531 裁定：正文复制也算「使用」，与 ItemDetail 三出口同款——成功才埋点。
     void vault.recordItemUsage(item.item_id);
   }

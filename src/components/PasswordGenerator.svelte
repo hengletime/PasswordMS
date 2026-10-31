@@ -153,7 +153,9 @@
     const ttl = 30;
     await copySecretWithAutoClear(password, ttl, (remaining: number): void => {
       if (remaining === ttl) {
-        ui.toast('success', 'common.copied_countdown', { n: ttl });
+        // D-146：连点复制时上一条「将在 30 秒后清空」已不描述剪贴板里那一代，
+        // 用 dedupeKey 顶掉它，只留一条。
+        ui.toast('success', 'common.copied_countdown', { n: ttl }, 'clipboard-copy');
       }
     });
   }
