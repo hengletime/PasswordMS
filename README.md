@@ -56,7 +56,8 @@ Other requirements and notes:
 - Both devices must be on the **same Wi‑Fi** (same subnet)
 - After switching networks or IPs, the address stored at pairing becomes stale; one sync attempt performs LAN discovery and updates it (the new address is only saved after a successful sync)
 - If the two sides keep showing different addresses, or discovery never gets a reply: **re-scan the pairing QR code** to recover immediately
-- **Last-resort fallback**: enable a **mobile hotspot** on the desktop and connect the phone to it before pairing/syncing — inside a hotspot the desktop *is* the phone's gateway, which bypasses router- or OS-level Wi‑Fi policies that silently interfere with LAN direct connections (measured 2026-10-30: one phone, after a system upgrade, had its packets silently dropped on two different routers' Wi‑Fi; only the hotspot worked)
+- **On Android the app needs the "Nearby devices" permission**: since Android 17 (API 37), LAN access requires the `ACCESS_LOCAL_NETWORK` runtime grant. Without it the system **silently drops** this app's connections (you see "network timeout" while the same phone's browser and keyboard still reach the LAN just fine). From v1.5.0 the app asks for it on launch — **tap Allow**. If you declined, re-enable it under Settings → Apps → PasswordMS → Permissions → Nearby devices
+- **Last-resort fallback**: enable a **mobile hotspot** on the desktop and connect the phone to it before pairing/syncing — inside a hotspot the desktop *is* the phone's gateway, and that path is not affected by the permission above (measured 2026-10-30 on two routers' Wi‑Fi vs hotspot; root-caused 2026-10-31 to the missing permission, fixed in v1.5.0)
 - The sync page shows this device's IP, the current listening port, and the recorded address of every paired device — compare both ends to tell "stale address" apart from "peer is away"
 
 ## 🔐 Security Model

@@ -1107,6 +1107,37 @@ v1.4.16 那条守门断言是「设置页**必须**包含 `settings.sync_manual_
 （Android 临时端口 32768-60999，区间外可能是对端真实端口）；`sync_port_range.rs` 3 例
 测的是函数本身，不受措辞影响，全绿未动。
 
+### 13.21 D-141：Android 17 局域网权限适配（v1.5.0，2026-10-31）
+
+排查背景与证据链见 `docs/02` §3.28。实现注记：
+
+**Manifest（`src-tauri/gen/android/app/src/main/AndroidManifest.xml`）**
+- 新增 `<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />`，
+  注释写明「缺它时 AppOps 恒 ignore、包被静默丢弃、与防火墙/路由器/netpolicy 无关」——
+  这条注释是给下一个人看的，避免再走一遍昨天的弯路。
+
+**MainActivity（`.../java/com/passwordms/app/MainActivity.kt`）**
+- 新增 `ensureLocalNetworkPermission()`，挂在 `onResume`（与 MulticastLock 同一生命周期语义：
+  同步只在解锁使用时才有意义）；
+- `SDK_INT < 37` 直接返回（低版本无此权限，不弹无意义对话框）；
+- 已授予 → `Log.i` 一行后返回，无副作用；
+- 未授予 → 读 `SharedPreferences("passwordms")` 的 `lan_perm_asked_at`，**24h 内不重复问**；
+  否则写时间戳后经 `WryActivity.requestPermissions(arrayOf(...)) { granted -> Log.i }` 发起申请。
+  选 24h 而非「只问一次」：Android 在拒绝两次后不再弹窗，用户若当时手滑拒绝，
+  过一天还会再被温和提一次，而不是永久无声失效。
+- 权限字符串用常量 `PERM_LOCAL_NETWORK`（`Build.VERSION` 判断已挡住低版本，不依赖
+  `Manifest.permission.*` 常量在旧 SDK 上是否存在）。
+
+**验证（小米 17 / Android 17 / OS4.0 真机，2026-10-31 08:02）**
+- 改前：`Uid mode: ACCESS_LOCAL_NETWORK: ignore`，配对/同步全超时；
+- 授权后日志 `request result granted=true`，`appops` 转 `allow; time=+42s`，
+  **42 秒内扫码配对成功**；
+- 纪律：本版不动协议/端口/发现顺序，单一变量。
+
+**未做（有意留后）**：前端「权限未授予」的专门文案（当前仍会落到 `err.network_timeout` 附近），
+以及诊断日志导出入口。二者都需要 Rust↔Kotlin 的状态查询通道，属独立改动，等真机回归完再做
+（见 §13.22 待办）。
+
 ## 14. IPC 契约不变量：`rename_all = "snake_case"` 必须 100% 覆盖
 
 > 2026-10-21（D-72）由前端工程师以证据顶回既定错误后的定论。**这是一条不变量，不是一条约定**——

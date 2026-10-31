@@ -10,6 +10,14 @@
          `ACCESS_WIFI_STATE` 是普通权限（不弹授权框），部分 ROM 上访问 WifiManager 需要它一起声明。 -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- D-141（v1.5.0）：Android 17（API 37）起，targetSdk>=37 的应用访问局域网
+         必须持有 ACCESS_LOCAL_NETWORK（NEARBY_DEVICES 运行时权限组），默认关闭。
+         缺它时系统对该 UID 的 AppOps `ACCESS_LOCAL_NETWORK` 恒为 ignore（实测
+         `adb shell cmd appops get com.passwordms.app` 可见 `Uid mode: ... ignore`），
+         本应用的 TCP 连接/UDP 广播被**静默丢弃**（手机侧 `ss -tne` 卡在 SYN-SENT、
+         无 RST），与本机防火墙、路由器、`netpolicy` 全部无关。
+         低版本系统忽略此声明，不影响 Android 6~16。运行时申请见 MainActivity.kt。 -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />

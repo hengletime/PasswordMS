@@ -2077,6 +2077,62 @@ Android 休眠（Doze）下用防火墙规则丢弃非白名单应用的流量�
 - **`sync_start_pairing` 错误留痕**：此前本命令失败静默（`sync_join` 留痕而它不留），
   D-139 的「加密操作失败」零日志正是这样漏掉的。补 stderr + passwordms.log 双通道。
 
+### 3.28 D-141：Android 17 局域网运行时权限缺失，导致「只有本应用连不上局域网」（1.5.0，2026-10-31）
+
+**现象**：小米 17（Android 17 / HyperOS OS4.0）在**同一 WiFi** 下，本应用的配对与同步一律
+超时；同一台手机的**浏览器访问电脑端口秒通**、**微信输入法剪贴板跨设备（走局域网）正常**。
+换小米 11、换公司/家里两台路由器、降级到 1.4.7/1.4.12、卸载重装、全量「还原网络设置」、
+关移动数据/双 WLAN 加速/VPN、随机 MAC 改设备 MAC、关专用 DNS —— **全部无效**。
+唯一能通的是「电脑开热点、手机连热点」。
+
+#### 3.28.1 根因：`targetSdk = 37` + 未声明 `ACCESS_LOCAL_NETWORK`
+
+Android 17（API 37）新增 **`ACCESS_LOCAL_NETWORK`**（归入 `NEARBY_DEVICES` 运行时权限组），
+**面向 `targetSdk >= 37` 的应用默认关闭**，覆盖 TCP 连接、UDP 单播/多播/广播，连 `.local`
+域名解析一并屏蔽。本工程 `compileSdk / targetSdk = 37` **自第一个提交起从未变过**
+（`src-tauri/gen/android/app/build.gradle.kts:18,24`），而 Manifest 只声明了
+`INTERNET` / `CAMERA` / `CHANGE_WIFI_MULTICAST_STATE` / `ACCESS_WIFI_STATE`。
+
+未声明 ⇒ 系统把该 UID 的 AppOps 置为 `ignore` ⇒ 本应用的 socket 请求被**静默丢弃**
+（手机侧 `ss -tne` 卡在 `SYN-SENT`、**无 RST**），表现为「连接超时 / 发现零应答」。
+内核与防火墙层全部放行，因此**在那些层怎么查都查不出问题**。
+
+#### 3.28.2 证据链（2026-10-31 早，小米 17 实测）
+
+| 环节 | 读数 |
+|---|---|
+| 系统版本 | `ro.build.version.sdk=37`、`ro.build.version.release=17`、`ro.mi.os.version.name=OS4.0` |
+| 包 targetSdk | `dumpsys package` → `versionCode=1004018 minSdk=24 targetSdk=37` |
+| 改前权限清单 | `requested permissions` 里**没有** `ACCESS_LOCAL_NETWORK` |
+| 改前 AppOps | `Uid mode: ACCESS_LOCAL_NETWORK: ignore`，只有 `rejectTime=` 无 `time=` |
+| 对照（已声明权限） | `CAMERA: foreground` + `allow; time=…; duration=+5s686ms`（有真实使用记录） |
+| 零代码绕过尝试全部失败 | `cmd appops set --uid 10473 … allow` 返回 rc=0 但状态不变；`pm grant` 抛 `SecurityException`（shell 无 `GRANT_RUNTIME_PERMISSIONS`）⇒ **未声明的权限，系统不允许授予** |
+| 改后 AppOps | `ACCESS_LOCAL_NETWORK: allow; time=+42s ago`、`granted=true`、日志 `request result granted=true` |
+| 功能性判据 | **授权后 42 秒内扫码配对成功**（同一手机/同一 WiFi/同一电脑，唯一变量＝该权限） |
+
+**为什么此前查不出来**：`dumpsys netpolicy`（effective=NONE）、`ip rule`、netd 放行链、
+standby bucket 全是「放行」——但 `ACCESS_LOCAL_NETWORK` 是**新的 AppOp（NEARBY_DEVICES 组）**，
+不出现在这些输出里。查的是「流量限制层」，卡的是「局域网可达性层」。
+
+**热点为何能通**：电脑开热点时手机唯一对端就是网关本身，该路径不被判定为受限的局域网访问
+（现象已实测确认；具体判定规则由系统实现，本程序不依赖它）。
+
+#### 3.28.3 修复（只改权限，不动协议）
+
+1. `AndroidManifest.xml` 声明 `<uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />`
+   （低版本系统忽略此声明，Android 6~16 行为不变）；
+2. `MainActivity.ensureLocalNetworkPermission()`：`SDK_INT >= 37` 且未授予时，经
+   `WryActivity.requestPermissions` 发起运行时申请；已授予即零开销返回；被拒后**至少间隔
+   24h** 才重问（Android 自身在「拒绝两次」后不再弹，此时只能由用户去系统设置手动开）；
+   状态经 `Log.i(tag="PasswordMS")` 留痕便于排障；
+3. 纪律：本版**不动**同步协议、端口策略、发现顺序与超时（单一变量，保证 A/B 可定性）。
+
+#### 3.28.4 同一轮被否掉的假设（勿再排查）
+
+「HyperOS 内核按 UID 丢包」曾被当作第一嫌疑（因 AOSP 各层策略全放行、浏览器与输入法正常）。
+该假设**已撤回**：真实机制是系统级的权限 AppOp，不是内核策略；且它与「换热点能通」
+「同应用所有版本都失败（targetSdk 一直是 37）」两条事实不矛盾但解释力更弱。
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。

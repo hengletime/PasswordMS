@@ -167,6 +167,26 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 
 **总判定：PASS（8 门全过 / 0 失败 / 0 跳过），一次干净跑通过（无假失败）。** Rust 门 519s 占整轮 92%，与 v1.4.18 持平。
 
+### 1.2f 最近一次完整实跑（2026-10-31 出包前 · v1.5.0 · D-141）
+
+> 口径：`env -u NODE_OPTIONS bash scripts/gate-all.sh --keep-going`，整轮墙钟 **8 分 15 秒**，总判定 PASS。日志存 `target/_gate_150.log`。
+> 本轮代码改动**全在 Android 原生侧**（`AndroidManifest.xml` + `MainActivity.kt`）+ 文档，前端与 Rust 零改动，故 1/2/5 门读数应与 v1.4.19 完全持平——**持平本身就是「没碰坏」的证据**。
+
+| # | 门 | 本次实测（v1.5.0） | 判定 |
+|---|----|------|------|
+| 1 | 前端单测 | **54 文件 479/479 通过**（与 v1.4.19 持平，符合预期） | ✅ 5s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 8s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（同既有浅色按钮对比度项，`3.74:1` 未达 AA） | ✅ 1s |
+| 4 | fmt | **0 处差异** | ✅ 1s |
+| 5 | Rust 全量 | **292 通过 / 0 失败 / 1 ignored**（与 v1.4.19 持平；ignored 仍是 `real_vault_ledger`） | ✅ 449s |
+| 6 | clippy | **0 warning**（`--workspace --all-targets`） | ✅ 12s |
+| 7 | 体积门-桌面 | 历史 NSIS/MSI 逐个达标；1.5.0 正式产物 NSIS **1.96 MB**（2,051,974 B）+ MSI **2.77 MB**（2,908,160 B）≤ 10 MB | ✅ 12s |
+| 8 | 体积门-Android | 历史 APK 逐个达标；1.5.0 签名 APK **7.37 MB**（7,725,483 B）≤ 12 MB | ✅ 4s |
+
+**注**：门禁不覆盖 Android 原生 Java/Kotlin 代码（无对应测试目标），D-141 的验证靠**真机 A/B**
+（`docs/02` §3.28.2 的证据链：AppOps 由 `ignore` → `allow; time=+42s`，授权后 42 秒配对成功）。
+**不得**把本节 8 门全绿表述为「D-141 已验」——两者是不同性质的门。
+
 ### 1.3 Rust 全量 149 例逐 target 累加（2026-10-22 14:10 实跑，148 通过 + 1 `#[ignore]`）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。
