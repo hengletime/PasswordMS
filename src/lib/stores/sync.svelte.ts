@@ -29,7 +29,19 @@ class SyncStore {
    */
   pairCompleted = $state<boolean>(false);
   /**
-   * D-147：配对成功后要主动把用户送到「状态」页（数据没同步，得他自己点「立即同步」）。
+   * D-148：手机端配对成功、但用户**还没核对会话码**。
+   *
+   * 为 true 时 `PairScan` 只渲染「配对完成 + 会话码 + 完成按钮」，扫码界面整块收起；
+   * 跳「状态」页被推迟到用户点「完成」之后。
+   *
+   * 【为什么必须有这个中间态】D-147 让 `join()` 一成功就 `requestTab('status')`，
+   * 于是 D-69 的会话码核对块**在它出现的同一瞬间就随页面切走**——扫码之后用户根本
+   * 没有任何一帧能看到那个码。防中间人的核对动作在流程上变成不可能，功能等于不存在。
+   * 配对是安全动作，「完成」必须由人点头，而不是由一次成功的 RPC 代替。
+   */
+  pairAwaitingConfirm = $state<boolean>(false);
+  /**
+   * D-147：请求切到同步页的某个标签（实际切换由 `MainLayout` 做）。
    *
    * 为什么用自增序号而不是布尔量（同 `ui.searchFocusSeq` 的道理）：连配两台设备时
    * 布尔量在「已经是 true」的第二次不会触发任何响应式更新，第二台就留在原地不动。
@@ -136,12 +148,12 @@ class SyncStore {
       // 只写状态、不 toast —— 核对是用户动作，不是通知。
       this.lastPairSessionCode = result.session_code ?? null;
       this.lastPairDeviceName = result.device_name;
-      // D-147：配对只建立关系，**数据一条都没动**。文案必须说清这一点，否则用户
-      // 会用「配对成功」推断「已经同步好了」，然后对着空库发呆。
-      ui.toast('success', 'sync.paired');
-      // 同时把人送到「状态」页——那里才有「立即同步」。这是本轮唯一的下一步动作，
-      // 留在扫码页等于让用户自己猜。
-      this.requestTab('status');
+      // D-147：配对只建立关系，**数据一条都没动**。
+      // D-148：但「配对成功」不是这一轮的终点——还有一步只能由人做：与电脑屏核对会话码。
+      // 所以这里**不跳页**，只把配对页切成「待确认」态（核对码 + 完成按钮）。
+      // 跳「状态」由 `confirmPairing()` 在用户点「完成」之后做。
+      this.pairAwaitingConfirm = true;
+      ui.toast('success', 'sync.paired_check');
       if (result.applied > 0) {
         ui.toast('info', 'sync.result_applied', { n: result.applied });
       }
@@ -164,6 +176,36 @@ class SyncStore {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * D-148：手机端用户核对完会话码、点「完成」。
+   *
+   * 三件事必须一起做，顺序也固定：
+   * ① 复位待确认态 —— 配对页回到「扫码 / 手动输入」的干净初始界面（即主人要的「收起」）；
+   * ② 清掉本轮的会话码与设备名 —— 它们属于已经结束的那一次配对，留着会让下一台
+   *    电脑的核对界面串味（与 `join()` 开头的清理同一口径）；
+   * ③ 才跳「状态」页 —— 那里才有「立即同步」。**跳页永远是这一步的最后动作**，
+   *    否则用户看到的是一闪而过的核对码。
+   */
+  confirmPairing(): void {
+    this.pairAwaitingConfirm = false;
+    this.lastPairSessionCode = null;
+    this.lastPairDeviceName = '';
+    // D-147 的文案在这里才成立：此刻用户确定要走了，而数据确实一个字节都没过来。
+    ui.toast('success', 'sync.paired');
+    this.requestTab('status');
+  }
+
+  /**
+   * D-148：电脑端（Host）用户核对完会话码、点「完成」。
+   *
+   * 只比 `endPairing()` 多一步跳「状态」——两端点完「完成」都落到同一个地方，
+   * 用户不必在两端各找一次「立即同步」在哪。
+   */
+  finishPairing(): void {
+    this.endPairing();
+    this.requestTab('status');
   }
 
   /** D-147：请求切换到同步页的某个标签（实际切换由 `MainLayout` 做）。 */
@@ -310,6 +352,9 @@ class SyncStore {
     this.pairEnded = false;
     // D-75：锁定后重进同步页应从「生成配对二维码」开始，不留上一轮的成功待核对态。
     this.pairCompleted = false;
+    // D-148：同理，手机端「配对成功待核对」也不许跨解锁残留 —— 核对码只对当次会话有意义，
+    // 解锁后还挂着上一轮的码，用户会拿它去比对新一次配对，比对了也没用。
+    this.pairAwaitingConfirm = false;
     this.devices = [];
     this.status = { last_sync_at: null, pending_changes: 0, device_count: 0 };
     this.conflicts = [];

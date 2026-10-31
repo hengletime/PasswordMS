@@ -82,39 +82,52 @@
 
 <div class="pms-card sync-card">
   <h3>{ui.t('sync.join_title')}</h3>
-  <p class="pms-meta">{ui.t('sync.scan_hint')}</p>
 
-  <video bind:this={videoEl} class="sync-preview" class:hidden={!scanning} muted playsinline></video>
+  <!-- D-148：配对成功 → **停在这里核对会话码**，不跳页。
+       顺序有意义：核对态必须优先于扫码界面判定，否则扫码/手动输入框还在，
+       用户会以为没成功又扫一次（第二次会覆盖 `lastPairSessionCode`，核对的码换了）。 -->
+  {#if sync.pairAwaitingConfirm}
+    <p class="pms-meta" role="status"><strong>{ui.t('sync.pair_completed')}</strong></p>
 
-  <div class="sync-row">
-    {#if scanning}
-      <button class="pms-btn is-ghost" type="button" onclick={stopScan}>
-        <Icon name="close" size={15} />{ui.t('common.cancel')}
-      </button>
-    {:else}
-      <button class="pms-btn" type="button" onclick={() => void startScan()}>
-        <Icon name="qr" size={15} />{ui.t('common.search')}
-      </button>
+    <!-- D-69：会话码与电脑屏同值（`sha256(本次临时公钥)` 前 8 字节），全靠用户逐字核对。
+         提示用 .pms-hint.is-warning —— 这是要求用户执行的安全动作，不是普通说明。 -->
+    {#if hasSessionCode(sync.lastPairSessionCode)}
+      <div class="sync-fp">
+        <span class="pms-label">{ui.t('sync.peer_session_code')}</span>
+        <span class="sync-mono sync-fp-code">{sync.lastPairSessionCode}</span>
+        {#if sync.lastPairDeviceName}<p class="pms-meta">{sync.lastPairDeviceName}</p>{/if}
+        <p class="pms-hint is-warning">{ui.t('sync.session_code_hint')}</p>
+      </div>
     {/if}
-  </div>
 
-  <form class="sync-manual" onsubmit={onManualSubmit}>
-    <textarea class="pms-input sync-manual-input" rows="3" placeholder={ui.t('sync.paste_hint')} bind:value={manual}></textarea>
-    <button class="pms-btn is-primary" type="submit" disabled={sync.busy || manual.trim().length === 0}>
-      {#if sync.busy}<Spinner size={15} />{/if}
-      {ui.t('sync.join')}
+    <!-- 只有用户点这里才「收起 + 去状态页」：核对是人的判断，不能被一次成功的 RPC 代劳。 -->
+    <button class="pms-btn is-primary" type="button" onclick={() => sync.confirmPairing()}>
+      {ui.t('sync.pair_done')}
     </button>
-  </form>
+  {:else}
+    <p class="pms-meta">{ui.t('sync.scan_hint')}</p>
 
-  <!-- D-69：提示用 .pms-hint.is-warning —— 这是要求用户执行的安全动作，不是普通说明。
-       两屏必须一致；不一致说明连接可能被中间人隔开。 -->
-  {#if hasSessionCode(sync.lastPairSessionCode)}
-    <div class="sync-fp">
-      <span class="pms-label">{ui.t('sync.peer_session_code')}</span>
-      <span class="sync-mono sync-fp-code">{sync.lastPairSessionCode}</span>
-      {#if sync.lastPairDeviceName}<p class="pms-meta">{sync.lastPairDeviceName}</p>{/if}
-      <p class="pms-hint is-warning">{ui.t('sync.session_code_hint')}</p>
+    <video bind:this={videoEl} class="sync-preview" class:hidden={!scanning} muted playsinline></video>
+
+    <div class="sync-row">
+      {#if scanning}
+        <button class="pms-btn is-ghost" type="button" onclick={stopScan}>
+          <Icon name="close" size={15} />{ui.t('common.cancel')}
+        </button>
+      {:else}
+        <button class="pms-btn" type="button" onclick={() => void startScan()}>
+          <Icon name="qr" size={15} />{ui.t('common.search')}
+        </button>
+      {/if}
     </div>
+
+    <form class="sync-manual" onsubmit={onManualSubmit}>
+      <textarea class="pms-input sync-manual-input" rows="3" placeholder={ui.t('sync.paste_hint')} bind:value={manual}></textarea>
+      <button class="pms-btn is-primary" type="submit" disabled={sync.busy || manual.trim().length === 0}>
+        {#if sync.busy}<Spinner size={15} />{/if}
+        {ui.t('sync.join')}
+      </button>
+    </form>
   {/if}
 </div>
 

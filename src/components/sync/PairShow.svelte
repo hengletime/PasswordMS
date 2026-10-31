@@ -53,7 +53,9 @@
       </div>
     {/if}
 
-    <button class="pms-btn is-primary" type="button" onclick={() => sync.endPairing()}>
+    <!-- D-148：两端点完「完成」都落到「状态」页 —— 那里才有「立即同步」。
+         不跳的话用户核对完还停在配对页，得自己找路去同步。 -->
+    <button class="pms-btn is-primary" type="button" onclick={() => sync.finishPairing()}>
       {ui.t('sync.pair_done')}
     </button>
   {:else if sync.pairing === null}

@@ -488,6 +488,7 @@ export const enUS: Messages = {
     paste_hint: 'Paste pairing text',
     join: 'Join and sync',
     pairing: 'Waiting for peer…',
+    paired_check: 'Paired. Check that the session code here matches the computer screen, then tap Done.',
     paired: 'Paired. Nothing has been synced yet — tap Sync now when you are ready.',
     fingerprint: 'Device fingerprint',
     devices: 'Paired devices',

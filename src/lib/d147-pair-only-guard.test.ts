@@ -95,25 +95,23 @@ describe('D-147 配对与同步必须分家', () => {
     expect(branch).toContain('return Ok(HostSyncResult');
   });
 
-  it('④ 前端配对成功跳「状态」页，且没有任何自动同步', () => {
+  it('④ 前端「立即同步」是唯一同步入口，配对流程里不得自动触发', () => {
     // 跳转用自增序号（连配两台时布尔量不会二次触发）。
     expect(syncStore).toContain('tabRequest');
-    expect(syncStore).toContain("this.requestTab('status');");
-    const toastAt = syncStore.indexOf("ui.toast('success', 'sync.paired')");
-    const reqAt = syncStore.indexOf("this.requestTab('status');");
-    expect(toastAt).toBeGreaterThan(-1);
-    expect(reqAt, '跳转必须写在配对成功之后').toBeGreaterThan(toastAt);
-
-    // 主界面响应请求。
     expect(mainLayout).toContain('sync.tabRequest');
     expect(mainLayout).toMatch(/syncTab = req\.tab;/);
 
-    // 「立即同步」只有一个入口：设备行按钮。配对流程里不得自己调它。
     const joinStart = syncStore.indexOf('async join(');
-    const joinEnd = syncStore.indexOf('async loadDevices');
+    // D-148：join 之后紧跟 confirmPairing / finishPairing，两者的体内都合法地带
+    // `requestTab`，所以截断点必须落在**下一个方法**上，不能到 loadDevices 为止。
+    const joinEnd = syncStore.indexOf('confirmPairing(): void {');
     expect(joinStart, 'join 方法必须在').toBeGreaterThan(-1);
+    expect(joinEnd, 'confirmPairing 必须紧接 join（截断点）').toBeGreaterThan(joinStart);
     const joinBody = syncStore.slice(joinStart, joinEnd);
     expect(joinBody, '配对流程不得自动触发同步').not.toContain('syncNow');
+    // D-148：配对成功**不跳页**——跳页推迟到用户核对完会话码点「完成」之后，
+    // 否则 D-69 的核对块在出现的同一瞬间就被页面切走（见 d148 守门）。
+    expect(joinBody, 'D-148：配对成功不得自己跳页').not.toContain('requestTab');
     expect(syncStatus).toContain('sync.syncNow(deviceId)');
   });
 });

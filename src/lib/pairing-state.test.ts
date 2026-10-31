@@ -166,7 +166,9 @@ describe('D-75 ③：PairShow 的成功态分支', () => {
     expect(successBlock).toContain('sync.pairing.session_code');
     expect(successBlock).toContain("ui.t('sync.session_code')");
     expect(successBlock).toContain("ui.t('sync.pair_completed_hint')");
-    expect(successBlock).toContain('sync.endPairing()');
+    // D-148：按钮改成 `finishPairing()`（= endPairing + 跳「状态」页）。
+    // 清的仍是同一个配对态，只是点完把人送到「立即同步」那里。
+    expect(successBlock).toContain('sync.finishPairing()');
     expect(successBlock).toContain("ui.t('sync.pair_done')");
   });
 

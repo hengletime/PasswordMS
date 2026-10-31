@@ -1353,3 +1353,47 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
   去掉 `mark_pair_only()` 跑 Rust 测试 → `left: 2, right: 0`。
 - **踩坑**：守门跨行匹配用了带 `\n` 的字面量，而这些文件是 **CRLF** → 恒为 -1 假红。
   跨行一律用 `\s*` 正则。
+
+### 13.26 D-148：配对页的三态与「完成」的收尾（v1.5.5，2026-10-31）
+
+#### 13.26.1 代码清单
+
+| 文件 | 改动 |
+|---|---|
+| `lib/stores/sync.svelte.ts` | 新增 `pairAwaitingConfirm` 状态；`join()` 成功只置它 + `sync.paired_check`，**删掉** `requestTab('status')`；新增 `confirmPairing()`（手机端收尾）、`finishPairing()`（电脑端收尾）；`reset()` 清待确认态 |
+| `components/sync/PairScan.svelte` | 卡片一分为二：待确认态（配对成功 + 会话码 + 提示 + 「完成」）/ 扫码态（video + 搜索 + 手动输入）。原来挂在卡片底部的核对块整体搬进待确认态 |
+| `components/sync/PairShow.svelte` | 「完成」按钮 `endPairing()` → `finishPairing()` |
+| 四语言 | 新增 `sync.paired_check`（配对成功，请核对会话码）；`sync.paired` 保留给收尾时弹 |
+| `lib/d147-pair-only-guard.test.ts` | ④ 反转断言：`join` 体内**不得**出现 `requestTab`；截断点改到 `confirmPairing`（它体内合法地带 requestTab） |
+| `lib/pairing-state.test.ts` | D-75 的成功态断言从 `endPairing()` 改为 `finishPairing()` |
+
+#### 13.26.2 三个不能颠倒的次序
+
+**① 待确认态必须优先于扫码界面判定**
+
+`PairScan` 里 `{#if sync.pairAwaitingConfirm}` 必须排在扫码那套 UI 之前。若反过来（或干脆
+两块都渲染），用户会看到「配对成功」和扫码按钮同时在场，很可能再扫一次——第二次
+`join()` 开头会清 `lastPairSessionCode` 并写入新的，**用户正在核对的那个码被换掉**，
+核对变成核对了个寂寞。
+
+**② 「收起」的实质是清掉本轮凭据，不只是隐藏**
+
+`confirmPairing()` 里清 `lastPairSessionCode` / `lastPairDeviceName` 不是洁癖：这两个值
+在下一轮 `join()` 里会被重写，但如果用户点完「完成」回「配对」页准备配第二台，留着旧码
+会让界面短暂显示「上一台电脑的码」。与 `join()` 开头的清理同一口径。
+
+**③ `requestTab` 必须是 `confirmPairing()` 的最后一句**
+
+清理在前、跳页在后。顺序反了不会报错，但会让核对码「闪一下」——而这正是 D-147 的原始
+缺陷形态。守门测试 ② 用 `reqAt > clearAt` 钉住。
+
+#### 13.26.3 测试与变异
+
+- `src/lib/d148-pair-confirm-guard.test.ts` 5 例（源码级，读 4 个文件）。
+- **四条变异全部真红**：① `join` 里加回 `requestTab('status')` → ①④ 双红；
+  ② `confirmPairing` 不 clean `lastPairSessionCode` → ② 红；
+  ③ `{#if sync.pairAwaitingConfirm}` 改成 `{#if false}` → ③ 红；
+  ④ `PairShow` 改回 `sync.endPairing()` → ④ 红。
+- **踩坑**：`join()` 的截断点原来取 `async loadDevices`，而 D-148 把两个新方法插在它们
+  之间——两个新方法体内都有 `requestTab`，于是「join 不许 requestTab」这条断言假红。
+  截断点必须落在**紧邻的下一个方法**上。

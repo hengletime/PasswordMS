@@ -256,6 +256,35 @@ APK `7,733,675 B`（`877d9398`，V3 签名）/ NSIS `2,048,513 B`（`cba711f0`�
 MSI `2,908,160 B`（`f77f32a9`）/ 裸 exe `4,980,736 B`（`ad3543b4`）/
 绿色版 zip `2,412,423 B`（`1259d356`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**。
 
+**1.5.5 门禁（D-148，2026-10-31 实跑）**：前端 `npm run test` **60 文件 528 例全绿**
+（较 1.5.4 的 523 例 +5，新增 `d148-pair-confirm-guard.test.ts`）/
+`npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动）/
+Rust `cargo test -p passwordms-core` **293 通过 / 0 失败 / 1 ignored**（本轮 Rust 零改动）/
+`cargo fmt --all -- --check` 0 处差异 / clippy 代码警告 0（唯一一条 `warning:` 是 build.rs 的
+windres 兜底提示，D-33 已知自愈）/ 体积门禁桌面 + APK 双过。
+
+**四条变异逐条真红**：`join` 里加回 `requestTab('status')` → ①④ 双红 / `confirmPairing`
+不清 `lastPairSessionCode` → ② 红 / `{#if sync.pairAwaitingConfirm}` 改 `{#if false}` → ③ 红 /
+`PairShow` 改回 `sync.endPairing()` → ④ 红。
+
+**1.5.5 实际产物（出包实测，非推算）**：
+APK `7,737,771 B`（`da336ae4`，V3 签名）/ NSIS `2,048,550 B`（`2cf240fb`）/
+MSI `2,912,256 B`（`1f9e43f9`）/ 裸 exe `4,984,832 B`（`1228d67c`，ProductVersion 1.5.5）/
+绿色版 zip `2,414,345 B`（`1e56cfa6`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**。
+
+**包内取证（1.5.5）**——APK 与 MSI 的**体积又一次与上一版逐字节相同**（7,737,771 /
+2,912,256），所以照例走同包对拍，不看大小：
+
+| 判据 | 读数 |
+|---|---|
+| APK 内 `.so` 字节数 | 1.5.4 `5,702,000` → 1.5.5 `5,703,592`（+1,592 B） |
+| APK 内 `.so` sha256 | `8ed405f0…`（与 1.5.4 不同） |
+| APK 整体 sha256 | `c1dccd0f…` → `da336ae4…` |
+| MSI 整体 sha256 | `1813ad0a…` → `1f9e43f9…`（体积相同、内容不同） |
+| `assets/tauri.conf.json` 的 `version` | `1.5.5` |
+| `dist/assets/*.js` 含 `配对成功。请与电脑屏核对会话码`（D-148 新文案） | ✅ |
+| dist 14:36:41 → APK 14:40:06（前端先于打包） | ✅ 顺序正确 |
+
 **1.5.3 门禁（D-146，2026-10-31 实跑）**：前端 `npm run test` **58 文件 518 例全绿**
 （较 1.5.2 的 511 例 +7，新增 `d146-clipboard-latest-ui.test.ts`）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（与 1.5.2 同，均为未达 AA 的老账）/

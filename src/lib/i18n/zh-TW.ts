@@ -439,6 +439,7 @@ export const zhTW = {
     paste_hint: '貼上配對文字',
     join: '加入並同步',
     pairing: '等待對方連線…',
+    paired_check: '配對成功。請與電腦螢幕核對工作階段碼，一致後點「完成」。',
     paired: '配對成功。資料還沒有同步——請點「立即同步」。',
     fingerprint: '裝置指紋',
     devices: '已配對裝置',

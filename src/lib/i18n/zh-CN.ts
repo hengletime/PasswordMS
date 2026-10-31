@@ -498,6 +498,7 @@ export const zhCN = {
     paste_hint: '粘贴配对文本',
     join: '加入并同步',
     pairing: '等待对端连接…',
+    paired_check: '配对成功。请与电脑屏核对会话码，一致后点「完成」。',
     paired: '配对成功。数据还没有同步——请点「立即同步」。',
     fingerprint: '设备指纹',
     devices: '已配对设备',
