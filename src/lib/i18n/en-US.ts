@@ -506,6 +506,8 @@ export const enUS: Messages = {
     syncing: 'Syncing…',
     last_sync: 'Last sync',
     pending: 'Pending changes',
+    pending_from: 'Furthest behind: {name}',
+    pending_from_never: 'Furthest behind: {name} (never synced — syncing other devices will not bring this down)',
     device_count: 'Devices',
     // D-134: action guidance + local network readout for manual sync.
     local_net: 'This device',

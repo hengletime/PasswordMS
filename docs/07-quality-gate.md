@@ -302,6 +302,43 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.8 门禁（D-150/D-151，2026-10-31 实跑）**：前端 `npm run test` **62 文件 541 例全绿**
+（较 1.5.7 的 535 例 +6，新增 `d150-sync-readout-guard.test.ts`）/
+`npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮只加一条局部样式）/
+Rust `cargo test -p passwordms-core` **全绿**（新增 `sync::status` 3 例 + `d150_last_sync_at.rs` 3 例，
+后者为**真 socket** 重同步与重配对）/ `cargo fmt --all` 已跑 / clippy 代码警告 0 /
+体积门禁桌面 + APK 双过。
+
+**本轮的方法论收获（写下来防止下次重犯）**：
+1. **先证伪「显而易见的 bug」再动手**。直觉是「同步成功却没写 `last_sync_at`」，但真 socket
+   回归一跑就绿——说明写入链路完好，问题在 UI 刷新与重配对覆写。若直接去改 `touch_device_sync`，
+   会把一个没坏的函数改坏，并因为「症状没变」继续往深处猜。
+2. **变异不生效 ≠ 守门有效**。第一版变异脚本用 `str.replace` 删 `loadDevices`，命中的是
+   `unpair()` 里那行同名调用（文件共 4 处），被测代码没动，测试自然全绿。判定真红之前
+   **必须先断言变异落地**（计数变化），再按函数边界切片重做。
+3. 归因逻辑放进 core 而不是命令层，是为了一条可写的单测：造「一台已同步 + 一台从未同步」的
+   数据形态，断言 `max` 归到后者且 `never_synced = true`。命令层没有测试载体。
+
+**1.5.8 实际产物（出包实测，非推算）**：
+APK `7,750,059 B`（`d1abd3bb`，V3 签名；**字节数与 1.5.7 完全相同**，故用包内字段名 A/B 取证，
+见下）/ NSIS `2,053,197 B`（`be020d0e`）/ MSI `2,912,256 B`（`e3181aa6`）/
+裸 exe `4,994,048 B`（`35526c9d`，ProductVersion 1.5.8，文件内 `1.5.7` 零残留）/
+绿色版 zip `2,420,230 B`（`c1e9d010`，4 条目）；
+**zip 内 exe 与裸 exe 哈希一致**（`35526c9d`）。
+
+**包内取证（1.5.8）**——沿用 1.5.6 起的「serde 字段名对拍」判据（运行时必需，LLVM 消不掉）：
+
+| 判据 | 位置 | 1.5.7 | 1.5.8 |
+|---|---|---|---|
+| `pending_device_name` | 桌面 `passwordms.exe` | 0 | 1 |
+| `pending_device_never_synced` | 桌面 `passwordms.exe` | 0 | 1 |
+| `pending_device_name` / `_never_synced` | APK 内 `libpasswordms_lib.so`（5,716,352 B） | 0 | 1 / 1 |
+| `pending_from_never` / `这台设备从未同步过` | `dist/assets/*.js` | — | 存在 |
+
+> APK 字节数与 1.5.7 逐字节相同（7,750,059）是第二次出现，`.so` 为 5,716,352（较 1.5.7 的
+> 5,715,824 +528 B）。**体积相同不代表内容相同**——sha256 不同（`d1abd3bb` vs `f65bf92e`），
+> 且两条 serde 字段名从「0 次」变成「1 次」，改动确实进包。
+
 **1.5.7 门禁（D-149，2026-10-31 实跑）**：前端 `npm run test` **61 文件 535 例全绿**
 （较 1.5.6 的 528 例 +7，新增 `d149-lan-perm-guard.test.ts`）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮只动组件内局部样式）/

@@ -565,13 +565,18 @@ fn persist_device(
 ) -> CoreResult<()> {
     let aad = device_key_aad(device_id);
     let wrapped = keys::wrap_item_key(repo.vault_key(), &keys.sync_key[..], &aad)?;
+    // D-150：同一 device_id 重新配对时保留「上次同步」。理由同
+    // `Joiner::persist_host_device`：配对时间归零合理，同步历史不该被假装清零。
+    let last_sync_at = repo
+        .get_paired_device(device_id)
+        .and_then(|d| d.last_sync_at);
     let device = PairedDevice {
         device_id: device_id.to_string(),
         device_name: device_name.to_string(),
         fingerprint: fingerprint.to_string(),
         sync_key_wrapped: wrapped,
         paired_at: now_ms(),
-        last_sync_at: None,
+        last_sync_at,
         peer_ip,
         peer_port,
     };

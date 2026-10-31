@@ -110,13 +110,20 @@ impl JoinerSession {
         } else {
             Some(self.host_sync_port)
         };
+        // D-150：同一台设备重新配对时，**不能把「上次同步」清成「从未」**。
+        // `paired_at` 归零是对的（这是本次配对发生的时间），但同步历史没有归零——
+        // 数据还是那批数据。原实现无条件写 `None`，于是「重配一下就显示从未同步过」，
+        // 用户会以为同步从来没成过（真机 2026-10-31 报的就是这个）。
+        let last_sync_at = repo
+            .get_paired_device(&self.host_id)
+            .and_then(|d| d.last_sync_at);
         let device = PairedDevice {
             device_id: self.host_id.clone(),
             device_name: self.host_name.clone(),
             fingerprint: self.device_fingerprint.clone(),
             sync_key_wrapped: wrapped,
             paired_at: now_ms(),
-            last_sync_at: None,
+            last_sync_at,
             peer_ip: Some(self.host_ip.clone()),
             peer_port,
         };

@@ -1459,3 +1459,37 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
 - **第一版断言假绿**：`toContain('lanPerm.supported && !lanPerm.granted')` 被 `grantPerm()`
   里的同名判据喂饱——只变异模板那处仍然全绿。改为正则直接匹配 `{#if}` 行才真红。
   （与 D-148「截断点取错」同类：**断言要钉在你以为它钉的地方**。）
+
+### 13.28 D-150/D-151：「上次同步」与「待同步」两个读数（v1.5.8，2026-10-31）
+
+#### 13.28.1 改动点
+
+| 文件 | 改动 |
+|---|---|
+| `crates/passwordms-core/src/sync/status.rs` | **新增**。`pending_summary()`：待发数 + 归因（设备名/是否从未同步），并列取 `device_id` 字典序 |
+| `crates/passwordms-core/src/sync/mod.rs` | 注册 `pub mod status;` |
+| `crates/passwordms-core/src/sync/client.rs` / `server.rs` | 重配对继承既有 `last_sync_at`（原为硬编码 `None`） |
+| `src-tauri/src/dto.rs` | `SyncStatusDto` += `pending_device_name` / `pending_device_never_synced`（均 `serde(default)`） |
+| `src-tauri/src/commands/sync_cmd.rs` | `sync_status` 改调 `pending_summary` |
+| `src/lib/stores/sync.svelte.ts` | `syncNow` 补 `loadDevices()`；`status` 初值补两字段 |
+| `src/types.ts` | `SyncStatusDto` 补两个可选字段（旧后端不返回也不炸） |
+| `src/components/sync/SyncStatus.svelte` | 归因行 + `.is-stale` 警示色 |
+| 四语言 i18n | `sync.pending_from` / `sync.pending_from_never` |
+
+#### 13.28.2 三个「不报错」的坑
+
+1. **`last_sync_at` 本身没坏**。先写真 socket 回归证明两端都落章、`export_changes`
+   归零，才敢往前提「问题在更外层」。否则很可能去改一个根本没坏的函数，越改越乱。
+2. **`syncNow` 漏刷 `devices`**。三份数据刷了两份——这种「差一份」在评审里几乎看不见，
+   因为代码读起来是通顺的（vault / status / conflicts 都在）。守门用**函数体切片**
+   同时钉住三份，才挡得住以后有人再删一份。
+3. **变异不生效 = 假绿**。第一版变异脚本 `str.replace` 命中的是 `unpair()` 里的同名
+   `loadDevices`，被测代码没动，测试自然不红。**必须先断言变异真的落地**
+   （计数变化 / 断言不等），再信「没红」这个结论。
+
+#### 13.28.3 测试
+
+- Rust：`tests/d150_last_sync_at.rs` 3 例（真 socket）；`sync::status` 单测 3 例。
+- 前端：`src/lib/d150-sync-readout-guard.test.ts` 6 例。
+- 变异 3 条全真红：`last_sync_at` 改回 `None`、删 `syncNow` 的 `loadDevices`、
+  模板判据退化。

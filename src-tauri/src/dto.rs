@@ -334,6 +334,16 @@ pub struct SyncStatusDto {
     pub last_sync_at: Option<i64>,
     pub pending_changes: usize,
     pub device_count: usize,
+    /// D-151：「待同步」这个数字由哪台设备的落后程度决定（`None` = 无配对设备）。
+    ///
+    /// 没有归因时，用户面对一个恒定的 58 完全无从下手——他不知道是「同步失败」还是
+    /// 「有条历史残影设备一条都没同步过」。给出名字，他就能去设备页找到那一行处理。
+    #[serde(default)]
+    pub pending_device_name: Option<String>,
+    /// D-151：该设备是否**从未同步过**。真 = 这 58 条不是「同步失败」，而是
+    /// 「这台设备一条都没拿到」（残影/刚配对未同步）。
+    #[serde(default)]
+    pub pending_device_never_synced: bool,
 }
 
 /// 保险库文件信息 DTO。

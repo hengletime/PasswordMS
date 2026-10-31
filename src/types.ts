@@ -322,6 +322,15 @@ export interface SyncStatusDto {
   last_sync_at?: number | null;
   pending_changes: number;
   device_count: number;
+  /**
+   * D-151：「待同步」由哪台设备的落后程度决定（`null` = 无配对设备，或旧后端不返回）。
+   *
+   * 没有归因时，一个恒定的数字无从下手——分不清「同步失败」还是「有条残影设备
+   * 一条都没同步过」。有名字就能去设备页找到那一行处理。
+   */
+  pending_device_name?: string | null;
+  /** D-151：该设备是否从未同步过（true = 这 N 条不是同步失败，是它一条都没拿到）。 */
+  pending_device_never_synced?: boolean;
 }
 
 /** 保险库文件信息（D-108：后端只回传文件名，不暴露绝对路径）。 */

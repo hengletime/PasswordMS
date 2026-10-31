@@ -14,6 +14,8 @@ pub mod protocol;
 pub mod replay;
 pub mod resync;
 pub mod server;
+/// 【D-151】同步状态读数（待同步归因）。
+pub mod status;
 pub mod transport;
 
 pub use handshake::HostIdentity;

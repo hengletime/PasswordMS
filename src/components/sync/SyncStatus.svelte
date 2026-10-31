@@ -154,6 +154,19 @@
     </div>
   </div>
 
+  <!-- D-151：给「待同步」这个数字一个主语。没有它，一个恒定的 58 分不清是
+       「同步一直失败」还是「有条历史残影设备一条都没同步过」——用户只会反复点
+       「立即同步」。数字口径不变（宁多勿少），只是把它归到具体设备上。 -->
+  {#if sync.status.pending_changes > 0 && sync.status.pending_device_name}
+    <p class="pms-meta sync-pending-who" class:is-stale={sync.status.pending_device_never_synced}>
+      {#if sync.status.pending_device_never_synced}
+        {ui.t('sync.pending_from_never', { name: sync.status.pending_device_name })}
+      {:else}
+        {ui.t('sync.pending_from', { name: sync.status.pending_device_name })}
+      {/if}
+    </p>
+  {/if}
+
   {#if sync.devices.length === 0}
     <p class="pms-meta">{ui.t('sync.no_devices')}</p>
   {:else}
@@ -247,6 +260,16 @@
   }
   .sync-stat strong {
     font-size: 0.95rem;
+  }
+  /* D-151：待同步归因行。必须**紧贴上面的数字**（负 margin 抵掉统计栅格的
+     bottom gap）——它是那个数字的注解，不是页面底部的脚注。 */
+  .sync-pending-who {
+    margin: -0.55rem 0 1rem;
+  }
+  /* 「从未同步过」用警示色：它意味着这个数字不会因为同步而下降，
+     与「只是落后一点」是两种完全不同的处境。 */
+  .sync-pending-who.is-stale {
+    color: var(--pms-warning);
   }
   .sync-list {
     list-style: none;

@@ -456,6 +456,8 @@ export const zhTW = {
     syncing: '正在同步…',
     last_sync: '上次同步',
     pending: '待同步變更',
+    pending_from: '最落後：{name}',
+    pending_from_never: '最落後：{name}（這台裝置從未同步過，同步其他裝置不會讓這個數字下降）',
     device_count: '裝置數',
     // D-134：手動同步的行動指引 + 本機網路。
     local_net: '本機網路',

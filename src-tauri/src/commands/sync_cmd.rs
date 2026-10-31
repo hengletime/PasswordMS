@@ -410,15 +410,15 @@ pub fn sync_status(state: tauri::State<'_, AppState>) -> IpcResult<SyncStatusDto
     let last_sync_at = devices.iter().filter_map(|d| d.last_sync_at).max();
     // D-56：待发变更按「对端 base 过滤后」的口径统计，取最落后对端的数量
     // （墓碑经免重发过滤；无已配对设备时无可同步对象，计 0）。
-    let pending_changes = devices
-        .iter()
-        .map(|d| repo.export_changes(&repo.sync_state(&d.device_id)).len())
-        .max()
-        .unwrap_or(0);
+    // D-151：口径不变，但**归因到具体设备**——否则数字被历史残影顶住时，
+    // 用户看到的是一个没有主语、永远不动的 58（真机 2026-10-31）。
+    let pending = passwordms_core::sync::status::pending_summary(repo);
     Ok(SyncStatusDto {
         last_sync_at,
-        pending_changes,
+        pending_changes: pending.count,
         device_count: devices.len(),
+        pending_device_name: pending.worst_device_name,
+        pending_device_never_synced: pending.worst_never_synced,
     })
 }
 

@@ -54,7 +54,13 @@ class SyncStore {
   /** 已配对设备。 */
   devices = $state<DeviceDto[]>([]);
   /** 同步状态。 */
-  status = $state<SyncStatusDto>({ last_sync_at: null, pending_changes: 0, device_count: 0 });
+  status = $state<SyncStatusDto>({
+    last_sync_at: null,
+    pending_changes: 0,
+    device_count: 0,
+    pending_device_name: null,
+    pending_device_never_synced: false,
+  });
   /** 未仲裁冲突。 */
   conflicts = $state<ConflictDto[]>([]);
   /** 每个冲突的当前选择（默认 null，**禁止自动选择**）。 */
@@ -310,6 +316,10 @@ class SyncStore {
       // D-47：同步进来的数据立即上屏。
       await vault.load();
       await this.loadStatus();
+      // D-150：**设备列表也必须刷新**。`last_sync_at` 是这次同步刚写进库的，
+      // 不重读就一直是上一次加载时的「从未」——用户在「状态」页连着同步十次，
+      // 切到「已配对设备」看到的还是十次之前的读数（真机 2026-10-31）。
+      await this.loadDevices();
       await this.loadConflicts();
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
@@ -356,7 +366,13 @@ class SyncStore {
     // 解锁后还挂着上一轮的码，用户会拿它去比对新一次配对，比对了也没用。
     this.pairAwaitingConfirm = false;
     this.devices = [];
-    this.status = { last_sync_at: null, pending_changes: 0, device_count: 0 };
+    this.status = {
+      last_sync_at: null,
+      pending_changes: 0,
+      device_count: 0,
+      pending_device_name: null,
+      pending_device_never_synced: false,
+    };
     this.conflicts = [];
     this.choices = {};
     // D-66：锁定会中断所有在飞的同步，忙碌态必须一并复位（否则解锁后按钮永久置灰）。
