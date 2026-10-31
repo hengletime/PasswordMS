@@ -7,12 +7,13 @@ import {
   compareVersions,
   fetchLatestVersion,
   isAutoCheckEnabled,
-  markAutoChecked,
-  setAutoCheckEnabled,
-  shouldAutoCheck,
-  storedLatest,
-  type UpdateCheckStorage,
-} from './update-check';
+    markAutoChecked,
+    pendingUpdateVersion,
+    setAutoCheckEnabled,
+    setPendingUpdate,
+    shouldAutoCheck,
+    type UpdateCheckStorage,
+  } from './update-check';
 
 /** 内存版 localStorage。 */
 function memoryStorage(initial: Record<string, string> = {}): UpdateCheckStorage & { map: Map<string, string> } {
@@ -82,10 +83,10 @@ describe('D-107 自动检查开关与节流', () => {
     setAutoCheckEnabled(s, true);
     expect(isAutoCheckEnabled(s)).toBe(true);
     markAutoChecked(s, '1.2.23');
-    expect(storedLatest(s)).toBe('1.2.23');
+    expect(pendingUpdateVersion(s, '1.2.22')).toBe('1.2.23');
     setAutoCheckEnabled(s, false);
     expect(isAutoCheckEnabled(s)).toBe(false);
-    expect(storedLatest(s)).toBeNull();
+    expect(pendingUpdateVersion(s, '1.2.22')).toBeNull();
   });
 
   it('未查过 → 该查；24h 内查过 → 不查；过期 → 该查', () => {
@@ -107,5 +108,46 @@ describe('D-107 自动检查开关与节流', () => {
   it('开关关闭时恒不查（哪怕从未查过）', () => {
     const s = memoryStorage();
     expect(shouldAutoCheck(s)).toBe(false);
+  });
+});
+
+// D-142：绿色版升到新版后设置页仍提示「有新版本」，点一次检查更新才隐去。
+describe('D-142 暂存版本必须按当前版本过滤', () => {
+  it('升级后缓存不再构成更新 → 返回 null 并清掉缓存（提示立即消失）', () => {
+    const s = memoryStorage();
+    setAutoCheckEnabled(s, true);
+    markAutoChecked(s, '1.5.0');
+    // 用户把绿色版换成 1.5.0 后重进设置页。
+    expect(pendingUpdateVersion(s, '1.5.0')).toBeNull();
+    expect(s.map.has('update_check_latest')).toBe(false);
+    // 清缓存不许动节流时间戳（那是独立状态，否则会自动重查刷爆 GitHub）。
+    expect(shouldAutoCheck(s)).toBe(false);
+  });
+
+  it('缓存高于当前版本 → 原样返回且保留缓存', () => {
+    const s = memoryStorage();
+    markAutoChecked(s, '1.6.0');
+    expect(pendingUpdateVersion(s, '1.5.0')).toBe('1.6.0');
+    expect(s.map.get('update_check_latest')).toBe('1.6.0');
+  });
+
+  it('无缓存 → null（不写垃圾值）', () => {
+    const s = memoryStorage();
+    expect(pendingUpdateVersion(s, '1.5.0')).toBeNull();
+    expect(s.map.size).toBe(0);
+  });
+
+  it('手动检查发现已最新会清缓存，重进设置页不再冒提示', () => {
+    const s = memoryStorage();
+    markAutoChecked(s, '1.5.0');
+    // 手动检查：hasUpdate=false → 传 null。
+    setPendingUpdate(s, null);
+    expect(pendingUpdateVersion(s, '1.4.19')).toBeNull();
+  });
+
+  it('v 前缀与缺段按 compareVersions 同一口径（1.5 vs 1.5.0 视为同版）', () => {
+    const s = memoryStorage();
+    setPendingUpdate(s, 'v1.5');
+    expect(pendingUpdateVersion(s, '1.5.0')).toBeNull();
   });
 });

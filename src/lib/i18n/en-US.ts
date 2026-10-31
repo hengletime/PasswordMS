@@ -400,6 +400,8 @@ export const enUS: Messages = {
     // fs::copy preserves LastWriteTime → file mtime = when the vault data was last written.
     export_confirm_body: 'The export is an encrypted copy of the whole vault (not plaintext), for backup or migration; restore it via "Restore from backup" on the lock screen. The file modification time reflects when the vault data was last written.',
     export_password_required: 'Enter the current master password before exporting.',
+    // D-143: uninstalling deletes the vault — this line is the only self-rescue reminder.
+    uninstall_wipes_vault: 'Uninstalling the app, switching devices, or reinstalling the OS deletes the vault on this device. Before you do any of that, export an encrypted copy with the button below and keep it where you can find it again.',
     vault_file: 'Vault file',
     size: 'Size',
     // D-73: the heading must explain itself — "what is this file for" beats a bare path.

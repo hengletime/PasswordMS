@@ -33,9 +33,10 @@
     fetchLatestVersion,
     isAutoCheckEnabled,
     markAutoChecked,
+    pendingUpdateVersion,
     setAutoCheckEnabled,
+    setPendingUpdate,
     shouldAutoCheck,
-    storedLatest,
     type UpdateCheckStorage,
   } from '../lib/update-check';
   import { runVaultExport } from '../lib/vault-export';
@@ -286,6 +287,10 @@
     const result = await fetchLatestVersion(window.fetch.bind(window), appVersion);
     if (auto) {
       markAutoChecked(updateStorage(), result?.hasUpdate ? result.latestVersion : null);
+    } else if (result !== null) {
+      // D-142：手动检查也要同步缓存。此前只在自动检查时写，于是「查到已最新」
+      // 只改了内存态、缓存里那句旧提示还留着 —— 当场隐去，重进设置页又冒出来。
+      setPendingUpdate(updateStorage(), result.hasUpdate ? result.latestVersion : null);
     }
     if (result === null) {
       // 手动检查失败才显式提示；自动检查静默（GitHub 不可达不该打扰用户）。
@@ -334,13 +339,16 @@
   }
 
   // 进入设置页：同步开关显示 + 若自动检查开启且过节流窗口则静默查一次；
-  // 上次自动检查查到过新版本的话，直接把提示摆出来（不必等下次检查）。
+  // 上次检查查到过新版本的话，直接把提示摆出来（不必等下次检查）——
+  // 但必须先用**本机当前版本**过一遍：升级后旧缓存不再构成更新，提示立即消失（D-142）。
   $effect((): void => {
     updateEnabled = isAutoCheckEnabled(updateStorage());
-    const cached = storedLatest(updateStorage());
-    if (cached !== null && appVersion !== null) {
-      updateLatest = cached;
-      updateState = 'available';
+    if (appVersion !== null) {
+      const pending = pendingUpdateVersion(updateStorage(), appVersion);
+      if (pending !== null) {
+        updateLatest = pending;
+        updateState = 'available';
+      }
     }
     if (shouldAutoCheck(updateStorage())) {
       void runUpdateCheck(true);
@@ -949,6 +957,13 @@
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.export_vault')}</h3>
+    <!-- D-143：卸载/换机即清库的常驻提醒。放在卡片最顶部（在「导出的是加密副本」说明之前），
+         因为它是**为什么要导出**的理由，用户先读到它才会往下读怎么导。
+         文案跨平台通用：桌面卸载/换机同样需要导出，不做平台判定（也就不依赖 UA）。 -->
+    <p class="pms-alert is-danger">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('settings.uninstall_wipes_vault')}</span>
+    </p>
     <p class="pms-alert is-warning">
       <Icon name="alert" size={16} />
       <span>{ui.t('settings.export_confirm_body')}</span>

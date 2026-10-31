@@ -368,6 +368,8 @@ export const zhTW = {
     export_confirm_title: '匯出保險庫',
     export_confirm_body: '匯出的是整庫的加密副本（非明文），用於備份或遷移；可在鎖定頁用「從備份還原」匯入。檔案的修改時間為庫資料的最後寫入時間。',
     export_password_required: '請先輸入目前主密碼再匯出。',
+    // D-143：解除安裝即清庫的備援提醒。
+    uninstall_wipes_vault: '解除安裝應用程式、換機或重新安裝系統都會刪除本機保險庫。請在動手前用下方按鈕匯出一份加密副本，存到自己找得回來的地方。',
     vault_file: '保險庫檔案',
     size: '大小',
     vault_file_hint: '本機全部項目都加密保存在這一個檔案裡；備份或換機就是複製它，檔名見下。',

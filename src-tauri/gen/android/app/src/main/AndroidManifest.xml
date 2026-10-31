@@ -22,10 +22,21 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- D-143（v1.5.1）：卸载时**允许用户保留应用数据**。
+         我们是零知识密码管理器，`allowBackup="false"` + 三份规则全 exclude 是刻意的
+         （保险库绝不能进第三方云）—— 代价是 Android 默认在卸载时把 /data/data/<pkg>
+         整体删除，用户点一下「卸载」就永久失去整个密码库。
+         `hasFragileUserData="true"`（API 29+，不影响低版本）让系统在**从设置页卸载**时
+         弹出「是否保留应用数据？」勾选项；勾选后数据留在半卸载状态，重装**同签名** APK
+         即可原样恢复。本项目签名固定（release.jks 永不更换）正是此机制成立的前提，
+         换签名会让保留的数据再也读不回来（INSTALL_FAILED_UPDATE_INCOMPATIBLE）。
+         局限：从 Play 商店 / adb 卸载不弹此框，数据仍会被清 —— 所以应用内导出引导
+         （设置 → 导出保险库 顶部常驻警示）是不可省的第二条腿。 -->
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/full_backup_content"
+        android:hasFragileUserData="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.passwordms"

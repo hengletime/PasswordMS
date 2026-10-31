@@ -2133,6 +2133,92 @@ standby bucket 全是「放行」——但 `ACCESS_LOCAL_NETWORK` 是**新的 Ap
 该假设**已撤回**：真实机制是系统级的权限 AppOp，不是内核策略；且它与「换热点能通」
 「同应用所有版本都失败（targetSdk 一直是 37）」两条事实不矛盾但解释力更弱。
 
+### 3.29 D-142：升级后设置页仍提示「有新版本」，点一次检查更新才隐去（1.5.1，2026-10-31）
+
+#### 3.29.1 现象与根因
+
+现场（免安装绿色版从 1.4.19 换成 1.5.0，主人的原话）：
+「已经更新到 1.5.0 版本，打开设置时还提示有新版本，点击检查更新后信息才隐去。」
+
+D-107 的更新检查把「上次自动检查查到过什么」**缓存进 localStorage 供 UI 直接展示**
+（`update_check_latest`，避免每次进设置页都打一次 GitHub）。本意是「免得用户等一次网络往返」，
+但它漏了两个前提：
+
+1. **缓存不会随升级失效**。1.4.19 自动检查时远端确实已经是 `1.5.0`，于是缓存写下 `1.5.0`；
+   用户换绿色版升到 1.5.0 后重进设置页，`storedLatest()` 只判「有没有值」，
+   于是把 `1.5.0` 当「新版本」摆出来——而本机就是 1.5.0，这是个**确定的假提示**。
+2. **手动检查不清缓存**。`runUpdateCheck` 只在 `auto === true` 时调 `markAutoChecked()`，
+   手动检查发现 `hasUpdate=false` 只改了内存态 `updateState='uptodate'`，缓存原值留在盘上
+   → 当场隐去，**重进设置页又冒出来**。主人的「点一下才隐去」正是这一步的表象。
+
+#### 3.29.2 修法
+
+- `update-check.ts`：`storedLatest(storage)` → **`pendingUpdateVersion(storage, currentVersion)`**。
+  语义从「上次查到过什么」变成「上次查到、且**现在仍构成更新**的版本」：
+  用既有 `compareVersions()` 比一次，不再更高就**顺手清掉缓存**并返回 `null`
+  （节流时间戳 `update_check_last_ms` 不动——那是独立状态，清它会让自动检查重新打网络）。
+- 新增 `setPendingUpdate(storage, version | null)`：只写/清 `update_check_latest`。
+  `markAutoChecked()` 内部改调它（保持原行为），手动检查分支也调它。
+- `Settings.svelte`：`$effect` 改调 `pendingUpdateVersion(updateStorage(), appVersion)`，
+  且把「读缓存」放在 `appVersion !== null` 之内（版本号没读到就不判，也不清——
+  否则会拿一个空版本号把好缓存误删）。
+
+#### 3.29.3 验证
+
+- 纯逻辑 5 例（`d107-update-check.test.ts` 新增 `D-142` 组）：升级后不构成更新则清缓存、
+  仍更新则原样返回、无缓存不写垃圾、手动检查清缓存后重进不冒、`v1.5` 与 `1.5.0` 同版。
+- 源码守门 2 例（`d142-d143-guard.test.ts`）：调用点必须带 `appVersion`、
+  旧 API `storedLatest` 不得复活、手动分支必须写缓存。
+- 变异验证：把 Manifest 的 `allowBackup` 临时改 `true`（同文件的 D-143 守门）确认会红，还原后 5/5 绿。
+
+#### 3.29.4 边界
+
+缓存被清只在「不再构成更新」时发生；**网络失败仍保留缓存**（`result === null` 时不动），
+所以断网进设置页不会把「还有新版」的提示误吞掉。
+
+### 3.30 D-143：Android 卸载会把整个保险库一起删掉（1.5.1，2026-10-31）
+
+#### 3.30.1 性质：不是 bug，是我们自己关的，但没有自拯救出口
+
+`AndroidManifest.xml` 里 `allowBackup="false"` + `data_extraction_rules.xml`
+（cloud-backup / device-transfer 全 exclude）+ `full_backup_content.xml`（全 exclude），
+是**刻意的安全策略**：零知识密码管理器的库文件不该进小米云 / Google Drive。
+
+代价在 Android 侧是硬的：`/data/data/<pkg>` 在卸载时被整体删除，
+用户点一下「卸载」就永久失去整个密码库（主人实测：卸载重装后配对信息与库都没了）。
+Kimi 报告把这条写成「Android 默认行为」不准确——默认 `allowBackup=true` 时数据是可以被
+系统迁移/恢复的，是我们主动关掉了它。
+
+#### 3.30.2 修法：两条腿，缺一条都不完整
+
+1. **系统卸载框的「保留数据」选项**：`<application android:hasFragileUserData="true">`
+   （API 29+，低版本忽略）。从**系统设置**卸载时系统会问「是否保留应用数据？」，
+   勾选后数据留在半卸载状态，重装**同签名** APK 即原样恢复。
+   本项目正式签名固定（`release.jks` 永不更换），这是该机制成立的前提；
+   换签名会让保留的数据再也读不回来（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）。
+   **局限必须知道**：从 Play 商店 / `adb uninstall` 卸载不弹此框，数据照样清。
+2. **应用内常驻警示**：设置 → 导出保险库卡片**顶部**（在「导出的是加密副本」说明之前）
+   加 `.pms-alert.is-danger` 一行 `settings.uninstall_wipes_vault`：
+   「卸载应用、换机或重装系统都会删除本机保险库。请在动手前用下方按钮导出一份加密副本…」
+   文案**跨平台通用**，不做平台判定——桌面卸载/换机同样需要导出，也就不依赖 UA
+   （项目原则：平台身份由后端 DTO 给，不从 UA 猜）。
+   位置选择有理由：先读到「为什么必须导出」，才会往下读「导出的是什么」；
+   警示与自救按钮在同一张卡里，中间不隔任何控件。
+
+#### 3.30.3 验证
+
+- 源码守门 3 例（`d142-d143-guard.test.ts`）：Manifest 必须含 `hasFragileUserData="true"`、
+  `allowBackup` 必须仍为 `false`（防「顺手打开云备份」这个方向更严重的错误）、
+  警示必须先于「加密副本」说明渲染。
+- 变异验证：`allowBackup` 改 `true` → 守门真红 → 还原后绿。
+- 真机：待主人装 1.5.1 后从系统设置卸载验证弹框（**下一轮**，不在本轮声称已验证）。
+
+#### 3.30.4 不做
+
+- 不打开 `allowBackup`（云备份）：「把加密库交出去」换取便利，与本产品定位冲突。
+- 不做卸载前的自动导出：Android 没有可拦截的卸载回调；
+  `ACTION_PACKAGE_REMOVED` 是广播（发给别人的），拿不到「我要被卸载了」的时机。
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。

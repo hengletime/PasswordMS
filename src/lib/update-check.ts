@@ -132,9 +132,8 @@ export function shouldAutoCheck(storage: UpdateCheckStorage): boolean {
   return Date.now() - last >= AUTO_CHECK_INTERVAL_MS;
 }
 
-/** 记录一次自动检查完成（节流时间戳 + 最新版本暂存）。 */
-export function markAutoChecked(storage: UpdateCheckStorage, latestVersion: string | null): void {
-  storage.setItem(KEY_LAST_MS, String(Date.now()));
+/** 写入/清除「暂存的新版本号」，不动节流时间戳。 */
+export function setPendingUpdate(storage: UpdateCheckStorage, latestVersion: string | null): void {
   if (latestVersion !== null) {
     storage.setItem(KEY_LATEST, latestVersion);
   } else {
@@ -142,7 +141,32 @@ export function markAutoChecked(storage: UpdateCheckStorage, latestVersion: stri
   }
 }
 
-/** 上次自动检查暂存的新版本号（无则 null）。 */
-export function storedLatest(storage: UpdateCheckStorage): string | null {
-  return storage.getItem(KEY_LATEST);
+/** 记录一次自动检查完成（节流时间戳 + 最新版本暂存）。 */
+export function markAutoChecked(storage: UpdateCheckStorage, latestVersion: string | null): void {
+  storage.setItem(KEY_LAST_MS, String(Date.now()));
+  setPendingUpdate(storage, latestVersion);
+}
+
+/**
+ * 上次检查暂存、且**对本机当前版本仍构成更新**的版本号（无则 null）。
+ *
+ * D-142：这里必须带 `currentVersion` 判一次。缓存不会随升级自动失效 ——
+ * 典型现场：1.4.19 自动检查暂存了 `1.5.0`，用户换绿色版升到 1.5.0，
+ * 打开设置页仍看到「有新版本 1.5.0」，直到手动点一次「检查更新」才消失；
+ * 而那个提示是错的，本机已经是最新。所以只要缓存不再构成更新就**顺手清掉**
+ * （节流时间戳不动，那是独立状态）。
+ */
+export function pendingUpdateVersion(
+  storage: UpdateCheckStorage,
+  currentVersion: string,
+): string | null {
+  const cached = storage.getItem(KEY_LATEST);
+  if (cached === null) {
+    return null;
+  }
+  if (compareVersions(cached, currentVersion) > 0) {
+    return cached;
+  }
+  storage.removeItem(KEY_LATEST);
+  return null;
 }

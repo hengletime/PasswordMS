@@ -187,6 +187,40 @@ bash scripts/gate-all.sh --keep-going  # 可选：失败也跑完剩余门再汇
 （`docs/02` §3.28.2 的证据链：AppOps 由 `ignore` → `allow; time=+42s`，授权后 42 秒配对成功）。
 **不得**把本节 8 门全绿表述为「D-141 已验」——两者是不同性质的门。
 
+### 1.2g 最近一次完整实跑（2026-10-31 08:45 · v1.5.1 · D-142 / D-143）
+
+> 口径：`env -u NODE_OPTIONS bash scripts/gate-all.sh --keep-going`，整轮墙钟 **7 分 23 秒**，总判定 **PASS（8/8，无跳过）**。日志存 `target/_gate_151.log`。
+> 本轮改前端（`update-check.ts` / `Settings.svelte` / 四语言字典 / 测试）+ Android 清单 + 文档；**Rust 与 IPC 零改动**，故 Rust 门 292/0/1 与 v1.5.0 **完全持平**——持平即「没碰坏」。
+
+| # | 门 | 本次实测（v1.5.1） | 判定 |
+|---|----|------|------|
+| 1 | 前端单测 | **55 文件 490/490 通过**（v1.5.0 是 54/479；本轮 +1 文件 +11 例：D-142 逻辑 5 例 + 守门 6 例） | ✅ 5s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 8s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（同既有浅色按钮对比度 `3.74:1` / `4.38:1`，未达 AA 正文 4.5 但过控件底线 3.0） | ✅ 1s |
+| 4 | fmt | **0 处差异** | ✅ 1s |
+| 5 | Rust 全量 | **292 通过 / 0 失败 / 1 ignored**（ignored 仍是 `real_vault_ledger`） | ✅ 409s |
+| 6 | clippy | **0 warning**（`--workspace --all-targets`） | ✅ 2s |
+| 7 | 体积门-桌面 | 历史 NSIS/MSI 逐个达标；1.5.1 正式产物 NSIS **1.96 MB**（2,051,270 B）+ MSI **2.77 MB**（2,908,160 B）≤ 10 MB | ✅ 10s |
+| 8 | 体积门-Android | 历史 APK 逐个达标（15 个产物）；1.5.1 签名 APK **7.37 MB**（7,729,579 B）≤ 12 MB | ✅ 4s |
+
+**1.5.1 实际产物（出包实测，非推算）**：
+APK `7,729,579 B`（`748360bc`）/ NSIS `2,051,270 B`（`61796fd0`）/ MSI `2,908,160 B`（`c71c5119`）/
+裸 exe `4,978,688 B`（`a4ee62f4`）/ 绿色版 zip `2,411,229 B`（`7f93be4d`，4 条目：
+`WebView2Loader.dll`、`passwordms.exe`、`passwordms.portable`、`使用说明.txt`）；
+**zip 内 exe 与裸 exe 哈希一致**。
+`aapt2 dump xmltree` 解包取证：`targetSdkVersion=37`、`ACCESS_LOCAL_NETWORK` 在、
+`allowBackup=false`、**`hasFragileUserData=true`** —— 四条属性全部真进了安装包。
+
+**首轮曾 FAIL 1/8（真红，非假失败）**：守门测试最初用 `node:fs` + `process.cwd()` 读 `AndroidManifest.xml`，
+`svelte-check` 直接报 `Cannot find module 'node:fs'` / `Cannot find name 'process'`（tsconfig 无 node 类型）。
+改法：`import.meta.glob([...], { query: '?raw', eager: true })` 同时读 `.svelte` 与 `.xml`，
+并加一条「守门本身别空跑」的长度断言（`>500` / `>1000`），防 glob 静默返回空集导致全绿假象。
+**教训**：前端测试读后端/原生文件不许走 Node API，这也是本项目第一次在 `src/lib/*.test.ts` 里读 `src-tauri/` 下的文件。
+
+**注**：门禁不覆盖 Android 原生清单语义。`hasFragileUserData` 是否真的让系统在卸载时弹「保留数据」，
+只能真机验（需从**系统设置**卸载 → 弹框 → 勾选保留 → 重装同签名 APK → 看库是否回来）。
+本轮**未做**该真机验证（会清掉主人手机上的真实数据），发布说明里据实标注为「待验证」。
+
 ### 1.3 Rust 全量 149 例逐 target 累加（2026-10-22 14:10 实跑，148 通过 + 1 `#[ignore]`）
 
 > 口径：`cargo test -p passwordms-core --target x86_64-pc-windows-gnullvm -- --list` 逐 target 读 `N tests, 0 benchmarks`，**不接受口头计数**。`--list` 与真实跑测的目标/用例一一对应，且不会因 `timing_sidechannel` 耗时 100s+ 而拖慢复核。

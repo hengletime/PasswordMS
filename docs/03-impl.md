@@ -1136,7 +1136,35 @@ v1.4.16 那条守门断言是「设置页**必须**包含 `settings.sync_manual_
 
 **未做（有意留后）**：前端「权限未授予」的专门文案（当前仍会落到 `err.network_timeout` 附近），
 以及诊断日志导出入口。二者都需要 Rust↔Kotlin 的状态查询通道，属独立改动，等真机回归完再做
-（见 §13.22 待办）。
+（见 §13.22 的 D-142/D-143 之后另列）。
+
+### 13.22 D-142 / D-143：更新提示按版本过滤 + 卸载清库的两条腿（v1.5.1，2026-10-31）
+
+**D-142 改动三处（都在前端，无 IPC / 无 Rust）**
+
+| 位置 | 改动 |
+|---|---|
+| `lib/update-check.ts` | `storedLatest(s)` → `pendingUpdateVersion(s, currentVersion)`：比一次版本，不再更高就清缓存；新增 `setPendingUpdate(s, v\|null)`；`markAutoChecked` 改调它 |
+| `components/Settings.svelte` | `$effect` 改调 `pendingUpdateVersion(updateStorage(), appVersion)`，且包进 `appVersion !== null`；手动检查成功的 `else if` 分支补 `setPendingUpdate` |
+| `lib/d107-update-check.test.ts` | 新增 `D-142` 组 5 例 |
+
+判据：`compareVersions(cached, current)` **> 0** 才算「仍构成更新」。等号即清——
+升级到同一版本后还提示「有新版本」是确定的假信息。
+**清缓存不动 `update_check_last_ms`**：那是节流时间戳，清掉会让自动检查重新打网络。
+
+**D-143 改动两处（Android 清单 + 设置页文案）**
+
+| 位置 | 改动 |
+|---|---|
+| `gen/android/app/src/main/AndroidManifest.xml` | `<application android:hasFragileUserData="true">`（与既有 `allowBackup="false"` 并存，语义不相干：前者管卸载框，后者管云备份） |
+| `components/Settings.svelte` | 导出卡片顶部加 `.pms-alert.is-danger` + `settings.uninstall_wipes_vault`，在 `export_confirm_body` **之前** |
+| `i18n/{zh-CN,zh-TW,en-US,th}.ts` | 同加 `settings.uninstall_wipes_vault` 一键（四语言键一致性守门自动覆盖） |
+
+签名前提（写进清单注释，勿删）：`hasFragileUserData` 保留的数据只能被**同签名** APK 读回，
+这正是「正式签名永不更换」的另一条硬理由。
+
+守门：`lib/d142-d143-guard.test.ts` 5 例（含“`allowBackup` 不许变 true”这条方向性断言），
+变异验证各做一次（Manifest 改 `true` → 真红 → 还原 → 绿）。
 
 ## 14. IPC 契约不变量：`rename_all = "snake_case"` 必须 100% 覆盖
 
