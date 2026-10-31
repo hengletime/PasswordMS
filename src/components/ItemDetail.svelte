@@ -228,30 +228,19 @@
       <p class="pms-meta">{ui.t('common.none')}</p>
     </div>
   {:else}
-    <!-- D-154：所属分组标签（三态）。放在标题旁而不是页脚：主人反馈「只有编辑时能选分组，
-         阅读时根本不知道它属于哪个组」—— 页脚那行小字要滚到底才看得到，等于没解决。 -->
+    <!-- D-154/D-155：所属分组标签（三态）。先放标题旁被主人打回——长组名会把标题本身
+         挤成省略号，等于用「看得见分组」换掉「看得见是什么」。改到页脚「更新于 / 修订」
+         同一排；页脚常驻在可视区底部（`margin-top: auto`），不需要滚到底才看得见。 -->
     {@const folderTag = folderLabelOf(item.folder_id, vault.folders)}
     <header class="detail-head">
       <div class="detail-titles">
         <h2>{item.kind.title}</h2>
-        <span class="detail-badges">
-          <span class="pms-badge is-accent">
-            {item.kind.type === 'login'
-              ? ui.t('item.type_login')
-              : item.kind.type === 'secure_note'
-                ? ui.t('item.type_note')
-                : ui.t('item.type_attachment')}
-          </span>
-          <span
-            class="pms-badge detail-folder"
-            class:is-none={folderTag.kind !== 'folder'}
-            title={folderText(folderTag)}
-          >
-            <Icon name="inbox" size={12} />
-            <!-- 文本必须自己成块才能吃 ellipsis：flex 容器里的裸文本会变成匿名 flex item，
-                 `text-overflow` 对它不生效（长组名就会把标题顶掉）。 -->
-            <span class="detail-folder-name">{folderText(folderTag)}</span>
-          </span>
+        <span class="pms-badge is-accent">
+          {item.kind.type === 'login'
+            ? ui.t('item.type_login')
+            : item.kind.type === 'secure_note'
+              ? ui.t('item.type_note')
+              : ui.t('item.type_attachment')}
         </span>
       </div>
       <div class="detail-tools">
@@ -398,6 +387,17 @@
     {/if}
 
     <footer class="detail-foot">
+      <!-- D-155：分组在页脚第一项——比「更新于 / 修订」更该先看到，位置仍在同一排。
+           超长组名必须自己成块才能吃 ellipsis（flex 里的裸文本是匿名 flex item，
+           text-overflow 对它不生效），全名由 title 兜底。 -->
+      <span
+        class="detail-foot-folder"
+        class:is-none={folderTag.kind !== 'folder'}
+        title={folderText(folderTag)}
+      >
+        <Icon name="inbox" size={11} />
+        <span class="detail-foot-folder-name">{ui.t('folder.label')}: {folderText(folderTag)}</span>
+      </span>
       <span>{ui.t('item.updated')}: {formatDateTime(item.updated_at, ui.locale)}</span>
       <span>{ui.t('item.rev')}: {item.rev}</span>
     </footer>
@@ -443,31 +443,23 @@
     gap: 0.6rem;
     min-width: 0;
   }
-  /* D-154：类型 + 分组两个徽标打包成一组，窄屏时整组不收缩、由 h2 先 ellipsis
-     （标题截断比「看不出归属」可接受——本轮要修的正是后者）。 */
-  .detail-badges {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-    flex: 0 0 auto;
-    min-width: 0;
-  }
-  /* D-154：分组徽标。`max-width` 兜住超长组名，全名靠 `title` 悬停提示。 */
-  .detail-folder {
+  /* D-155：分组标签在页脚。页脚是 flex 一排（分组 / 更新于 / 修订），窄屏必须允许换行，
+     否则三项会互相挤扁；`flex: 0 1 auto` + ellipsis 让超长组名先截断而不是顶走时间。 */
+  .detail-foot-folder {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
-    max-width: 7.5rem;
     min-width: 0;
+    max-width: 12rem;
   }
-  .detail-folder-name {
+  .detail-foot-folder-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
   }
   /* 「未分组 / 未知分组」不是真组名：弱化，但仍要看得见（灰掉不是隐藏）。 */
-  .detail-folder.is-none {
+  .detail-foot-folder.is-none {
     color: var(--pms-faint);
   }
   h2 {
@@ -545,7 +537,8 @@
     margin-top: auto;
     padding-top: 1rem;
     display: flex;
-    gap: 1rem;
+    flex-wrap: wrap;
+    gap: 0.3rem 1rem;
     font-size: 0.72rem;
     color: var(--pms-muted);
   }

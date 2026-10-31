@@ -302,6 +302,47 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.11 门禁（D-155，2026-10-31 实跑）**：前端 `npm run test` **65 文件 572 例全绿**
+（较 1.5.10 的 569 例 **+3**，全部新增在 `d153-ungrouped-filter-guard.test.ts`：
+头部不许出现分组 / 页脚三项共存 / 页脚允许换行）/ `npm run check` 0 error 0 warning /
+CSS 契约 0 FAIL 6 WARN（老账未动）/ Rust `cargo test -p passwordms-core` 全绿
+（本轮 core 零改动）/ `cargo fmt --all -- --check` 干净 / clippy 代码警告 0
+（唯一一条 `warning:` 仍是 build.rs windres 兜底）/ 体积门禁桌面 + APK 双过。
+
+**1.5.11 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`e4a72fce`，versionCode 1005011 / versionName 1.5.11，V3 签名；
+**字节数与 1.5.10 第三次完全相同**）/ NSIS `2,055,894 B`（`032be283`）/
+MSI `2,916,352 B`（`7a60fe2d`）/ 裸 exe `4,997,120 B`（`4b031383`，ProductVersion 1.5.11）/
+绿色版 zip `2,422,335 B`（`41c7b57c`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**（`4b031383`）。
+`sha256sum -c target/SHA256SUMS-1.5.11.txt` 四文件全 OK。
+
+**包内取证（1.5.11）——本轮是纯前端改动，没有新的 serde 字段名可查**，
+改用 **dist 资源文件名（内容哈希）** 作为指纹，A/B 双方都是当场从包里取出实测：
+
+| 判据 | 位置 | 1.5.10 | 1.5.11 |
+|---|---|---|---|
+| `style-CErjAN2L` / `index-CrTGZE5S` / `App-DFEtLUvm`（本次 dist 三个产物名） | APK 内 `libpasswordms_lib.so`（5,721,032 B，两版**同尺寸**） | **0 / 0 / 0** | **1 / 1 / 1** |
+| 同上三个 | 桌面 `passwordms.exe` | — | **1 / 1 / 1** |
+| `detail-foot-folder`（新类名） | `dist/assets/*.css` | — | 3 |
+| `detail-foot-folder` | `dist/assets/*.js` | — | 2 |
+| `detail-badges`（已删的旧类名） | `dist` 全量 | — | **0** |
+
+> **方法论升级（1.5.11 新增，比 serde 字段名更通用）**：Vite 产物名带内容哈希，
+> 一旦改动进包，名字必然换新；**且这些名字在 `.so` / exe 里是明文**（不随前端资源被压缩），
+> 所以「旧名 0 次 → 新名 1 次」是**纯前端改动的首选取证手段**。
+> serde 字段名只在有 Rust 改动时可用；`detail-foot-folder` 这类 CSS 类名在二进制里搜不到
+> （前端资源压缩嵌入），**不能拿它当包内判据**，只能拿它验 `dist/`。
+
+**变异验证 2 条全真红**：
+① 把分组 `<span>` 搬回 `<header class="detail-head">` 内 → 「分组不许回到标题区」红
+（`expected '<header class="detail-head">…' not to contain 'folderText'`）；
+② 删 `.detail-foot` 的 `flex-wrap: wrap` → 「页脚允许多项换行」红。
+
+> 本轮唯一的假绿风险点在**切片断言**：`section()` 找不到标记时返回空串，而
+> `expect(head).not.toContain('folderText')` 对空串是**通过**的。所以每条切片断言前
+> 都先钉 `expect(head.length).toBeGreaterThan(0)`。这是 1.5.10「断言被同名代码喂饱」的同族，
+> 记在此处以备后续复制。
+
 **1.5.10 门禁（D-153/D-154，2026-10-31 实跑）**：前端 `npm run test` **65 文件 569 例全绿**
 （较 1.5.9 的 552 例 **+17**：新增 `folder-label.test.ts` 6 例、
 `d153-ungrouped-filter-guard.test.ts` 9 例、`save-visibility.test.ts` +3 例并改写原 9 例夹具，

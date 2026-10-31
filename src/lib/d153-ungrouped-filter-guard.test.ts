@@ -41,6 +41,17 @@ function src(suffix: string): string {
   return text.replace(/\r\n/g, '\n');
 }
 
+/** 切出某段模板区间（含首尾标记）。找不到返回空串——断言里会先钉长度 > 0，
+ *  否则「切片失败」会被 `not.toContain` 当成通过（假绿）。 */
+function section(text: string, open: string, close: string): string {
+  const start = text.indexOf(open);
+  if (start < 0) {
+    return '';
+  }
+  const end = text.indexOf(close, start);
+  return end < 0 ? '' : text.slice(start, end + close.length);
+}
+
 describe('D-153：未分组必须是可点进去的视图', () => {
   it('IPC 传独立的 `ungrouped_only`（不许用 folder_id 的空值表达）', () => {
     expect(src('./ipc.ts')).toMatch(/ungrouped_only: ungroupedOnly \?\? null/);
@@ -106,7 +117,7 @@ describe('D-153：未分组必须是可点进去的视图', () => {
 });
 
 describe('D-154：条目必须说明自己属于哪个分组', () => {
-  it('列表行渲染“类型 · 分组”，详情头部也渲染分组徽标', () => {
+  it('列表行渲染“类型 · 分组”，详情页脚也渲染分组', () => {
     const list = src('/ItemList.svelte');
     const detail = src('/ItemDetail.svelte');
     // 必须是**作为文本渲染**的那一处：`title={folderText(...)}` 只是悬停提示，
@@ -115,6 +126,32 @@ describe('D-154：条目必须说明自己属于哪个分组', () => {
     expect(detail).toMatch(/\{folderText\(folderTag\)\}<\/span>/);
     expect(list).toMatch(/\{@const folderTag = folderLabelOf\(item\.folder_id, vault\.folders\)\}/);
     expect(detail).toMatch(/\{@const folderTag = folderLabelOf\(item\.folder_id, vault\.folders\)\}/);
+  });
+
+  // D-155：主人反馈「条目里的分组名放在上面，把原来的名字给挤掉了」。
+  // 放在标题旁的本质问题是：`.detail-titles` 里 h2 是唯一可收缩项，多一个徽标
+  // 就多一个抢宽度的人，长组名直接把标题挤成省略号。所以钉死「头部不许出现分组」。
+  it('D-155：分组不许回到标题区（会挤掉标题本身）', () => {
+    const detail = src('/ItemDetail.svelte');
+    const head = section(detail, '<header class="detail-head">', '</header>');
+    expect(head.length, '切片失败：找不到 detail-head').toBeGreaterThan(0);
+    expect(head).not.toContain('folderText');
+    expect(head).not.toContain('folderTag');
+    expect(head).not.toContain('detail-foot-folder');
+  });
+
+  it('D-155：分组在页脚，且与「更新于 / 修订」同一排', () => {
+    const detail = src('/ItemDetail.svelte');
+    const foot = section(detail, '<footer class="detail-foot">', '</footer>');
+    expect(foot.length, '切片失败：找不到 detail-foot').toBeGreaterThan(0);
+    expect(foot).toContain('folderText(folderTag)');
+    expect(foot).toContain("ui.t('item.updated')");
+    expect(foot).toContain("ui.t('item.rev')");
+  });
+
+  it('D-155：页脚允许多项换行，否则窄屏三项互相挤扁', () => {
+    const detail = src('/ItemDetail.svelte');
+    expect(detail).toMatch(/\.detail-foot\s*\{[^}]*flex-wrap:\s*wrap;/);
   });
 
   it('两处共用同一个判定函数（各写一份 `folders.find` 迟早读数不一致）', () => {

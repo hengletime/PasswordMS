@@ -1546,7 +1546,7 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
 | `src/components/FolderSidebar.svelte` | 「另有 N 条未分组」→ 可点的「未分组」行；「全部」行 `active` 排除 `ungroupedOnly`；删 `.side-note` |
 | `src/components/common/Icon.svelte` | 新增 `inbox` 图标 |
 | `src/components/ItemList.svelte` | 副行 = `类型 · 分组`；`{@const folderTag}`；`.list-sub-*` 三个类 |
-| `src/components/ItemDetail.svelte` | 标题旁分组徽标；`.detail-badges` / `.detail-folder` / `.detail-folder-name` |
+| `src/components/ItemDetail.svelte` | **D-155 起**分组标签在页脚第一项；`.detail-foot-folder` / `.detail-foot-folder-name`（原 `.detail-badges` / `.detail-folder` 已删） |
 | `src/lib/folder-label.ts` | 新增：`folderLabelOf`（三态）+ `folderLabelText` |
 | 四语言 i18n | 新增 `folder.unknown` / `folder.label`；**删除** `folder.ungrouped_note`（13.29 的说明文字已被行替代） |
 | `src/lib/stores/vault.test.ts` | 5 处精确参数断言补第四个实参 |
@@ -1561,9 +1561,9 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
    文本输出删掉之后**仍然通过**，因为 `title={folderText(folderTag)}` 还在。
    改成正则直匹配 `\{folderText\(folderTag\)\}</span>` 才真红（D-149 同型）。
    通用判据：**断言要绑定「形态」，不要绑定「符号是否存在」**。
-3. **flex 容器里的裸文本不吃 `text-overflow`**。`.detail-folder` 是 `inline-flex`，
+3. **flex 容器里的裸文本不吃 `text-overflow`**。分组标签是 `inline-flex`，
    直接放 `{folderText(...)}` 会形成匿名 flex item，长组名不截断、反而把标题顶掉。
-   必须包一层 `.detail-folder-name`（`min-width: 0` + ellipsis）。
+   必须包一层具名 span（`min-width: 0` + ellipsis）。D-155 把它挪到页脚后同理。
 4. **`delete_folder` 的第二个参数是枚举不是字符串**。测试里写 `"to_ungrouped"` 直接
    `expected FolderDeleteStrategy, found &str` —— 用 `FolderDeleteStrategy::ToUngrouped`。
    另外 `ItemKind::Attachment` 是 deprecated 变体（D-60 之后附件内嵌在 `Item.attachments`），
@@ -1588,3 +1588,49 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
   「全部」行 `active` 漏排除 `ungroupedOnly`。
 - 全量：前端 65 文件 569 例、Rust core 各套件全绿，`npm run check` 0/0，
   CSS 契约 0 FAIL 6 WARN（与基线一致）。
+
+### 13.31 D-155：分组标签从标题旁挪到页脚
+
+**改因**（主人 2026-10-31 实测反馈）：「条目里的分组名放在上面，把原来的名字给挤掉了。
+要把分组名放在页脚的版本一排」。13.30 把分组徽标放在 `<h2>` 右侧，本意是「阅读时一眼看到
+归属」，代价是**用「看得见分组」换掉了「看得见是什么」**。
+
+**根因**：`.detail-titles` 是 `display: flex`，`h2` 是唯一允许收缩的项（`min-width: 0` +
+`overflow: hidden`，D-103 的 flex 修复），类型徽章与分组徽标都是 `flex-shrink: 0`。
+每多一个徽标就多一个抢宽度的固定项，`h2` 的可分配宽度只剩「容器宽 − 徽标 − gap」。
+组名一长，标题就被压成 `工作帐…` 这种残句 —— 类型徽章（登录/笔记）只有 2 字、宽度可控，
+分组名是用户自由输入，宽度无上限，所以它才是压垮标题的那一个。
+
+**改法**：
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| 头部 `.detail-titles` | `h2` + 类型徽标 + 分组徽标（包在 `.detail-badges` 里） | `h2` + 类型徽标（回到 D-103 的原结构） |
+| 页脚 `.detail-foot` | `更新于` / `修订` 两项 | `分组: 名称` / `更新于` / `修订` 三项 |
+
+**为什么不违背 13.30 的初衷**：页脚是 `margin-top: auto`，内容不足一屏时被推到可视区**底部**
+（不是滚到底才出现）；内容超过一屏时它确实在文末 —— 但那时标题也在顶部可见，
+「是什么」与「在哪」不会再互相挤占。
+
+**三处细节**：
+
+1. `.detail-foot` 加 `flex-wrap: wrap` + `gap: 0.3rem 1rem`（行距小于列距）。三项在窄屏
+   （手机 360dp）放不下一排，不换行只会互相压扁；换成两行后每项各自完整。
+2. 长组名仍要 `min-width: 0` + ellipsis + `max-width: 12rem`，文本必须包一层具名 span
+   （13.30.2 第 3 条：flex 里的裸文本是匿名 flex item，`text-overflow` 不生效），
+   全名由 `title` 兜底。
+3. `.is-none`（未分组 / 未知分组）沿用 `--pms-faint`：灰掉但仍看得见，不是隐藏。
+
+**守门**（`d153-ungrouped-filter-guard.test.ts` 新增 3 例，共 12 例）：
+
+- 「分组不许回到标题区」—— 用 `section()` 切出 `<header class="detail-head">…</header>`
+  区间，断言不含 `folderText` / `folderTag` / `detail-foot-folder`。切片函数找不到标记时
+  返回空串，**断言前先钉 `length > 0`**，否则 `not.toContain` 会把「切片失败」当成通过；
+- 「分组在页脚，且与更新于/修订同一排」—— 切 `<footer>` 区间断言三者共存；
+- 「页脚允许多项换行」—— 正则匹配 `.detail-foot { … flex-wrap: wrap; }`。
+
+**变异 2 条全真红**：① 把分组 span 搬回头部 → 「分组不许回到标题区」红；
+② 删 `flex-wrap: wrap` → 「页脚允许多项换行」红。
+
+**全量**：前端 **65 文件 572 例**、`npm run check` 0/0、CSS 0 FAIL 6 WARN（与基线一致）。
+
