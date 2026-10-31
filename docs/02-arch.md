@@ -2628,7 +2628,7 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `update_folder` | `{folder_id,name,icon,color}` | `FolderDto` | F-03 |
 | `delete_folder` | `{folder_id,strategy}` | `()` | 二次确认由前端；`strategy: "to_ungrouped"｜"to_trash"` |
 | `reorder_folders` | `{ordered_ids}` | `()` | F-03 排序 |
-| `list_items` | `{folder_id?,favorite_only?,query?}` | `Vec<ItemDto>` | F-04/F-08 |
+| `list_items` | `{folder_id?,favorite_only?,query?,ungrouped_only?}` | `Vec<ItemDto>` | F-04/F-08；`ungrouped_only`（D-153）为真时忽略 `folder_id` |
 | `get_item` | `{item_id}` | `ItemDto` | F-04 |
 | `create_item` | `{draft}` | `ItemDto` | F-04 |
 | `update_item` | `{item_id,draft}` | `ItemDto` | F-04 |
@@ -3908,3 +3908,107 @@ store 快照，快照只在「解锁时」与「进状态页时」各取一次�
 
 `ipc-contract.test.ts` 的硬编码计数 74/74、70 → **75/75、71**，注释写明 D-152 那条
 命令同样不做平台分立（三端都从同一份活跃条目计数，无平台差异）。
+
+### 3.38 D-153/D-154：把「分组 ↔ 条目」的双向可见性补齐（1.5.10，2026-10-31）
+
+主人两条连续反馈：
+
+1. 「显示另有 4 条未分组，但我怎么从 100 多条里找出这 4 条？未分组的也应该可以点击后筛选出来。」
+2. 「其实目前用户只能看到每个分组里有哪些条目，但不知道某个条目是属于哪个分组。」
+   「只有在编辑条目的时候可以选择分组，阅读条目时并不知道该条目所属分组。」
+
+同一件事的两个方向：分组→条目可见，条目→分组不可见。
+
+#### 3.38.1 IPC 契约：`list_items` 增加第四个可选参数
+
+```rust
+pub fn list_items(
+    state: tauri::State<'_, AppState>,
+    folder_id: Option<String>,
+    favorite_only: Option<bool>,
+    query: Option<String>,
+    ungrouped_only: Option<bool>,   // D-153 新增
+) -> IpcResult<Vec<ItemDto>>
+```
+
+- **不新增命令**：仍然是 75 个 `#[tauri::command]` / 71 个命令名，`ipc-contract.test.ts`
+  的计数断言无需改动 —— 这正是「同一命令多一个筛选位」而不是「再造一条命令」的理由。
+- `ungrouped_only = true` 时忽略 `folder_id`。前端保证两者互斥；万一同时给出，
+  语义更具体的 `ungrouped_only` 优先，避免「两个矛盾筛选 → 空列表」这种无法解释的结果。
+
+#### 3.38.2 为什么不用空串哨兵
+
+「未分组」最省事的写法是 `folder_id = ""`（或 `""` 之外的任意魔法值），在 `list_items`
+里特判。否决理由：
+
+- 哨兵靠约定成立。某个调用点漏传或误传空串，症状是「列表突然空了」，**不报错**；
+- 与 D-150/D-151 同型的故障：读数/行为与事实不一致，且没有任何红灯。
+
+改用编译期能检查的枚举：
+
+```rust
+enum FolderScope<'a> { All, Ungrouped, Folder(&'a str) }
+
+impl FolderScope<'_> {
+    fn admits(&self, item: &Item) -> bool {
+        match self {
+            Self::All => true,
+            Self::Ungrouped => item.folder_id.is_none(),   // 与 item_counts().ungrouped 逐字一致
+            Self::Folder(fid) => item.folder_id.as_deref() == Some(*fid),
+        }
+    }
+}
+```
+
+`list_items` / `list_ungrouped_items` 都只是 `list_scoped(scope, favorite_only, query)`
+的薄包装：筛选与排序**只有一份实现**。分成两份迟早只改一边，「未分组里的顺序与全部视图
+不一致」这种差异没人会报 bug。
+
+#### 3.38.3 判据必须与读数同源
+
+侧栏显示 `item_counts().ungrouped`，点进去执行 `list_ungrouped_items()`。两处判据都是
+`item.folder_id.is_none()` —— 这不是巧合，是**必须**：
+
+- 侧栏写「4 条未分组」、点进去列出 5 条 → 用户先把差额读成「数据丢了」；
+- 反过来（列出 3 条）→ 用户以为有一条被藏了。
+
+所以 `d153_ungrouped_filter.rs` 的核心断言就是
+`list_ungrouped_items().len() == item_counts().ungrouped`，而不是某个具体数字。
+
+#### 3.38.4 前端：独立布尔位，不复用 `selectedFolderId`
+
+`selectedFolderId === null` 已经是「全部」。新增 `vault.ungroupedOnly`，并在
+`selectFolder` / `toggleFavoriteOnly` / `selectUngrouped` 三处维持互斥（详见 `06-ui-design.md` §6.44.3）。
+
+D-81 的保存回落判定（`save-visibility.ts` 的 `ItemFilter`）同步增加第四位：
+在未分组视图里保存了一个带分组的条目，要只清这一位 —— 否则「保存就消失」会在新视图里复现。
+
+#### 3.38.5 D-154：三态标签
+
+条目所属分组由纯函数 `folderLabelOf(folderId, folders)` 判定，返回
+`{kind:'folder'|'ungrouped'|'unknown'}`：
+
+- `unknown` = `folder_id` 指向不存在的分组（旧数据 / 同步残留 / 手工改库）。
+  **不许冒充 `ungrouped`**：侧栏「未分组 N 条」里不包含它，冒充就是新的矛盾读数；
+- `folders` 必须是全量列表（`vault.folders` 来自独立 IPC，与筛选无关）。传筛选后的
+  子集会把手脚正常的条目误判成 `unknown`。
+
+列表行与详情头部共用这一个判定，两处只是把三态翻成文案（`folderLabelText`）。
+
+#### 3.38.6 守门与变异
+
+| 层 | 文件 | 例数 | 钉住什么 |
+|----|------|------|----------|
+| 行为 | `crates/passwordms-core/tests/d153_ungrouped_filter.rs` | 5 | 条数==读数、收藏/搜索叠加、回收站排除、删组落入未分组、排序与全部视图逐条一致 |
+| 三态 | `src/lib/folder-label.test.ts` | 6 | null/undefined/空串/命中/悬空 + 文案取键 |
+| 接线 | `src/lib/d153-ungrouped-filter-guard.test.ts` | 9 | 参数名、命令分流顺序、store 三处传参、侧栏可点、`active` 排除、两处共用判定 |
+| 回落 | `src/lib/save-visibility.test.ts` | 12（+3） | 第四位参与判定与清位 |
+
+**变异实测（4 条全真红）**：
+`selectUngrouped` 不立标记 → 接线红；`FolderScope::Ungrouped` 判据失效 → 行为 5 例全红
+（报错原文「侧栏显示 3 条未分组，点进去却列出 0 条」）；列表行不渲染分组 → 接线红；
+「全部」行 `active` 漏排除 `ungroupedOnly` → 接线红。
+
+其中「列表行不渲染分组」第一次**没红**：断言写成 `toContain('folderText(folderTag)')`
+被同一行的 `title={folderText(folderTag)}` 喂饱了。改为正则直匹配
+`\{folderText\(folderTag\)\}</span>` 后才真红 —— 与 D-149 那条「断言被同名代码喂饱」同型。

@@ -1531,3 +1531,60 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
 - 前端 `d152-item-counts-guard.test.ts` 11 例。
 - **变异 4 条全真红**：删 `item_count += 1`、`total` 含回收站、`counts` 由 `items.length` 推导、
   删侧栏绑定。
+
+### 13.30 D-153/D-154：未分组可点筛选 + 条目显示所属分组（v1.5.10，2026-10-31）
+
+#### 13.30.1 改动点
+
+| 文件 | 改动 |
+|---|---|
+| `crates/passwordms-core/src/store/repository.rs` | 新增 `FolderScope` 枚举；`list_items` 拆出 `list_scoped`；新增 `list_ungrouped_items` |
+| `src-tauri/src/commands/item_cmd.rs` | `list_items` 增加 `ungrouped_only: Option<bool>` 并分流 |
+| `src/lib/ipc.ts` | `api.items.list` 增加第四参数，wire 键 `ungrouped_only` |
+| `src/lib/stores/vault.svelte.ts` | `ungroupedOnly` 状态 + `selectUngrouped()`；`load`/`filterSnapshot`/`revealSavedItem`/`reset` 四处同步 |
+| `src/lib/save-visibility.ts` | `ItemFilter` += `ungroupedOnly`；`ungroupedHides` 判定与清位 |
+| `src/components/FolderSidebar.svelte` | 「另有 N 条未分组」→ 可点的「未分组」行；「全部」行 `active` 排除 `ungroupedOnly`；删 `.side-note` |
+| `src/components/common/Icon.svelte` | 新增 `inbox` 图标 |
+| `src/components/ItemList.svelte` | 副行 = `类型 · 分组`；`{@const folderTag}`；`.list-sub-*` 三个类 |
+| `src/components/ItemDetail.svelte` | 标题旁分组徽标；`.detail-badges` / `.detail-folder` / `.detail-folder-name` |
+| `src/lib/folder-label.ts` | 新增：`folderLabelOf`（三态）+ `folderLabelText` |
+| 四语言 i18n | 新增 `folder.unknown` / `folder.label`；**删除** `folder.ungrouped_note`（13.29 的说明文字已被行替代） |
+| `src/lib/stores/vault.test.ts` | 5 处精确参数断言补第四个实参 |
+
+#### 13.30.2 四个坑
+
+1. **位置参数增加一位，所有精确参数断言一起失配**。`api.items.list` 从 3 参变 4 参后，
+   `vault.test.ts` 的 `toHaveBeenNthCalledWith(2, null, false, undefined)` 全红
+   （reported diff：`+ false`）。对象参数不会这样 —— 这正是位置参数在测试里的代价。
+   **加参数时必须同时 `grep` 该函数的每一处精确断言**。
+2. **断言被同一行的 `title=` 喂饱**。`toContain('folderText(folderTag)')` 在把模板里的
+   文本输出删掉之后**仍然通过**，因为 `title={folderText(folderTag)}` 还在。
+   改成正则直匹配 `\{folderText\(folderTag\)\}</span>` 才真红（D-149 同型）。
+   通用判据：**断言要绑定「形态」，不要绑定「符号是否存在」**。
+3. **flex 容器里的裸文本不吃 `text-overflow`**。`.detail-folder` 是 `inline-flex`，
+   直接放 `{folderText(...)}` 会形成匿名 flex item，长组名不截断、反而把标题顶掉。
+   必须包一层 `.detail-folder-name`（`min-width: 0` + ellipsis）。
+4. **`delete_folder` 的第二个参数是枚举不是字符串**。测试里写 `"to_ungrouped"` 直接
+   `expected FolderDeleteStrategy, found &str` —— 用 `FolderDeleteStrategy::ToUngrouped`。
+   另外 `ItemKind::Attachment` 是 deprecated 变体（D-60 之后附件内嵌在 `Item.attachments`），
+   测试里的 match 用兜底分支，别引用它（否则 `--all-targets` 的 clippy 出 deprecated 警告）。
+
+#### 13.30.3 测试
+
+- **Rust**：
+  - 新增 `tests/d153_ungrouped_filter.rs` 5 例。核心断言不是数字而是恒等式
+    `list_ungrouped_items().len() == item_counts().ungrouped`；
+  - 排序一致性用「从 `list_items(None)` 里 filter 未分组」与 `list_ungrouped_items()`
+    逐条比对 item_id —— 这是一条能罩住「两份实现漂移」的结构性断言。
+- **前端**：
+  - 新增 `folder-label.test.ts` 6 例（三态 + 文案取键）；
+  - 新增 `d153-ungrouped-filter-guard.test.ts` 9 例（IPC 参数名、命令分流顺序、
+    store 三处传参 + `selectUngrouped` 方法体内容、侧栏可点、`active` 排除、共用判定）；
+  - `save-visibility.test.ts` 12 例（原 9 例补第四位 + 新增 3 例未分组场景）；
+  - `d152-item-counts-guard.test.ts` 改 2 处：`ungrouped_note` 断言改为「未分组行恒在」
+    并反向断言旧的 `{#if counts.ungrouped > 0}` 不许回来。
+- **变异 4 条全真红**（1 条先假绿后收紧）：
+  `selectUngrouped` 不立标记 / `FolderScope::Ungrouped` 判据失效 / 列表行不渲染分组 /
+  「全部」行 `active` 漏排除 `ungroupedOnly`。
+- 全量：前端 65 文件 569 例、Rust core 各套件全绿，`npm run check` 0/0，
+  CSS 契约 0 FAIL 6 WARN（与基线一致）。

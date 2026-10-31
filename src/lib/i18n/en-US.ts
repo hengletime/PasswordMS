@@ -107,6 +107,8 @@ export const enUS: Messages = {
   folder: {
     all: 'All',
     ungrouped: 'Ungrouped',
+    unknown: 'Unknown folder',
+    label: 'Folder',
     new: 'New folder',
     name_placeholder: 'Folder name',
     rename_title: 'Rename folder',
@@ -116,7 +118,6 @@ export const enUS: Messages = {
     delete_to_ungrouped: 'Move out',
     delete_to_trash: 'Move to trash',
     empty: 'No folders yet',
-    ungrouped_note: '{count} more in Ungrouped',
   },
   item: {
     new_login: 'New login',

@@ -302,6 +302,54 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.10 门禁（D-153/D-154，2026-10-31 实跑）**：前端 `npm run test` **65 文件 569 例全绿**
+（较 1.5.9 的 552 例 **+17**：新增 `folder-label.test.ts` 6 例、
+`d153-ungrouped-filter-guard.test.ts` 9 例、`save-visibility.test.ts` +3 例并改写原 9 例夹具，
+`d152-item-counts-guard.test.ts` 改 2 例语义）/ `npm run check` 0 error 0 warning /
+CSS 契约 0 FAIL 6 WARN（老账未动）/ Rust `cargo test -p passwordms-core` **全绿**
+（新增 `d153_ungrouped_filter.rs` 5 例）/ `cargo fmt --all` 已跑 / clippy 代码警告 0
+（唯一一条 `warning:` 仍是 build.rs windres 兜底）/ 体积门禁桌面 + APK 双过。
+
+**1.5.10 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`a3f6a241`，V3 签名；**字节数与 1.5.9 完全相同**但哈希不同，
+见下方说明）/ NSIS `2,055,607 B`（`56e26031`）/ MSI `2,916,352 B`（`4b1b2050`）/
+裸 exe `4,997,120 B`（`0130d178`，较 1.5.9 的 4,992,512 **+4,608 B**）/
+绿色版 zip `2,422,123 B`（`8eb049cd`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**（`0130d178`）。
+
+> APK 字节数 1.5.9 / 1.5.10 **逐字节相同（7,754,155）**，这是第二次出现（1.5.7/1.5.8 也相同）。
+> sha256 不同（`9a978c48` → `a3f6a241`），且包内 `.so` 从 5,718,576 → **5,721,032（+2,456 B）**。
+> 结论**不依赖体积判据**：靠的是下面那张包内取证表。以后遇到"两版同尺寸"不要当成没构建成功。
+
+**包内取证（1.5.10）——A/B 双方都是当场取出实测**：
+
+| 判据 | 位置 | 1.5.9 | 1.5.10 |
+|---|---|---|---|
+| `ungrouped_only`（新 IPC 参数名） | 桌面 `passwordms.exe` | **0** | **1** |
+| `ungrouped_only` | APK 内 `libpasswordms_lib.so`（+2,456 B） | **0** | **1** |
+| `未知分组`（新 i18n 文案） | `dist/assets/*.js` | — | 1 |
+| `未分组` | 同上 | — | 1 |
+| inbox 图标路径 `M22 12h-6l-2 3h-4l-2-3H2` | 同上 | — | 1 |
+
+> `list_ungrouped_items` / `FolderScope` 在两侧都是 0 次：Rust 符号名在 release 下被内联、
+> 不进二进制字符串表。**所以取证只认 serde 字段名与命令参数名**（沿用 1.5.2 定下的方法论）。
+
+**变异验证 4 条全真红**（1 条先假绿后收紧）：
+① `selectUngrouped()` 里 `this.ungroupedOnly = true` → `false` → 「store 独立布尔位」红；
+② `FolderScope::Ungrouped => false` → 行为 5 例**全红**，报错原文
+「侧栏显示 3 条未分组，点进去却列出 0 条」——正是本轮要防的故障；
+③ 列表行把 `{folderText(folderTag)}` 换成 `{typeLabel(item)}` → 「列表行渲染分组」红；
+④ 「全部」行 `active` 删掉 `!vault.ungroupedOnly` → 「两行同时高亮」红。
+
+**这一轮又踩到一次"断言被同名代码喂饱"**：变异 ③ 第一次**没红**，因为断言写的是
+`toContain('folderText(folderTag)')`，而同一行还有 `title={folderText(folderTag)}`（悬停提示），
+删掉文本输出后该字符串仍在。改成正则直匹配 `\{folderText\(folderTag\)\}</span>`（绑定"作为
+文本渲染"的形态）才真红。**与 D-149 同型**：断言要绑形态，不要绑符号是否存在。
+
+**另一条：位置参数多一位，所有精确参数断言一起失配**。`api.items.list` 从 3 参变 4 参后，
+`vault.test.ts` 的 5 处 `toHaveBeenNthCalledWith(…, null, false, undefined)` 全红
+（received 多一个 `false`）。对象参数不会这样——这是位置参数在测试里的固有代价，
+**加参数时必须 grep 该函数的每一处精确断言**。
+
 **1.5.9 门禁（D-152，2026-10-31 实跑）**：前端 `npm run test` **63 文件 552 例全绿**
 （较 1.5.8 的 541 例 +11，新增 `d152-item-counts-guard.test.ts`）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮只加组件内局部样式）/

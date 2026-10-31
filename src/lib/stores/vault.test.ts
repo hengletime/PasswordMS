@@ -95,8 +95,8 @@ describe('D-81 createItem：保存后必须可见且选中', () => {
     expect(vault.query).toBe('');
     expect(vault.selectedItemId).toBe('new-1');
     // 两次拉取：先旧过滤器，后回落后的「全部」。
-    expect(listMock).toHaveBeenNthCalledWith(1, 'folder-a', false, undefined);
-    expect(listMock).toHaveBeenNthCalledWith(2, null, false, undefined);
+    expect(listMock).toHaveBeenNthCalledWith(1, 'folder-a', false, undefined, false);
+    expect(listMock).toHaveBeenNthCalledWith(2, null, false, undefined, false);
   });
 
   it('过滤器没藏住新条目（条目在列表里）→ 过滤器原样，只拉一次', async () => {
@@ -114,7 +114,7 @@ describe('D-81 createItem：保存后必须可见且选中', () => {
     expect(vault.selectedFolderId).toBe('folder-a');
     expect(vault.selectedItemId).toBe('new-2');
     expect(listMock).toHaveBeenCalledTimes(1);
-    expect(listMock).toHaveBeenCalledWith('folder-a', false, undefined);
+    expect(listMock).toHaveBeenCalledWith('folder-a', false, undefined, false);
   });
 
   it('query 藏住新条目 → 只清 query，组与收藏保留', async () => {
@@ -132,7 +132,7 @@ describe('D-81 createItem：保存后必须可见且选中', () => {
 
     expect(vault.selectedFolderId).toBe('folder-a');
     expect(vault.query).toBe('');
-    expect(listMock).toHaveBeenNthCalledWith(2, 'folder-a', false, undefined);
+    expect(listMock).toHaveBeenNthCalledWith(2, 'folder-a', false, undefined, false);
   });
 });
 
@@ -153,7 +153,7 @@ describe('D-81 updateItem：更新后同样必须可见且选中', () => {
     expect(result).not.toBeNull();
     expect(vault.selectedFolderId).toBeNull();
     expect(vault.selectedItemId).toBe('moved-1');
-    expect(listMock).toHaveBeenNthCalledWith(2, null, false, undefined);
+    expect(listMock).toHaveBeenNthCalledWith(2, null, false, undefined, false);
   });
 
   it('更新后仍在原过滤器里 → 过滤器原样、选中保持', async () => {

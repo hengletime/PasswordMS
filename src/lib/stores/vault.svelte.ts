@@ -14,6 +14,14 @@ class VaultStore {
   folders = $state<FolderDto[]>([]);
   /** 当前分组筛选（null = 全部）。 */
   selectedFolderId = $state<string | null>(null);
+  /**
+   * 是否仅看**未分组**（D-153）。
+   *
+   * 不能用 `selectedFolderId === null` 表达：那已经是「全部」的含义。
+   * 两者在 wire 上是不同参数（`folder_id` / `ungrouped_only`），在这里也必须是独立位，
+   * 否则点「未分组」会列出全库 —— 用户看到 100 多条，比看不到入口更受挫。
+   */
+  ungroupedOnly = $state(false);
   /** 是否仅看收藏。 */
   favoriteOnly = $state(false);
   /** 搜索关键词。 */
@@ -60,7 +68,12 @@ class VaultStore {
     this.busy = true;
     try {
       const [items, folders, counts] = await Promise.all([
-        api.items.list(this.selectedFolderId, this.favoriteOnly, this.query || undefined),
+        api.items.list(
+          this.selectedFolderId,
+          this.favoriteOnly,
+          this.query || undefined,
+          this.ungroupedOnly,
+        ),
         api.folders.list(),
         api.items.counts(),
       ]);
@@ -93,6 +106,21 @@ class VaultStore {
   /** 选择分组。 */
   async selectFolder(folderId: string | null): Promise<void> {
     this.selectedFolderId = folderId;
+    this.ungroupedOnly = false;
+    this.favoriteOnly = false;
+    await this.load();
+  }
+
+  /**
+   * 选择「未分组」视图（D-153）：侧栏那行数字点得进去。
+   *
+   * 与 `selectFolder(null)`（全部）的 `selectedFolderId` 都是 null，靠 `ungroupedOnly` 区分。
+   * 清掉收藏与分组：三者是**同级单一视图**——同时点亮两行会让侧栏出现两个高亮，
+   * 用户也无法解释「为什么未分组里只剩收藏的」。
+   */
+  async selectUngrouped(): Promise<void> {
+    this.selectedFolderId = null;
+    this.ungroupedOnly = true;
     this.favoriteOnly = false;
     await this.load();
   }
@@ -100,6 +128,8 @@ class VaultStore {
   /** 切换「仅收藏」。 */
   async toggleFavoriteOnly(): Promise<void> {
     this.favoriteOnly = !this.favoriteOnly;
+    // 与「未分组」同级：切到收藏时清掉未分组标记，避免两个视图标记同时成立。
+    this.ungroupedOnly = false;
     await this.load();
   }
 
@@ -120,6 +150,7 @@ class VaultStore {
       selectedFolderId: this.selectedFolderId,
       favoriteOnly: this.favoriteOnly,
       query: this.query,
+      ungroupedOnly: this.ungroupedOnly,
     };
   }
 
@@ -139,13 +170,15 @@ class VaultStore {
     if (
       next.selectedFolderId === before.selectedFolderId &&
       next.favoriteOnly === before.favoriteOnly &&
-      next.query === before.query
+      next.query === before.query &&
+      next.ungroupedOnly === before.ungroupedOnly
     ) {
       return;
     }
     this.selectedFolderId = next.selectedFolderId;
     this.favoriteOnly = next.favoriteOnly;
     this.query = next.query;
+    this.ungroupedOnly = next.ungroupedOnly;
     this.queryEpoch += 1;
     await this.load();
   }
@@ -305,6 +338,7 @@ class VaultStore {
     this.folders = [];
     this.counts = { total: 0, favorites: 0, ungrouped: 0 };
     this.selectedFolderId = null;
+    this.ungroupedOnly = false;
     this.favoriteOnly = false;
     this.query = '';
     this.queryEpoch += 1;

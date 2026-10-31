@@ -138,6 +138,17 @@
     onpicked?.();
   }
 
+  /**
+   * 选中「未分组」视图（D-153）：完成后通知父级关闭抽屉。
+   *
+   * 不能走 `pickFolder(null)` —— 那是「全部条目」。两者 `selectedFolderId` 都是 null，
+   * 靠 `vault.ungroupedOnly` 区分，所以必须走独立入口。
+   */
+  function pickUngrouped(): void {
+    void vault.selectUngrouped();
+    onpicked?.();
+  }
+
   function onFolderPointerDown(event: PointerEvent, folderId: string, name: string): void {
     beginRowDrag('folder', folderId, event, {
       getLabel: (): string => name,
@@ -209,7 +220,9 @@
     <!-- #531：「全部条目」固定第一、不可拖，但是**条目**的投放目标（= 移到未分组）。 -->
     <button
       class="side-row"
-      class:active={vault.selectedFolderId === null && !vault.favoriteOnly}
+      class:active={vault.selectedFolderId === null &&
+        !vault.favoriteOnly &&
+        !vault.ungroupedOnly}
       class:drop-hover={drag.state.active &&
         drag.state.kind === 'item' &&
         drag.state.overId === DROP_ID_ALL_ITEMS}
@@ -335,13 +348,24 @@
     {:else}
       <li class="side-empty">{ui.t('folder.empty')}</li>
     {/each}
-    <!-- D-152：未分组条目不属于任何分组行。缺这一句时「各组数字加起来 ≠ 全部」，
-         用户正好会把它读成「同步丢了」。只在真有未分组条目时出现。 -->
-    {#if vault.counts.ungrouped > 0}
-      <li class="side-note">
-        {ui.t('folder.ungrouped_note', { count: vault.counts.ungrouped })}
-      </li>
-    {/if}
+    <!-- D-153：未分组 = 与分组同级的**视图入口**（D-152 那行说明文字的数字点得进去）。
+         位置留在分组列表末尾：与上一版的说明文字同址，用户不用重新找一遍。
+         **不再用 `{#if ungrouped > 0}` 包住**：它现在是一个视图，入口按数据闪现/消失
+         会让「未分组视图在哪」变得不可预期；恒在且显示 0，与分组行同一原则。 -->
+    <li>
+      <button
+        class="side-row"
+        class:active={vault.ungroupedOnly}
+        type="button"
+        onclick={() => pickUngrouped()}
+      >
+        <Icon name="inbox" size={16} />
+        <span class="side-name">{ui.t('folder.ungrouped')}</span>
+        <span class="side-count" class:is-zero={vault.counts.ungrouped === 0}>
+          {vault.counts.ungrouped}
+        </span>
+      </button>
+    </li>
   </ul>
 
   {#if menuFor !== null && menuTarget !== null}
@@ -509,13 +533,6 @@
     color: var(--pms-faint);
     font-size: 0.8rem;
     padding: 0.4rem 0.55rem;
-  }
-  /* D-152：分组列表末尾的「另有 N 条未分组」——说明文字，不可点、不吃行高。 */
-  .side-note {
-    color: var(--pms-faint);
-    font-size: 0.74rem;
-    padding: 0.35rem 0.55rem 0.1rem;
-    font-variant-numeric: tabular-nums;
   }
   /* #531：钉住标记 / 投放高亮 / 插入位指示线。D-85 起钉子可点 = 直接取消钉住，
      且是行按钮的**兄弟**节点（与 .side-del 同位型：26px flex 项），不嵌套 button。 */

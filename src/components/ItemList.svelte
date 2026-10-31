@@ -10,6 +10,7 @@
   import { pinnedOrderAfterDrop } from '../lib/dnd';
   import { vault } from '../lib/stores/vault.svelte';
   import { ui } from '../lib/stores/ui.svelte';
+  import { folderLabelOf, folderLabelText, type FolderLabel } from '../lib/folder-label';
   import type { ItemDto } from '../types';
 
   interface Props {
@@ -104,6 +105,17 @@
     if (item.kind.type === 'login') return ui.t('item.type_login');
     if (item.kind.type === 'secure_note') return ui.t('item.type_note');
     return ui.t('item.type_attachment');
+  }
+
+  /**
+   * D-154：所属分组的文案。
+   *
+   * `vault.folders` 是独立 IPC 拉回的**全量**分组（与列表筛选无关），所以在「全部」
+   * 视图里也能正确显示每个条目所属的组名 —— 这正是本轮要解决的那件事。
+   * 传箭头函数而不是 `ui.t`：`t` 内部读 `this.locale`，裸传方法引用会丢 `this`。
+   */
+  function folderText(label: FolderLabel): string {
+    return folderLabelText(label, (key): string => ui.t(key));
   }
 
   // ===== #531：拖拽 / 菜单 / 移动到分组 =====
@@ -282,6 +294,8 @@
   {:else}
     <ul class="list-items" bind:this={listEl}>
       {#each vault.items as item (item.item_id)}
+        <!-- D-154：所属分组标签（三态：组名 / 未分组 / 未知分组），每行算一次复用两处。 -->
+        {@const folderTag = folderLabelOf(item.folder_id, vault.folders)}
         <li class:has-pin={item.pinned === true}>
           <button
             class="list-row"
@@ -316,7 +330,17 @@
             <span class="list-icon"><Icon name={iconFor(item)} size={16} /></span>
             <span class="list-meta">
               <span class="list-title">{item.kind.title}</span>
-              <span class="list-sub pms-meta">{typeLabel(item)}</span>
+              <!-- D-154：类型 · 所属分组。先类型后归属：扫列表时第一眼认类型，第二眼才问
+                   「这条在哪个组」；组名可截断，类型不可（类型只有固定几个短词）。 -->
+              <span class="list-sub pms-meta">
+                <span class="list-sub-type">{typeLabel(item)}</span>
+                <span class="list-sub-sep" aria-hidden="true">·</span>
+                <span
+                  class="list-sub-folder"
+                  class:is-none={folderTag.kind !== 'folder'}
+                  title={folderText(folderTag)}
+                >{folderText(folderTag)}</span>
+              </span>
             </span>
             <!-- #531：拖拽手柄的辅助说明（视觉隐藏，进可访问名称）。 -->
             <span class="sr-only">{ui.t('dnd.handle_item')}</span>
@@ -484,8 +508,32 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* D-154：副行 = 类型 · 所属分组。整行可截断，但类型不参与截断
+     （`flex: 0 0 auto`）：类型只有几个固定短词，被挤掉会让「组名」显得像类型。 */
   .list-sub {
     margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+  .list-sub-type {
+    flex: 0 0 auto;
+  }
+  .list-sub-sep {
+    flex: 0 0 auto;
+    opacity: 0.55;
+  }
+  .list-sub-folder {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* 「未分组 / 未知分组」不是真组名：弱化但**不隐藏**——这行本身就是本轮要给的答案。 */
+  .list-sub-folder.is-none {
+    color: var(--pms-faint);
   }
   .list-fav {
     color: var(--pms-warning);

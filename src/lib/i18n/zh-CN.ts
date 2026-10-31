@@ -106,6 +106,10 @@ export const zhCN = {
   folder: {
     all: '全部',
     ungrouped: '未分组',
+    /* D-154：条目所属分组的三态文案。`unknown` = folder_id 指向不存在的分组
+       （旧数据 / 同步残留），不能冒充「未分组」——那会与侧栏未分组读数矛盾。 */
+    unknown: '未知分组',
+    label: '分组',
     new: '新建分组',
     name_placeholder: '分组名称',
     rename_title: '重命名分组',
@@ -115,9 +119,6 @@ export const zhCN = {
     delete_to_ungrouped: '移出分组',
     delete_to_trash: '移入回收站',
     empty: '还没有分组',
-    /* D-152：未分组条目不属于任何分组行，缺了这一句「各组数字加起来 ≠ 全部」时
-       用户会重新怀疑同步丢数据。 */
-    ungrouped_note: '另有 {count} 条未分组',
   },
   item: {
     new_login: '新建登录',

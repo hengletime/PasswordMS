@@ -104,6 +104,8 @@ export const th = {
   folder: {
     all: 'ทั้งหมด',
     ungrouped: 'ไม่อยู่ในกลุ่ม',
+    unknown: 'กลุ่มที่ไม่รู้จัก',
+    label: 'กลุ่ม',
     new: 'สร้างกลุ่มใหม่',
     name_placeholder: 'ชื่อกลุ่ม',
     rename_title: 'เปลี่ยนชื่อกลุ่ม',
@@ -113,7 +115,6 @@ export const th = {
     delete_to_ungrouped: 'ย้ายออกจากกลุ่ม',
     delete_to_trash: 'ย้ายไปถังขยะ',
     empty: 'ยังไม่มีกลุ่ม',
-    ungrouped_note: 'อีก {count} รายการที่ยังไม่จัดกลุ่ม',
   },
   item: {
     new_login: 'เพิ่มข้อมูลเข้าสู่ระบบ',

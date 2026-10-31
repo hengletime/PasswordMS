@@ -23,21 +23,26 @@ pub fn item_counts(state: tauri::State<'_, AppState>) -> IpcResult<ItemCountsDto
     })
 }
 
-/// 列出条目（支持分组过滤 / 仅收藏 / 模糊搜索）。
+/// 列出条目（支持分组过滤 / 仅收藏 / 模糊搜索 / **未分组**）。
+///
+/// `ungrouped_only = true` 时忽略 `folder_id`：前端把「未分组」做成与分组同级的视图，
+/// 两者不会同时给出。万一同时给出，语义更具体的 `ungrouped_only` 优先 ——
+/// 否则「两个筛选条件互相矛盾 → 列表为空」是用户无法解释的结果。
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_items(
     state: tauri::State<'_, AppState>,
     folder_id: Option<String>,
     favorite_only: Option<bool>,
     query: Option<String>,
+    ungrouped_only: Option<bool>,
 ) -> IpcResult<Vec<ItemDto>> {
     let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
-    Ok(repo.list_items(
-        folder_id.as_deref(),
-        favorite_only.unwrap_or(false),
-        query.as_deref(),
-    ))
+    let favorite_only = favorite_only.unwrap_or(false);
+    if ungrouped_only.unwrap_or(false) {
+        return Ok(repo.list_ungrouped_items(favorite_only, query.as_deref()));
+    }
+    Ok(repo.list_items(folder_id.as_deref(), favorite_only, query.as_deref()))
 }
 
 /// 取单条。

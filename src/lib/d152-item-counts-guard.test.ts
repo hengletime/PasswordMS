@@ -99,13 +99,13 @@ describe('D-152：跨语言字段名逐字一致', () => {
 });
 
 describe('D-152：侧栏必须把数字显示出来', () => {
-  it('四个读数都进模板：全部 / 收藏 / 各组 / 未分组说明', () => {
+  it('四个读数都进模板：全部 / 收藏 / 各组 / 未分组', () => {
     const side = src('/FolderSidebar.svelte');
     expect(side).toContain('vault.counts.total');
     expect(side).toContain('vault.counts.favorites');
     expect(side).toContain('folder.item_count');
+    // D-153 起未分组那行从「说明文字」升级为可点的视图行，读数本身没变。
     expect(side).toContain('vault.counts.ungrouped');
-    expect(side).toContain(`ui.t('folder.ungrouped_note'`);
   });
 
   it('0 条也要显示（不能 `{#if count > 0}` 藏起来）', () => {
@@ -117,14 +117,11 @@ describe('D-152：侧栏必须把数字显示出来', () => {
     expect(side).toMatch(/\.side-count\.is-zero\s*\{/);
   });
 
-  it('未分组说明只在真的有未分组条目时出现', () => {
+  it('未分组行恒在（D-153 起是视图入口，不按数据闪现）', () => {
     const side = src('/FolderSidebar.svelte');
-    expect(side).toMatch(/\{#if vault\.counts\.ungrouped > 0\}/);
-  });
-
-  it('四语言都有 `ungrouped_note`（键以 zh-CN 为准）', () => {
-    for (const lang of ['zh-CN', 'zh-TW', 'en-US', 'th']) {
-      expect(src(`/i18n/${lang}.ts`), `${lang} 缺 ungrouped_note`).toContain('ungrouped_note:');
-    }
+    // D-152 曾用 `{#if counts.ungrouped > 0}` 包住那行说明文字；D-153 起它是视图入口，
+    // 包住会让「未分组视图在哪」有时无时。反向断言这条 if 不得再出现。
+    expect(side).not.toMatch(/\{#if vault\.counts\.ungrouped > 0\}/);
+    expect(side).toContain('vault.ungroupedOnly');
   });
 });

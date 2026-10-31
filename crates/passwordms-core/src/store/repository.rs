@@ -132,6 +132,33 @@ pub struct ItemCounts {
     pub ungrouped: usize,
 }
 
+/// 列表作用域（D-153）：全部 / 未分组 / 某个分组。
+///
+/// **不用「`folder_id` 传空串当哨兵」**：哨兵靠约定成立，某个调用点漏传或误传空串时，
+/// 症状是「列表突然空了」而不是报错 —— 与 D-150/D-151 同型的「不报错但不对」。
+/// 枚举让「未分组」成为编译期能检查的第三种作用域。
+#[derive(Debug, Clone, Copy)]
+enum FolderScope<'a> {
+    /// 全部条目（不过滤分组）。
+    All,
+    /// 未分组条目（`folder_id == None`）。
+    Ungrouped,
+    /// 指定分组。
+    Folder(&'a str),
+}
+
+impl FolderScope<'_> {
+    /// 该条目是否落在本作用域内。
+    fn admits(&self, item: &Item) -> bool {
+        match self {
+            Self::All => true,
+            // 与 `item_counts()` 的 `ungrouped` 判据逐字一致。
+            Self::Ungrouped => item.folder_id.is_none(),
+            Self::Folder(fid) => item.folder_id.as_deref() == Some(*fid),
+        }
+    }
+}
+
 /// 压缩规划：保留哪些 slot、能省多少（[`Repository::plan_compaction`] 的产物）。
 struct CompactionPlan {
     /// 保留帧在 `slots` 中的下标（按原顺序，即写入顺序）。
@@ -867,10 +894,36 @@ impl Repository {
 
     // ===== 条目 =====
 
-    /// 列出条目（支持分组过滤 / 仅收藏 / 模糊搜索）。
+    /// 列出条目（支持分组过滤 / 仅收藏 / 模糊搜索）。`folder_id = None` = 全部。
     pub fn list_items(
         &self,
         folder_id: Option<&str>,
+        favorite_only: bool,
+        query: Option<&str>,
+    ) -> Vec<Item> {
+        let scope = match folder_id {
+            Some(fid) => FolderScope::Folder(fid),
+            None => FolderScope::All,
+        };
+        self.list_scoped(scope, favorite_only, query)
+    }
+
+    /// 列出**未分组**条目（D-153）：`folder_id == None` 的条目。
+    ///
+    /// 判据必须与 [`Self::item_counts`] 的 `ungrouped` **逐字一致**（`folder_id.is_none()`）：
+    /// 侧栏写「4 条未分组」、点进去却列出 5 条，自相矛盾的读数比没有读数更糟
+    /// （D-150/D-151 就是这类「不报错但不对」的故障）。
+    pub fn list_ungrouped_items(&self, favorite_only: bool, query: Option<&str>) -> Vec<Item> {
+        self.list_scoped(FolderScope::Ungrouped, favorite_only, query)
+    }
+
+    /// 三作用域共用的筛选 + 排序（D-153 提取，`list_items` / `list_ungrouped_items` 都走这里）。
+    ///
+    /// 提取而不是复制：排序与搜索语义一旦分成两份，迟早只改一边，
+    /// 「未分组视图的顺序和全部视图不一致」这种差异没人会报 bug。
+    fn list_scoped(
+        &self,
+        scope: FolderScope<'_>,
         favorite_only: bool,
         query: Option<&str>,
     ) -> Vec<Item> {
@@ -881,10 +934,8 @@ impl Repository {
             .items
             .values()
             .filter(|item| {
-                if let Some(fid) = folder_id {
-                    if item.folder_id.as_deref() != Some(fid) {
-                        return false;
-                    }
+                if !scope.admits(item) {
+                    return false;
                 }
                 if favorite_only && !item.favorite {
                     return false;

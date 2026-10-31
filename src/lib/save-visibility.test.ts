@@ -5,6 +5,9 @@
 //   ④ 全匹配（条目就在刚拉回的列表里）→ 原样；⑤ update 场景同判。
 // 另加三条边界：字段全匹配却不在列表（状态不一致 → 保守全回落）、
 // query 语义与后端逐字对齐（trim + 小写 + title/username/url）、多过滤位同时藏 → 全清。
+//
+// D-153 追加：第四个过滤位 `ungroupedOnly`（未分组视图）必须同样参与判定。
+// 少判它 = 在未分组视图里新建带分组的条目时判定「可见」而列表里没有，正好复现 D-81 本身。
 
 import { describe, expect, it } from 'vitest';
 import { matchesSavedItemQuery, revealFilterAfterSave, type ItemFilter } from './save-visibility';
@@ -32,7 +35,12 @@ function item(overrides: Partial<ItemDto> & { item_id: string }): ItemDto {
 describe('D-81 revealFilterAfterSave：五种藏匿情形', () => {
   it('① 组不匹配 → 清组，query / favoriteOnly 原样保留', () => {
     const saved = item({ item_id: 'i1', folder_id: 'folder-b' });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: false, query: '' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: false,
+      query: '',
+      ungroupedOnly: false,
+    };
     const next = revealFilterAfterSave(current, saved, []);
     expect(next.selectedFolderId).toBeNull();
     expect(next.favoriteOnly).toBe(false);
@@ -41,7 +49,12 @@ describe('D-81 revealFilterAfterSave：五种藏匿情形', () => {
 
   it('② query 不匹配 → 清 query，组与收藏保留（用户在组内搜索时保存了不匹配的新条目）', () => {
     const saved = item({ item_id: 'i2', folder_id: 'folder-a', kind: { type: 'login', title: '银行', custom_fields: [] } });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: false, query: 'github' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: false,
+      query: 'github',
+      ungroupedOnly: false,
+    };
     const next = revealFilterAfterSave(current, saved, []);
     expect(next.selectedFolderId).toBe('folder-a');
     expect(next.favoriteOnly).toBe(false);
@@ -50,7 +63,12 @@ describe('D-81 revealFilterAfterSave：五种藏匿情形', () => {
 
   it('③ favoriteOnly 不匹配 → 清收藏，组保留', () => {
     const saved = item({ item_id: 'i3', folder_id: 'folder-a', favorite: false });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: true, query: '' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: true,
+      query: '',
+      ungroupedOnly: false,
+    };
     const next = revealFilterAfterSave(current, saved, []);
     expect(next.selectedFolderId).toBe('folder-a');
     expect(next.favoriteOnly).toBe(false);
@@ -59,7 +77,12 @@ describe('D-81 revealFilterAfterSave：五种藏匿情形', () => {
 
   it('④ 条目就在刚拉回的列表里 → 过滤器原样（返回与 current 字段完全相同）', () => {
     const saved = item({ item_id: 'i4', folder_id: 'folder-a', favorite: true });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: true, query: 'Default' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: true,
+      query: 'Default',
+      ungroupedOnly: false,
+    };
     const items = [saved];
     const next = revealFilterAfterSave(current, saved, items);
     expect(next).toEqual(current);
@@ -67,7 +90,12 @@ describe('D-81 revealFilterAfterSave：五种藏匿情形', () => {
 
   it('⑤ update 场景同判：把条目改到别的分组后不在原组列表里 → 清组', () => {
     const updated = item({ item_id: 'i5', folder_id: 'folder-b' });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: false, query: '' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: false,
+      query: '',
+      ungroupedOnly: false,
+    };
     // items 是用旧过滤器（组 A）拉回的列表，改完分组的条目不在其中。
     const next = revealFilterAfterSave(current, updated, []);
     expect(next.selectedFolderId).toBeNull();
@@ -77,17 +105,37 @@ describe('D-81 revealFilterAfterSave：五种藏匿情形', () => {
 describe('D-81 revealFilterAfterSave：边界', () => {
   it('字段判断全匹配却不在列表 → 保守回落全部条目（状态不一致时保住「必须可见」）', () => {
     const saved = item({ item_id: 'i6', folder_id: 'folder-a', favorite: true });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: true, query: 'default' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: true,
+      query: 'default',
+      ungroupedOnly: false,
+    };
     // 组匹配（A）、收藏匹配、query 匹配（标题含 default），但 items 里没有它。
     const next = revealFilterAfterSave(current, saved, []);
-    expect(next).toEqual({ selectedFolderId: null, favoriteOnly: false, query: '' });
+    expect(next).toEqual({
+      selectedFolderId: null,
+      favoriteOnly: false,
+      query: '',
+      ungroupedOnly: false,
+    });
   });
 
   it('多个过滤位同时藏 → 一次全清（组 + 收藏 + query 都不匹配）', () => {
     const saved = item({ item_id: 'i7', folder_id: null, favorite: false, kind: { type: 'secure_note', title: '随手记', body: '' } });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: true, query: 'github' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: true,
+      query: 'github',
+      ungroupedOnly: false,
+    };
     const next = revealFilterAfterSave(current, saved, []);
-    expect(next).toEqual({ selectedFolderId: null, favoriteOnly: false, query: '' });
+    expect(next).toEqual({
+      selectedFolderId: null,
+      favoriteOnly: false,
+      query: '',
+      ungroupedOnly: false,
+    });
   });
 
   it('query 语义与后端 item_matches 逐字对齐：trim + 大小写不敏感 + title/username/url', () => {
@@ -109,10 +157,61 @@ describe('D-81 revealFilterAfterSave：边界', () => {
 
   it('收藏条目在 favoriteOnly 下保存 → 不清收藏（可见路径不走回落）', () => {
     const saved = item({ item_id: 'i9', folder_id: 'folder-a', favorite: true });
-    const current: ItemFilter = { selectedFolderId: 'folder-a', favoriteOnly: true, query: '' };
+    const current: ItemFilter = {
+      selectedFolderId: 'folder-a',
+      favoriteOnly: true,
+      query: '',
+      ungroupedOnly: false,
+    };
     // items 里包含它 → 原样返回（收藏保留）。
     const next = revealFilterAfterSave(current, saved, [saved]);
     expect(next).toEqual(current);
     expect(next.favoriteOnly).toBe(true);
+  });
+});
+
+describe('D-153：未分组视图是第四个过滤位', () => {
+  it('未分组视图下保存了**带分组**的条目 → 只清 ungroupedOnly，query 保留', () => {
+    const saved = item({ item_id: 'u1', folder_id: 'folder-a' });
+    const current: ItemFilter = {
+      selectedFolderId: null,
+      favoriteOnly: false,
+      query: '',
+      ungroupedOnly: true,
+    };
+    const next = revealFilterAfterSave(current, saved, []);
+    expect(next.ungroupedOnly).toBe(false);
+    expect(next.selectedFolderId).toBeNull();
+    expect(next.query).toBe('');
+  });
+
+  it('未分组视图下保存**未分组**条目 → 原样（不走回落，视图不跳走）', () => {
+    const saved = item({ item_id: 'u2', folder_id: null });
+    const current: ItemFilter = {
+      selectedFolderId: null,
+      favoriteOnly: false,
+      query: '',
+      ungroupedOnly: true,
+    };
+    const next = revealFilterAfterSave(current, saved, [saved]);
+    expect(next).toEqual(current);
+    expect(next.ungroupedOnly).toBe(true);
+  });
+
+  it('未分组 + query 同时藏 → 两位一起清（新条目既不在未分组里也不匹配搜索）', () => {
+    const saved = item({
+      item_id: 'u3',
+      folder_id: 'folder-a',
+      kind: { type: 'secure_note', title: '随手记', body: '' },
+    });
+    const current: ItemFilter = {
+      selectedFolderId: null,
+      favoriteOnly: false,
+      query: 'github',
+      ungroupedOnly: true,
+    };
+    const next = revealFilterAfterSave(current, saved, []);
+    expect(next.ungroupedOnly).toBe(false);
+    expect(next.query).toBe('');
   });
 });

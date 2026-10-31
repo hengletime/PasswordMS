@@ -107,11 +107,18 @@ export const vault = {
 export const items = {
   // D-152：条目计数（总数 / 收藏 / 未分组）。**与筛选无关**——侧栏读数不能随视图变化。
   counts: (): Promise<ItemCountsDto> => invoke<ItemCountsDto>('item_counts'),
-  list: (folderId?: string | null, favoriteOnly?: boolean, query?: string): Promise<ItemDto[]> =>
+  list: (
+    folderId?: string | null,
+    favoriteOnly?: boolean,
+    query?: string,
+    ungroupedOnly?: boolean,
+  ): Promise<ItemDto[]> =>
     invoke<ItemDto[]>('list_items', {
       folder_id: folderId ?? null,
       favorite_only: favoriteOnly ?? null,
       query: query ?? null,
+      // D-153：未分组视图。与 folder_id 互斥（store 保证），后端以本字段优先。
+      ungrouped_only: ungroupedOnly ?? null,
     }),
   get: (itemId: string): Promise<ItemDto> => invoke<ItemDto>('get_item', { item_id: itemId }),
   create: (draft: ItemDraftDto): Promise<ItemDto> =>
