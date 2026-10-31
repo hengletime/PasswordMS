@@ -85,6 +85,9 @@ pub struct FolderDto {
     pub use_count: i64,
     /// 组内条目 `last_used_at` 最大值（#531 聚合值）。
     pub last_used_at: Option<i64>,
+    /// 组内**活跃**条目数（D-152，不含回收站）。侧栏分组名后的数字。
+    #[serde(default)]
+    pub item_count: usize,
 }
 
 impl FolderDto {
@@ -106,8 +109,20 @@ impl FolderDto {
             pin_order: f.pin_order,
             use_count: usage.use_count,
             last_used_at: usage.last_used_at,
+            item_count: usage.item_count,
         }
     }
+}
+
+/// 条目计数 DTO（D-152）：侧栏「全部条目 / 收藏」的读数。
+///
+/// 与 [`FolderDto::item_count`] 同源（都来自活跃条目），所以
+/// `Σ 各组 item_count + ungrouped == total` 恒成立 —— 这是让用户能「自己核对」的前提。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ItemCountsDto {
+    pub total: usize,
+    pub favorites: usize,
+    pub ungrouped: usize,
 }
 
 /// 回收站 DTO。

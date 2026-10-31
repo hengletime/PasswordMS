@@ -115,6 +115,9 @@ export const zhCN = {
     delete_to_ungrouped: '移出分组',
     delete_to_trash: '移入回收站',
     empty: '还没有分组',
+    /* D-152：未分组条目不属于任何分组行，缺了这一句「各组数字加起来 ≠ 全部」时
+       用户会重新怀疑同步丢数据。 */
+    ungrouped_note: '另有 {count} 条未分组',
   },
   item: {
     new_login: '新建登录',

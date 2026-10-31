@@ -1493,3 +1493,41 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
 - 前端：`src/lib/d150-sync-readout-guard.test.ts` 6 例。
 - 变异 3 条全真红：`last_sync_at` 改回 `None`、删 `syncNow` 的 `loadDevices`、
   模板判据退化。
+
+### 13.29 D-152：侧栏条目数（v1.5.9，2026-10-31）
+
+#### 13.29.1 改动点
+
+| 文件 | 改动 |
+|---|---|
+| `crates/passwordms-core/src/store/repository.rs` | `FolderUsage` += `item_count`；新增 `ItemCounts` + `Repository::item_counts()` |
+| `src-tauri/src/dto.rs` | `FolderDto` += `item_count`；新增 `ItemCountsDto` |
+| `src-tauri/src/commands/item_cmd.rs` | 新增 `item_counts`（**无筛选参数**） |
+| `src-tauri/src/lib.rs` | 注册 `commands::item_cmd::item_counts` |
+| `src/types.ts` / `src/lib/ipc.ts` | `FolderDto.item_count?` + `ItemCountsDto` + `api.items.counts()` |
+| `src/lib/stores/vault.svelte.ts` | `counts` 状态；`load()` 三路并行；`reset()` 清零 |
+| `src/components/FolderSidebar.svelte` | 三个读数 + `另有 N 条未分组` + `.side-count` 样式 |
+| 四语言 i18n | `folder.ungrouped_note` |
+| `src/lib/ipc-contract.test.ts` | 命令计数 74/70 → 75/71 |
+| `src/lib/stores/vault.test.ts` | mock 补 `items.counts`（否则 `Promise.all` 整体拒绝） |
+
+#### 13.29.2 三个坑
+
+1. **不能用 `vault.items.length`**。它是筛选后的列表，切分组/搜索/只看收藏都会变。
+   守门用正则直接钉 `this.counts = {...items.length...}` 这种写法为红。
+2. **`vault.load()` 加第三路请求会打爆既有 mock**。`vault.test.ts` 的 `api` 是整体 mock，
+   缺 `items.counts` 会让 `Promise.all` 拒绝 → `load()` 走 catch → 三条 D-81 用例红，
+   **而报错内容是「过滤器没恢复」**（`expected null to be 'folder-a'`），与真因（mock 缺一项）
+   隔了三层。先看这个假象很容易去改 `load()` 的 try/catch 位置。
+   > 这条值得记住：**给 `Promise.all` 加分支，必须同步检查所有 mock 了该模块的测试**。
+3. **`--pms-faint` 不能用在 12px 的读数上**。0 值想"弱化"是合理的，但弱化方式选错
+   （换淡色阶）会把最关键的那个 `0` 变成最看不清的。改降不透明度。
+
+#### 13.29.3 测试
+
+- Rust `tests/d152_item_counts.rs` 3 例（恒等式 / 回收站 / 跨解锁）。
+  写第一版时**自己数错了夹具**（3+1+2 写成 5）——断言失败信息 `left: 6, right: 5`
+  反而证明了 `total` 在正确工作。这类"测试写错先怀疑测试"的判断要保留。
+- 前端 `d152-item-counts-guard.test.ts` 11 例。
+- **变异 4 条全真红**：删 `item_count += 1`、`total` 含回收站、`counts` 由 `items.length` 推导、
+  删侧栏绑定。

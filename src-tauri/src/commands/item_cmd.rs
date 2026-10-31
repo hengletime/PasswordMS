@@ -2,9 +2,26 @@
 
 use passwordms_core::store::repository::ItemDraft;
 
-use crate::dto::{ItemDraftDto, ItemDto};
+use crate::dto::{ItemCountsDto, ItemDraftDto, ItemDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
+
+/// 条目计数（D-152）：总数 / 收藏 / 未分组。
+///
+/// 独立成一条命令而不是塞进 `list_items` 的返回：`list_items` 的结果随筛选变化，
+/// 而这三个数**必须与筛选无关** —— 用户在「收藏」视图里也要看到全库总条数，
+/// 否则读数一变就又要怀疑同步丢数据了。
+#[tauri::command(rename_all = "snake_case")]
+pub fn item_counts(state: tauri::State<'_, AppState>) -> IpcResult<ItemCountsDto> {
+    let session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo()?;
+    let c = repo.item_counts();
+    Ok(ItemCountsDto {
+        total: c.total,
+        favorites: c.favorites,
+        ungrouped: c.ungrouped,
+    })
+}
 
 /// 列出条目（支持分组过滤 / 仅收藏 / 模糊搜索）。
 #[tauri::command(rename_all = "snake_case")]

@@ -113,6 +113,7 @@ export const th = {
     delete_to_ungrouped: 'ย้ายออกจากกลุ่ม',
     delete_to_trash: 'ย้ายไปถังขยะ',
     empty: 'ยังไม่มีกลุ่ม',
+    ungrouped_note: 'อีก {count} รายการที่ยังไม่จัดกลุ่ม',
   },
   item: {
     new_login: 'เพิ่มข้อมูลเข้าสู่ระบบ',

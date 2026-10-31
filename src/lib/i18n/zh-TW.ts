@@ -110,6 +110,7 @@ export const zhTW = {
     delete_to_ungrouped: '移出群組',
     delete_to_trash: '移入資源回收筒',
     empty: '還沒有群組',
+    ungrouped_note: '另有 {count} 條未分組',
   },
   item: {
     new_login: '新增登入',

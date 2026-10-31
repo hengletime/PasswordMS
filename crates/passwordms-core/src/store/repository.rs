@@ -110,6 +110,26 @@ pub struct FolderUsage {
     pub use_count: i64,
     /// 组内条目 `last_used_at` 的最大值（组内无条目或全部为 `None` 时为 `None`）。
     pub last_used_at: Option<i64>,
+    /// 组内**活跃**条目数（D-152）。
+    ///
+    /// 只数 `items`，不含 `trash`：点进分组看到的就是这些条目，若把回收站里的也数上，
+    /// 用户会数不上数——读数一旦对不上列表，就等于没有读数（D-150 教训）。
+    /// **不参与排序**：排序键仍是 `use_count` / `last_used_at`（#531 口径不许被顺手改掉）。
+    pub item_count: usize,
+}
+
+/// 条目计数快照（D-152：侧栏读数与「同步有没有丢数据」的核对依据）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ItemCounts {
+    /// 活跃条目总数（不含回收站）。
+    pub total: usize,
+    /// 其中「收藏」标记为真的条目数。
+    pub favorites: usize,
+    /// 其中**未分组**的条目数（`folder_id == None`）。
+    ///
+    /// 存在的唯一理由：让 `各组 item_count 之和 + ungrouped == total` 恒成立。
+    /// 少了它，用户把各组数字加起来对不上总数时，会重新怀疑「同步丢数据了」。
+    pub ungrouped: usize,
 }
 
 /// 压缩规划：保留哪些 slot、能省多少（[`Repository::plan_compaction`] 的产物）。
@@ -604,10 +624,29 @@ impl Repository {
             if let Some(fid) = &item.folder_id {
                 let agg = out.entry(fid.clone()).or_default();
                 agg.use_count += item.use_count as i64;
+                agg.item_count += 1;
                 agg.last_used_at = match (agg.last_used_at, item.last_used_at) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
+            }
+        }
+        out
+    }
+
+    /// 条目计数快照（D-152）。遍历一次 `items`（已在内存），无磁盘 I/O。
+    ///
+    /// 三个数出自**同一次遍历**而不是三次 `filter().count()`：分开数会在两次遍历之间
+    /// 被并发改动（同步落盘）切出互相矛盾的读数，而这种矛盾正是本轮要消灭的东西。
+    pub fn item_counts(&self) -> ItemCounts {
+        let mut out = ItemCounts::default();
+        for item in self.items.values() {
+            out.total += 1;
+            if item.favorite {
+                out.favorites += 1;
+            }
+            if item.folder_id.is_none() {
+                out.ungrouped += 1;
             }
         }
         out

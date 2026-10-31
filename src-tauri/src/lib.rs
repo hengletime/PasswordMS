@@ -247,6 +247,7 @@ pub fn run() {
             commands::biometric_cmd::biometric_unlock,
             commands::biometric_cmd::open_biometric_settings,
             // item
+            commands::item_cmd::item_counts,
             commands::item_cmd::list_items,
             commands::item_cmd::get_item,
             commands::item_cmd::create_item,

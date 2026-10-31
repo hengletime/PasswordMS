@@ -1,6 +1,6 @@
 // 保险库数据状态（Svelte 5 runes）：条目、分组、筛选与 CRUD。
 
-import type { FolderDto, ItemDraftDto, ItemDto } from '../../types';
+import type { FolderDto, ItemCountsDto, ItemDraftDto, ItemDto } from '../../types';
 import { toAppError } from '../errors';
 import { api } from '../ipc';
 import { revealFilterAfterSave, type ItemFilter } from '../save-visibility';
@@ -27,6 +27,14 @@ class VaultStore {
   queryEpoch = $state(0);
   /** 当前选中条目。 */
   selectedItemId = $state<string | null>(null);
+  /**
+   * 条目计数（D-152）：总数 / 收藏 / 未分组。
+   *
+   * **与筛选无关**——`items` 是筛选后的列表，拿它 `.length` 当「总条数」会在切分组、
+   * 搜索、只看收藏时全部变样。用户正是拿这些数字核对「同步有没有丢数据」，
+   * 数字随视图漂移等于自毁判据。
+   */
+  counts = $state<ItemCountsDto>({ total: 0, favorites: 0, ungrouped: 0 });
   /** 是否加载中。 */
   busy = $state(false);
 
@@ -51,9 +59,10 @@ class VaultStore {
     const seq = ++this.loadSeq;
     this.busy = true;
     try {
-      const [items, folders] = await Promise.all([
+      const [items, folders, counts] = await Promise.all([
         api.items.list(this.selectedFolderId, this.favoriteOnly, this.query || undefined),
         api.folders.list(),
+        api.items.counts(),
       ]);
       // 快速切分组/搜索时多个请求在途：只有最新一次的响应才允许写状态，
       // 否则后返回的旧结果会覆盖新筛选的列表（UI 状态与数据不一致）。
@@ -62,6 +71,7 @@ class VaultStore {
       }
       this.items = items;
       this.folders = folders;
+      this.counts = counts;
       if (this.selectedItemId !== null && !items.some((i): boolean => i.item_id === this.selectedItemId)) {
         this.selectedItemId = null;
       }
@@ -293,6 +303,7 @@ class VaultStore {
   reset(): void {
     this.items = [];
     this.folders = [];
+    this.counts = { total: 0, favorites: 0, ungrouped: 0 };
     this.selectedFolderId = null;
     this.favoriteOnly = false;
     this.query = '';

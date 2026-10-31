@@ -116,6 +116,7 @@ export const enUS: Messages = {
     delete_to_ungrouped: 'Move out',
     delete_to_trash: 'Move to trash',
     empty: 'No folders yet',
+    ungrouped_note: '{count} more in Ungrouped',
   },
   item: {
     new_login: 'New login',

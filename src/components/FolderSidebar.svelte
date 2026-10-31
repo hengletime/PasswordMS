@@ -219,7 +219,9 @@
       onclick={() => pickFolder(null)}
     >
       <Icon name="key" size={16} />
-      <span>{ui.t('folder.all')}</span>
+      <span class="side-name">{ui.t('folder.all')}</span>
+      <!-- D-152：全库条目数（与筛选无关）。用户拿它核对「同步有没有丢数据」。 -->
+      <span class="side-count" class:is-zero={vault.counts.total === 0}>{vault.counts.total}</span>
     </button>
     <button
       class="side-row"
@@ -228,7 +230,10 @@
       onclick={() => pickFavorite()}
     >
       <Icon name="star" size={16} />
-      <span>{ui.t('nav.favorites')}</span>
+      <span class="side-name">{ui.t('nav.favorites')}</span>
+      <span class="side-count" class:is-zero={vault.counts.favorites === 0}>
+        {vault.counts.favorites}
+      </span>
     </button>
   </nav>
 
@@ -296,6 +301,11 @@
           >
             <Icon name="folder" size={16} />
             <span class="side-name">{folder.name}</span>
+            <!-- D-152：组内条目数。0 也要显示（用更淡的颜色）——一个组突然变成 0 条
+                 正是「同步会不会丢数据」这个疑问最需要被看见的形态，藏起来等于帮他忽略。 -->
+            <span class="side-count" class:is-zero={(folder.item_count ?? 0) === 0}>
+              {folder.item_count ?? 0}
+            </span>
             <!-- #531：拖拽手柄的辅助说明（视觉隐藏，进可访问名称）。 -->
             <span class="sr-only">{ui.t('dnd.handle_folder')}</span>
           </button>
@@ -325,6 +335,13 @@
     {:else}
       <li class="side-empty">{ui.t('folder.empty')}</li>
     {/each}
+    <!-- D-152：未分组条目不属于任何分组行。缺这一句时「各组数字加起来 ≠ 全部」，
+         用户正好会把它读成「同步丢了」。只在真有未分组条目时出现。 -->
+    {#if vault.counts.ungrouped > 0}
+      <li class="side-note">
+        {ui.t('folder.ungrouped_note', { count: vault.counts.ungrouped })}
+      </li>
+    {/if}
   </ul>
 
   {#if menuFor !== null && menuTarget !== null}
@@ -426,9 +443,35 @@
     background: var(--pms-accent);
   }
   .side-name {
+    /* D-152：吃掉剩余宽度，把条目数挤到行尾右对齐；`min-width: 0` 是 ellipsis 在
+       flex 容器里生效的前提（少了它长分组名会把数字顶出可视区）。 */
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  /* D-152：条目数徽标。等宽数字（tabular-nums）—— 数字变化时行宽不抖，
+     几组纵向扫一眼就能比大小。 */
+  .side-count {
+    flex: 0 0 auto;
+    min-width: 1.5em;
+    text-align: right;
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--pms-muted);
+    /* 选中行里数字跟着变强调色，否则在 accent-soft 底上看不清。 */
+  }
+  .side-row.active .side-count {
+    color: var(--pms-accent);
+  }
+  .side-count.is-zero {
+    /* 0 值只降不透明度、**不换到更淡的色阶**：`--pms-faint` 在 12px 上对比度不够，
+       而「一个组突然变 0 条」恰恰是本轮最需要被看见的形态。 */
+    opacity: 0.72;
+  }
+  .side-row.active .side-count.is-zero {
+    opacity: 0.8;
   }
   .side-head {
     display: flex;
@@ -466,6 +509,13 @@
     color: var(--pms-faint);
     font-size: 0.8rem;
     padding: 0.4rem 0.55rem;
+  }
+  /* D-152：分组列表末尾的「另有 N 条未分组」——说明文字，不可点、不吃行高。 */
+  .side-note {
+    color: var(--pms-faint);
+    font-size: 0.74rem;
+    padding: 0.35rem 0.55rem 0.1rem;
+    font-variant-numeric: tabular-nums;
   }
   /* #531：钉住标记 / 投放高亮 / 插入位指示线。D-85 起钉子可点 = 直接取消钉住，
      且是行按钮的**兄弟**节点（与 .side-del 同位型：26px flex 项），不嵌套 button。 */

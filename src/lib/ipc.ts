@@ -19,6 +19,7 @@ import type {
   HealthReport,
   ImportPreviewDto,
   ImportResultDto,
+  ItemCountsDto,
   ItemDraftDto,
   ItemDto,
   LanPermissionDto,
@@ -104,6 +105,8 @@ export const vault = {
 
 /** 条目类。 */
 export const items = {
+  // D-152：条目计数（总数 / 收藏 / 未分组）。**与筛选无关**——侧栏读数不能随视图变化。
+  counts: (): Promise<ItemCountsDto> => invoke<ItemCountsDto>('item_counts'),
   list: (folderId?: string | null, favoriteOnly?: boolean, query?: string): Promise<ItemDto[]> =>
     invoke<ItemDto[]>('list_items', {
       folder_id: folderId ?? null,

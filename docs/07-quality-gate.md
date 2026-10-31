@@ -302,6 +302,48 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.9 门禁（D-152，2026-10-31 实跑）**：前端 `npm run test` **63 文件 552 例全绿**
+（较 1.5.8 的 541 例 +11，新增 `d152-item-counts-guard.test.ts`）/
+`npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮只加组件内局部样式）/
+Rust `cargo test -p passwordms-core` **全绿**（新增 `d152_item_counts.rs` 3 例）/
+`cargo fmt --all` 已跑 / clippy 代码警告 0（唯一一条 `warning:` 仍是 build.rs windres 兜底）/
+体积门禁桌面 + APK 双过。
+
+**本轮踩到的一个"假红"（值得记下来）**：给 `vault.load()` 的 `Promise.all` 加了第三路
+`api.items.counts()` 之后，`vault.test.ts` 里三条 D-81 用例瞬间红，**报错内容是
+「过滤器没恢复」（`expected null to be 'folder-a'`）**——真因只是那份整体 mock `api`
+没写 `counts`，Promise 整体拒绝 → `load()` 走 catch → 过滤器恢复逻辑没执行。
+报错与真因隔了三层。教训：**给 `Promise.all` 加分支后，必须把所有 mock 了该模块的测试过一遍**；
+看到"逻辑没执行"类红灯，先怀疑 mock 而不是先改被断言的逻辑。
+
+另：Rust 测试第一版是我**自己数错夹具**（3+1+2 断言成 5），`left: 6, right: 5` 的红灯
+反而证明了 `total` 在正常工作。这类情况应先复核夹具，别急着改实现。
+
+**变异验证 4 条全真红**：① 删 `agg.item_count += 1` → 恒等式与跨解锁两例红；
+② `out.total += self.trash.len()`（把回收站算进总数）→ 回收站断言红；
+③ `this.counts = { total: items.length, ... }` → 「不许由 items.length 推导」红；
+④ 删侧栏 `folder.item_count` 绑定 → 「四个读数都进模板」红。
+
+**1.5.9 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`9a978c48`，V3 签名；较 1.5.8 的 7,750,059 **+4,096 B**，
+不再出现前两版的"逐字节相同"）/ NSIS `2,051,851 B`（`717d342b`）/
+MSI `2,912,256 B`（`9258af38`）/ 裸 exe `4,992,512 B`（`43ff169d`，
+ProductVersion 1.5.9，文件内 `1.5.8` 零残留）/ 绿色版 zip `2,419,499 B`（`d56242f3`，4 条目）；
+**zip 内 exe 与裸 exe 哈希一致**（`43ff169d`）。
+
+**包内取证（1.5.9）**——沿用 serde 字段名 / 命令注册名对拍，并做 A/B：
+
+| 判据 | 位置 | 1.5.8 | 1.5.9 |
+|---|---|---|---|
+| `item_counts` | 桌面 `passwordms.exe` | — | 1 |
+| `ItemCountsDto` | 桌面 `passwordms.exe` | — | 1 |
+| `item_counts` | APK 内 `libpasswordms_lib.so`（5,718,576 B） | **0** | **1** |
+| `ItemCountsDto` | 同上 | **0** | **1** |
+| `ungrouped_note` / `另有` / `item_counts` | `dist/assets/*.js` | — | 存在 |
+
+> `.so` 5,716,352 → 5,718,576（+2,224 B），与一条命令 + 一个 DTO + 计数逻辑的量级一致。
+> 1.5.8 的 `.so` 是**当场取出实测**（不是查历史记录），所以 A/B 两侧都是硬数据。
+
 **1.5.8 门禁（D-150/D-151，2026-10-31 实跑）**：前端 `npm run test` **62 文件 541 例全绿**
 （较 1.5.7 的 535 例 +6，新增 `d150-sync-readout-guard.test.ts`）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮只加一条局部样式）/

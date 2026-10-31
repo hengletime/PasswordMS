@@ -128,6 +128,16 @@ export interface FolderDto {
   pin_order: number;
   use_count: number;
   last_used_at: number | null;
+  /** 组内活跃条目数（D-152，不含回收站）。 */
+  item_count?: number;
+}
+
+/** 条目计数（D-152）：与筛选无关的全库读数。 */
+export interface ItemCountsDto {
+  total: number;
+  favorites: number;
+  /** 未分组条目数；`Σ 各组 + ungrouped == total` 恒成立。 */
+  ungrouped: number;
 }
 
 /** 回收站条目。 */

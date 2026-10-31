@@ -10,6 +10,9 @@ import type { ItemDto } from '../../types';
 vi.mock('../ipc', () => ({
   api: {
     items: {
+      // D-152：`load()` 现在三路并行，计数命令必须一起 mock——漏了会让整个
+      // Promise.all 拒绝，表面上红的是「过滤器没恢复」，真因却是 mock 缺一项。
+      counts: vi.fn(),
       list: vi.fn(),
       create: vi.fn(),
       update: vi.fn(),
@@ -69,6 +72,7 @@ beforeEach((): void => {
   vi.clearAllMocks();
   vault.reset();
   foldersListMock.mockResolvedValue([]);
+  vi.mocked(api.items.counts).mockResolvedValue({ total: 0, favorites: 0, ungrouped: 0 });
 });
 
 describe('D-81 createItem：保存后必须可见且选中', () => {
