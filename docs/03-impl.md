@@ -655,14 +655,30 @@ v1.2.5 出包前的权威门禁抓到一条真红：`add_attachment_bytes::bytes
 > 反过来说：这条真红恰好证明「顺序守门测试是有效的」——它抓到了真缺陷。
 > **不要为了让它绿去改断言**，那正是 §13.5 说的「教人红了就改断言」。
 
-### 13.7 backlog D-70：HELLO 携带 Joiner 长期身份公钥（**未做**）
+### 13.7 D-70：HELLO 携带 Joiner 长期身份公钥（**v1.5.6 已做**）
 
-- **现状**：`Hello` 只带 `joiner_pub`（临时 X25519）。电脑端因此**无法**得到手机的长期设备指纹，
+> 原为 backlog，2026-10-31 落地。设计说明见 `docs/02` §3.34；本条保留为**实现清单 + 验收对照**。
+
+- **原来的现状**：`Hello` 只带 `joiner_pub`（临时 X25519）。电脑端因此**无法**得到手机的长期设备指纹，
   D-69 起 `HostSyncResult.fingerprint` / `PairedDevice.fingerprint` 在电脑侧**恒为空串**，设备行不渲染指纹行。
-- **目标**：`Hello` 增加 `#[serde(default)] joiner_identity_pub: Vec<u8>`（加法式、向后兼容：老客户端缺省空 →
-  电脑端照旧留空，不崩不退化为假指纹），电脑端据此写 `fingerprint_of(该公钥)` 作为**稳定**设备指纹。
-- **验收**：① 新↔新：电脑「设备」页能看到手机的 16 位 hex 稳定指纹，重配对不变；
-  ② 新电脑↔老手机：留空、不渲染、不报错；③ 电脑端**永远**不拿临时公钥算指纹（现有测试 `host_side_leaves_peer_fingerprint_empty` 继续钉住）。
+- **做法**：`Hello` 增 `#[serde(default, with = "b64url")] joiner_identity_pub: Vec<u8>`（加法式、向后兼容）；
+  `client::pair()` 增 `Option<[u8; 32]>` 形参；`sync_join_impl` 锁内段① 顺手取本机长期身份公钥；
+  电脑端 `peer_identity_fingerprint(hello.joiner_identity_pub)` 写 `PairedDevice.fingerprint`。
+- **验收对照**：
+  ① 新↔新：电脑「设备」页看到手机 16 位小写 hex 指纹，重配对不变 →
+  `d70_identity_fingerprint.rs::host_stores_joiner_identity_fingerprint` +
+  `fingerprint_survives_repairing_but_session_code_rotates`；
+  ② 新电脑↔老手机：留空、不渲染、不报错 →
+  `legacy_client_without_identity_stays_empty` + 原 `host_side_leaves_peer_fingerprint_empty`（继续绿）；
+  ③ 电脑端**永远**不拿临时公钥算指纹 → 上述两条 + 变异①（把 `joiner_identity_pub` 换成 `joiner_pub`）
+  三条同时真红。
+- **三条不能错的地方**：
+  1. **发的是公钥不是私钥**：`HostIdentity::public_bytes()`。误传私钥字节不会报错、指纹只是"另一种稳定值"，
+     测试抓不住——所以 `d70` 的 ① 例用「私钥派生出公钥再发」的写法，并断言等于手机端自己算的指纹。
+  2. **加载失败不阻断配对**：`load_or_create_identity` 出错 → `None` → 不发该字段。
+     宁可没有指纹，也不能因为一个可选的身份文件让主人配不上对。
+  3. **绝不回退临时公钥**：空/畸形长度一律留空串。`peer_identity_fingerprint` 抽成独立函数并加单测
+     （32B / 空 / 31B / 33B 四种输入），就是为了让这条红线可被单独钉住。
 
 ### 13.8 backlog：「读侧」对话取消归一（**形状债，不是缺陷**）
 

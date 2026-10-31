@@ -303,13 +303,16 @@ impl SyncServer {
         }
 
         // ── 锁内段②（O2，毫秒级）：令牌用后即焚；持久化配对设备与同步状态。
-        // D-69：**不写指纹**。HELLO 只带 Joiner 的临时公钥（`joiner_pub`），拿它算出的
-        // 指纹每次重配对都变，写进 `PairedDevice.fingerprint` 就是又一个「冒充设备指纹」
-        // （D-67 同类错误）。电脑端要拿到手机的**长期**身份公钥，需扩展 HELLO 携带
-        // `joiner_identity_pub`（加法式、向后兼容）——已登记 backlog **D-70**，本轮不做。
-        // 空串的语义 = 「本端不掌握对端长期身份」，UI 侧据此**不渲染**指纹行，回退到设备名。
+        // 【D-70】设备指纹取自 HELLO 里的 `joiner_identity_pub`（**长期**身份公钥）。
+        // 老客户端不发该字段 → 空 vec → 指纹留空串（= 「本端不掌握对端长期身份」），
+        // UI 据此不渲染指纹行。
+        //
+        // 红线：**绝不**回退到 `joiner_pub`（临时 ECDH 公钥）。它是每次配对新生成的，
+        // 算出来的指纹每次都不一样，写进 `PairedDevice.fingerprint` 就是用一次性值
+        // 冒充设备身份 —— D-67 定性过的错误，也是 D-69 把指纹置空的原始动机。
+        // 长度不符（非 32B）同样留空：畸形输入不得 panic，也不得猜。
         self.used = true;
-        let fingerprint = String::new();
+        let fingerprint = peer_identity_fingerprint(&hello.joiner_identity_pub);
         let peer_port = if hello.sync_port == 0 {
             None
         } else {
@@ -617,3 +620,50 @@ fn _zero_key() -> Zeroizing<[u8; 32]> {
 /// 供外部引用 VaultKey 类型（保持导入稳定）。
 #[allow(dead_code)]
 fn _vault_key_marker(_k: &VaultKey) {}
+
+/// 由 HELLO 里的**长期**身份公钥算对端设备指纹（【D-70】）。
+///
+/// 长度不是 32B（空 = 老客户端不发该字段；或畸形输入）一律返回空串：
+/// - 空串的语义是「本端不掌握对端长期身份」，UI 据此**不渲染**指纹行；
+/// - **绝不回退**到 `joiner_pub`（临时 ECDH 公钥）——那是每次配对新生成的，
+///   用它算指纹等于把一个一次性值冒充成设备身份（D-67/D-69）。
+fn peer_identity_fingerprint(identity_pub: &[u8]) -> String {
+    match <[u8; 32]>::try_from(identity_pub) {
+        Ok(key) => handshake::fingerprint_of(&key),
+        Err(_) => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::peer_identity_fingerprint;
+
+    /// 32B 正身 → 16 位小写 hex（与手机端 `HostIdentity::fingerprint` 同算法同长度）。
+    #[test]
+    fn thirty_two_bytes_yields_hex_fingerprint() {
+        let fp = peer_identity_fingerprint(&[9u8; 32]);
+        assert_eq!(fp.len(), 16, "指纹是 sha256 前 8 字节 = 16 字符");
+        assert!(
+            fp.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "必须是小写 hex：{fp}"
+        );
+        // 同一把公钥恒得同一指纹（跨配对稳定的前提）。
+        assert_eq!(fp, peer_identity_fingerprint(&[9u8; 32]));
+        // 不同公钥必得不同指纹（否则认不出两台设备）。
+        assert_ne!(fp, peer_identity_fingerprint(&[10u8; 32]));
+    }
+
+    /// 老客户端不发该字段 → 空 vec → 留空串（UI 不渲染指纹行）。
+    #[test]
+    fn empty_identity_stays_empty() {
+        assert_eq!(peer_identity_fingerprint(&[]), "");
+    }
+
+    /// 畸形长度（31 / 33B）→ 留空，不 panic 也不猜。
+    #[test]
+    fn wrong_length_stays_empty() {
+        assert_eq!(peer_identity_fingerprint(&[1u8; 31]), "");
+        assert_eq!(peer_identity_fingerprint(&[1u8; 33]), "");
+    }
+}

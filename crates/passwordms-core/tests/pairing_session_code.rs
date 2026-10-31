@@ -71,7 +71,7 @@ fn pair_once(tag: &str, identity_secret: [u8; 32]) -> Screens {
 
     let mut joiner_session = Session::create(&joiner_vault, JOINER_PWD, true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
-    let mut joiner = client::pair(&qr, &joiner_id, "ScJoiner", 0, now_ms()).unwrap();
+    let mut joiner = client::pair(&qr, &joiner_id, "ScJoiner", 0, None, now_ms()).unwrap();
     let phone_session_code = joiner.session_code().to_string();
     let device_fingerprint = joiner.device_fingerprint().to_string();
 

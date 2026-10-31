@@ -406,7 +406,7 @@ fn pair_real_host(host_vault: &Path, joiner_vault: &Path) -> (String, ResyncServ
 
     let mut joiner = Session::create(joiner_vault, PWD_B, true).unwrap();
     let joiner_id = device_id_of(&joiner);
-    let mut paired = client::pair(&qr, &joiner_id, "RealJoiner", 0, now_ms()).unwrap();
+    let mut paired = client::pair(&qr, &joiner_id, "RealJoiner", 0, None, now_ms()).unwrap();
     joiner.adopt_vault_key(paired.host_vault_key()).unwrap();
     {
         let repo = joiner.repo_mut().unwrap();

@@ -129,6 +129,17 @@ pub struct Hello {
     /// Joiner 的持久重同步监听端口（0 = 未提供）。供 Host 记录后用于 `sync_now`（D-11）。
     #[serde(default)]
     pub sync_port: u16,
+    /// Joiner 的**长期**身份公钥（X25519，32B）——【D-70】。
+    ///
+    /// 与上面的 `joiner_pub` 是**两把完全不同的密钥**：`joiner_pub` 是每次配对新生成的
+    /// 临时 ECDH 公钥（会话结束即作废），拿它算出的指纹每次都不一样，写进
+    /// `PairedDevice.fingerprint` 就是「用一次性值冒充设备身份」（D-67 同类错误）。
+    /// 这里发的是本机身份文件里的长期公钥，跨配对稳定，电脑端才能真正「认人」。
+    ///
+    /// `serde(default)` = 空 → 老客户端不发该字段时 Host 读到空 vec，指纹留空串、
+    /// UI 不渲染指纹行，行为与 D-70 之前逐位一致（向后兼容，不崩、不退化）。
+    #[serde(default, with = "b64url")]
+    pub joiner_identity_pub: Vec<u8>,
 }
 
 /// 握手 ACCEPT（Host → Joiner），内含用 `sync_key` 加密的 VK 信封。

@@ -140,17 +140,37 @@ fn sync_join_impl(
     let sync_port = ensure_resync_listener(app)?;
 
     // ── 锁内段①（O2，毫秒级）：本端设备身份。
-    let (device_id, device_name) = {
+    //
+    // 【D-70】同时取本机**长期**身份公钥，随 HELLO 发给电脑端——电脑「设备」页
+    // 才能显示一个跨配对稳定的指纹（认人，而不是认一次性的临时会话）。
+    // 加载失败**不阻断配对**：降级为 None = 不发该字段 = 老客户端行为（对端留空），
+    // 宁可没有指纹，也不能因为一个可选的身份文件让主人配不上对。
+    let (device_id, device_name, identity_pub) = {
         let session = state.lock_session().map_err(lock_err)?;
-        let id = session.repo()?.device_id().to_string();
+        let id = {
+            let repo = session.repo()?;
+            repo.device_id().to_string()
+        };
         let name = host_display_name(&id);
-        (id, name)
+        // VK 要先拷出来：`load_or_create_identity` 会写身份文件，不能与 `repo()` 的
+        // 不可变借用同时存在（且 VK 本身是短命临时值，用完即清）。
+        let vk = Zeroizing::new(session.repo()?.vault_key().to_vec());
+        let pubkey = match load_or_create_identity(app, &vk[..]) {
+            Ok(identity) => Some(identity.public_bytes()),
+            Err(e) => {
+                let msg = format!("[identity] load for hello failed (fingerprint empty): {e:?}");
+                eprintln!("{msg}");
+                crate::state::append_log(app, &msg);
+                None
+            }
+        };
+        (id, name, pubkey)
     };
 
     // 网络段（O2，不持锁）：1) 握手（不接触本地数据）。
     // 行为变更说明：握手期间若自动锁定触发，后续锁内段②将失败并整体放弃本次配对
     // （旧实现持锁横跨全程无此窗口；换来的是配对全程 UI 可响应）。
-    let mut joiner = client::pair(&qr, &device_id, &device_name, sync_port, now)?;
+    let mut joiner = client::pair(&qr, &device_id, &device_name, sync_port, identity_pub, now)?;
 
     // ── 锁内段②（O2，毫秒级）：2) 采用 Host 的 VK + 3) 持久化配对关系（含对端地址）。
     //    U1/U2 裁定：本地库非空则拒绝，由前端处理提示。

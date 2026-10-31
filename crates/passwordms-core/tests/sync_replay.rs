@@ -62,6 +62,9 @@ fn client_send_hello(port: u16, token: Vec<u8>) -> String {
         joiner_name: "QA-Joiner".to_string(),
         joiner_pub: vec![1u8; 32],
         sync_port: 0,
+        // D-70：这一处手搓的 HELLO 模拟**老客户端**（不发长期身份公钥）——
+        // 送的是无效令牌，Host 在校验阶段就拒绝，走不到写指纹那步。
+        joiner_identity_pub: Vec::new(),
     });
     transport::send_frame(&mut stream, &serde_json::to_vec(&hello).expect("ser"))
         .expect("send hello");

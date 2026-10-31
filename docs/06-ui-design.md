@@ -635,7 +635,7 @@ li.sync-device
 |---|---|
 | 取值 | 必须 `DeviceDto.fingerprint`，**禁止**把 `device_id` 当指纹渲染 |
 | 判定位置 | 走纯函数 `hasSessionCode()`（非空判定）+ `fingerprintText()`（仅 `trim`）（`src/lib/device-label.ts`），**不在模板里写 `||` / 三元判定** |
-| 空值**不渲染** | 指纹为空串 / 纯空白 / `null` / `undefined` → **该行整行不渲染**（不是回退 `device_id`、也不是留空白）。**D-69 改口径**：回退 `device_id` 等于用 UUID 冒充指纹，正是 D-67 定性过的错误。空值不是假设——`PairedDevice.fingerprint` 带 `#[serde(default)]`，老记录读出来就是空串；且**电脑端记录手机设备时现在恒为空**（HELLO 不含手机长期身份公钥，见 §5.7.1 与 backlog D-70） |
+| 空值**不渲染** | 指纹为空串 / 纯空白 / `null` / `undefined` → **该行整行不渲染**（不是回退 `device_id`、也不是留空白）。**D-69 改口径**：回退 `device_id` 等于用 UUID 冒充指纹，正是 D-67 定性过的错误。空值不是假设——`PairedDevice.fingerprint` 带 `#[serde(default)]`，老记录读出来就是空串；**D-70（v1.5.6）之前配对产生的记录全部为空**，且老版本手机端不发长期身份公钥，重配也是空。空串因此有两种成因（历史记录 / 老客户端），UI 都不渲染，也不猜 |
 | `device_id` 的位置 | 只挂 `<span title={device.device_id}>`，悬停可查（排查用）；**不单独占一行**，副行已够挤且 UUID 对用户零意义 |
 | 大小写 | 后端输出即小写 hex，前端**不做**大小写变换（比对的是同一个串，改了反而对不上） |
 | 单测 | `device-label.test.ts` 覆盖：正常 / 前后空白 / 空串 / 纯空白 / `null` / `undefined`，且断言**任何输入都不返回 `device_id` 顶替** |
@@ -1480,7 +1480,7 @@ Rust 侧为什么必须写两份实现、不能共用一份，见 `docs/02-arch.
   - **本地昵称**：改名**不影响**对端手机上的设备名，也不改变「上次同步 / 待同步变更」任何计数（昵称只存本机设备表；不进 wire 由 `export_changes` 的 ITEM/FOLDER 白名单结构性保证，core 测试 `rename_touches_only_device_name` 断言 `last_sync_at` / `paired_at` / 指纹 / 共享密钥全不变）。
 - [ ] **D-67**（v2.9 已实现）：**设备行「指纹」必须是真指纹，不得用 `device_id` 冒充**
   - **形式判据**：设备行「设备指纹」显示的是 **16 位小写 hex**（`sha256(对端长期身份公钥)` 前 8 字节），不是 36 位带连字符的 UUID。
-  - **口径一致性**：手机端该值取自**二维码 `QRPayload.fp`**（长期身份指纹，D-69 修正；不再取临时公钥指纹）；电脑端因 HELLO 只带临时公钥而**留空**（backlog D-70 再补），前端只负责如实显示。
+  - **口径一致性**：手机端该值取自**二维码 `QRPayload.fp`**（长期身份指纹，D-69 修正；不再取临时公钥指纹）；电脑端自 **D-70**（v1.5.6）起取自 HELLO 的 `joiner_identity_pub`（同一算法 `sha256(pub) 前 8 字节`），老客户端或历史记录仍为空串，前端只负责如实显示。
   - **`device_id` 不再当指纹**：完整 UUID 只出现在指纹的 `title` 悬停提示里，副行不单独占一行。
   - **空指纹整行不渲染**：构造一条 `fingerprint` 为空串的配对记录（老记录无该字段时 `#[serde(default)]` 的结果，以及电脑端的手机行）→ **该行整行不渲染**，既不留空白、**也不回退显示 `device_id`**（D-69 改口径：回退 UUID 正是本条要消灭的行为）。
   - 判定收敛在 `hasSessionCode()`（非空判定）+ `fingerprintText()`（仅 `trim`，无回退分支），单测覆盖：正常 / 前后空白 / 空串 / 纯空白 / `null` / `undefined`。

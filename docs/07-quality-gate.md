@@ -256,6 +256,52 @@ APK `7,733,675 B`（`877d9398`，V3 签名）/ NSIS `2,048,513 B`（`cba711f0`�
 MSI `2,908,160 B`（`f77f32a9`）/ 裸 exe `4,980,736 B`（`ad3543b4`）/
 绿色版 zip `2,412,423 B`（`1259d356`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**。
 
+**1.5.6 门禁（D-70，2026-10-31 实跑）**：前端 `npm run test` **60 文件 528 例全绿**（本轮前端零业务改动；
+唯一改动是 `ipc-contract.test.ts` 的 VK 白名单 4→5，见下）/ `npm run check` 0 error 0 warning /
+CSS 契约 0 FAIL 6 WARN（老账未动）/ Rust `cargo test -p passwordms-core` 全绿（新增
+`d70_identity_fingerprint.rs` 4 例 + `server.rs` 内 3 例指纹单测）/ `cargo fmt --all -- --check` 0 处差异 /
+clippy 代码警告 0（唯一 `warning:` 仍是 build.rs windres 兜底）/ 体积门禁桌面 + APK 双过。
+
+**先说一个被守门逮住的真实新增**：`ipc-contract.test.ts` 有一条「命令层直接取 VK 的调用点恒为 4 处
+（新增必须有人来解释）」。D-70 在 `sync_join_impl` 锁内段① 取了一次 VK 去解封本机身份文件，
+于是这条**立刻红**（`expected [...4] to deeply equal [...3]` 式的差异）。
+这正是它存在的意义——当场必须回答「这里为什么也要裸 VK」：**只为读出公钥**随 HELLO 外发，
+私钥不出函数、不落盘；与 `sync_start_pairing` 那一处同源同目的。白名单更新为 5 处并把理由写进注释。
+**没有把它改成"忽略数量"，也没有放宽成 `<=`。**
+
+**变异验证（两条，均真红）**：
+① Host 改用临时公钥 `hello.joiner_pub` 算指纹 → `host_stores` / `legacy_client` /
+`fingerprint_survives_repairing` **三条同时红**（含最能说明问题的
+`left: "cc417c41…" right: "8bfbc9b3…"`——同一台手机两次配对得到不同指纹）；
+② 手机改成发 `joiner_eph.public_bytes()`（临时公钥）→ 同样三条红。
+**两条变异红在同一组用例上是对的**：它们破坏的是同一件事实（指纹必须来自长期身份）。
+
+**1.5.6 实际产物（出包实测，非推算）**：
+APK `7,737,771 B`（`122c4870`，V3 签名）/ NSIS `2,056,477 B`（`0e684b27`）/
+MSI `2,912,256 B`（`e8396701`）/ 裸 exe `4,987,392 B`（`8bda36f4`，ProductVersion 1.5.6）/
+绿色版 zip `2,416,423 B`（`45be57cc`，4 条目）；**zip 内 exe 与裸 exe 哈希一致**（`8bda36f4`）。
+
+**包内取证（1.5.6）**——APK 体积 **第三次**与上一版逐字节相同（7,737,771 × 3 个版本），
+MSI 也是（2,912,256）。这次拿到了**迄今最硬的一组判据：A/B 对拍同名字符串**：
+
+| 判据 | 1.5.5 | 1.5.6 |
+|---|---|---|
+| APK 内 `.so` 字节数 | `5,703,592` | `5,703,280`（**−312 B**） |
+| APK 内 `.so` sha256 | — | `560d48da…` |
+| APK 整体 sha256 | `da336ae4…` | `122c4870…` |
+| 包内 `tauri.conf.json` 的 `version` | `1.5.5` | `1.5.6` |
+| `.so` 内 `joiner_identity_pub`（serde 字段名） | **0 次** | **1 次** |
+| `.so` 内 `load for hello failed`（D-70 新增日志） | **0 次** | **1 次** |
+
+**加代码而 `.so` 小 312 B**：这一点如实记录为**未解释**——代码布局/字符串表重排、
+panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`joiner_identity_pub` 是 serde 序列化
+字段名（`&'static str`，运行时必需，LLVM 消不掉），1.5.5 里 0 次、1.5.6 里 1 次，
+这是二进制级别的铁证。
+
+**顺带固化一条方法论**：`IpcError::io(_detail)` 那种「形参未使用被 LLVM 消掉字面量」的坑（1.5.2 踩过）
+**不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
+它必然进二进制、必然可 grep、必然新旧可对拍。
+
 **1.5.5 门禁（D-148，2026-10-31 实跑）**：前端 `npm run test` **60 文件 528 例全绿**
 （较 1.5.4 的 523 例 +5，新增 `d148-pair-confirm-guard.test.ts`）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动）/

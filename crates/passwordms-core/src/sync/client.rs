@@ -326,11 +326,18 @@ impl JoinerSession {
 /// 与 Host 完成配对握手，返回会话上下文（含 Host 的 VK，但**尚未采用**）。
 ///
 /// `joiner_sync_port` 为本机持久重同步监听端口（0 = 未提供），随 HELLO 通告给 Host。
+/// `joiner_identity_pub` 为本机**长期**身份公钥（X25519）——【D-70】随 HELLO 发给 Host，
+/// 让电脑端能用它算出稳定的设备指纹。传 `None` = 本端没有长期身份（或加载失败），
+/// 等于老客户端行为：对端指纹留空、UI 不渲染指纹行。
+///
+/// 【D-70】绝不能把 `joiner_eph` 的临时公钥当身份发出去。它是每次配对新生成的，
+/// 用它算指纹会让同一台手机每次配对都变成「新设备」——正是 D-67 定性过的错误。
 pub fn pair(
     qr: &QRPayload,
     joiner_id: &str,
     joiner_name: &str,
     joiner_sync_port: u16,
+    joiner_identity_pub: Option<[u8; 32]>,
     now: i64,
 ) -> CoreResult<JoinerSession> {
     if now > qr.exp {
@@ -391,6 +398,8 @@ pub fn pair(
         joiner_name: joiner_name.to_string(),
         joiner_pub: joiner_eph.public_bytes().to_vec(),
         sync_port: joiner_sync_port,
+        // D-70：长期身份公钥（不是上面那把临时公钥）。缺省空 = 老客户端行为。
+        joiner_identity_pub: joiner_identity_pub.map(|k| k.to_vec()).unwrap_or_default(),
     };
     let hello_frame = serde_json::to_vec(&HandshakeMessage::Hello(hello))?;
     transport::send_frame(&mut stream, &hello_frame)?;

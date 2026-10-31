@@ -404,7 +404,7 @@ describe('VK 不跨 JS 边界（§18.5 约束 6 · §13.10 第 3 条）', () => 
     expect(all).not.toMatch(/IpcResult<\s*VaultKey/);
   });
 
-  it('命令层直接取 VK 的调用点恒为 4 处（新增必须有人来解释）', () => {
+  it('命令层直接取 VK 的调用点恒为 5 处（新增必须有人来解释）', () => {
     // 完整收窄（把 `vault_key()` 降为 `pub(crate)`）的成本核算在 `docs/08` §35.5：
     // 32 处改动（3 处生产 + 29 处集成测试）+ 要把身份私钥的读包逻辑搬进 core，
     // 而收益只是「防未来误用」（VK 本来就在进程内存里，拦不住真攻击者）⇒ 不排期。
@@ -412,12 +412,16 @@ describe('VK 不跨 JS 边界（§18.5 约束 6 · §13.10 第 3 条）', () => 
     // 这条白名单用近乎零的成本拿主要收益：新增调用必须显式改这个数组，
     // 等于强制作者当场回答「这里为什么也需要裸 VK」。
     //
-    // 白名单（4 处）：
+    // 白名单（5 处）：
     // - biometric_cmd.rs ×1：启用快速解锁时把 VK 封给平台密钥库；
     // - sync_cmd.rs ×1（sync_start_pairing）：取 VK 包裹身份文件（D-96）；
     // - sync_cmd.rs ×2（sync_join 采纳路径，D-139）：采纳对端 VK 前取「旧 VK」
     //   解开身份私钥、采纳后取「新 VK」包回去——两把 VK 都只留在 Rust 内存里
     //   完成重包裹，不跨 IPC 边界，前端拿到的 DTO 无密钥材料。
+    // - sync_cmd.rs ×1（sync_join 锁内段①，**D-70**）：取**旧 VK** 解开本机身份
+    //   文件，只为读出**公钥**随 HELLO 发给电脑端（电脑端据此算稳定设备指纹）。
+    //   私钥本身不出本函数、不落盘、不跨 IPC；取 VK 是解封文件的必要前提，
+    //   与 sync_start_pairing 那一处同源同目的。公钥不是秘密，可外发。
     const sites = Object.entries(rustTree)
       .filter(([p]) => p.includes('/commands/'))
       .flatMap(([path, text]) =>
@@ -429,7 +433,13 @@ describe('VK 不跨 JS 边界（§18.5 约束 6 · §13.10 第 3 条）', () => 
           .map(() => path.split(/[\\/]/).pop() ?? path),
       )
       .sort();
-    expect(sites).toEqual(['biometric_cmd.rs', 'sync_cmd.rs', 'sync_cmd.rs', 'sync_cmd.rs']);
+    expect(sites).toEqual([
+      'biometric_cmd.rs',
+      'sync_cmd.rs',
+      'sync_cmd.rs',
+      'sync_cmd.rs',
+      'sync_cmd.rs',
+    ]);
   });
 });
 

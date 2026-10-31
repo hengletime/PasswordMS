@@ -51,7 +51,7 @@ fn pairing_loopback_handshake_and_sync() {
     let mut joiner_session = Session::create(&joiner_vault, "Loopback#Joiner1", true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
 
-    let mut joiner = client::pair(&qr, &joiner_id, "LoopbackJoiner", 0, now_ms())
+    let mut joiner = client::pair(&qr, &joiner_id, "LoopbackJoiner", 0, None, now_ms())
         .expect("回环配对握手失败 —— Host 断开点见本测试的 host 线程结果");
     joiner_session
         .adopt_vault_key(joiner.host_vault_key())
@@ -237,7 +237,7 @@ fn repair_already_paired_vault_without_adopt() {
     let mut joiner_session = Session::create(&joiner_vault, "Repair#Joiner1", true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
     {
-        let mut joiner = client::pair(&qr, &joiner_id, "RepairJoiner", 0, now_ms()).unwrap();
+        let mut joiner = client::pair(&qr, &joiner_id, "RepairJoiner", 0, None, now_ms()).unwrap();
         joiner_session
             .adopt_vault_key(joiner.host_vault_key())
             .unwrap();
@@ -273,7 +273,7 @@ fn repair_already_paired_vault_without_adopt() {
     // Host 的 accept_and_sync 在 run_exchange 里等 Joiner 的 Push（30s 超时），
     // 若先把线程 join 了就构成测试自身的死锁（不是被测代码的问题）。
     let joiner_result = (|| -> Result<(), passwordms_core::CoreError> {
-        let mut joiner2 = client::pair(&qr2, &joiner2_id, "RepairJoiner", 0, now_ms())?;
+        let mut joiner2 = client::pair(&qr2, &joiner2_id, "RepairJoiner", 0, None, now_ms())?;
         // ⚠️ 关键：这里**故意不调用** adopt_vault_key（等价于后端 already_paired 豁免）。
         let repo = joiner2_session.repo_mut().unwrap();
         joiner2.persist_host_device(repo)?;
@@ -363,7 +363,7 @@ fn repair_repair_after_unbind_with_matching_vk() {
     let mut joiner_session = Session::create(&joiner_vault, "Unbind#Joiner1", true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
     {
-        let mut joiner = client::pair(&qr, &joiner_id, "UnbindJoiner", 0, now_ms()).unwrap();
+        let mut joiner = client::pair(&qr, &joiner_id, "UnbindJoiner", 0, None, now_ms()).unwrap();
         joiner_session
             .adopt_vault_key(joiner.host_vault_key())
             .unwrap();
@@ -417,7 +417,7 @@ fn repair_repair_after_unbind_with_matching_vk() {
     });
 
     let joiner_result = (|| -> Result<(), passwordms_core::CoreError> {
-        let mut joiner2 = client::pair(&qr2, &joiner_id, "UnbindJoiner", 0, now_ms())?;
+        let mut joiner2 = client::pair(&qr2, &joiner_id, "UnbindJoiner", 0, None, now_ms())?;
         // 模拟 sync_cmd 的 D-62 增强豁免判定：VK 相等 ⇒ 跳过 adopt。
         // 变异锚点：若豁免缺失，命令层会对非空库调用 adopt_vault_key → VkAdoptRequiresEmpty。
         assert_eq!(

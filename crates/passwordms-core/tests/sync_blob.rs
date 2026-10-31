@@ -155,7 +155,7 @@ fn pair_first(
     let mut joiner_session = Session::create(joiner_vault, JOINER_PWD, true).unwrap();
     let joiner_id = joiner_session.repo().unwrap().device_id().to_string();
     let mut joiner =
-        client::pair(&qr, &joiner_id, "BlobJoiner", 0, now_ms()).expect("回环配对握手失败");
+        client::pair(&qr, &joiner_id, "BlobJoiner", 0, None, now_ms()).expect("回环配对握手失败");
     joiner_session
         .adopt_vault_key(joiner.host_vault_key())
         .unwrap();
