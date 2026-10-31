@@ -217,6 +217,7 @@ fn envelope_aad_binds_session_and_seq() {
         changes: Vec::new(),
         conflicts: Vec::new(),
         blob_support: false,
+        pair_only: false,
     };
     let now = 1_700_000_000_000i64;
     let env = seal_envelope(&key, &session_id, 1, now, &payload).expect("seal");

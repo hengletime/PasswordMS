@@ -487,7 +487,7 @@ export const zhCN = {
     // D-75：配对**成功**后面板不得立刻收回 —— 手机端此刻才弹出「请核对会话码」，
     // 电脑屏必须把同一个会话码留在屏上，否则核对动作永远没有发生的机会。
     pair_completed: '配对成功',
-    pair_completed_hint: '请核对手机上的会话码与本机是否一致，一致才算配对安全。',
+    pair_completed_hint: '请核对手机上的会话码与本机是否一致，一致才算配对安全。配对只建立关系，数据不会自动同步——到「状态」页点「立即同步」。',
     pair_done: '完成',
     manual_hint: '无法扫码？可复制下面的配对文本手动输入。',
     copy_code: '复制配对文本',
@@ -498,7 +498,7 @@ export const zhCN = {
     paste_hint: '粘贴配对文本',
     join: '加入并同步',
     pairing: '等待对端连接…',
-    paired: '配对成功',
+    paired: '配对成功。数据还没有同步——请点「立即同步」。',
     fingerprint: '设备指纹',
     devices: '已配对设备',
     no_devices: '还没有已配对设备',

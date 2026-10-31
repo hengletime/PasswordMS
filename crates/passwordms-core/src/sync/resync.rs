@@ -421,6 +421,7 @@ pub fn resync_with_peer_access(
         &client_id,
         &prep.pages,
         Vec::new(),
+        false,
     )
     .map_err(|e| stage_io(e, "push_send"))?;
     // D-56/O1：发送成功后推进已导出墓碑的 base 与 live 水位（下一轮免重发；失败路径
@@ -431,9 +432,13 @@ pub fn resync_with_peer_access(
     }
 
     // 9) 收对端 Push（网络段，不持锁；O1：多页聚合，密文载荷）。
-    let (reply_changes, reply_blob_support) =
-        paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
-            .map_err(|e| stage_io(e, "reply_recv"))?;
+    let reply = paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
+        .map_err(|e| stage_io(e, "reply_recv"))?;
+    // D-147：增量重同步通道永远不会是「只配对」那一轮；`pair_only` 在这里恒 false，
+    // 显式断言语义而不是静默忽略。
+    debug_assert!(!reply.pair_only, "resync 通道不该出现 pair_only");
+    let reply_changes = reply.changes;
+    let reply_blob_support = reply.blob_support;
 
     // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并收到的变更。
     let sent_flat: Vec<crate::sync::protocol::ChangeRecord> =
@@ -462,6 +467,8 @@ pub fn resync_with_peer_access(
         changes: Vec::new(),
         conflicts: conflicts.clone(),
         blob_support: true,
+        // D-147：增量重同步通道永不「只配对」。
+        pair_only: false,
     };
     let done_env = seal_envelope(&sk[..], &session_id, seq, now, &done)?;
     transport::send_frame(&mut stream, &serde_json::to_vec(&done_env)?)
@@ -755,9 +762,11 @@ impl ResyncServer {
         let mut replay = ReplayGuard::with_state(last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
         // 6) 收发起方 Push（O1：多页聚合后一次合并——页面间记录互不重叠，等价单帧）。
-        let (push_changes, push_blob_support) =
-            paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
-                .map_err(|e| stage_io(e, "push_recv"))?;
+        let push = paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
+            .map_err(|e| stage_io(e, "push_recv"))?;
+        debug_assert!(!push.pair_only, "resync 通道不该出现 pair_only");
+        let push_changes = push.changes;
+        let push_blob_support = push.blob_support;
 
         // ── 锁内段②（O2，毫秒级）：vault 未变校验 → 合并 → 导出回包页。
         // 水位/墓碑推进在此一并做：发送失败路径 `save_sync_state` 不执行、随会话丢弃，
@@ -804,6 +813,7 @@ impl ResyncServer {
             &server_id,
             &pages,
             conflicts.clone(),
+            false,
         )
         .map_err(|e| stage_io(e, "reply_send"))?;
 

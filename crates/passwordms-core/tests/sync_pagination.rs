@@ -309,6 +309,7 @@ fn case3_legacy_payload_interop() {
         changes: vec![rec],
         conflicts: Vec::new(),
         blob_support: false,
+        pair_only: false,
     };
     // 手工序列化后删掉 cursor 键 = 老端线上形态。
     let mut value = serde_json::to_value(&payload).unwrap();
@@ -333,12 +334,12 @@ fn case3_legacy_payload_interop() {
 
     let mut stream = &wire[..];
     let mut replay = ReplayGuard::with_state(0, 60);
-    let (changes, blob_support) =
-        paging::recv_push_pages(&mut stream, &sync_key, &session_id, &mut replay, now_ms())
-            .unwrap();
+    let got = paging::recv_push_pages(&mut stream, &sync_key, &session_id, &mut replay, now_ms())
+        .unwrap();
+    let changes = got.changes;
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].record_id.len(), 36);
-    assert!(!blob_support, "老端无 blob_support 字段 → false");
+    assert!(!got.blob_support, "老端无 blob_support 字段 → false");
     assert_eq!(
         stream.len(),
         framed(b"garbage-not-json").len(),
@@ -387,6 +388,7 @@ fn paging_loop_aggregates_and_stops() {
             "sender",
             &pages,
             vec!["conflict-x".to_string()],
+            false,
         )
         .unwrap();
         assert_eq!(seq, 13, "三页各占一个 seq");
@@ -396,11 +398,10 @@ fn paging_loop_aggregates_and_stops() {
 
     let mut stream = &wire[..];
     let mut replay = ReplayGuard::with_state(0, 60);
-    let (changes, blob_support) =
-        paging::recv_push_pages(&mut stream, &sync_key, &session_id, &mut replay, now_ms())
-            .unwrap();
-    assert_eq!(changes.len(), 12);
-    assert!(blob_support);
+    let got = paging::recv_push_pages(&mut stream, &sync_key, &session_id, &mut replay, now_ms())
+        .unwrap();
+    assert_eq!(got.changes.len(), 12);
+    assert!(got.blob_support);
     assert_eq!(stream.len(), framed(b"trailing garbage").len());
 }
 

@@ -216,6 +216,17 @@ pub struct SyncPayload {
     /// 不发任何 `BlobMessage`，行为与 D-53 之前逐位一致（§3.12.10 能力协商）。
     #[serde(default)]
     pub blob_support: bool,
+    /// 本次 Push 是「只配对、不交换数据」（D-147）。
+    ///
+    /// 配对通道的握手里本来夹着一次完整双向同步：手机扫码一成功，整库就被拉过去了。
+    /// 主人裁定「有时只是想配对」——配对只建立信任关系与密钥采纳，数据由用户自己在
+    /// 状态页点「立即同步」。
+    ///
+    /// **向后兼容**：`serde(default)` = false。老端收到 `pair_only: true` 会忽略该字段
+    /// 照常同步（退化为旧行为，不丢数据）；新端收到缺字段 = false，同样是旧行为。
+    /// 也就是说新旧混用只会「多同步一次」，绝不会少。
+    #[serde(default)]
+    pub pair_only: bool,
 }
 
 /// blob 阶段报文族（D-53，架构文档 §3.12.4；与 [`HandshakeMessage`] 平行）。

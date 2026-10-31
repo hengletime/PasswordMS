@@ -3510,3 +3510,60 @@ platform_sealer() ── WinSealer::new()
 可用性查询（`CheckAvailabilityAsync`）仍走 UWP 版：interop 只提供窗口版请求方法，没有窗口版可用性查询。
 
 为什么不能借这次改动删掉 `run_on_sta` / `pump`：见 `docs/08-biometric-unlock.md` §34.2 的四条实测（尤其 `GetResults()` 在无消息泵的 STA 上返回 `E_ILLEGAL_METHOD_CALL`）。
+
+### 3.32 D-147：配对不再顺带同步（1.5.4，2026-10-31）
+
+**主人诉求**：「配对成功马上就同步有点不合适，有时只是想配对，配对成功后应该跳转到状态，
+由用户手动点击『立即同步』。」
+
+#### 3.32.1 为什么这不是一处 UI 改动
+
+配对通道的握手末尾原本夹着一轮**完整双向同步**：`sync_join_pairing` 在 `persist_host_device`
+之后直接调 `push_and_sync_access`，Host 侧 `handle_connection` 握手后就在等 Joiner 的 Push。
+所以「只把界面上的自动跳转去掉」是不行的——**两端都在协议里等着对方发数据帧**，不去掉就是
+手机端卡超时、电脑端报配对失败。
+
+#### 3.32.2 协议：`SyncPayload.pair_only`
+
+数据阶段信封的内层载荷新增一个布尔字段：
+
+```rust
+#[serde(default)]
+pub pair_only: bool,   // false = 旧行为（配对时同步）
+```
+
+**向后兼容是双向的**：老端不认识该字段会被 serde 忽略（等价 false）→ 照常同步；
+新端收到缺字段的报文同样读成 false → 照常同步。**新旧混用只会「多同步一次」，绝不会少。**
+
+#### 3.32.3 两端的语义（三处不能错）
+
+**① Joiner（手机）：发空载荷 + 标记**
+
+`mark_pair_only()` 让 `push_and_sync_access` 跳过 `repo.export_changes`，`paginate` 对空集
+仍返回**一页空载荷**（协议要求必有一帧 Push，否则 Host 一直等）。
+
+**② Host（电脑）：收到 `pair_only` 就整段跳过**
+
+不 merge、不 export、**不推进任何 base / live 水位 / 墓碑**，回一页空 Push（同样带
+`pair_only`）并收 Done。**这一帧仍要落盘游标**——它确实占了一个序号，不记下来的话下一轮
+会重发同一个 seq，对端的重放护栏会直接拒掉它。
+
+**③ Joiner 以对端的确认决定是否合并**
+
+`skip_merge = reply.pair_only`，**不是** `self.pair_only`。理由：如果对端是老版本（忽略
+我们的标记、照常 export），它会推进自己的 `note_sent_base` 并认为我们已持有那些变更。
+此时若我们也跳过合并，那些数据此后任何一轮都不会再发——**静默丢数据**。所以老对端场景
+照常合并，退化为旧行为。
+
+#### 3.32.4 水位：本条的全部风险都在这
+
+`base` 的语义是「对端至少持有这些版本」。配对轮把它推进 = 骗对端「你已经有这个库了」，
+而它一个字节都没收到。**守门因此不断言「配对后没数据」，而是断言「配对之后还能同步出全部
+数据」**——`crates/passwordms-core/tests/d147_pair_only.rs` 用真实 resync 闭环验证：
+Host 2 条 → 只配对（双端 `applied == 0`、Joiner 仍空库）→ 显式同步 `applied == 2`。
+把 `mark_pair_only()` 挪到 push 之后，该测试立刻红在 `left: 2, right: 0`（applied）。
+
+#### 3.32.5 UI
+
+配对成功 → toast 说明「数据还没有同步」→ 自动切到「状态」标签（`sync.tabRequest`，
+自增序号而非布尔量，连配两台都能触发）。设备行上的「立即同步」仍是**唯一**的同步入口。

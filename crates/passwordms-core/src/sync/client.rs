@@ -47,6 +47,12 @@ pub struct JoinerSession {
     host_sync_port: u16,
     /// Host 下发的保险库密钥（**尚未采用**；采用需满足「Joiner 本地库为空」裁定）。
     host_vault_key: Zeroizing<[u8; 32]>,
+    /// 本次通道只做配对、不交换数据（D-147）。
+    ///
+    /// 默认 false = 旧行为（配对握手里夹一次完整双向同步）。配对命令在调用
+    /// [`Self::push_and_sync_access`] 之前置 true：那一轮两端都不 merge、不推进水位，
+    /// 数据留给用户自己在状态页点「立即同步」。
+    pair_only: bool,
 }
 
 /// 一次同步交换结果。
@@ -82,6 +88,15 @@ impl JoinerSession {
     /// Host 下发的 VK（供会话层决定是否采用）。
     pub fn host_vault_key(&self) -> &[u8; 32] {
         &self.host_vault_key
+    }
+
+    /// 把本轮交换标记为「只配对、不交换数据」（D-147）。
+    ///
+    /// 影响 [`Self::push_and_sync_access`] 的三处：不发本端变更、不合并对端变更、
+    /// 不推进任何同步水位。**配对关系本身的持久化不受影响**（那一步在
+    /// `persist_host_device`，发生在调用本方法之前）。
+    pub fn mark_pair_only(&mut self) {
+        self.pair_only = true;
     }
 
     /// 持久化本端对 Host 的配对记录（`sync_key` 由本端 VK 包裹）。
@@ -147,7 +162,13 @@ impl JoinerSession {
         let mut prepared: Option<PreparedSection> = None;
         access.with_repo(Box::new(|repo| {
             let st = repo.sync_state(&self.host_id);
-            let changes = repo.export_changes(&st);
+            // D-147：只配对时**一条本地变更都不发**。`paginate` 对空集仍返回一页空
+            // 载荷（协议要求必有一帧 Push），对端据此知道「这一轮没东西」而不是在等。
+            let changes = if self.pair_only {
+                Vec::new()
+            } else {
+                repo.export_changes(&st)
+            };
             match paging::paginate(changes) {
                 Ok(pgs) => {
                     let my_id = repo.device_id().to_string();
@@ -172,6 +193,7 @@ impl JoinerSession {
             &my_device_id,
             &pages,
             Vec::new(),
+            self.pair_only,
         )?;
         // D-56/O1：发送成功后推进已导出墓碑的 base 与 live 水位（下一轮免重发；
         // 失败路径不落盘自动重发）。
@@ -181,13 +203,22 @@ impl JoinerSession {
         }
 
         // 网络段（O2）：接收 Host 的 Push（O1：多页聚合，密文载荷）。
-        let (reply_changes, reply_blob_support) = paging::recv_push_pages(
+        let reply = paging::recv_push_pages(
             &mut self.stream,
             &self.keys.sync_key[..],
             &self.session_id,
             &mut replay,
             now,
         )?;
+        // D-147：**以对端的确认为准**。回包带 `pair_only` = 双方都同意「这一轮只配对」，
+        // 于是一个字节都不落地、水位也不动；回包不带（老版本 Host 会忽略我们发的标记）
+        // 则照常合并——宁可多同步一次，也绝不能让对端已推进的 base 与本端实际持有对不上
+        // （那会让这批变更在后续任何一轮都不再重发，等于静默丢数据）。
+        //
+        // 注意：这只跳过「合并」这一段，**Done 必须照发**——对端正等着它收尾。
+        let skip_merge = reply.pair_only;
+        let reply_changes = reply.changes;
+        let reply_blob_support = reply.blob_support;
 
         // ── 锁内段②（O2，毫秒级）：vault 身份校验 → 合并。
         // D-106（豆包审查 3.3-1）：直接复用段①导出后在**内存 state** 上推进过发送
@@ -197,19 +228,23 @@ impl JoinerSession {
         let sent_flat: Vec<crate::sync::protocol::ChangeRecord> =
             pages.iter().flatten().cloned().collect();
         let mut merged: Option<CoreResult<(usize, Vec<String>)>> = None;
-        access.with_repo(Box::new(|repo| {
-            if repo.device_id().as_bytes() != my_device_id.as_bytes() {
-                // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
-                return Err(CoreError::SyncAborted);
-            }
-            // D-109：发送侧 base 推进——本端已成功发出的版本，对端至少持有。
-            merge::note_sent_base(repo, &mut state, &sent_flat);
-            let rep = merge::apply_changes(repo, &mut state, &reply_changes)?;
-            // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
-            merge::note_received_changes(repo, &mut state, &reply_changes);
-            merged = Some(Ok((rep.applied, rep.conflicts.clone())));
-            Ok(())
-        }))?;
+        if skip_merge {
+            merged = Some(Ok((0, Vec::new())));
+        } else {
+            access.with_repo(Box::new(|repo| {
+                if repo.device_id().as_bytes() != my_device_id.as_bytes() {
+                    // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
+                    return Err(CoreError::SyncAborted);
+                }
+                // D-109：发送侧 base 推进——本端已成功发出的版本，对端至少持有。
+                merge::note_sent_base(repo, &mut state, &sent_flat);
+                let rep = merge::apply_changes(repo, &mut state, &reply_changes)?;
+                // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位同步推进。
+                merge::note_received_changes(repo, &mut state, &reply_changes);
+                merged = Some(Ok((rep.applied, rep.conflicts.clone())));
+                Ok(())
+            }))?;
+        }
         let (applied, conflicts) = merged.take().ok_or(CoreError::SyncAborted)??;
 
         // 网络段（O2）：Done（seq 延续分页序号）。
@@ -220,6 +255,7 @@ impl JoinerSession {
             changes: Vec::new(),
             conflicts: conflicts.clone(),
             blob_support: true,
+            pair_only: self.pair_only,
         };
         let done_env = seal_envelope(&self.keys.sync_key[..], &self.session_id, seq, now, &done)?;
         transport::send_frame(&mut self.stream, &serde_json::to_vec(&done_env)?)?;
@@ -230,7 +266,10 @@ impl JoinerSession {
         // blob 内部按「落盘/读帧」粒度进出锁（access），网络等待全程锁外。
         let mut sent = seq;
         let mut blobs = 0;
-        if blob_transfer::blob_phase_enabled(true, reply_blob_support) {
+        // D-147：只配对的一轮不谈附件——对端也没通告 blob 能力（`send_push_pages`
+        // 在 pair_only 时置 false），这里再显式短路一次，免得将来有人把上面的
+        // `blob_support` 改成恒 true。
+        if !skip_merge && blob_transfer::blob_phase_enabled(true, reply_blob_support) {
             sent = seq + 1;
             let phase = blob_transfer::pull_missing(
                 &mut self.stream,
@@ -254,6 +293,15 @@ impl JoinerSession {
         }
 
         // ── 锁内段③（O2，毫秒级）：持久化游标。
+        // D-147：只配对的一轮**不落盘任何同步水位**（连 `last_sync_at` 也不动——
+        // 配对不是一次同步）。配对关系本身已由 `persist_host_device` 写过。
+        if skip_merge {
+            return Ok(JoinerSyncResult {
+                applied: 0,
+                conflicts: Vec::new(),
+                blobs: 0,
+            });
+        }
         state.last_recv_seq = replay.last_recv_seq();
         state.last_sent_seq = sent;
         let final_state = state.clone();
@@ -404,6 +452,7 @@ pub fn pair(
         host_ip,
         host_sync_port: qr.sync_port,
         host_vault_key,
+        pair_only: false,
     })
 }
 

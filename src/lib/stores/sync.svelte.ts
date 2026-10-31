@@ -28,6 +28,17 @@ class SyncStore {
    * `src/lib/pairing-state.ts::nextPairingState` 里成组返回，不许分开改。
    */
   pairCompleted = $state<boolean>(false);
+  /**
+   * D-147：配对成功后要主动把用户送到「状态」页（数据没同步，得他自己点「立即同步」）。
+   *
+   * 为什么用自增序号而不是布尔量（同 `ui.searchFocusSeq` 的道理）：连配两台设备时
+   * 布尔量在「已经是 true」的第二次不会触发任何响应式更新，第二台就留在原地不动。
+   * `seq === 0` 表示「从未请求过」，`MainLayout` 据此避免挂载即跳页。
+   */
+  tabRequest = $state<{ tab: 'pair' | 'devices' | 'status' | 'conflicts'; seq: number }>({
+    tab: 'status',
+    seq: 0,
+  });
   /** 已配对设备。 */
   devices = $state<DeviceDto[]>([]);
   /** 同步状态。 */
@@ -125,7 +136,12 @@ class SyncStore {
       // 只写状态、不 toast —— 核对是用户动作，不是通知。
       this.lastPairSessionCode = result.session_code ?? null;
       this.lastPairDeviceName = result.device_name;
+      // D-147：配对只建立关系，**数据一条都没动**。文案必须说清这一点，否则用户
+      // 会用「配对成功」推断「已经同步好了」，然后对着空库发呆。
       ui.toast('success', 'sync.paired');
+      // 同时把人送到「状态」页——那里才有「立即同步」。这是本轮唯一的下一步动作，
+      // 留在扫码页等于让用户自己猜。
+      this.requestTab('status');
       if (result.applied > 0) {
         ui.toast('info', 'sync.result_applied', { n: result.applied });
       }
@@ -148,6 +164,11 @@ class SyncStore {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** D-147：请求切换到同步页的某个标签（实际切换由 `MainLayout` 做）。 */
+  requestTab(tab: 'pair' | 'devices' | 'status' | 'conflicts'): void {
+    this.tabRequest = { tab, seq: this.tabRequest.seq + 1 };
   }
 
   /** 加载设备列表。 */

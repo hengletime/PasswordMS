@@ -351,7 +351,7 @@ impl SyncServer {
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
 
         // 网络段：5) 收 Joiner 的 Push（O1：多页聚合，密文载荷）。
-        let (push_changes, push_blob_support) = paging::recv_push_pages(
+        let push = paging::recv_push_pages(
             &mut stream,
             &keys.sync_key[..],
             &self.session_id,
@@ -363,8 +363,72 @@ impl SyncServer {
         // ── 锁内段③（O2，毫秒级）：vault 身份校验 → 合并 → 导出回包页。
         // 水位/墓碑推进在此一并做：发送失败路径 `save_sync_state` 不执行、随会话丢弃，
         // 失败安全语义不变（宁多勿丢）。
+        //
+        // 【D-147】对端声明 `pair_only` 时整段跳过：不合并它的变更、不导出本端变更、
+        // **不推进任何 base/水位**。这一轮只把配对关系留下来，数据由用户自己点
+        // 「立即同步」（走增量重同步通道）。协议仍要求本端回一帧 Push（对端在等），
+        // 所以回一页空载荷并同样打上 `pair_only`，让对端知道「这一轮没有任何数据」。
         let host_id = self.host_id.clone();
-        // 锁内段③的密文暂存类型（O2 三段式）：RepoAccess 闭包外只持此不透明结果。
+        let pair_only = push.pair_only;
+        if pair_only {
+            let (mut state, pages, applied, conflicts) = {
+                let mut st_out: Option<CoreResult<DeviceSyncState>> = None;
+                access.with_repo(Box::new(|repo| {
+                    if repo.device_id().as_bytes() != host_id.as_bytes() {
+                        return Err(CoreError::SyncAborted);
+                    }
+                    st_out = Some(Ok(repo.sync_state(&joiner_id)));
+                    Ok(())
+                }))?;
+                (
+                    st_out.take().ok_or(CoreError::SyncAborted)??,
+                    vec![Vec::new()],
+                    0usize,
+                    Vec::<String>::new(),
+                )
+            };
+            let mut seq = state.last_sent_seq + 1;
+            paging::send_push_pages(
+                &mut stream,
+                &keys.sync_key[..],
+                &self.session_id,
+                &mut seq,
+                now,
+                &host_id,
+                &pages,
+                conflicts,
+                true,
+            )
+            .map_err(|e| stage_io(e, "reply_send"))?;
+            let _done = paging::recv_done(
+                &mut stream,
+                &keys.sync_key[..],
+                &self.session_id,
+                &mut replay,
+                now,
+            )
+            .map_err(|e| stage_io(e, "done_recv"))?;
+            // 游标照常落盘：这一帧确实占了一个序号，不记下来的话下一轮会重发同一个
+            // seq，对端的重放护栏会直接拒掉它（D-147 的坑，宁记不可漏）。
+            state.last_recv_seq = 0;
+            state.last_sent_seq = seq;
+            access.with_repo(Box::new(|repo| {
+                if repo.device_id().as_bytes() != host_id.as_bytes() {
+                    return Err(CoreError::SyncAborted);
+                }
+                repo.save_sync_state(state)?;
+                Ok(())
+            }))?;
+            return Ok(HostSyncResult {
+                device_id: joiner_id,
+                device_name: joiner_name,
+                fingerprint,
+                applied,
+                conflicts: Vec::new(),
+                blobs: 0,
+            });
+        }
+        // 锁内段③的密文暂存类型（O2 三段式）：RepoAccess 闭包外只能持此不透明结果。
         type SectionResult = CoreResult<(
             DeviceSyncState,
             Vec<Vec<crate::sync::protocol::ChangeRecord>>,
@@ -378,9 +442,9 @@ impl SyncServer {
                 return Err(CoreError::SyncAborted);
             }
             let mut st = repo.sync_state(&joiner_id);
-            let rep = merge::apply_changes(repo, &mut st, &push_changes)?;
+            let rep = merge::apply_changes(repo, &mut st, &push.changes)?;
             // O1 回声消除：对端发来的 live 变更证明对端已持有该 rev → 回发水位推进。
-            merge::note_received_changes(repo, &mut st, &push_changes);
+            merge::note_received_changes(repo, &mut st, &push.changes);
             let changes = repo.export_changes(&st);
             let pgs = paging::paginate(changes)?;
             // D-109：发送侧 base 推进——即将回发的版本对端即将持有（本交换内送达；
@@ -410,6 +474,7 @@ impl SyncServer {
             &host_id,
             &pages,
             conflicts.clone(),
+            false,
         )
         .map_err(|e| stage_io(e, "reply_send"))?;
 
@@ -431,7 +496,7 @@ impl SyncServer {
         // blob 内部按「落盘/读帧」粒度进出锁（access），网络等待全程锁外。
         let mut sent = seq - 1;
         let mut blobs = 0;
-        if blob_transfer::blob_phase_enabled(true, push_blob_support) {
+        if blob_transfer::blob_phase_enabled(true, push.blob_support) {
             sent = seq;
             blob_transfer::serve_pull(
                 &mut stream,

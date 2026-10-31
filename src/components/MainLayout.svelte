@@ -210,6 +210,18 @@
     syncTab = tab;
   }
 
+  // D-147：配对成功后 store 会请求跳「状态」页（那里才有「立即同步」）。
+  // 用序号而非布尔量：连配两台设备时，第二次必须也能触发切页。
+  $effect((): void => {
+    const req = sync.tabRequest;
+    if (req.seq === 0) {
+      return;
+    }
+    // 这是程序化跳转，等同于用户手动选过：之后的初始标签规则不再劫持它。
+    syncTabTouched = true;
+    syncTab = req.tab;
+  });
+
   async function lockNow(): Promise<void> {
     // D-91（审查 O3）：后端锁定失败（如锁中毒）时不得 reset store / 切锁屏——
     // 否则界面显示锁屏但后端会话仍 Unlocked、明文仍在内存。保持主界面，错误已 toast。

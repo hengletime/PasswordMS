@@ -2200,3 +2200,30 @@ Android 那句说明文字（`settings.bio_manage_hint_android`，四语言）�
 `src/components/ItemDetail.svelte`（字段状态 + 提示行）、`PasswordGenerator.svelte` /
 `SecureNoteView.svelte`（toast 同键）、四语言 +1 键（`common.copied_countdown_field`）。
 CSS 零改动（复用既有 `.pms-hint.is-warning`）。
+
+### 6.39 配对成功不等于同步完成（D-147，1.5.4）
+
+**改动位置**：同步页「配对」标签 → 扫码/输入码成功后的去向。
+
+| 项 | 之前 | 现在 |
+|---|---|---|
+| 配对成功后 | 自动跑完一轮双向同步，toast 报「同步 N 条」 | **一条数据都不动**；toast 为 `sync.paired`「配对成功。数据还没有同步——请点「立即同步」。」 |
+| 页面去向 | 留在扫码页 | 自动切到「状态」标签（`sync.tabRequest`，自增序号） |
+| 数据何时到 | 配对即到 | 用户在设备行点「立即同步」才到 |
+
+**为什么文案要说得这么啰嗦**：配对成功与同步完成在旧版是同一瞬间发生的，用户已经养成
+「配对完就有数据」的预期。现在拆开了，一句「配对成功」会被读成「已经同步好了」，
+接着对着空库发呆。成功提示里唯一允许出现的动作指引就是这一句。
+
+**电脑端**（显示二维码那侧）：`sync.pair_completed_hint` 在核对会话码之后补一句
+「配对只建立关系，数据不会自动同步——到「状态」页点「立即同步」。」
+
+**跳转实现**：`sync.tabRequest = { tab, seq }`，`MainLayout` 的 `$effect` 响应后置
+`syncTabTouched = true`（程序化跳转等同于用户选过，D-58b 的初始标签规则不再劫持）。
+用 seq 而非布尔量：连配两台设备时，第二次必须也能触发。
+
+**服务端字段对用户的可见影响**：`Status` 页「上次同步」在配对后仍为「未同步」——
+这是事实，不是 bug。用户点一次「立即同步」后才有值。
+
+**守门**：`src/lib/d147-pair-only-guard.test.ts` 第 ④ 例（跳转位置、join 体内不得出现
+`syncNow`、「立即同步」仍是设备行唯一入口）。

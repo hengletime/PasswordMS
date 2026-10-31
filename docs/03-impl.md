@@ -1306,3 +1306,50 @@ Android 专属分支在 Node 上**既不编译也不执行**，任何行为测�
 另修 `d135-clipboard-guard.test.ts` 的计数断言：`copyText` 调用在 D-146 后拆成多行、
 多了字段参数，原 `/copyText\(item\.kind/` 会失配 —— 改按 `void copyText(` 前缀计数并
 保留「两个出口」的语义。
+
+### 13.25 D-147：配对只建立关系（v1.5.4，2026-10-31）
+
+#### 13.25.1 代码清单
+
+| 文件 | 改动 |
+|---|---|
+| `sync/protocol.rs` | `SyncPayload` 增 `#[serde(default)] pair_only: bool` |
+| `sync/paging.rs` | 新增 `PushPages { changes, blob_support, pair_only }`；`send_push_pages` 增 `pair_only` 形参（pair_only 时 `blob_support=false`）；`recv_push_pages` 返回该结构体，任一分页为 true 即整轮为 true |
+| `sync/client.rs` | `JoinerSession.pair_only` + `mark_pair_only()`；`push_and_sync_access`：只配对时不导出变更、`skip_merge = reply.pair_only`、跳过 blob、在保存游标之前提前返回 |
+| `sync/server.rs` | `pair_only` 分支：不 merge/export，回一页空 Push（带标记）→ 收 Done → **只落盘游标** → 返回 |
+| `commands/sync_cmd.rs` | `sync_join_pairing` 在 push 之前调 `joiner.mark_pair_only()` |
+| `lib/stores/sync.svelte.ts` | 新增 `tabRequest`（seq 自增）+ `requestTab()`；`join()` 成功后 toast + 切「状态」 |
+| `components/MainLayout.svelte` | `$effect` 响应 `sync.tabRequest` → `syncTab`（同时置 `syncTabTouched`） |
+| 四语言 | `sync.paired` 说明「数据还没有同步」；`sync.pair_completed_hint` 补一句 |
+
+#### 13.25.2 三个反直觉点
+
+**① 空变化的 paginate 仍返回一页**
+
+`paginate(vec![])` → `vec![vec![]]`（源码注释写着「保持必有一帧 Push 的旧形状」）。只配对
+时靠这个性质发一帧空载荷，而不是「什么都不发」——后者会让对端 `recv_push_pages` 一直阻塞
+到 30 秒超时，用户看到的是「配对失败」而不是「配对成功但没同步」。
+
+**② Host 只配对时**仍然要** `save_sync_state`**
+
+不保存 base/水位是对的，但**游标必须记**：那一帧确实消耗了一个 `seq`，不记的话下一轮
+Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉。所以那个分支里只写
+`last_recv_seq / last_sent_seq`，一个字都不碰 base。
+
+**③ 判断「跳过合并」用对端的回包，不用自己的标记**
+
+见 docs/02 §3.32.3 ③。一句话：老版本对端会推进它的 base，此时我们必须照常合并，
+否则它认为「你有了」的那批数据永远不会再发。
+
+#### 13.25.3 测试
+
+- `crates/passwordms-core/tests/d147_pair_only.rs`（行为闭环，约 18 s：真起 socket、
+  真走 resync）：配对后双端 `applied == 0`、Joiner 空库 → 显式同步 `applied == 2`。
+- `src/lib/d147-pair-only-guard.test.ts`（5 例，源码级）：`mark_pair_only` 必须在 push
+  之前 / `skip_merge` 取自回包 / Host 分支不含 merge 且在 return 前不分流走错 / 前端跳
+  「状态」且 join 体内不出现 `syncNow`。
+- **变异验证**：把 `mark_pair_only()` 挪到 push 之后 → ①红（`expected 9439 to be less
+  than 9386`）；删掉 client 的提前返回 → ②红（`expected -1 to be greater than -1`）；
+  去掉 `mark_pair_only()` 跑 Rust 测试 → `left: 2, right: 0`。
+- **踩坑**：守门跨行匹配用了带 `\n` 的字面量，而这些文件是 **CRLF** → 恒为 -1 假红。
+  跨行一律用 `\s*` 正则。

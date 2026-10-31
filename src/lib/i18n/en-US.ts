@@ -477,7 +477,7 @@ export const enUS: Messages = {
     // D-75: on success the panel must NOT be torn down immediately — the phone only shows
     // its "check the code" prompt at this moment, so this screen has to keep the same code up.
     pair_completed: 'Paired successfully',
-    pair_completed_hint: 'Check that the code on your phone matches this one.',
+    pair_completed_hint: 'Check that the code on your phone matches this one. Pairing only creates the link — data is never transferred automatically; use Sync now on the Status tab.',
     pair_done: 'Done',
     manual_hint: 'Cannot scan? Copy the pairing text below and enter it manually.',
     copy_code: 'Copy pairing text',
@@ -488,7 +488,7 @@ export const enUS: Messages = {
     paste_hint: 'Paste pairing text',
     join: 'Join and sync',
     pairing: 'Waiting for peer…',
-    paired: 'Paired',
+    paired: 'Paired. Nothing has been synced yet — tap Sync now when you are ready.',
     fingerprint: 'Device fingerprint',
     devices: 'Paired devices',
     no_devices: 'No paired devices yet',

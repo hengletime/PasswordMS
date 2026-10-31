@@ -228,6 +228,12 @@ fn sync_join_impl(
 
     // 网络段 + 锁内段（O2 三段式）：4) 双向同步交换——`push_and_sync_access` 内部
     // 按「导出/合并/持久化」三个锁内段进出锁，传输全程不持会话锁。
+    //
+    // 【D-147】这一轮**只配对、不搬数据**：主人裁定「有时只是想配对」，配对成功后由
+    // 用户自己在状态页点「立即同步」。`mark_pair_only` 让两端都不发变更、不合并、
+    // 不推进任何同步水位——但要照常走完 Push/Done 这轮报文，否则对端会一直等。
+    // 配对关系（含对端地址）已由上面的 `persist_host_device` 落盘，与数据无关。
+    joiner.mark_pair_only();
     let mut access = crate::state::SessionAccess {
         session: &state.session,
     };

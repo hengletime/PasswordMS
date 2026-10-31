@@ -839,6 +839,7 @@ fn case7_tombstone_ciphertext_fault_tolerant_export_and_replay() {
         changes: Vec::new(),
         conflicts: Vec::new(),
         blob_support: false,
+        pair_only: false,
     };
     let env = seal_envelope(&key, &sid, 1, now_ms(), &payload).unwrap();
     let mut replay = ReplayGuard::with_state(0, SYNC_TIME_WINDOW_SECS);

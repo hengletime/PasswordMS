@@ -65,10 +65,23 @@ pub fn paginate(mut records: Vec<ChangeRecord>) -> CoreResult<Vec<Vec<ChangeReco
     Ok(pages)
 }
 
+/// 收到的一路 Push 聚合结果（D-147 起含 `pair_only`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PushPages {
+    pub changes: Vec<ChangeRecord>,
+    /// 对端是否支持 blob 阶段（取最后一帧）。
+    pub blob_support: bool,
+    /// 对端声明「本次只配对、不交换数据」。
+    pub pair_only: bool,
+}
+
 /// 发送一侧的全部 Push 页（≥1 页；`cursor` = 本页之后剩余条数，0 = 最后一页）。
 ///
 /// `next_seq` 为「下一帧可用序号」（先用后增），返回后指向最后一个已用序号 + 1。
 /// 每页都通告 `blob_support` 与 `conflicts`（对端逐帧读，取最后一帧语义即可）。
+///
+/// `pair_only`（D-147）只在**配对通道**取 true：此时载荷为空、且对端不得据此推进任何
+/// 水位（那会把「没发过的变更」记成「对端已持有」）。
 // 参数均为协议帧的必要字段；打包成参数结构体需改公开签名（红线，同 session.rs 先例）。
 #[allow(clippy::too_many_arguments)]
 pub fn send_push_pages<W: std::io::Write>(
@@ -80,6 +93,7 @@ pub fn send_push_pages<W: std::io::Write>(
     device_id: &str,
     pages: &[Vec<ChangeRecord>],
     conflicts: Vec<String>,
+    pair_only: bool,
 ) -> CoreResult<()> {
     let total: usize = pages.iter().map(Vec::len).sum();
     let mut sent = 0usize;
@@ -91,7 +105,9 @@ pub fn send_push_pages<W: std::io::Write>(
             cursor: (total - sent) as u64,
             changes: page.clone(),
             conflicts: conflicts.clone(),
-            blob_support: true,
+            // pair_only 时不谈 blob 能力：没有数据就没有附件要拉。
+            blob_support: !pair_only,
+            pair_only,
         };
         let env = seal_envelope(sync_key, session_id, *next_seq, now, &payload)?;
         transport::send_frame(stream, &serde_json::to_vec(&env)?)?;
@@ -119,7 +135,7 @@ pub fn recv_push_pages<R: Read>(
     session_id: &[u8],
     replay: &mut ReplayGuard,
     now: i64,
-) -> CoreResult<(Vec<ChangeRecord>, bool)> {
+) -> CoreResult<PushPages> {
     recv_push_pages_with_limits(
         stream,
         sync_key,
@@ -141,9 +157,11 @@ fn recv_push_pages_with_limits<R: Read>(
     now: i64,
     max_total_bytes: usize,
     max_pages: usize,
-) -> CoreResult<(Vec<ChangeRecord>, bool)> {
+) -> CoreResult<PushPages> {
     let mut all: Vec<ChangeRecord> = Vec::new();
     let mut blob_support;
+    // D-147：任一分页声明 pair_only 即视为整轮都是（发送侧每页同值）。
+    let mut pair_only = false;
     let mut total_bytes = 0usize;
     let mut page_count = 0usize;
     loop {
@@ -152,6 +170,7 @@ fn recv_push_pages_with_limits<R: Read>(
         replay.accept(env.seq, env.ts, now)?;
         let payload = open_envelope(sync_key, session_id, &env)?;
         blob_support = payload.blob_support;
+        pair_only = pair_only || payload.pair_only;
         page_count += 1;
         total_bytes += payload
             .changes
@@ -165,7 +184,11 @@ fn recv_push_pages_with_limits<R: Read>(
         }
         all.extend(payload.changes);
         if payload.cursor == 0 {
-            return Ok((all, blob_support));
+            return Ok(PushPages {
+                changes: all,
+                blob_support,
+                pair_only,
+            });
         }
     }
 }
@@ -278,6 +301,7 @@ mod tests {
             "test-dev",
             pages,
             Vec::new(),
+            false,
         )
         .unwrap();
         std::io::Cursor::new(buf)
@@ -350,7 +374,7 @@ mod tests {
             .collect();
         let mut stream = feed_pages(&sync_key, &session_id, &pages, &mut next_seq);
         let mut replay = crate::sync::replay::ReplayGuard::new(120);
-        let (all, blob_support) = recv_push_pages_with_limits(
+        let got = recv_push_pages_with_limits(
             &mut stream,
             &sync_key,
             &session_id,
@@ -360,7 +384,9 @@ mod tests {
             4096,
         )
         .unwrap();
-        assert_eq!(all.len(), 6);
-        assert!(blob_support);
+        assert_eq!(got.changes.len(), 6);
+        assert!(got.blob_support);
+        // D-147：普通同步（非配对通道）不得被标成只配对。
+        assert!(!got.pair_only);
     }
 }
