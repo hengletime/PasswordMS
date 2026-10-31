@@ -490,6 +490,12 @@ export const zhCN = {
     pair_completed_hint: '请核对手机上的会话码与本机是否一致，一致才算配对安全。配对只建立关系，数据不会自动同步——到「状态」页点「立即同步」。',
     pair_done: '完成',
     manual_hint: '无法扫码？可复制下面的配对文本手动输入。',
+    // D-149：Android 17（API 37）起访问局域网必须持有「附近的设备」权限，缺它时系统
+    // 直接**静默丢弃**本应用的包（无 RST），表现就是配对/同步永远超时。
+    lan_perm_missing: '未授予「附近的设备」权限，配对和同步都会超时失败。',
+    lan_perm_grant: '授予权限',
+    lan_perm_denied: '仍未授予。请到系统设置 → 应用 → PasswordMS → 权限 里手动打开「附近的设备」。',
+    lan_perm_failed: '无法打开权限申请，请在系统设置 → 应用 → PasswordMS → 权限 里手动授予「附近的设备」。',
     copy_code: '复制配对文本',
     cancel: '取消配对',
     join_title: '加入配对',

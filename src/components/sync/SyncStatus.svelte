@@ -5,17 +5,65 @@
   // D-134：页面常驻「本机网络」与每台设备的「配对记录地址」——手动同步失败时，
   // 用户唯一能自己判断的是「两端地址/端口是否对得上」，看不到就只剩一句「网络不可达」。
   import { onMount } from 'svelte';
+  import { listen, type UnlistenFn } from '@tauri-apps/api/event';
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
+  import { RESUME_EVENTS, hasTauriHost } from '../../lib/app-resume';
   import { formatDateTime } from '../../lib/constants';
   import { syncButtonState } from '../../lib/device-label';
+  import { toAppError } from '../../lib/errors';
   import { api } from '../../lib/ipc';
   import { sync } from '../../lib/stores/sync.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
-  import type { SyncNetInfoDto } from '../../types';
+  import type { LanPermissionDto, SyncNetInfoDto } from '../../types';
 
   /** 本机网络诊断（只读）。`null` = 尚未取到（不显示，也不据此下结论）。 */
   let net = $state<SyncNetInfoDto | null>(null);
+
+  /**
+   * D-149：Android 17 的局域网访问权限。
+   *
+   * `null` = 还没查到（什么都不渲染）。三种「不该显示警示」的情形都由数据本身表达：
+   * 桌面 / 旧版 Android 是 `supported=false`，已授权是 `granted=true`。
+   */
+  let lanPerm = $state<LanPermissionDto | null>(null);
+  let permBusy = $state(false);
+
+  async function refreshPerm(): Promise<void> {
+    try {
+      lanPerm = await api.sync.lanPermission();
+    } catch {
+      // 查不到就退回「不适用」：这里弹红字只会给用户一条他无法处理的错误，
+      // 而真正的信息（同步能不能成）本来就由下面的失败提示负责。
+      lanPerm = null;
+    }
+  }
+
+  /**
+   * 用户点「授予权限」。
+   *
+   * 结果**以回包为准**而不是以「对话框弹过」为准：用户可能按返回键取消，也可能在
+   * 系统设置里已把它设成永久拒绝（此时系统直接返回 denied，不弹窗）。两种情况都
+   * 保留警示，并补一条「可去系统设置手动打开」的 toast——这是用户唯一还有的路。
+   */
+  async function grantPerm(): Promise<void> {
+    if (permBusy) {
+      return;
+    }
+    permBusy = true;
+    try {
+      lanPerm = await api.sync.requestLanPermission();
+      if (lanPerm.supported && !lanPerm.granted) {
+        // `info` 而不是 `error`：用户刚刚做了正确的事（点了授予），系统没批不等于他操作错。
+        // 带 dedupeKey：连点几次只留最后一条（D-146 的机制），否则提示会堆成一摞。
+        ui.toast('info', 'sync.lan_perm_denied', undefined, 'lan-perm');
+      }
+    } catch (err) {
+      ui.toast('error', toAppError(err).messageKey);
+    } finally {
+      permBusy = false;
+    }
+  }
 
   async function refreshNet(): Promise<void> {
     try {
@@ -29,6 +77,7 @@
     await sync.loadStatus();
     await sync.loadDevices();
     await refreshNet();
+    await refreshPerm();
   }
 
   /** 点「立即同步」：无论成败都顺手刷新本机网络——失败时用户要看的正是那两个数。 */
@@ -37,8 +86,24 @@
     await refreshNet();
   }
 
-  onMount((): void => {
+  // D-149：从系统设置里手动开/关过权限再切回来，警示必须跟着变——否则用户按提示
+  // 去设置里开完，回到这里仍是一片红字，只会认为「开了也没用」。
+  // 与 App.svelte 同一套两条链路（`app://resumed` + `tauri://resumed`），只刷权限状态，
+  // 不动设备列表（那两份查询互不相关，`$effect` 也不该把两件事串在一起）。
+  onMount((): (() => void) => {
     void refreshNet();
+    void refreshPerm();
+    const pending: Promise<UnlistenFn>[] = [];
+    if (hasTauriHost()) {
+      for (const name of RESUME_EVENTS) {
+        pending.push(listen(name, () => void refreshPerm()));
+      }
+    }
+    return () => {
+      for (const off of pending) {
+        void off.then((f) => f());
+      }
+    };
   });
 
   /** 设备行的「配对记录地址」：IP 与端口可能各自缺失，缺哪个就显示未知。 */
@@ -57,6 +122,20 @@
       <Icon name="refresh" size={14} />{ui.t('common.retry')}
     </button>
   </header>
+
+  <!-- D-149：权限没给时**必须顶在最上面**。下面的「上次同步 / 待同步 / 设备数」看起来
+       一切正常，可只要这个权限缺着，任何一次同步都必然超时——用户会拿着正常的数据
+       去查 WiFi、路由器、防火墙，全错方向。 -->
+  {#if lanPerm !== null && lanPerm.supported && !lanPerm.granted}
+    <div class="pms-alert is-warning sync-perm" role="alert">
+      <Icon name="shield" size={16} />
+      <span class="sync-perm-text">{ui.t('sync.lan_perm_missing')}</span>
+      <button class="pms-btn is-sm" type="button" disabled={permBusy} onclick={() => void grantPerm()}>
+        {#if permBusy}<Spinner size={13} />{/if}
+        {ui.t('sync.lan_perm_grant')}
+      </button>
+    </div>
+  {/if}
 
   <div class="sync-stats">
     <div class="sync-stat">
@@ -122,15 +201,23 @@
       <!-- 发现应答没起来 = 这台设备不会回应别人的「换网后自动找对端」广播。 -->
       <p class="pms-meta sync-net-warn">{ui.t('sync.discovery_off', { port: net.discovery_port })}</p>
     {/if}
-    <!-- 这条是**行动指引**，不是免责声明：手动同步最常见的失败原因是另一台设备息屏后
-         被系统掐掉后台网络，用户看到的却只有一句「网络不可达」。 -->
-    <p class="pms-meta">{ui.t('sync.manual_hint')}</p>
   </div>
 </div>
 
 <style>
   .sync-card {
     padding: 1.1rem;
+  }
+  /* D-149：局域网权限警示条。图标 + 说明 + 按钮，窄屏按钮自动掉到下一行——
+     说明文字是**两行中文**，和按钮挤一行必然把按钮压成竖排。 */
+  .sync-perm {
+    margin-bottom: 0.9rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .sync-perm-text {
+    flex: 1 1 12rem;
+    min-width: 0;
   }
   .sync-head {
     display: flex;
@@ -223,5 +310,18 @@
   }
   .sync-net-warn {
     color: var(--pms-warning);
+  }
+  /* D-149：窄屏下「本机网络」标签与「IP / 端口」挤在同一行会折成两三行参差不齐
+     （标签 4 字 + 一个 IP 就吃掉半行，多网卡时更甚）。改为上下两行：
+     标签在上，值在下并左对齐——读数时视线只走一列，不必在两端来回跳。 */
+  @media (max-width: 767px) {
+    .sync-net-line {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.15rem;
+    }
+    .sync-net-value {
+      text-align: left;
+    }
   }
 </style>

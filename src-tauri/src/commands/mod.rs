@@ -8,6 +8,7 @@ pub mod import_cmd;
 pub mod item_cmd;
 pub mod keydoc_cmd;
 pub mod ordering_cmd;
+pub mod perm_cmd;
 pub mod prefs_cmd;
 pub mod settings_cmd;
 pub mod sync_cmd;

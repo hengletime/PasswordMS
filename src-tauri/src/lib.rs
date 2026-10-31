@@ -32,6 +32,14 @@ use tauri::Manager as _;
 #[cfg(target_os = "android")]
 pub struct BiometricHandle(pub tauri::plugin::PluginHandle<tauri::Wry>);
 
+/// 局域网访问权限插件的句柄（D-149，`gen/android/.../LanPermissionPlugin.kt`）。
+///
+/// 与 [`BiometricHandle`] 分开存：Tauri 的托管状态按**类型**索引，两个插件若共用一个
+/// 类型，后注册的会覆盖先注册的，`state::<T>()` 拿到的就不是你以为的那个插件——
+/// 症状是「生物识别突然读成了权限状态」，编译器不会报任何错。
+#[cfg(target_os = "android")]
+pub struct LanPermissionHandle(pub tauri::plugin::PluginHandle<tauri::Wry>);
+
 /// 「宿主把我叫回前台了」的事件名（D-123 引入，D-124 修正触发源）。
 ///
 /// 只在移动端有意义：桌面窗口真的丢焦点又拿回来时，前端自己的 `focus` 事件就够了；
@@ -59,6 +67,30 @@ fn biometric_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
                 let handle =
                     api.register_android_plugin("com.passwordms.app", "BiometricPlugin")?;
                 app.manage(BiometricHandle(handle));
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = (app, api);
+            }
+            Ok(())
+        })
+        .build()
+}
+
+/// 局域网访问权限插件（D-149；其它平台是空壳，`setup` 里什么都不注册）。
+///
+/// 为什么要一条独立通道：Android 17 起 `targetSdk>=37` 的应用访问局域网必须持有
+/// `ACCESS_LOCAL_NETWORK`，缺它时系统**静默丢弃**本应用的包（无 RST），表现为
+/// 「配对/同步永远超时」。`MainActivity` 一直在申请，但结果只进 logcat——用户和前端
+/// 都看不到，只能猜网络问题。这条通道把那一个布尔值送上来。
+fn lan_permission_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("pmslanperm")
+        .setup(|app, api| {
+            #[cfg(target_os = "android")]
+            {
+                let handle =
+                    api.register_android_plugin("com.passwordms.app", "LanPermissionPlugin")?;
+                app.manage(LanPermissionHandle(handle));
             }
             #[cfg(not(target_os = "android"))]
             {
@@ -154,6 +186,7 @@ pub fn run() {
 
     let result = builder
         .plugin(biometric_plugin())
+        .plugin(lan_permission_plugin())
         .manage(AppState::new())
         // D-108（3.4-6）：auto-lock 的 Rust 兜底线程——WebView 后台节流时前端
         // 定时器停摆，闲置锁定由后端按 last_activity_ms 仲裁。
@@ -195,6 +228,9 @@ pub fn run() {
             commands::system_cmd::vault_file_info,
             commands::system_cmd::vault_compaction_stats,
             commands::system_cmd::compact_vault,
+            // perm（D-149：Android 17 局域网访问权限——未授予时配对/同步静默超时）
+            commands::perm_cmd::lan_permission_status,
+            commands::perm_cmd::lan_permission_request,
             // vault
             commands::vault_cmd::create_vault,
             commands::vault_cmd::unlock,

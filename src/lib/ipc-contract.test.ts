@@ -268,7 +268,7 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     expect(paths.some((p) => p.endsWith('/lib.rs'))).toBe(true);
   });
 
-  it('所有 tauri::command 都带 rename_all = "snake_case"（v1.4.10 起为 71/71，67 个命令名）', () => {
+  it('所有 tauri::command 都带 rename_all = "snake_case"（v1.5.7 起为 74/74，70 个命令名）', () => {
     const all = Object.values(rustTree).join('\n');
     const total = (all.match(/tauri::command/g) ?? []).length;
     // 不写成 `\(rename_all = "snake_case"\)` 精确匹配：§23 起有 5 个命令带 `, async`
@@ -294,18 +294,21 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // 所以 `commands/prefs_cmd.rs` 给了 `cfg(desktop)` + `cfg(not(desktop))` **两套同名同签名
     // 实现**，各带一份属性 ⇒ 4 个名字 × 2 = 8 个属性，属性总数 63 + 8 = 71。
     // D-134（本机同步网络信息）：+1（sync_net_info），属性 71 → 72、命令名 67 → 68。
-    expect(total).toBe(72);
-    expect(withAttr).toBe(72);
+    // D-149（Android 局域网权限）：+2（lan_permission_status / lan_permission_request），
+    //   属性 72 → 74、命令名 68 → 70。两个命令都**不做平台分立**——桌面返回
+    //   `supported = false` 而不是另写一套实现，「这个权限在桌面不存在」本身就是正确回答。
+    expect(total).toBe(74);
+    expect(withAttr).toBe(74);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会是 71/71，但前端在 Android 上 invoke
-    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数 = 67**，
+    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数 = 70**，
     // 即平台分立只许增加实现份数，不许增加命令名。
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(72);
-    expect(new Set(names).size).toBe(68);
+    expect(names.length).toBe(74);
+    expect(new Set(names).size).toBe(70);
   });
 });
 

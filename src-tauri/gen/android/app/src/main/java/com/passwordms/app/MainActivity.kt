@@ -30,9 +30,29 @@ class MainActivity : TauriActivity() {
      */
     private const val PERM_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK"
 
+    /** 引入 `ACCESS_LOCAL_NETWORK` 的 API 级别（Android 17）。与 `LanPermissionPlugin` 同值。 */
+    private const val MIN_SDK_FOR_PERM = 37
+
     /** 上次主动申请的时间戳；跨进程冷启动至少间隔 24h，避免每次进前台都弹窗。 */
     private const val PREF_LAN_PERM_ASKED_AT = "lan_perm_asked_at"
     private const val REASK_INTERVAL_MS = 24L * 60 * 60 * 1000
+
+    /** 与 `LanPermissionPlugin` 共用（跨类字面值，改一处就得改两处）。 */
+    const val PREF_NAME = "passwordms"
+
+    /**
+     * D-149：给 `LanPermissionPlugin` 用的「主动申请」通道（`null` = 宿主还没建好）。
+     *
+     * 为什么必须由 MainActivity 持有、而不能让插件自己申请：带回调的
+     * `requestPermissions(Array<String>) { }` 是 **ComponentActivity 的扩展**，
+     * 而 `Plugin` 构造拿到的是裸 `Activity`，调不到那个重载；裸 `Activity.requestPermissions`
+     * 只有 `(Array<String>, Int)` 这种无回调形态，插件也收不到结果。
+     *
+     * 于是把「调用点」留在 MainActivity（这里已验证可编译），插件只负责转交一个回调。
+     * 申请结果**不缓存**在此处：`status` 每次现查 `checkSelfPermission`，这是唯一的真相源。
+     */
+    @Volatile
+    var lanPermRequester: ((cb: (Boolean) -> Unit) -> Unit)? = null
   }
 
   /**
@@ -68,6 +88,9 @@ class MainActivity : TauriActivity() {
       view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
       insets
     }
+    // D-149：登记给插件的申请通道。必须在 onCreate 里（Activity 已 attach、还没 STARTED），
+    // 这样「同步页点授予」时 requester 一定非空。
+    lanPermRequester = { cb -> requestLanPermission(cb) }
   }
 
   override fun onResume() {
@@ -89,25 +112,51 @@ class MainActivity : TauriActivity() {
    */
   private fun ensureLocalNetworkPermission() {
     // 低版本系统没有这个权限，声明会被忽略，也不需要申请。
-    if (Build.VERSION.SDK_INT < 37) {
+    if (Build.VERSION.SDK_INT < MIN_SDK_FOR_PERM) {
       return
     }
     if (checkSelfPermission(PERM_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED) {
       Log.i(TAG, "$PERM_LOCAL_NETWORK already granted")
       return
     }
-    val prefs = getSharedPreferences("passwordms", Context.MODE_PRIVATE)
+    val prefs = getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
     val lastAskedAt = prefs.getLong(PREF_LAN_PERM_ASKED_AT, 0L)
     val now = System.currentTimeMillis()
     if (lastAskedAt != 0L && now - lastAskedAt < REASK_INTERVAL_MS) {
       Log.i(TAG, "$PERM_LOCAL_NETWORK not granted; skipped (asked ${(now - lastAskedAt) / 1000}s ago)")
       return
     }
-    prefs.edit().putLong(PREF_LAN_PERM_ASKED_AT, now).apply()
     Log.i(TAG, "requesting $PERM_LOCAL_NETWORK (sdk=${Build.VERSION.SDK_INT})")
-    requestPermissions(arrayOf(PERM_LOCAL_NETWORK)) { granted ->
+    requestLanPermission { granted ->
       Log.i(TAG, "$PERM_LOCAL_NETWORK request result granted=$granted")
     }
+  }
+
+  /**
+   * D-149：主动申请一次局域网权限，**不受 24h 节流约束**。
+   *
+   * 与 `ensureLocalNetworkPermission` 的区别只有节流：那条是「进前台时顺手问一次」，
+   * 用户可能根本没在同步；这条由用户在同步页点「授予权限」触发，意图明确，必须真弹窗
+   * ——否则用户点了按钮却什么都没发生，比不给按钮更糟。
+   *
+   * 副作用：仍然记下时间戳，让下一次自动申请继续遵守间隔（避免前脚刚点完、后脚切回来又问）。
+   */
+  private fun requestLanPermission(cb: (Boolean) -> Unit) {
+    if (Build.VERSION.SDK_INT < MIN_SDK_FOR_PERM) {
+      cb(true)
+      return
+    }
+    if (checkSelfPermission(PERM_LOCAL_NETWORK) == PackageManager.PERMISSION_GRANTED) {
+      cb(true)
+      return
+    }
+    getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
+      .putLong(PREF_LAN_PERM_ASKED_AT, System.currentTimeMillis())
+      .apply()
+    // 回调形参是 `Boolean?`（系统可在 Activity 已销毁时给 null，此时**不是授权**）。
+    // 直接 `cb(granted)` 编不过；而 `granted == true` 正好把 null 归为「未授予」——
+    // 这正是我们要的语义：拿不准就当作没给，绝不让警示提前消失。
+    requestPermissions(arrayOf(PERM_LOCAL_NETWORK)) { granted -> cb(granted == true) }
   }
 
   /** 幂等；取不到 WifiManager（无 WiFi 硬件/服务异常）时静默跳过——发现只是增强路径。 */

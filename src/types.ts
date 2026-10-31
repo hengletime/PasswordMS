@@ -206,6 +206,18 @@ export interface SyncNetInfoDto {
   discovery_port: number;
 }
 
+/**
+ * D-149：Android 局域网访问权限状态。
+ *
+ * `supported = false` 表示**这个平台/系统版本没有这个权限**（桌面、Android < 17），
+ * 前端据此整块不渲染——「未授予」在那些平台是个伪问题。
+ */
+export interface LanPermissionDto {
+  supported: boolean;
+  /** `supported === false` 时恒 true（语义：不构成阻塞）。 */
+  granted: boolean;
+}
+
 /** 体检报告。 */
 export interface HealthReport {
   total_score: number;

@@ -480,6 +480,13 @@ export const enUS: Messages = {
     pair_completed_hint: 'Check that the code on your phone matches this one. Pairing only creates the link — data is never transferred automatically; use Sync now on the Status tab.',
     pair_done: 'Done',
     manual_hint: 'Cannot scan? Copy the pairing text below and enter it manually.',
+    // D-149: from Android 17 (API 37) local-network access requires the "Nearby devices"
+    // permission. Without it the system silently drops this app's packets (no RST), which
+    // shows up as pairing/sync always timing out.
+    lan_perm_missing: 'The "Nearby devices" permission is not granted — pairing and sync will always time out.',
+    lan_perm_grant: 'Grant permission',
+    lan_perm_denied: 'Still not granted. Open Settings → Apps → PasswordMS → Permissions and enable "Nearby devices" manually.',
+    lan_perm_failed: 'Could not open the permission prompt. Open Settings → Apps → PasswordMS → Permissions and grant "Nearby devices" manually.',
     copy_code: 'Copy pairing text',
     cancel: 'Cancel pairing',
     join_title: 'Join pairing',

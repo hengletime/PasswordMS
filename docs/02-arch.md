@@ -3676,3 +3676,65 @@ pub joiner_identity_pub: Vec<u8>,   // 长期身份公钥 32B；老客户端不�
 ② 旧记录里的 `sync_key_wrapped` 是那份配对关系的唯一凭据，删了不可恢复；
 ③ 一旦指纹为空（老客户端）就没有判据，仍要走人工。
 **三件事都不该由一次"顺手优化"决定**，故本节只提供判据，不做动作。
+
+### 3.35 D-149：Android 17 的局域网权限必须有一条**能到达用户**的通道（1.5.7，2026-10-31）
+
+#### 3.35.1 现象与真因的差距有多大
+
+用户看到的是「同一台手机、同一个 WiFi，别的应用都能上网，只有本应用配对/同步永远超时」。
+能想到的排查方向是 WiFi、路由器、防火墙、息屏省电、对端地址——**全部无效**。
+
+真因：Android 17（API 37）起，`targetSdk >= 37` 的应用访问局域网必须持有
+`ACCESS_LOCAL_NETWORK`（NEARBY_DEVICES 运行时权限组），**默认关闭**。缺它时系统对本 UID
+的 AppOps 恒为 `ignore`，包被**静默丢弃**：手机侧 `ss -tne` 卡在 SYN-SENT、收不到 RST。
+没有超时错误、没有权限异常、没有任何日志——只有「等」和「再等」。
+
+`MainActivity.ensureLocalNetworkPermission()` 自 D-141 起就一直在申请这个权限。问题是
+**申请结果只写进 logcat**：前端拿不到，用户看不到。于是这条自愈链路对使用者等于不存在。
+
+#### 3.35.2 分层：谁该知道什么
+
+| 层 | 知道什么 | 不知道什么 |
+|---|---|---|
+| Kotlin `MainActivity` | 何时申请、系统版本闸门、SharedPreferences 节流戳 | 同步成功与否 |
+| Kotlin `LanPermissionPlugin` | 现查 `checkSelfPermission`、把申请转交给 Activity | 数据库、网络 |
+| Rust `perm_cmd` | 平台分支（桌面恒「不适用」）、错误兜底 | Android 权限模型细节 |
+| 前端 `SyncStatus` | **只判 `supported && !granted`** | 系统版本号、权限名 |
+
+四层里只有最后一行需要「判断」，前两层只做**事实转述**。这是刻意的：把「这个权限在
+本平台存不存在」的判断留在最靠近平台的地方（Kotlin 的 `supported`），前端不做平台嗅探
+——前端一旦开始猜 `__TAURI_INTERNALS__` 里有没有 android 字段，就会在下一版 Tauri 改结构
+时静默失效。
+
+#### 3.35.3 为什么插件不自己申请权限
+
+`Plugin` 构造函数拿到的是裸 `Activity`，而带回调的
+`requestPermissions(Array<String>) { granted -> }` 是 **ComponentActivity 的扩展**——插件
+调不到那个重载；裸 `Activity.requestPermissions` 只有 `(Array, Int)` 无回调形态，插件收不到
+结果。
+
+于是把「调用点」留在 `MainActivity`（那里已验证可编译），在 `onCreate` 里登记一个闭包
+`lanPermRequester`，插件按需转交。**取不到时必须 reject，不能假装成功**：前端会据此收起
+警示，然后同步继续超时，而用户刚点过「授予」——比根本不给按钮更难查。
+
+#### 3.35.4 前端的判据为什么是两个条件
+
+`supported && !granted`。只判 `!granted` 会让桌面与 Android 16 上顶一条**永远消不掉**的
+警示（那两个平台根本没有这个权限，`granted` 恒为构造值）。这会直接把用户赶去系统设置里找
+一个不存在的开关——比不提示更糟。
+
+`supported = false` 时后端一律返回 `granted = true`，语义是「这个问题在本平台不存在」，
+前端只按一个布尔式渲染，不需要知道平台。
+
+#### 3.35.5 刷新时机：两条「回前台」链路
+
+用户去系统设置里手动开了权限再切回来，警示必须自动消失（否则他会认为「开了也没用」）。
+`SyncStatus` 自己监听 `RESUME_EVENTS`（`app://resumed` + `tauri://resumed`），只重查权限状态，
+不动设备列表——两份查询互不相关，不塞进同一个 `$effect`（第一件抛错会废掉全部）。
+
+#### 3.35.6 守门
+
+`src/lib/d149-lan-perm-guard.test.ts`（7 例）钉四类跨语言字面值：插件注册名↔Kotlin 包名/类名、
+权限字符串三处一致、版本闸门 37 两处一致、模板判据必须是双条件。变异实测：把注册类名改一个
+字母、把模板判据退化成 `!granted`，均真红（后者第一版断言被 `grantPerm()` 里的同名判据喂饱，
+已改为直接匹配 `{#if}` 行）。

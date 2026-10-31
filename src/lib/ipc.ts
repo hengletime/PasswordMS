@@ -21,6 +21,7 @@ import type {
   ImportResultDto,
   ItemDraftDto,
   ItemDto,
+  LanPermissionDto,
   PairingDto,
   PairResultDto,
   PrefsDto,
@@ -250,6 +251,12 @@ export const sync = {
   status: (): Promise<SyncStatusDto> => invoke<SyncStatusDto>('sync_status'),
   // D-134：本机同步网络信息（只读诊断）：本机 IPv4、监听端口、发现应答是否可用。
   netInfo: (): Promise<SyncNetInfoDto> => invoke<SyncNetInfoDto>('sync_net_info'),
+  // D-149：Android 17 起访问局域网必须先授予 ACCESS_LOCAL_NETWORK，缺它时包被系统
+  // **静默丢弃**（无 RST），表现就是「配对/同步永远超时」。桌面恒 supported=false。
+  lanPermission: (): Promise<LanPermissionDto> => invoke<LanPermissionDto>('lan_permission_status'),
+  // 用户点「授予权限」时调：会弹一次系统对话框，返回**申请之后**的实际状态。
+  requestLanPermission: (): Promise<LanPermissionDto> =>
+    invoke<LanPermissionDto>('lan_permission_request'),
   listConflicts: (): Promise<ConflictDto[]> => invoke<ConflictDto[]>('list_conflicts'),
   // D-112：copySuffix 为 KeepBoth 副本标题后缀（前端按 UI 语言传 i18n 文案）。
   resolveConflict: (conflictId: string, choice: ConflictChoice, copySuffix: string): Promise<void> =>

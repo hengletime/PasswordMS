@@ -302,6 +302,55 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.7 门禁（D-149，2026-10-31 实跑）**：前端 `npm run test` **61 文件 535 例全绿**
+（较 1.5.6 的 528 例 +7，新增 `d149-lan-perm-guard.test.ts`）/
+`npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮只动组件内局部样式）/
+Rust `cargo test -p passwordms-core` 全绿（本轮 core 零改动）/ `cargo fmt --all` 已跑 /
+clippy 代码警告 0（唯一一条 `warning:` 仍是 build.rs windres 兜底）/ 体积门禁桌面 + APK 双过。
+
+**本轮多跑了一道别人不会跑的编译**：`./gradlew :app:compileArmDebugKotlin`（跳过全部
+`rustBuild*`）。理由：`cargo check` 与前端测试**都碰不到 Kotlin 类型**，而本轮改的正是
+`MainActivity` 与新增的 Kotlin 插件。**它当场抓到一个真错误**——
+`requestPermissions(...) { granted -> cb(granted) }` 报
+`actual type is 'Boolean?', but 'Boolean' was expected`：原代码那行只做字符串插值
+（`Log.i("... granted=$granted")`），永远不会暴露回调形参可空；我把回调接进 `(Boolean) -> Unit`
+才暴露。修法 `cb(granted == true)`（null 归为「未授予」，拿不准就当作没给）。
+**教训：改 Kotlin 必须真编译一次，否则「全绿」只是没测到。**
+
+> 附带踩坑：Gradle 的 `:app:compileDebugKotlin` 在本工程**任务名有歧义**
+> （候选 `compileArmDebugKotlin` / `compileUniversalDebugKotlin`），必须带 ABI 前缀。
+> 另：Kotlin 守护进程在编译上游 `tauri-android` crate 时会因增量缓存文件锁崩
+> （`Could not close incremental caches …`），与本项目代码无关；
+> `-Pkotlin.compiler.execution.strategy=in-process` 可稳定绕过。
+
+**两条变异真红**：① `lib.rs` 注册类名改 `LanPermPlugin` → 跨语言比对红；
+② 模板判据退化成 `{#if lanPerm !== null && !lanPerm.granted}` → 判据断言红。
+**第一版断言是假绿**：`toContain('lanPerm.supported && !lanPerm.granted')` 被 `grantPerm()`
+里的同名判据喂饱，只变异模板那处仍然全绿；改为正则直匹配 `{#if}` 行才真红
+（与 D-148「截断点取错」同类：断言必须钉在你以为它钉的地方）。
+
+**1.5.7 实际产物（出包实测，非推算）**：
+APK `7,750,059 B`（`f65bf92e`，V3 签名）/ NSIS `2,052,585 B`（`893dd29c`）/
+MSI `2,912,256 B`（`d4908640`）/ 裸 exe `4,988,928 B`（`051b8a58`，ProductVersion 1.5.7，
+文件内 `1.5.6` 零残留）/ 绿色版 zip `2,417,115 B`（`4c4d789f`，4 条目）；
+**zip 内 exe 与裸 exe 哈希一致**（`051b8a58`）。
+
+**包内取证（1.5.7）**——延续 1.5.6 的「字符串对拍」法，但换一类判据：
+本轮验的不是 serde 字段名，而是**命令注册名**（`generate_handler!` 生成的匹配串，
+运行时必需、消不掉）：
+
+| 判据 | 位置 | 结果 |
+|---|---|---|
+| `lan_permission_status` | 桌面 `passwordms.exe` | 存在 |
+| `lan_permission_request` | 桌面 `passwordms.exe` | 存在 |
+| `lan_permission_status` / `_request` | APK 内 `libpasswordms_lib.so`（5,715,824 B） | 均存在 |
+| `sync.lan_perm_missing`（前端文案） | exe | **0 次**（前端资源压缩进 exe，属预期，不作判据） |
+| `附近的设备` / `授予权限` | `dist/assets/*.js` | 均存在 |
+
+> APK 体积四版各不相同（7,737,771 × 3 → 7,750,059，+12,288 B），不再出现「逐字节相同」
+> 的诡异巧合；本轮唯一仍未解释的残留是 `.so` 从 5,703,280 增到 5,715,824（+12,544 B）——
+> 与新增的 Kotlin 插件常量、两条命令的字符串和分发逻辑一致，量级合理，未进一步归因。
+
 **1.5.5 门禁（D-148，2026-10-31 实跑）**：前端 `npm run test` **60 文件 528 例全绿**
 （较 1.5.4 的 523 例 +5，新增 `d148-pair-confirm-guard.test.ts`）/
 `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动）/

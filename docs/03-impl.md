@@ -1413,3 +1413,49 @@ Host 会用同一个序号重发，对端 `ReplayGuard` 直接判重放并拒掉
 - **踩坑**：`join()` 的截断点原来取 `async loadDevices`，而 D-148 把两个新方法插在它们
   之间——两个新方法体内都有 `requestTab`，于是「join 不许 requestTab」这条断言假红。
   截断点必须落在**紧邻的下一个方法**上。
+
+### 13.27 D-149：局域网权限有通道、状态页去掉死指引（v1.5.7，2026-10-31）
+
+#### 13.27.1 两条独立的线，合在一版
+
+- **功能缺口**：D-141 起 `MainActivity` 一直在申请 `ACCESS_LOCAL_NETWORK`，结果只进 logcat，
+  前端拿不到 → 加一条 Kotlin 插件 → Rust 命令 → 前端警示的通道。
+- **主人实测三处排版**：状态页的「无法扫码？」是死指引、本机网络挤行、「关于」四按钮挤行。
+
+两条都是「用户看得见的地方不对」，但修法完全不交叉（一条动 Kotlin/Rust，一条只动 CSS），
+故合版发布。
+
+#### 13.27.2 新增文件与改动点
+
+| 文件 | 改动 |
+|---|---|
+| `gen/android/.../LanPermissionPlugin.kt` | **新增**。`status`（只读现查）/ `request`（转交 MainActivity） |
+| `gen/android/.../MainActivity.kt` | 加 `MIN_SDK_FOR_PERM` 常量、`lanPermRequester` 静态槽、`requestLanPermission()`；`ensureLocalNetworkPermission` 改为复用它 |
+| `src-tauri/src/lib.rs` | `LanPermissionHandle` + `lan_permission_plugin()`（键 `pmslanperm`） |
+| `src-tauri/src/commands/perm_cmd.rs` | **新增**。`lan_permission_status` / `lan_permission_request` |
+| `src/types.ts` / `src/lib/ipc.ts` | `LanPermissionDto` + `api.sync.lanPermission()` / `requestLanPermission()` |
+| `src/components/sync/SyncStatus.svelte` | 权限警示条、删 `manual_hint`、窄屏堆叠、`RESUME_EVENTS` 重查 |
+| `src/components/Settings.svelte` | `.set-about-btn` + 窄屏两列 |
+| 四语言 i18n | `lan_perm_missing` / `_grant` / `_denied` / `_failed` |
+
+#### 13.27.3 三个「写错也能编译」的点，各踩了一次
+
+1. **`requestPermissions` 的回调是 `Boolean?`**。原来那行只做字符串插值
+   （`Log.i("... granted=$granted")`），永远不暴露类型；我把回调改成 `cb(granted)` 传给
+   `(Boolean) -> Unit`，Kotlin 立刻报 `actual type is 'Boolean?'`。修法 `cb(granted == true)`，
+   顺带把 null 归为「未授予」——拿不准就当作没给，警示不许提前消失。
+   **教训：`cargo check` 与前端测试都碰不到 Kotlin 类型，必须真跑一次 `compileArmDebugKotlin`。**
+2. **`.set-row` 不许加新变体**。先给「关于」那行加 `is-twin`，`settings-row-type-guard`
+   两例立刻红（`is-actions` 计数 2→1；白名单外的变体 10→9）。改为给按钮加 `.set-about-btn`。
+3. **命令数硬编码**。`ipc-contract.test.ts` 的 72/68 是钉住的，加两条命令必须同步到 74/70，
+   并在注释里写清「这两个命令不做平台分立，桌面返回 supported=false 就是正确回答」。
+
+#### 13.27.4 测试
+
+- `src/lib/d149-lan-perm-guard.test.ts` 7 例：插件注册名↔Kotlin 包名/类名、权限字符串三处、
+  版本闸门两处、`requester == null` 必须 reject、命令名两端一致、桌面返回 `supported:false`、
+  状态页无 `manual_hint` 且配对页有。
+- **两条变异真红**：注册类名改 `LanPermPlugin`；模板判据退化成 `!granted`。
+- **第一版断言假绿**：`toContain('lanPerm.supported && !lanPerm.granted')` 被 `grantPerm()`
+  里的同名判据喂饱——只变异模板那处仍然全绿。改为正则直接匹配 `{#if}` 行才真红。
+  （与 D-148「截断点取错」同类：**断言要钉在你以为它钉的地方**。）

@@ -1200,20 +1200,20 @@
     {/if}
     <div class="set-row is-actions">
       <button
-        class="pms-btn is-ghost is-sm"
+        class="pms-btn is-ghost is-sm set-about-btn"
         type="button"
         disabled={updateState === 'checking' || appVersion === null}
         onclick={() => void onUpdateCheckNow()}
       >
         <Icon name="sync" size={14} />{ui.t('settings.update_check_now')}
       </button>
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openHomepage()}>
+      <button class="pms-btn is-ghost is-sm set-about-btn" type="button" onclick={() => void openHomepage()}>
         <Icon name="external" size={14} />{ui.t('settings.about_homepage')}
       </button>
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => openLegal('disclaimer')}>
+      <button class="pms-btn is-ghost is-sm set-about-btn" type="button" onclick={() => openLegal('disclaimer')}>
         {ui.t('settings.about_disclaimer')}
       </button>
-      <button class="pms-btn is-ghost is-sm" type="button" onclick={() => openLegal('terms')}>
+      <button class="pms-btn is-ghost is-sm set-about-btn" type="button" onclick={() => openLegal('terms')}>
         {ui.t('settings.about_terms')}
       </button>
     </div>
@@ -1428,6 +1428,15 @@
       align-items: center;
       justify-content: flex-start;
       gap: 0.5rem;
+    }
+    /* D-149：「关于」分组的四个按钮（检查更新 / 项目主页 / 免责声明 / 用户条款）
+       390px 上换行后落成 3+1 的参差排布，看着像两组不相干的东西。给这组按钮标
+       `.set-about-btn`，窄屏排成两列等宽 —— 2×2 是唯一能一眼看出「四个同类按钮」的排法。
+       刻意**不**给 `.set-row` 加新变体：`is-info` / `is-actions` / `is-check` 是行类型
+       三分（D-73），多一个变体就让「控件行必须继续走窄屏堆叠」的守门失去判据。 */
+    .set-row.is-actions .set-about-btn {
+      flex: 1 1 calc(50% - 0.25rem);
+      justify-content: center;
     }
     /* D-110：复选框行（自动同步 / 启动同步 / 更新检查）——窄屏保持「文字左 / 复选框右」。
        不覆盖的话复选框被 column 堆到文字下一行，孤零零一个方块（主人手机实测）。

@@ -431,6 +431,12 @@ export const zhTW = {
     pair_completed_hint: '請核對手機上顯示的核對碼與本機一致，以確保配對安全。配對只建立關係，資料不會自動同步——到「狀態」頁點「立即同步」。',
     pair_done: '完成',
     manual_hint: '無法掃碼？可複製下面的配對文字手動輸入。',
+    // D-149：Android 17（API 37）起存取區域網路必須持有「附近的裝置」權限，缺它時系統
+    // 直接**靜默丟棄**本應用的封包（無 RST），表現就是配對/同步永遠逾時。
+    lan_perm_missing: '未授予「附近的裝置」權限，配對和同步都會逾時失敗。',
+    lan_perm_grant: '授予權限',
+    lan_perm_denied: '仍未授予。請到系統設定 → 應用程式 → PasswordMS → 權限 裡手動開啟「附近的裝置」。',
+    lan_perm_failed: '無法開啟權限申請，請在系統設定 → 應用程式 → PasswordMS → 權限 裡手動授予「附近的裝置」。',
     copy_code: '複製配對文字',
     cancel: '取消配對',
     join_title: '加入配對',
