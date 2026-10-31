@@ -349,23 +349,27 @@
       <li class="side-empty">{ui.t('folder.empty')}</li>
     {/each}
     <!-- D-153：未分组 = 与分组同级的**视图入口**（D-152 那行说明文字的数字点得进去）。
-         位置留在分组列表末尾：与上一版的说明文字同址，用户不用重新找一遍。
-         **不再用 `{#if ungrouped > 0}` 包住**：它现在是一个视图，入口按数据闪现/消失
-         会让「未分组视图在哪」变得不可预期；恒在且显示 0，与分组行同一原则。 -->
-    <li>
-      <button
-        class="side-row"
-        class:active={vault.ungroupedOnly}
-        type="button"
-        onclick={() => pickUngrouped()}
-      >
-        <Icon name="inbox" size={16} />
-        <span class="side-name">{ui.t('folder.ungrouped')}</span>
-        <span class="side-count" class:is-zero={vault.counts.ungrouped === 0}>
-          {vault.counts.ungrouped}
-        </span>
-      </button>
-    </li>
+         位置留在分组列表末尾：与说明文字同址，用户不用重新找一遍。
+         D-156：未分组为 0 时整行隐藏（主人要求）——0 条的入口点进去必然是空列表，
+         常驻只是多一行占位。**但正停在该视图时例外**（`|| vault.ungroupedOnly`）：
+         删掉最后一条未分组条目后读数归 0，若入口同时消失，用户会卡在一个空列表里、
+         侧栏没有任何高亮项，看不出自己在哪。通用原则：选中的筛选项不因结果为空而消失。 -->
+    {#if vault.counts.ungrouped > 0 || vault.ungroupedOnly}
+      <li>
+        <button
+          class="side-row"
+          class:active={vault.ungroupedOnly}
+          type="button"
+          onclick={() => pickUngrouped()}
+        >
+          <Icon name="inbox" size={16} />
+          <span class="side-name">{ui.t('folder.ungrouped')}</span>
+          <span class="side-count" class:is-zero={vault.counts.ungrouped === 0}>
+            {vault.counts.ungrouped}
+          </span>
+        </button>
+      </li>
+    {/if}
   </ul>
 
   {#if menuFor !== null && menuTarget !== null}

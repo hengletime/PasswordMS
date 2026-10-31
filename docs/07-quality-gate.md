@@ -302,6 +302,36 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.12 门禁（D-156，2026-10-31 实跑）**：前端 `npm run test` **65 文件 572 例全绿**
+（例数与 1.5.11 相同 —— 本轮只改 1 例断言的**语义**，没加新例）/
+`npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，本轮零样式改动）/
+Rust `cargo test -p passwordms-core` 全绿（core 零改动）/ `cargo fmt --all -- --check` 干净 /
+clippy 代码警告 0（唯一一条 `warning:` 仍是 build.rs windres 兜底）/ 体积门禁桌面 + APK 双过。
+
+**1.5.12 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`fafb1545`，versionCode 1005012 / versionName 1.5.12；**字节数与前三版
+完全相同，第四次**）/ NSIS `2,054,239 B`（`60add0c0`）/ MSI `2,916,352 B`（`471b3200`）/
+裸 exe `4,994,048 B`（`07af67c4`，ProductVersion 1.5.12）/ 绿色版 zip `2,420,502 B`
+（`57beb040`）；**zip 内 exe 与裸 exe 哈希一致**（`07af67c4`）。
+`sha256sum -c target/SHA256SUMS-1.5.12.txt` 四文件全 OK。
+
+**包内取证（1.5.12）——本轮一个意外的正面校验**：
+
+| 判据 | 位置 | 1.5.11 | 1.5.12 |
+|---|---|---|---|
+| `BK01vCCU`（本次 `App-*.js` 名字） | APK 内 `libpasswordms_lib.so` | **0** | **1** |
+| `DXV310Az`（本次 `index-*.js` 名字） | 同上 | **0** | **1** |
+| `CErjAN2L`（本次 `style-*.css` 名字） | 同上 | **1** | **1** |
+| 版本串 `1.5.11` / `1.5.12` | 同上 | 1 / 0 | 0 / 1 |
+
+> **`CErjAN2L` 两版都是 1，恰恰证明这条判据是有效的**：本轮只改模板条件（`{#if}`），
+> 样式一行没动，Vite 给 CSS 算出的内容哈希**理应不变**。如果三个名字全都变了，
+> 反而要怀疑判据是不是「必然变化」的假证据。**「该变的变、不该变的不变」比「全变」更可信。**
+> 桌面 `passwordms.exe` 同样含 `BK01vCCU` / `DXV310Az` 各 1 次。
+
+**变异 2 条全真红**：① 判据退化成只 `vault.counts.ungrouped > 0`（丢 `|| ungroupedOnly`）；
+② 整个 `{#if}` 去掉（回到恒在）。
+
 **1.5.11 门禁（D-155，2026-10-31 实跑）**：前端 `npm run test` **65 文件 572 例全绿**
 （较 1.5.10 的 569 例 **+3**，全部新增在 `d153-ungrouped-filter-guard.test.ts`：
 头部不许出现分组 / 页脚三项共存 / 页脚允许换行）/ `npm run check` 0 error 0 warning /

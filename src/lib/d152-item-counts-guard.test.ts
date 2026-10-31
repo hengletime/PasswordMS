@@ -108,7 +108,9 @@ describe('D-152：侧栏必须把数字显示出来', () => {
     expect(side).toContain('vault.counts.ungrouped');
   });
 
-  it('0 条也要显示（不能 `{#if count > 0}` 藏起来）', () => {
+  // 本条只管**分组行**（以及全部/收藏）：某个组突然变 0 条，正是「同步会不会丢数据」
+  // 最需要被看见的形态。未分组那行是视图入口，按 D-156 改为 0 时隐藏，见下一条。
+  it('分组的 0 条也要显示（不能 `{#if count > 0}` 藏起来）', () => {
     const side = src('/FolderSidebar.svelte');
     // 直接钉「数字绑定」那一行的最近上下文里没有 `> 0` 之类的前置条件。
     // 用一个更稳的判据：`is-zero` 这个「零态样式钩子」必须在模板里被用上，
@@ -117,11 +119,12 @@ describe('D-152：侧栏必须把数字显示出来', () => {
     expect(side).toMatch(/\.side-count\.is-zero\s*\{/);
   });
 
-  it('未分组行恒在（D-153 起是视图入口，不按数据闪现）', () => {
+  it('D-156：未分组为 0 时隐藏入口，但正停在该视图时例外', () => {
     const side = src('/FolderSidebar.svelte');
-    // D-152 曾用 `{#if counts.ungrouped > 0}` 包住那行说明文字；D-153 起它是视图入口，
-    // 包住会让「未分组视图在哪」有时无时。反向断言这条 if 不得再出现。
-    expect(side).not.toMatch(/\{#if vault\.counts\.ungrouped > 0\}/);
-    expect(side).toContain('vault.ungroupedOnly');
+    // 判据必须**同时**含两个条件。只判 `> 0` 会这样出错：用户在未分组视图里删掉最后一条
+    // → 读数归 0 → 入口连同 `active` 一起消失，人卡在一个空列表里、侧栏没有任何高亮项，
+    // 看不出自己在哪。「选中的筛选项不因结果为空而消失」。
+    expect(side).toMatch(/\{#if vault\.counts\.ungrouped > 0 \|\| vault\.ungroupedOnly\}/);
+    expect(side).toContain('class:active={vault.ungroupedOnly}');
   });
 });
