@@ -347,3 +347,110 @@ describe('D-159 切视图保留搜索词', () => {
     expect(vault.queryEpoch).toBe(before);
   });
 });
+
+// D-161：收藏是**跨组**视图 —— 进收藏必须把分组一起清掉。
+//
+// 主人复现（2026-11-01）：「『个人』和『Commander 办公』各收藏一条，如果从『个人』跳到收藏，
+// 收藏里只有『个人』分组里的一条；如果从『Commander 办公』跳到收藏，收藏里只有
+// 『Commander 办公』分组里的一条；从其它分组跳到收藏就为空，从全部跳到收藏才 2 条都有。」
+//
+// 这段话本身就是判据：**同一份收藏，从不同分组进来看到不同的东西** ——
+// 那么这个视图就不是「收藏」，而是「上一个分组 ∩ 收藏」。
+// 根因是 `toggleFavoriteOnly` 只清了 `ungroupedOnly`、漏了 `selectedFolderId`；
+// 后端 `list_scoped` 是交集（`scope ∩ favorite_only ∩ query`），漏一位不会报错，
+// 只会安静地少给数据 —— 所以这里断言的不是「store 字段是什么」，
+// 而是「发出去的请求到底带没带分组」。
+describe('D-161 收藏视图跨组（进收藏必须清掉分组）', () => {
+  /** 最近一次 `items.list` 请求的三个范围位（与 ipc.list 形参顺序一致）。 */
+  function lastScope(): {
+    folderId: string | null | undefined;
+    favoriteOnly: boolean;
+    ungroupedOnly: boolean;
+  } {
+    const call = listMock.mock.calls.at(-1);
+    return {
+      folderId: call?.[0],
+      favoriteOnly: call?.[1] === true,
+      ungroupedOnly: call?.[3] === true,
+    };
+  }
+
+  beforeEach(() => {
+    listMock.mockReset().mockResolvedValue([]);
+    foldersListMock.mockReset().mockResolvedValue([]);
+    countsMock.mockReset().mockResolvedValue({ total: 0, favorites: 0, ungrouped: 0 });
+    vault.reset();
+  });
+
+  it('从某个分组里点「收藏」：请求不再带分组（否则只是「该组 ∩ 收藏」）', async () => {
+    await vault.selectFolder('f-personal');
+    expect(lastScope().folderId).toBe('f-personal');
+
+    await vault.toggleFavoriteOnly();
+
+    expect(vault.selectedFolderId).toBeNull();
+    const scope = lastScope();
+    expect(scope.folderId).toBeNull();
+    expect(scope.favoriteOnly).toBe(true);
+    expect(scope.ungroupedOnly).toBe(false);
+  });
+
+  it('换一个分组再进收藏，看到的范围必须一样（主人这句「从别的组进去不同」就是判据）', async () => {
+    await vault.selectFolder('f-personal');
+    await vault.toggleFavoriteOnly();
+    const fromPersonal = lastScope();
+
+    await vault.selectFolder('f-office');
+    await vault.toggleFavoriteOnly();
+    const fromOffice = lastScope();
+
+    // 两次请求逐字相同 —— 收藏与「从哪儿点进来的」无关。
+    expect(fromOffice).toEqual(fromPersonal);
+  });
+
+  it('从「未分组」进收藏：两位一起清（folder_id 与 ungrouped_only 谁都不许留下）', async () => {
+    await vault.selectUngrouped();
+    expect(lastScope()).toEqual({ folderId: null, favoriteOnly: false, ungroupedOnly: true });
+
+    await vault.toggleFavoriteOnly();
+
+    expect(lastScope()).toEqual({ folderId: null, favoriteOnly: true, ungroupedOnly: false });
+  });
+
+  it('退出收藏落在「全部」（界面上从没有「上次的分组」这个概念）', async () => {
+    await vault.selectFolder('f-office');
+    await vault.toggleFavoriteOnly();
+    await vault.toggleFavoriteOnly();
+
+    expect(vault.favoriteOnly).toBe(false);
+    expect(lastScope()).toEqual({ folderId: null, favoriteOnly: false, ungroupedOnly: false });
+  });
+
+  it('从收藏切分组：收藏标记必须清（回归——这条一直是好的，不许被本轮改坏）', async () => {
+    await vault.toggleFavoriteOnly();
+    await vault.selectFolder('f-office');
+
+    expect(vault.favoriteOnly).toBe(false);
+    expect(lastScope()).toEqual({ folderId: 'f-office', favoriteOnly: false, ungroupedOnly: false });
+  });
+
+  it('任意切换序列下三个位互斥：不出现「某分组 + 收藏 / 未分组」的请求', async () => {
+    const steps: (() => Promise<void>)[] = [
+      () => vault.selectFolder('f-a'),
+      () => vault.toggleFavoriteOnly(),
+      () => vault.selectUngrouped(),
+      () => vault.toggleFavoriteOnly(),
+      () => vault.selectFolder(null),
+      () => vault.selectUngrouped(),
+    ];
+    for (const step of steps) {
+      await step();
+      const scope = lastScope();
+      const hasFolder = scope.folderId !== null && scope.folderId !== undefined;
+      // 收藏与未分组都是「跨组」的读法，带上一只具体的组就自相矛盾（顶栏写着「收藏」、
+      // 列表只有一个组的条目 —— D-150/D-151 那类「界面自相矛盾」）。
+      expect(hasFolder && scope.favoriteOnly, '出现「分组 ∩ 收藏」').toBe(false);
+      expect(hasFolder && scope.ungroupedOnly, '出现「分组 ∩ 未分组」').toBe(false);
+    }
+  });
+});

@@ -302,6 +302,41 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.17 门禁（D-161，2026-11-01 实跑）**：前端 `npm run test` **71 文件 623 例全绿**
+（较 1.5.16 的 70/612 新增 1 文件 5 例 `d161-favorite-scope-guard.test.ts` + store D-161 段 6 例；
+另 `d153-ungrouped-filter-guard.test.ts` 一条既有断言形式跟改，语义未变）/
+`npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（本轮零样式改动）/
+Rust core 零改动（仅 `Cargo.toml` 版本串）/ `cargo fmt --all -- --check` 干净（EXIT=0）/
+clippy 代码警告 0（唯一 warning 行仍是 windres 兜底的 build-script 提示）/
+体积门禁桌面 + APK 双过（MSI 2.78 MB、NSIS 1.96 MB、APK 7.39 MB）。
+
+**1.5.17 实际产物（出包实测，非推算）**：
+APK `7,750,059 B`（`1c3a4a59`，versionCode 1005017 / versionName 1.5.17；**较前八版共同的
+`7,754,155 B` 少了 4,096 B —— 第九版首次变化**，形态上是「删掉一行赋值 + 新增一个小方法」的
+如实体现；前八版字节数完全相同的原因仍未解释，故所有进包判断依旧只认包内证据）/
+NSIS `2,056,344 B`（`be10eaba`）/ MSI `2,916,352 B`（`b59e3c63`）/
+裸 exe **`4,998,144 B`**（`c194b337`，ProductVersion 1.5.17；较 1.5.16 的 4,994,560 B
+**+3,584 B**——新增 `setScope` 方法与注释）/ 绿色版 zip `2,422,841 B`（`88c1bf37`）；
+**zip 内 exe 与裸 exe 哈希一致**（`c194b337`，同为 4,998,144 B）。
+`sha256sum -c` 在**独立空目录**（四个资产按发布名拷入）四文件全 OK。
+
+**包内取证（1.5.17）——第五种输入：改 store 结构、零样式、零新 UI**：
+
+| 判据 | 位置 | 1.5.16 | 1.5.17 |
+|---|---|---|---|
+| `D8W6LNvP`（本次 `App-*.js`） | APK 内 `libpasswordms_lib.so` | **0** | **1** |
+| `DFktmJF6`（本次 `index-*.js`） | 同上 | **0** | **1** |
+| `CHkM6JsF`（`QuickSearch-*.js`） | 同上 | **0** | **1** |
+| `7qndHU-K`（`theme.svelte-*.js`） | 同上 | **0** | **1** |
+| `ptvdewIa` / `C_KvDGpM`（1.5.16 的 JS 名） | 同上 | 1 / 1 | **0 / 0** |
+| `jc_arBlM`（`style-*.css`） | 同上 | **1** | **1** |
+| 版本串 `1.5.16` / `1.5.17` | 同上 | 1 / 0 | **0 / 1** |
+
+> **五轮五种输入**：改样式 → CSS 名变；零样式（1.5.14 / 1.5.15 / 1.5.16 / 1.5.17）→ CSS 名
+> **连续四版不变**（`jc_arBlM` 五版都是 1）。这轮连模板都没动，只改 store 里的三个视图位，
+> 所以「CSS 名不动」是预期的、不是漏验；四个 JS 产物名全换、两个旧名归零，才是这轮改动
+> 真正进包的证据。桌面 `passwordms.exe` 的五个名字同样各出现 1 次。
+
 **1.5.16 门禁（D-160，2026-11-01 实跑）**：前端 `npm run test` **70 文件 612 例全绿**
 （较 1.5.15 的 69/602 新增 1 文件 4 例 `d160-row-folder-visibility-guard.test.ts`
 + `list-scope` 6 例）/ `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN

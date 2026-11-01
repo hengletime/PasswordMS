@@ -1832,3 +1832,41 @@ CSS 契约 0 FAIL / 6 WARN（与基线一致，均为既有主按钮对比度项
 
 前端 **70 文件 612 例全绿**（较 1.5.15 的 69/602 新增 1 文件 4 例 + `list-scope` 6 例）/
 `check` 0/0 / CSS 契约 0 FAIL 6 WARN。
+
+### 13.37 D-161：收藏视图跨组（v1.5.17，2026-11-01）
+
+**背景**：主人实测「收藏里条目显示不全」，复现路径四种走法对应四种结果，指向
+「收藏 = 上一个分组 ∩ 收藏」。
+
+#### 13.37.1 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/stores/vault.svelte.ts` | 新增 `private async setScope({folderId, favoriteOnly, ungroupedOnly})`；`selectFolder` / `selectUngrouped` / `toggleFavoriteOnly` 全部改为一行调用它；收藏的 `folderId` 传 `null` |
+| `src/lib/stores/vault.test.ts` | 新增 D-161 段 6 例（断言**发出去的请求**，不是 store 字段） |
+| `src/lib/d161-favorite-scope-guard.test.ts` | 新增 5 例结构守门 |
+| `src/lib/d153-ungrouped-filter-guard.test.ts` | 一条既有断言形式跟改（`selectUngrouped` 体内不再有三行赋值，改断言「传了哪三个值」），语义未变 |
+
+后端**零改动**：`list_scoped` 的交集语义是对的（「某组里的收藏」是一个合理查询），
+错的是前端在「收藏」这个入口上偷留了分组。
+
+#### 13.37.2 为什么行为例断言「请求」而不是「字段」
+
+```ts
+function lastScope() {
+  const call = listMock.mock.calls.at(-1);
+  return { folderId: call?.[0], favoriteOnly: call?.[1] === true, ungroupedOnly: call?.[3] === true };
+}
+```
+
+`vault.selectedFolderId === null` 只能证明「侧栏高亮换人了」，证明不了「数据真按全库查」。
+D-158 那轮已经吃过一次这个教训：界面清了、数据还筛着，是最坏形态
+（用户看得见的地方都对，看不见的地方全错）。
+
+「不同分组进收藏，两次请求逐字相同」这条最值钱 —— 它直接对应主人那句
+「从『个人』跳和从『Commander 办公』跳结果不一样」，把口述症状变成了可执行判据。
+
+#### 13.37.3 门禁
+
+前端 **71 文件 623 例全绿**（较 1.5.16 的 70/612 新增 1 文件 5 例 + store 段 6 例）/
+`check` 0/0 / CSS 契约 0 FAIL 6 WARN（零样式改动）。

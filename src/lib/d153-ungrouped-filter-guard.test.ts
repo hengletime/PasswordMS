@@ -86,10 +86,13 @@ describe('D-153：未分组必须是可点进去的视图', () => {
     // 入口的方法体必须真的把标记立起来并清掉另两个视图标记 ——
     // 只断言方法名存在的话，方法体写成空壳也能过。
     const sel = store.slice(store.indexOf('async selectUngrouped'));
-    const body = sel.slice(0, sel.indexOf('await this.load()'));
-    expect(body).toContain('this.ungroupedOnly = true;');
-    expect(body).toContain('this.selectedFolderId = null;');
-    expect(body).toContain('this.favoriteOnly = false;');
+    const body = sel.slice(0, sel.indexOf('\n  }'));
+    // D-161 起三个位收进 `setScope` 一起写（漏一位就是「收藏变成 某组∩收藏」那个 bug），
+    // 所以这里断言的是「传了哪三个值」而不是「在哪个函数体里赋值」——语义不变，形式跟代码走。
+    expect(body).toContain('await this.setScope({');
+    expect(body).toContain('ungroupedOnly: true');
+    expect(body).toContain('folderId: null');
+    expect(body).toContain('favoriteOnly: false');
     // 三处必传：列表查询、过滤器快照、保存后回落判定。
     expect(store).toMatch(/this\.ungroupedOnly,\n\s*\),/);
     expect(store).toMatch(/ungroupedOnly: this\.ungroupedOnly,/);

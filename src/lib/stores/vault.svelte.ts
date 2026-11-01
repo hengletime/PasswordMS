@@ -119,12 +119,36 @@ class VaultStore {
    * 若连搜索词也不让清，则「看全库」确实退化成不可达 —— 那条路由清空按钮承担。
    */
 
-  /** 选择分组。 */
-  async selectFolder(folderId: string | null): Promise<void> {
-    this.selectedFolderId = folderId;
-    this.ungroupedOnly = false;
-    this.favoriteOnly = false;
+  /**
+   * 一次性设定「看哪一片」的三个位（D-161）。
+   *
+   * 三个位是**同级单一视图**：任何时刻只能有一个成立（收藏 / 未分组 / 某分组 / 全部）。
+   * 因此切换视图必须**三位一起写**，不许只写自己那一位。
+   *
+   * 收成一个函数不是为了省代码 —— 是因为 `toggleFavoriteOnly` 当初只写了两行、漏了
+   * `selectedFolderId`，于是「收藏」实际变成「当前分组 ∩ 收藏」：从「个人」进收藏只看到
+   * 个人组里那一条，从别的组进去是空的，只有从「全部」进去才是对的
+   * （主人 2026-11-01 原话：「从全部跳到收藏才 2 条都有」）。
+   * 后端 `list_scoped` 一直是交集语义（`scope ∩ favorite_only ∩ query`），
+   * 所以漏这一位不会报错，只会安静地少给数据 —— 这正是最难被自己发现的一类缺陷。
+   *
+   * 参数**三个字段全部必填、不给默认值**：默认值正是这次漏掉的形态，漏写一个参数等于
+   * 悄悄沿用上一次的值，TypeScript 不会说话。
+   */
+  private async setScope(scope: {
+    folderId: string | null;
+    favoriteOnly: boolean;
+    ungroupedOnly: boolean;
+  }): Promise<void> {
+    this.selectedFolderId = scope.folderId;
+    this.favoriteOnly = scope.favoriteOnly;
+    this.ungroupedOnly = scope.ungroupedOnly;
     await this.load();
+  }
+
+  /** 选择分组（传 null = 全部）。 */
+  async selectFolder(folderId: string | null): Promise<void> {
+    await this.setScope({ folderId, favoriteOnly: false, ungroupedOnly: false });
   }
 
   /**
@@ -135,18 +159,25 @@ class VaultStore {
    * 用户也无法解释「为什么未分组里只剩收藏的」。搜索词不动（D-159）。
    */
   async selectUngrouped(): Promise<void> {
-    this.selectedFolderId = null;
-    this.ungroupedOnly = true;
-    this.favoriteOnly = false;
-    await this.load();
+    await this.setScope({ folderId: null, favoriteOnly: false, ungroupedOnly: true });
   }
 
-  /** 切换「仅收藏」。 */
+  /**
+   * 切换「仅收藏」。
+   *
+   * **D-161**：`folderId` 必须一起清成 null —— 收藏是**跨组**的视图，
+   * 侧栏高亮的是「收藏」这一行，列表却按上一个分组过滤的话，
+   * 顶栏写着「收藏」、里面只有某一个组的条目（D-150/D-151 那类「界面自相矛盾」的又一例）。
+   *
+   * 退出收藏（再点一次）落在「全部」而不是回到进入前的分组：界面上从未存在「上次的分组」
+   * 这个概念，突然跳进某个组比回到全部更费解。
+   */
   async toggleFavoriteOnly(): Promise<void> {
-    this.favoriteOnly = !this.favoriteOnly;
-    // 与「未分组」同级：切到收藏时清掉未分组标记，避免两个视图标记同时成立。
-    this.ungroupedOnly = false;
-    await this.load();
+    await this.setScope({
+      folderId: null,
+      favoriteOnly: !this.favoriteOnly,
+      ungroupedOnly: false,
+    });
   }
 
   /** 设置搜索词并刷新。 */
