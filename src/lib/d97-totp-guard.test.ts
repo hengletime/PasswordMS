@@ -58,7 +58,12 @@ describe('D-97（A）：编辑器入库前校验（源码结构断言）', () =>
   const src = pickSource('ItemEditor.svelte');
 
   it('save() 必须先 normalizeTotpInput 再试算 currentTotp，ERR_VALIDATION 拦截保存', () => {
-    expect(src).toContain('normalizeTotpInput(totp)');
+    // D-162：输入先 trim 成 `raw`，再按 otpauth 链接 / 裸 Base32 分流 —— 归一化仍在试算之前。
+    expect(src).toContain('normalizeTotpInput(raw)');
+    const normalizeAt = src.indexOf('normalizeTotpInput(raw)');
+    const computeAt = src.indexOf('await currentTotp(totpSecret)');
+    expect(normalizeAt).toBeGreaterThan(-1);
+    expect(computeAt, '试算跑到归一化之前了').toBeGreaterThan(normalizeAt);
     const saveAt = src.indexOf('async function save()');
     expect(saveAt).toBeGreaterThan(-1);
     const body = src.slice(saveAt, src.indexOf('</script>'));

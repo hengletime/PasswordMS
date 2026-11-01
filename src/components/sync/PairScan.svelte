@@ -5,65 +5,64 @@
   import Icon from '../common/Icon.svelte';
   import Spinner from '../common/Spinner.svelte';
   import { hasSessionCode } from '../../lib/device-label';
-  import { decodeQrFromVideo, isPairingPayload } from '../../lib/qr';
+  import { isPairingPayload } from '../../lib/qr';
+  import { startCameraScan, type CameraScan } from '../../lib/qr-camera';
   import { sync } from '../../lib/stores/sync.svelte';
   import { ui } from '../../lib/stores/ui.svelte';
 
   let manual = $state('');
   let scanning = $state(false);
   let videoEl = $state<HTMLVideoElement | null>(null);
-  let stream: MediaStream | null = null;
-  let handle = 0;
+  let scan: CameraScan | null = null;
 
   async function startScan(): Promise<void> {
-    if (scanning) {
+    if (scan !== null) {
       return;
     }
-    try {
-      // 分辨率给 ideal 约束：桌面定焦摄像头拍手机屏幕时，高分辨率帧显著提高 jsQR 识别率（D-40）。
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-      });
-      if (videoEl !== null) {
-        videoEl.srcObject = stream;
-        await videoEl.play();
-      }
-      scanning = true;
-      // 250ms：jsQR 单帧 720p 约 3-8ms，5fps 抓拍足够跟手。
-      handle = window.setInterval(tick, 250);
-    } catch (err) {
+    // 先点亮预览（哪怕还是黑帧）：用户点了按钮必须立刻有反应，不能让权限弹窗期间的空白被读成「没生效」。
+    scanning = true;
+    if (videoEl === null) {
       scanning = false;
-      // 权限被拒 / 无摄像头给出可行动的提示，而不是笼统的「内部错误」。
-      const name = err instanceof DOMException ? err.name : '';
-      ui.toast('error', name === 'NotAllowedError' || name === 'NotFoundError' ? 'sync.camera_unavailable' : 'err.internal');
-      if (name !== 'NotAllowedError' && name !== 'NotFoundError') {
-        console.error('[pair-scan] getUserMedia failed', err);
-      }
+      return;
+    }
+    scan = await startCameraScan({
+      video: videoEl,
+      // 视野里别的二维码（普通网址、商品条码）一律忽略并继续扫 —— 返回 false 不放停扫描。
+      onText: (text) => {
+        if (!isPairingPayload(text)) {
+          return false;
+        }
+        stopScan();
+        void join(text);
+        return true;
+      },
+      onError: (kind) => {
+        scanning = false;
+        scan = null;
+        // 权限被拒 / 无摄像头给出可行动的提示，而不是笼统的「内部错误」（D-41 的既有口径）。
+        ui.toast('error', kind === 'other' ? 'err.internal' : 'sync.camera_unavailable');
+      },
+    });
+    if (scan === null) {
+      // onError 已在等待期间把状态清掉了：别把按钮留在「扫描中」。
+      scanning = false;
     }
   }
 
   function stopScan(): void {
+    scan?.stop();
+    scan = null;
     scanning = false;
-    if (handle !== 0) {
-      clearInterval(handle);
-      handle = 0;
-    }
-    if (stream !== null) {
-      stream.getTracks().forEach((track): void => track.stop());
-      stream = null;
-    }
   }
 
-  async function tick(): Promise<void> {
-    if (videoEl === null) {
-      return;
-    }
-    const text = decodeQrFromVideo(videoEl);
-    if (text !== null && isPairingPayload(text)) {
-      stopScan();
-      await join(text);
-    }
-  }
+  // D-162：卸载时必须释放摄像头。原先 startScan 里拿的 stream 无人收尾，
+  // 离开配对页后摄像头指示灯仍然亮着（同一份资源，谁 start 谁 stop）。
+  $effect((): (() => void) => {
+    return () => {
+      scan?.stop();
+      scan = null;
+    };
+  });
 
   async function join(text: string): Promise<void> {
     const payload = text.trim();

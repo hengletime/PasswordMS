@@ -7,6 +7,9 @@
   import { isSafeUrl } from '../lib/url-safety';
   import { toAppError, ErrorCode } from '../lib/errors';
   import { currentTotp, normalizeTotpInput } from '../lib/totp';
+  import { parseOtpauth, rejectMessage } from '../lib/otpauth';
+  import { decodeQrFromBlob } from '../lib/qr';
+  import { startCameraScan, type CameraScan } from '../lib/qr-camera';
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import type { CustomField, ItemDraftDto, ItemDto } from '../types';
@@ -50,6 +53,158 @@
   // D-97：校验失败聚焦用（bind:this）。
   let totpInput = $state<HTMLInputElement | null>(null);
 
+  // ===== D-162：两步验证二维码（扫码 / 从图片导入）=====
+  //
+  // 为什么要有这个：绝大多数网站的两步验证设置页给的是**二维码**，旁边才有一行
+  // 「手动输入密钥」的小字。手抄 Base32 又慢又容易错（0/O、1/I 是经典错源），
+  // 而既有实现只支持「粘贴 otpauth 链接」——那要求用户先把二维码转成文本，绕了一圈。
+  //
+  // 两个入口都保留，因为二维码常常就显示在**用户自己这块屏幕上**（网站设置页在浏览器里、
+  // App 在手机上）：这时摄像头拍自己的屏幕是最难的对焦条件，「从图片」才是主力路径。
+  let scanOpen = $state(false);
+  let scanVideo = $state<HTMLVideoElement | null>(null);
+  let fileInput = $state<HTMLInputElement | null>(null);
+  /** 摄像头打不开（权限被拒 / 无设备）→ 收起预览，只留提示与图片入口。 */
+  let scanCameraFailed = $state(false);
+  /**
+   * TOTP 字段的行内提示（i18n 键 + 参数）；`null` 表示无提示。
+   *
+   * 扫码与粘贴**共用**这一个状态：两个入口走的是同一条参数判定（见 `parseOtpauth`），
+   * 提示也就该落在同一个位置 —— 分两套状态迟早出现「扫码说不行、粘贴没反应」。
+   */
+  let totpHint = $state<{ key: string; params?: Record<string, string> } | null>(null);
+  // 刻意不用 $state：它是设备句柄，不是渲染数据；若做成响应式，下面的 effect 会因
+  // 「赋值 scan」而重跑，等于每启动一次摄像头就重启一次。
+  let scan: CameraScan | null = null;
+
+  /**
+   * 消费一张码解出的文本。
+   *
+   * @returns 是否已消费（`true` 停止扫描）。**非 `otpauth://` 的一律返回 `false`**：
+   * 摄像头视野里常有别的二维码（商品条码、普通网址），把每一条都当错误会让人以为坏了。
+   */
+  function handleScannedText(raw: string): boolean {
+    const trimmed = raw.trim();
+    // 只判前缀就用 `startsWith`，不写正则字面量：这里没有任何模式匹配需求，
+    // 而正则里的转义斜杠在多层文本传递中最容易被吃掉（本轮实际踩过一次）。
+    if (!trimmed.toLowerCase().startsWith('otpauth://')) {
+      return false;
+    }
+    const parsed = parseOtpauth(trimmed);
+    if (parsed.kind === 'rejected') {
+      // **拒绝时绝不写 `totp`**：存量计算固定 6 位 / 30 秒 / SHA1，把 digits=8 的密钥存进去
+      // 会得到一个「存得进去、算出来必然对不上」的条目 —— 比当场报错难查得多。
+      totpHint = rejectMessage(parsed);
+      return true;
+    }
+    totp = parsed.secret;
+    totpInvalid = false;
+    totpHint = null;
+    // 标题只在**空**的时候补：用户已经写了一半就说明他要自己的命名，覆盖比不填更烦人。
+    if (title.trim() === '') {
+      title = parsed.issuer ?? parsed.account ?? '';
+    }
+    closeScan();
+    return true;
+  }
+
+  function closeScan(): void {
+    scan?.stop();
+    scan = null;
+    scanOpen = false;
+    // 刻意不清 `totpHint`：拒绝原因要留在字段旁边，用户才有机会读懂它。
+    // 「关掉面板」不等于「问题解决了」。
+  }
+
+  function toggleScan(): void {
+    if (scanOpen) {
+      closeScan();
+      return;
+    }
+    scanOpen = true;
+    totpHint = null;
+    scanCameraFailed = false;
+  }
+
+  async function ingestImage(file: Blob): Promise<void> {
+    const text = await decodeQrFromBlob(file);
+    if (text === null) {
+      totpHint = { key: 'editor.scan_no_qr' };
+      return;
+    }
+    if (!handleScannedText(text)) {
+      // 解出了码但不是两步验证码：明确说出来，别表现成「点了没反应」。
+      totpHint = { key: 'editor.scan_not_otpauth' };
+    }
+  }
+
+  async function pickImage(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    // 立刻清空：否则连选同一个文件第二次不会触发 change（浏览器不会发事件）。
+    input.value = '';
+    if (file === null) {
+      return;
+    }
+    await ingestImage(file);
+  }
+
+  // 面板展开时接受粘贴：截图 → Ctrl+V 是最快的一条路（比"先存成文件再选"少两步）。
+  // 只在面板打开时监听，避免用户往其他输入框粘贴图片时被我们拦下来。
+  $effect((): (() => void) => {
+    if (!scanOpen) {
+      return () => {};
+    }
+    const onPaste = (event: ClipboardEvent): void => {
+      const items = event.clipboardData?.items;
+      if (items === undefined) {
+        return;
+      }
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file !== null) {
+            // 只有真拿到图片才 preventDefault：没有图片时让粘贴照常走（用户可能就想粘文本）。
+            event.preventDefault();
+            void ingestImage(file);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', onPaste);
+    return (): void => window.removeEventListener('paste', onPaste);
+  });
+
+  // 面板展开时开摄像头，收起 / 卸载时释放。
+  $effect((): (() => void) => {
+    if (!scanOpen || scanVideo === null) {
+      return () => {};
+    }
+    // `cancelled` 而不是读 `scanOpen`：授权弹窗期间用户可能已经关了面板甚至离开编辑器，
+    // 那时 stream 才到手 —— 必须当场还回去，否则摄像头灯一直亮着（D-162 修的既有泄漏）。
+    let cancelled = false;
+    void startCameraScan({
+      video: scanVideo,
+      onText: handleScannedText,
+      onError: (kind) => {
+        scanCameraFailed = true;
+        totpHint = { key: kind === 'other' ? 'err.internal' : 'editor.scan_camera_denied' };
+      },
+    }).then((handle) => {
+      if (cancelled) {
+        handle.stop();
+        return;
+      }
+      scan = handle;
+    });
+    return () => {
+      cancelled = true;
+      scan?.stop();
+      scan = null;
+    };
+  });
+
   let noteBytes = $derived(new Blob([body]).size);
   let bodyTooLong = $derived(kind === 'secure_note' && noteBytes > MAX_NOTE_BYTES);
   let urlUnsafe = $derived(kind === 'login' && url.trim().length > 0 && !isSafeUrl(url));
@@ -74,10 +229,28 @@
     // 仅 ERR_VALIDATION 拦截保存并聚焦字段；环境类错误放行原流程（不因 IPC 故障卡死编辑器）。
     let totpSecret: string | null = null;
     if (kind === 'login' && totp.trim().length > 0) {
-      totpSecret = normalizeTotpInput(totp);
+      const raw = totp.trim();
+      // D-162：粘贴 otpauth 整串时先过**与扫码完全同一套**参数判定。
+      //
+      // 只抽 secret（D-97 的做法）会放过 digits=8 / period=60 / SHA256 的码：
+      // 存进去以后本地算出来的 6 位码在网站上必然被拒，而用户没有任何线索知道为什么。
+      // 扫码路径已经明确拒绝 —— 若粘贴路径还放行，就成了「同一个密钥，扫进来不行、
+      // 粘进来能存」，比两处都不判更难解释。
+      if (raw.toLowerCase().startsWith('otpauth://')) {
+        const parsed = parseOtpauth(raw);
+        if (parsed.kind === 'rejected') {
+          totpHint = rejectMessage(parsed, 'paste');
+          totpInput?.focus();
+          return;
+        }
+        totpSecret = parsed.secret;
+      } else {
+        totpSecret = normalizeTotpInput(raw);
+      }
       try {
         await currentTotp(totpSecret);
         totpInvalid = false;
+        totpHint = null;
       } catch (err) {
         if (toAppError(err).code === ErrorCode.ERR_VALIDATION) {
           totpInvalid = true;
@@ -209,6 +382,47 @@
         placeholder={ui.t('editor.totp_placeholder')}
         aria-invalid={totpInvalid}
       />
+
+      <!-- D-162：两步验证二维码。网站设置页给的是二维码，手抄 Base32 才是那个绕远的办法；
+           两个入口并列而不是只做扫码 —— 二维码常显示在用户自己这块屏幕上，
+           摄像头拍自己屏幕最难对焦，「从图片」才是同屏场景的主力。 -->
+      <div class="editor-scan-row">
+        <button class="pms-btn is-ghost is-sm" type="button" onclick={toggleScan}>
+          <Icon name="qr" size={14} />{ui.t('editor.totp_scan')}
+        </button>
+        <button class="pms-btn is-ghost is-sm" type="button" onclick={() => fileInput?.click()}>
+          <Icon name="file" size={14} />{ui.t('editor.totp_scan_image')}
+        </button>
+        <!-- 隐藏的原生文件选择：桌面与 Android 都走系统选择器，不需要额外插件权限。
+             不设 capture，避免在手机上强制唤起相机（相册里的截图同样是我们需要的那条路）。 -->
+        <input
+          class="editor-scan-file"
+          type="file"
+          accept="image/*"
+          bind:this={fileInput}
+          onchange={(event) => void pickImage(event)}
+        />
+      </div>
+
+      {#if scanOpen}
+        <div class="editor-scan">
+          {#if !scanCameraFailed}
+            <video bind:this={scanVideo} class="editor-scan-preview" muted playsinline></video>
+          {/if}
+          <p class="pms-hint">{ui.t('editor.scan_hint')}</p>
+          <div class="editor-scan-row">
+            <button class="pms-btn is-ghost is-sm" type="button" onclick={closeScan}>
+              {ui.t('common.cancel')}
+            </button>
+          </div>
+        </div>
+      {/if}
+
+      <!-- 失败原因就地说明：拒绝路径（digits=8 / period=60 / HOTP）必须由界面直说，
+           否则用户只会看到「扫了但没反应」，然后去怀疑摄像头。 -->
+      {#if totpHint}
+        <p class="pms-hint is-danger">{ui.t(totpHint.key, totpHint.params)}</p>
+      {/if}
       {#if totpInvalid}
         <p class="pms-hint is-danger">{ui.t('err.totp_invalid')}</p>
       {/if}
@@ -331,6 +545,31 @@
   }
   .editor-add {
     align-self: flex-start;
+  }
+  /* D-162：扫码入口与预览面板。只做布局 —— 按钮/提示/圆角全部沿用既有类（§5.7）。 */
+  .editor-scan-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.4rem;
+  }
+  .editor-scan {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    margin-top: 0.5rem;
+  }
+  .editor-scan-preview {
+    width: 100%;
+    max-height: 220px;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    background: #000;
+    border-radius: var(--pms-r);
+  }
+  .editor-scan-file {
+    display: none;
   }
   /* D-93：固定底栏（非 sticky）——flex 布局保证永远贴容器底，无缝隙、无内容透出。 */
   .editor-actions {

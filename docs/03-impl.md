@@ -1870,3 +1870,43 @@ D-158 那轮已经吃过一次这个教训：界面清了、数据还筛着，�
 
 前端 **71 文件 623 例全绿**（较 1.5.16 的 70/612 新增 1 文件 5 例 + store 段 6 例）/
 `check` 0/0 / CSS 契约 0 FAIL 6 WARN（零样式改动）。
+
+### 13.38 D-162：两步验证扫码 / 图片导入（v1.5.18，2026-11-01）
+
+#### 13.38.1 改动清单
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/otpauth.ts` | **新增**。`parseOtpauth()` 纯函数解析 + `rejectMessage(reason, scene)` 文案映射 |
+| `src/lib/qr-camera.ts` | **新增**。从 `PairScan` 抽出的「摄像头 + 抓拍节奏 + 资源释放」，`startCameraScan()` 返回 `{stop}` |
+| `src/lib/qr.ts` | 新增 `decodeQrFromBlob()`（限尺寸 → 2× 重试）；`createImageBitmap` 失败退回 `<img>`（SVG 场景） |
+| `src/components/ItemEditor.svelte` | TOTP 字段下加「扫码 / 从图片」两个入口 + 扫码面板 + 粘贴监听；`save()` 接入同一套参数判定 |
+| `src/components/sync/PairScan.svelte` | 改用 `startCameraScan`，删掉手写的 getUserMedia/interval；**补上卸载释放**（原缺失） |
+| `src/lib/i18n/*.ts` | 13 个键 ×4 语言（扫码入口 2 + 通用提示 3 + 拒绝 4 + 链接措辞 2 + 摄像头 1，另有 1 个复用） |
+| `src/lib/otpauth.test.ts` | **新增** 22 例 |
+| `src/lib/d162-totp-scan-guard.test.ts` | **新增** 11 例接线守门 |
+| `src/lib/d97-totp-guard.test.ts` | 一条断言形式跟改（`normalizeTotpInput(totp)` → `(raw)`），并加强为「归一化必须早于试算」 |
+
+后端**零改动**：`totp_now` 的入参仍是 secret，扫码只是多了个写入途径。
+
+#### 13.38.2 两个容易写错的点
+
+1. **拒绝分支的 `return` 位置**。写成「先 `totpHint = ...` 再往下执行」= 把不支持的密钥
+   写进表单，同时也报了错 —— 用户看到警告、保存下来、然后永远对不上码。断言顺序
+   （`indexOf` 比较）比断言「有这段代码」有效得多。
+2. **`decodeQrFromBlob` 的资源释放**。`ImageBitmap` 占原生内存，GC 不回收；
+   `<img>` 兜底路径用 `URL.createObjectURL`，不 revoke 就是每选一次图泄漏一份。
+   用 `QrSource.dispose()` 统一兜住，两条路各自实现。
+
+#### 13.38.3 图片导入的两个策略
+
+- **先缩再解**：手机照片 4000×3000，`getImageData` 一次 48 MB，而二维码只占几百像素。
+  先等比缩到最长边 ≤2000。
+- **失败后放大 2× 重试**：截图里的码常只有一两百像素，jsQR 的二值化容易丢定位图案；
+  放大重采样后命中率明显上升。上限 2400，避免放大把内存又吃回去。
+
+#### 13.38.4 门禁
+
+前端 **75 文件 656 例全绿**（较 1.5.17 的 71/623 新增 2 文件 33 例 + 存量两条断言跟改）/
+`check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（新增 4 条布局类，未引入任何外观规则）/
+Rust 零改动 / `fmt` 干净 / clippy 代码警告 0。
