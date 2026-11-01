@@ -27,10 +27,14 @@ describe('D-101 搜索框一键清空', () => {
   it('clearSearch 必须先取消防抖 timer 再清空——否则旧词 setQuery 写回', () => {
     const at = src.indexOf('function clearSearch');
     const body = src.slice(at, src.indexOf('}', src.indexOf('setQuery', at)));
-    const clearTimer = body.indexOf('clearTimeout');
+    // D-158 起「取消防抖」抽成 `cancelDebounce()`：timer 与 pending 必须**一起**清，
+    // 这件配对不能留给每个调用方自己记（漏清 pending 会让空闲对齐永久瘫痪）。
+    // 断言随之改为「先 cancelDebounce、后 setQuery('')」；那两个动作仍在
+    // `cancelDebounce` 函数体内，由 d158-search-echo-guard.test.ts ③ 钉住。
+    const cancel = body.indexOf('cancelDebounce()');
     const setStore = body.indexOf("setQuery('')");
-    expect(clearTimer).toBeGreaterThan(-1);
-    expect(setStore).toBeGreaterThan(clearTimer);
+    expect(cancel).toBeGreaterThan(-1);
+    expect(setStore).toBeGreaterThan(cancel);
     expect(body).toContain('query = ');
   });
 

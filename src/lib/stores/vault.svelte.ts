@@ -103,11 +103,36 @@ class VaultStore {
     }
   }
 
+  /**
+   * 切视图（分组 / 收藏 / 未分组）时重置搜索词。
+   *
+   * **D-158**：切视图是**导航**，不是筛选 —— 导航应当重置临时筛选条件。
+   * 主人原话：「想回到所有项目，回不去了，不管切换到哪个分组都是处于筛选结果状态。」
+   * 根因有两层：① `ItemList` 重建后搜索框显示为空，筛选却还在生效（看不见的筛选）；
+   * ② 即便看得见，用户点侧栏分组的意图也是「看这一组」，不是「在这一组里继续筛」——
+   * 让两者同时生效的结果通常是空列表，会被读成「工作组里没数据」。
+   *
+   * **必须推进 `queryEpoch`**：这是程序化改写，搜索框要立刻跟着清（D-81 的约定；
+   * 用户自己打字走 `setQuery`，不推进）。空串时不推进，避免每次点侧栏都白跑一遍
+   * `ItemList` 的同步 effect。
+   *
+   * 刻意**不**在「切标签往返」时清：那是暂时离开、回到同一位置，搜索词应当保留
+   * （`ItemList` 挂载时从 store 取初值，正好覆盖这条路径）。
+   */
+  private resetQueryOnNavigate(): void {
+    if (this.query === '') {
+      return;
+    }
+    this.query = '';
+    this.queryEpoch += 1;
+  }
+
   /** 选择分组。 */
   async selectFolder(folderId: string | null): Promise<void> {
     this.selectedFolderId = folderId;
     this.ungroupedOnly = false;
     this.favoriteOnly = false;
+    this.resetQueryOnNavigate();
     await this.load();
   }
 
@@ -122,6 +147,7 @@ class VaultStore {
     this.selectedFolderId = null;
     this.ungroupedOnly = true;
     this.favoriteOnly = false;
+    this.resetQueryOnNavigate();
     await this.load();
   }
 
@@ -130,6 +156,7 @@ class VaultStore {
     this.favoriteOnly = !this.favoriteOnly;
     // 与「未分组」同级：切到收藏时清掉未分组标记，避免两个视图标记同时成立。
     this.ungroupedOnly = false;
+    this.resetQueryOnNavigate();
     await this.load();
   }
 

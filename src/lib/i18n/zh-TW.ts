@@ -117,6 +117,7 @@ export const zhTW = {
     new_login: '新增登入',
     new_note: '新增筆記',
     empty: '還沒有項目',
+    empty_search: '沒有符合條件的項目',
     no_results: '沒有符合的項目',
     favorite: '加入最愛',
     unfavorite: '取消最愛',

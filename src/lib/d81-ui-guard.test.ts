@@ -32,8 +32,12 @@ describe('D-81 组件层结构守卫', () => {
   it('ItemList 搜索框接 queryEpoch（否则保存回落「全部条目」后输入框残留旧词）', () => {
     const src = pickSource('ItemList.svelte');
     // 正向锚点：必须读 epoch 并同步本地显示。
+    // D-158 起同步值先快照进 `storeQuery` 局部变量（同一段还要拿它做「空闲对齐」），
+    // 所以拆成「快照来源 + 赋值目标」两句，而不是原来那句 `query = vault.query;`。
+    // 钉的意图没变：显示值必须来自 store，不能凭本地状态自说自话。
     expect(src).toContain('vault.queryEpoch');
-    expect(src).toContain('query = vault.query;');
+    expect(src).toContain('const storeQuery = vault.query;');
+    expect(src).toContain('query = storeQuery;');
     // 负向：epoch 没变时不得反向覆盖本地输入（那是用户正在打的字，防抖期间 store 落后是正常的）。
     expect(src).toContain('vault.queryEpoch !== seenQueryEpoch');
   });

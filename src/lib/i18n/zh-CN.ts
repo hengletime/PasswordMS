@@ -124,6 +124,8 @@ export const zhCN = {
     new_login: '新建登录',
     new_note: '新建笔记',
     empty: '还没有条目',
+    /* D-158：搜索无匹配 ≠ 库里没有条目。两者共用一句会让人以为数据丢了。 */
+    empty_search: '没有匹配的条目',
     no_results: '没有匹配的条目',
     favorite: '收藏',
     unfavorite: '取消收藏',

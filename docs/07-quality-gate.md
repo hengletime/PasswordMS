@@ -302,6 +302,33 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.14 门禁（D-158，2026-11-01 实跑）**：前端 `npm run test` **68 文件 596 例全绿**
+（较 1.5.13 的 67/584 新增 1 文件 8 例 `d158-search-echo-guard.test.ts`，另 `vault.test.ts`
+新增 4 例行为）/ `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，
+本轮零样式改动）/ Rust core 零改动 / `cargo fmt --all -- --check` 干净 / clippy 代码警告 0 /
+体积门禁桌面 + APK 双过（MSI 2.78 MB、NSIS 1.96 MB、APK 7.33 MB）。
+
+**1.5.14 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`49fc2aff`，versionCode 1005014 / versionName 1.5.14；**字节数与前五版
+完全相同，第六次**）/ NSIS `2,056,481 B`（`65ca4701`）/ MSI `2,916,352 B`（`951490b0`）/
+裸 exe `4,997,120 B`（`492c4088`，ProductVersion 1.5.14）/ 绿色版 zip `2,422,707 B`
+（`fe699a24`）；**zip 内 exe 与裸 exe 哈希一致**（`492c4088`）。
+`sha256sum -c target/SHA256SUMS-1.5.14.txt` 四文件全 OK。
+
+**包内取证（1.5.14）——「不该变的不变」第二次得到验证，且这次是反向**：
+
+| 判据 | 位置 | 1.5.13 | 1.5.14 |
+|---|---|---|---|
+| `BScF0NTj`（本次 `App-*.js`） | APK 内 `libpasswordms_lib.so` | **0** | **1** |
+| `CyNRiLgU`（本次 `index-*.js`） | 同上 | **0** | **1** |
+| `C9OX3AUS` / `C6Cyrhx7`（1.5.13 的 JS 名） | 同上 | 1 / 1 | **0 / 0** |
+| `jc_arBlM`（`style-*.css`） | 同上 | **1** | **1** |
+| 版本串 `1.5.13` / `1.5.14` | 同上 | 1 / 0 | 0 / 1 |
+
+> **1.5.13 改了样式 → CSS 名变（`CErjAN2L`→`jc_arBlM`）；1.5.14 零样式改动 → CSS 名不变
+> （`jc_arBlM` 两版都是 1）。两轮一正一反，把「Vite 产物名反映内容」这条判据验到了两个方向。
+> 桌面 `passwordms.exe` 同样含三个名字各 1 次。
+
 **1.5.13 门禁（D-157，2026-11-01 实跑）**：前端 `npm run test` **67 文件 584 例全绿**
 （较 1.5.12 的 65/572 新增 2 文件 12 例：`list-scope.test.ts` 8 例 +
 `d157-mobile-scope-title-guard.test.ts` 4 例）/ `npm run check` 0 error 0 warning /

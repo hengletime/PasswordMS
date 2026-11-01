@@ -26,8 +26,25 @@
     return window.matchMedia('(max-width: 767px)').matches;
   }
 
-  let query = $state('');
+  /**
+   * 搜索框**显示值**（与「实际生效的筛选词」`vault.query` 是两个东西，但那两者在空闲时
+   * 必须相等 —— 这是验收项）。
+   *
+   * **初值必须取 `vault.query` 现值**：本组件会因切分区、手机端列表↔详情推进而被
+   * **卸载重建**。初值写成 `''` 时，重建后 store 里那个仍在生效的关键词就没有任何界面
+   * 痕迹了 —— 表现为「列表只有 5 条、搜索框是空的、切分组切标签都回不到全部」，
+   * 用户会读成「数据丢了、软件卡住了」（D-158，v1.5.14 修复）。
+   */
+  let query = $state(vault.query);
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * 正在防抖、尚未提交给 store 的词（`null` = 空闲）。
+   *
+   * 判「本地显示与 store 不一致是谁的锅」全靠它：`pending !== null` = 是我自己还在打字，
+   * store 落后是 220ms 防抖的正常延迟，**不许**拿 store 覆盖输入框（否则每个按键都会被清掉）；
+   * `pending === null` = 空闲，此时两者不同只可能是外部改写，必须跟上 store。
+   */
+  let pending: string | null = null;
   /** 搜索框引用（v1.4.10：全局热键唤出后把焦点打进来）。 */
   let searchInput = $state<HTMLInputElement | undefined>(undefined);
   /**
@@ -49,21 +66,55 @@
     searchInput.select();
   });
 
+  /**
+   * 取消防抖：**timer 与 pending 必须一起清**。
+   *
+   * 只清 timer 会留下一个非 null 的 `pending`，空闲对齐分支就永久瘫痪 —— 输入框从此不再
+   * 跟随 store（比原 bug 更隐蔽）。所以这两件事封在一个函数里，不留给调用方记。
+   */
+  function cancelDebounce(): void {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    pending = null;
+  }
+
+  /**
+   * 卸载时丢弃未提交的词。
+   *
+   * 220ms 防抖窗口内切分区，timer 会在组件已经消失之后才 fire，替用户把一个**他已经
+   * 放弃的词**写进 store。下一次重建时那个词又冒出来 —— 一个没有任何来源的幽灵筛选。
+   * 组件销毁 = 用户离开了搜索框，没提交的输入就该作废。
+   *
+   * 只丢弃**未提交**的词；已提交的（store 里那份）由挂载初值 + 空闲对齐负责恢复，
+   * 这正是「切分区回来还能看到自己在搜什么」的正常路径。
+   */
+  $effect((): (() => void) => () => {
+    cancelDebounce();
+  });
+
   // D-81：store 的 query 被外部重置（保存成功后回落「全部条目」、锁定 reset）时，
   // 搜索框显示值必须跟着变 —— 「搜索框显示 = 实际过滤」是验收项。
   // 用 `queryEpoch` 区分两种「store 与本地不一致」：
   //   · epoch 变了 = 外部重置 → 取消挂着的防抖、把显示同步成 store 值；
   //   · epoch 没变 = 自己打字中（store 落后于本地是 220ms 防抖的正常延迟）→ 不动输入框，
   //     否则每个按键都会被清掉。
+  //
+  // D-158：再加一条**空闲对齐**。只靠 epoch 等于要求「以后每条改 query 的路径都记得推进
+  // epoch」，而这次出问题的恰恰**没有路径**：组件卸载重建、本地归零，store 没变、epoch 也没变。
+  // `pending === null` 是「我没在打字」的准确判据，此时两者不同只可能是外部改写，跟上它。
   let seenQueryEpoch = vault.queryEpoch;
   $effect(() => {
+    const storeQuery = vault.query;
     if (vault.queryEpoch !== seenQueryEpoch) {
       seenQueryEpoch = vault.queryEpoch;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      query = vault.query;
+      cancelDebounce();
+      query = storeQuery;
+      return;
+    }
+    if (pending === null && query !== storeQuery) {
+      query = storeQuery;
     }
   });
 
@@ -73,13 +124,23 @@
     if (timer !== null) {
       clearTimeout(timer);
     }
+    // 先立 pending 再挂 timer：Svelte 的 effect 在本次事件处理结束后才跑，那时 pending
+    // 必须已经是非 null，否则上面那条空闲对齐会把刚敲的字判成「外部改写」清掉。
+    pending = value;
     timer = setTimeout((): void => {
       timer = null;
       // 防御性兜底：防抖期间本地被外部重置清空过的话，旧词不再生效
       // （正常路径 epoch effect 已把 timer 取消，这条护栏兜的是未来新增的重置路径）。
-      if (query === value) {
-        void vault.setQuery(value);
+      if (query !== value) {
+        pending = null;
+        return;
       }
+      // 顺序有讲究：**先 setQuery，再清 pending**。
+      // `setQuery` 首行 `this.query = query` 在第一个 `await` 之前同步执行，所以它返回时
+      // store 已经是新词；反过来先清 pending 的话，中间那一瞬会被空闲对齐读成「外部改写」，
+      // 把用户刚打的词清回旧值。
+      void vault.setQuery(value);
+      pending = null;
     }, 220);
   }
 
@@ -87,10 +148,7 @@
   // 又写回去），再同步本地显示与 store（setQuery 内部走 load()，与手输路径同源）。
   // 不碰 queryEpoch：epoch 只由外部重置路径推进（D-81），本按钮是自己发起的清空。
   function clearSearch(): void {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
+    cancelDebounce();
     query = '';
     void vault.setQuery('');
   }
@@ -287,9 +345,18 @@
   {#if vault.busy}
     <div class="list-center"><Spinner label={ui.t('common.loading')} /></div>
   {:else if vault.items.length === 0}
+    <!-- D-158：空态要区分「库里没有」和「被搜索词筛掉了」。
+         统一写「还没有条目」时，搜一个不存在的词会让人以为数据丢了（D-152 同型焦虑）。
+         判据用 `vault.query`（**实际生效**的筛选词）而不是本地 `query`：空态解释的是
+         「列表为什么是空的」，而列表是按 store 里的词过滤的。 -->
     <div class="list-center list-empty">
-      <Icon name="key" size={26} />
-      <p>{ui.t('item.empty')}</p>
+      {#if vault.query.length > 0}
+        <Icon name="search" size={26} />
+        <p>{ui.t('item.empty_search')}</p>
+      {:else}
+        <Icon name="key" size={26} />
+        <p>{ui.t('item.empty')}</p>
+      {/if}
     </div>
   {:else}
     <ul class="list-items" bind:this={listEl}>

@@ -38,6 +38,7 @@ import { api } from '../ipc';
 import { vault } from './vault.svelte';
 
 const listMock = vi.mocked(api.items.list);
+const countsMock = vi.mocked(api.items.counts);
 const createMock = vi.mocked(api.items.create);
 const updateMock = vi.mocked(api.items.update);
 const foldersListMock = vi.mocked(api.folders.list);
@@ -272,5 +273,65 @@ describe('#531 排序与频度命令透传', () => {
 
     await expect(vault.recordItemUsage('i1')).resolves.toBeUndefined();
     expect(listMock).not.toHaveBeenCalled();
+  });
+});
+
+// D-158：切视图（分组 / 收藏 / 未分组）是**导航**，必须重置临时搜索词。
+//
+// 主人反馈（2026-11-01）：「搜索框输入一个字母 j 筛出一些条目，现在想回到所有项目，
+// 回不去了，不管切换到哪个分组都是处于筛选结果状态。切换标签再回来也不行。」
+//
+// 除了「搜索框显示为空、筛选仍在生效」那层（由 ItemList 的 `d158-search-echo-guard`
+// 负责），这一层是语义：即便搜索词看得见，点分组也不该继续在旧关键词下筛——那通常
+// 得到空列表，会被读成「这个分组里没有数据」。
+describe('D-158 切视图重置搜索词', () => {
+  beforeEach(() => {
+    listMock.mockReset().mockResolvedValue([]);
+    foldersListMock.mockReset().mockResolvedValue([]);
+    countsMock.mockReset().mockResolvedValue({ total: 0, favorites: 0, ungrouped: 0 });
+    vault.reset();
+    // reset 会推进 epoch，同步一次基准。
+  });
+
+  it('search 之后切分组：query 清空、epoch 推进、新请求不再带 query', async () => {
+    await vault.setQuery('j');
+    expect(vault.query).toBe('j');
+    const before = vault.queryEpoch;
+
+    await vault.selectFolder('f-work');
+
+    expect(vault.query).toBe('');
+    expect(vault.queryEpoch).toBe(before + 1);
+    // 关键：真的重新查了、且没带旧关键词（否则界面看着清了、数据还是筛过的）。
+    const last = listMock.mock.calls.at(-1);
+    expect(last?.[0]).toBe('f-work');
+    expect(last?.[2]).toBeUndefined();
+  });
+
+  it('切「收藏」与「未分组」同样重置（三者同级视图，不许留一条带旧词的路径）', async () => {
+    await vault.setQuery('j');
+    await vault.toggleFavoriteOnly();
+    expect(vault.query).toBe('');
+    expect(listMock.mock.calls.at(-1)?.[2]).toBeUndefined();
+
+    await vault.setQuery('j');
+    await vault.selectUngrouped();
+    expect(vault.query).toBe('');
+    expect(listMock.mock.calls.at(-1)?.[2]).toBeUndefined();
+  });
+
+  it('搜索词本来为空时不推进 epoch（否则每点一次侧栏都白跑一遍同步 effect）', async () => {
+    expect(vault.query).toBe('');
+    const before = vault.queryEpoch;
+
+    await vault.selectFolder('f-a');
+
+    expect(vault.queryEpoch).toBe(before);
+  });
+
+  it('打字路径不得推进 epoch（那是用户自己的输入，不算程序化重置）', async () => {
+    const before = vault.queryEpoch;
+    await vault.setQuery('abc');
+    expect(vault.queryEpoch).toBe(before);
   });
 });

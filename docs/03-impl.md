@@ -1715,3 +1715,51 @@ const scopeLabel = $derived(
 `folderId` 分支失效。
 
 **全量**：前端 67 文件 584 例、`npm run check` 0/0、CSS 0 FAIL 6 WARN（与基线一致）。
+### 13.34 D-158：搜索筛选「回不去」——显示值与生效值脱钩（v1.5.14，2026-11-01）
+
+**改因**（主人，附截图）：「刚刚在搜索框里输入一个字母『j』筛选出一些条目，现在想回到所有
+项目，回不去了，不管切换到哪个分组都是处于筛选结果状态。切换标签再回来也不行。」
+截图状态：搜索框**空**、列表只有 5 条、侧栏「全部 51」高亮。
+
+**根因（两层，都不是搜索逻辑本身）**：
+
+1. `ItemList` 的本地 `query` 初值写死 `''`。而 `MainLayout` 用 `{#if ui.section === 'items'}`
+   包住它 —— 切分区会**卸载重建**。重建后本地归零，`vault.query` 里那个 `'j'` 还在生效，
+   `queryEpoch` 没变（没人推进它），于是输入框空着、列表还在筛。
+2. 即便看得见，切分组也不该保留搜索：`search + 分组` 的组合通常得到空列表，会被读成
+   「这个分组里没有数据」。
+
+**代码改动**（三个文件）：
+
+| 文件 | 改动 |
+|---|---|
+| `src/components/ItemList.svelte` | `let query = $state(vault.query)`；新增 `pending` + `cancelDebounce()`；effect 加空闲对齐；卸载 cleanup；空态分流 |
+| `src/lib/stores/vault.svelte.ts` | 新增 `resetQueryOnNavigate()`；`selectFolder` / `selectUngrouped` / `toggleFavoriteOnly` 调用它 |
+| 四语言 | 新增 `item.empty_search` |
+
+**为什么不能只补 `queryEpoch`**：epoch 机制的隐含前提是「以后每条改 `query` 的路径都推进它」。
+这次的路径**根本没改 store**，是本地被归零 —— 它抓不到。所以加一条判据
+`pending === null && query !== storeQuery`：把「谁改的」换成「我是不是在打字」。三条同步路径
+（锚点：`const storeQuery = vault.query;`）在 `docs/02-arch.md` §3.39.1 有完整表。
+
+**两个顺序不是风格问题**：
+- `onSearchInput` 里先立 `pending` 再挂 `timer`——Svelte 的 effect 在事件处理结束后才跑，
+  那时 pending 必须已非 null，否则空闲对齐会把刚敲的字判成「外部改写」清掉。
+- 回调里先 `void vault.setQuery(value)` 再 `pending = null`——`setQuery` 首行
+  `this.query = query` 在第一个 `await` 前同步执行，返回时 store 已是新词；反过来中间那一瞬
+  会被读成外部改写。
+
+**`cancelDebounce` 为什么不内联**：清 timer 与清 pending 是**必须成对**的动作，只清 timer 会
+留下非 null 的 pending，让空闲对齐永久瘫痪（比原 bug 更隐蔽）。封进函数里不留给调用方记。
+
+**三处既有断言随之更新**（都是**形式过时**，语义未变）：
+- `d81-ui-guard.test.ts`：`query = vault.query;` → 拆成 `const storeQuery = vault.query;` +
+  `query = storeQuery;`（同步值先快照进局部变量，同一段还要拿它做空闲对齐）。
+- `d101-search-clear.test.ts`：`clearTimeout` 的位置断言 → `cancelDebounce()` 的位置断言。
+- `d158` 自身第 ④ 例用 `lastIndexOf('pending = null;')`：回调里「本地被外部改过就放弃」那个
+  兜底分支也有一句 `pending = null`（必须在 return 前），`indexOf` 会命中它、把顺序读反。
+
+**守门**：`d158-search-echo-guard.test.ts` 8 例（接线）+ `vault.test.ts` 新增 4 例（行为：
+三个视图切换都清词、且**真的不带旧词重查**）。**变异 8 条全真红**。
+
+**全量**：前端 68 文件 596 例、`npm run check` 0/0、CSS 0 FAIL 6 WARN（与基线一致）。
