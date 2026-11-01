@@ -1806,3 +1806,29 @@ D-158 的可见性修复（挂载初值 + 空闲对齐 + `queryEpoch`）**一行
 
 **门禁**：前端 **69 文件 602 例全绿**、`npm run check` 0 errors / 0 warnings、
 CSS 契约 0 FAIL / 6 WARN（与基线一致，均为既有主按钮对比度项）。
+
+### 13.36 D-160：组内视图副行不再重复组名（v1.5.16，2026-11-01）
+
+**背景**：主人测超长分组名时提出「只有为全部（全部条目）这里才显示分组名，如果已经在某
+分组里了，这里就没有必要显示分组名了」。
+
+#### 13.36.1 改动
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/list-scope.ts` | 新增纯函数 `shouldShowRowFolder(scope)`（收藏 → 未分组 → folderId，与 `listScopeLabel` 同序） |
+| `src/components/ItemList.svelte` | `const showRowFolder = $derived(shouldShowRowFolder({...三位}))`；副行的「·」与组名一起包进 `{#if showRowFolder}`，**类型留在 if 之外** |
+| `src/lib/list-scope.test.ts` | 新增 D-160 段 6 例 |
+| `src/lib/d160-row-folder-visibility-guard.test.ts` | 新增 4 例接线守门（含 CSS 判据） |
+
+#### 13.36.2 两个容易写错的点
+
+1. **判据不能只写 `folderId === null`**：收藏视图的 `folderId` 也是 `null`，那样会把
+   收藏一起关掉——而收藏是跨组的，是唯一「看着像全部、其实更需要组名」的视图。
+2. **`{#if}` 必须连分隔符一起包**：只包组名会留下一行末尾孤零零的「·」；只包分隔符
+   而组名在外，则等于没改（变异 3 就是这条，真红）。
+
+#### 13.36.3 门禁
+
+前端 **70 文件 612 例全绿**（较 1.5.15 的 69/602 新增 1 文件 4 例 + `list-scope` 6 例）/
+`check` 0/0 / CSS 契约 0 FAIL 6 WARN。

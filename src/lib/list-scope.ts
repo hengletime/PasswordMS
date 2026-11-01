@@ -55,3 +55,36 @@ export function listScopeLabel(
   }
   return t('nav.items');
 }
+
+/**
+ * D-160：列表行要不要在副行显示「所属分组」。
+ *
+ * 主人反馈（2026-11-01，附超长组名截图）：「只有为全部（全部条目）这里才显示分组名，
+ * 如果已经在某分组里了，这里就没有必要显示分组名了。」
+ *
+ * 判据不是「进没进组」，而是**「当前列表里会不会出现不同分组的条目」**——
+ * 组名唯一的信息量是「这条和旁边的不是一家」。按这个判据，四个视图分成两类：
+ *
+ * | 视图 | 显示 | 理由 |
+ * |------|------|------|
+ * | 全部 | **显示** | 全库混合，组名是唯一的归属线索（D-154 的原始诉求） |
+ * | 收藏 | **显示** | 收藏是**跨组**的，条目依旧来自各个组 |
+ * | 某个分组内 | 隐藏 | 20 条全是同一组，重复 20 遍只是噪音，还挤占副行宽度（长组名尤甚） |
+ * | 未分组 | 隐藏 | 每行都写「未分组」= 说 20 遍同一句话 |
+ *
+ * **收藏这一行的存在正是本函数存在的理由**：如果只写 `folderId === null`，
+ * 收藏视图会被一起隐藏掉——那是唯一「看着像全部、其实需要组名」的视图。
+ *
+ * @param scope 三个互斥状态位（与 `listScopeLabel` 同源，避免两处判据漂移）
+ */
+export function shouldShowRowFolder(scope: ListScope): boolean {
+  // 顺序与 `listScopeLabel` 一致：收藏先于未分组先于 folderId。
+  if (scope.favoriteOnly) {
+    return true;
+  }
+  if (scope.ungroupedOnly) {
+    return false;
+  }
+  // 空串按「没有分组」处理（与 `listScopeLabel` 同口径：空串不算未知分组）。
+  return scope.folderId === null || scope.folderId === '';
+}

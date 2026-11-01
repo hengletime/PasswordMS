@@ -11,6 +11,7 @@
   import { vault } from '../lib/stores/vault.svelte';
   import { ui } from '../lib/stores/ui.svelte';
   import { folderLabelOf, folderLabelText, type FolderLabel } from '../lib/folder-label';
+  import { shouldShowRowFolder } from '../lib/list-scope';
   import type { ItemDto } from '../types';
 
   interface Props {
@@ -152,6 +153,21 @@
     query = '';
     void vault.setQuery('');
   }
+
+  /**
+   * D-160：副行要不要显示「所属分组」。
+   *
+   * 只在**列表里可能出现不同分组条目**时显示（全部 / 收藏）；进了某个分组或未分组视图
+   * 就隐藏 —— 那时每行都写同一个组名，重复 20 遍只会挤掉副行本来的信息（长组名尤甚）。
+   * 判定本身在纯函数里（收藏是「跨组」的那一个例外，见 `list-scope.ts`）。
+   */
+  const showRowFolder = $derived(
+    shouldShowRowFolder({
+      folderId: vault.selectedFolderId,
+      favoriteOnly: vault.favoriteOnly,
+      ungroupedOnly: vault.ungroupedOnly,
+    }),
+  );
 
   function iconFor(item: ItemDto): string {
     if (item.kind.type === 'login') return 'key';
@@ -404,15 +420,19 @@
             <span class="list-meta">
               <span class="list-title">{item.kind.title}</span>
               <!-- D-154：类型 · 所属分组。先类型后归属：扫列表时第一眼认类型，第二眼才问
-                   「这条在哪个组」；组名可截断，类型不可（类型只有固定几个短词）。 -->
+                   「这条在哪个组」；组名可截断，类型不可（类型只有固定几个短词）。
+                   D-160：组名只在全部 / 收藏（跨组）显示 —— 进了某个组，每行都是同一个
+                   组名，那是噪音；组内视图里副行只留类型。 -->
               <span class="list-sub pms-meta">
                 <span class="list-sub-type">{typeLabel(item)}</span>
-                <span class="list-sub-sep" aria-hidden="true">·</span>
-                <span
-                  class="list-sub-folder"
-                  class:is-none={folderTag.kind !== 'folder'}
-                  title={folderText(folderTag)}
-                >{folderText(folderTag)}</span>
+                {#if showRowFolder}
+                  <span class="list-sub-sep" aria-hidden="true">·</span>
+                  <span
+                    class="list-sub-folder"
+                    class:is-none={folderTag.kind !== 'folder'}
+                    title={folderText(folderTag)}
+                  >{folderText(folderTag)}</span>
+                {/if}
               </span>
             </span>
             <!-- #531：拖拽手柄的辅助说明（视觉隐藏，进可访问名称）。 -->
