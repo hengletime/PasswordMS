@@ -107,7 +107,8 @@ describe('D-158：搜索框显示值 = 实际筛选词', () => {
     expect(block.length).toBeGreaterThan(0);
     // 判据必须是**生效值** vault.query，不是打字中的本地 query。
     expect(block).toContain('vault.query.length > 0');
-    expect(block).toContain(`ui.t('item.empty_search')`);
+    // D-159：词要写进文案里（跨分组保留后，空列表得自己说明是被哪个词筛掉的）。
+    expect(block).toContain(`ui.t('item.empty_search', { q: vault.query })`);
     expect(block).toContain(`ui.t('item.empty')`);
   });
 
@@ -118,6 +119,6 @@ describe('D-158：搜索框显示值 = 实际筛选词', () => {
     }
     const zh = src('/i18n/zh-CN.ts');
     expect(zh).toContain(`empty: '还没有条目'`);
-    expect(zh).toContain(`empty_search: '没有匹配的条目'`);
+    expect(zh).toContain(`empty_search: '没有匹配「{q}」的条目'`);
   });
 });

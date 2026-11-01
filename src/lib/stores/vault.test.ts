@@ -276,15 +276,16 @@ describe('#531 排序与频度命令透传', () => {
   });
 });
 
-// D-158：切视图（分组 / 收藏 / 未分组）是**导航**，必须重置临时搜索词。
+// D-159：切视图（分组 / 收藏 / 未分组）**保留**搜索词 —— 分组是范围，搜索是条件，两者叠加。
 //
-// 主人反馈（2026-11-01）：「搜索框输入一个字母 j 筛出一些条目，现在想回到所有项目，
-// 回不去了，不管切换到哪个分组都是处于筛选结果状态。切换标签再回来也不行。」
+// 这一节原先是 D-158 的「切视图重置搜索词」（主人 2026-11-01 当天的第一版反馈），
+// 当天即被主人推翻：「搜 j → 直接点侧栏『个人』，搜索框不应该自动清空，应该只显示
+// 『个人』分组里 j 的搜索结果。」记录在这里是为了防止下次有人凭「导航该重置筛选」
+// 这条通用直觉又把它清回去。
 //
-// 除了「搜索框显示为空、筛选仍在生效」那层（由 ItemList 的 `d158-search-echo-guard`
-// 负责），这一层是语义：即便搜索词看得见，点分组也不该继续在旧关键词下筛——那通常
-// 得到空列表，会被读成「这个分组里没有数据」。
-describe('D-158 切视图重置搜索词', () => {
+// D-158 真正的问题（搜索框空着、筛选还生效）由 ItemList 的显示值对齐解决；
+// 词既然始终看得见，「看全库」就交给清空按钮，而不是替用户清。
+describe('D-159 切视图保留搜索词', () => {
   beforeEach(() => {
     listMock.mockReset().mockResolvedValue([]);
     foldersListMock.mockReset().mockResolvedValue([]);
@@ -293,40 +294,51 @@ describe('D-158 切视图重置搜索词', () => {
     // reset 会推进 epoch，同步一次基准。
   });
 
-  it('search 之后切分组：query 清空、epoch 推进、新请求不再带 query', async () => {
+  it('search 之后切分组：query 保留、epoch 不动、新请求仍带 query（组内搜索）', async () => {
     await vault.setQuery('j');
     expect(vault.query).toBe('j');
     const before = vault.queryEpoch;
 
     await vault.selectFolder('f-work');
 
-    expect(vault.query).toBe('');
-    expect(vault.queryEpoch).toBe(before + 1);
-    // 关键：真的重新查了、且没带旧关键词（否则界面看着清了、数据还是筛过的）。
+    expect(vault.query).toBe('j');
+    // 这次是用户点侧栏，不是程序改写搜索框 —— 推进 epoch 会把输入框里的词清掉。
+    expect(vault.queryEpoch).toBe(before);
+    // 关键：真的重新查了、且**带着**关键词（只查该组 ∩ 词，不是该组全部）。
     const last = listMock.mock.calls.at(-1);
     expect(last?.[0]).toBe('f-work');
-    expect(last?.[2]).toBeUndefined();
+    expect(last?.[2]).toBe('j');
   });
 
-  it('切「收藏」与「未分组」同样重置（三者同级视图，不许留一条带旧词的路径）', async () => {
+  it('切「收藏」与「未分组」同样保留（三者同级视图，不许留一条偷清词的路径）', async () => {
     await vault.setQuery('j');
     await vault.toggleFavoriteOnly();
-    expect(vault.query).toBe('');
-    expect(listMock.mock.calls.at(-1)?.[2]).toBeUndefined();
+    expect(vault.query).toBe('j');
+    expect(listMock.mock.calls.at(-1)?.[2]).toBe('j');
 
-    await vault.setQuery('j');
     await vault.selectUngrouped();
-    expect(vault.query).toBe('');
-    expect(listMock.mock.calls.at(-1)?.[2]).toBeUndefined();
+    expect(vault.query).toBe('j');
+    expect(listMock.mock.calls.at(-1)?.[2]).toBe('j');
   });
 
-  it('搜索词本来为空时不推进 epoch（否则每点一次侧栏都白跑一遍同步 effect）', async () => {
-    expect(vault.query).toBe('');
-    const before = vault.queryEpoch;
+  it('切分组后再点「全部」仍是同一个词（不许给「回不去」留余地靠猜）', async () => {
+    await vault.setQuery('j');
+    await vault.selectFolder('f-a');
+    await vault.selectFolder(null);
+
+    expect(vault.query).toBe('j');
+    expect(listMock.mock.calls.at(-1)?.[0]).toBeNull();
+    expect(listMock.mock.calls.at(-1)?.[2]).toBe('j');
+  });
+
+  it('用户自己清空后切分组不会把词找回来（保留的是现值，不是历史）', async () => {
+    await vault.setQuery('j');
+    await vault.setQuery('');
 
     await vault.selectFolder('f-a');
 
-    expect(vault.queryEpoch).toBe(before);
+    expect(vault.query).toBe('');
+    expect(listMock.mock.calls.at(-1)?.[2]).toBeUndefined();
   });
 
   it('打字路径不得推进 epoch（那是用户自己的输入，不算程序化重置）', async () => {

@@ -104,35 +104,26 @@ class VaultStore {
   }
 
   /**
-   * 切视图（分组 / 收藏 / 未分组）时重置搜索词。
+   * 切视图（分组 / 收藏 / 未分组）**不动搜索词**。
    *
-   * **D-158**：切视图是**导航**，不是筛选 —— 导航应当重置临时筛选条件。
-   * 主人原话：「想回到所有项目，回不去了，不管切换到哪个分组都是处于筛选结果状态。」
-   * 根因有两层：① `ItemList` 重建后搜索框显示为空，筛选却还在生效（看不见的筛选）；
-   * ② 即便看得见，用户点侧栏分组的意图也是「看这一组」，不是「在这一组里继续筛」——
-   * 让两者同时生效的结果通常是空列表，会被读成「工作组里没数据」。
+   * **D-159**（推翻 D-158 的「切视图顺手清词」，主人原话：「搜 j → 直接点侧栏『个人』，
+   * 搜索框不应该自动清空，应该只显示『个人』分组里 j 的搜索结果。」）：
+   * 搜索词是**用户自己设定的筛选条件**，分组是**范围**，两者是叠加关系不是互斥关系。
+   * 想让某人找「个人组里带 j 的东西」，清词等于把人家打到一半的活儿扔掉。
    *
-   * **必须推进 `queryEpoch`**：这是程序化改写，搜索框要立刻跟着清（D-81 的约定；
-   * 用户自己打字走 `setQuery`，不推进）。空串时不推进，避免每次点侧栏都白跑一遍
-   * `ItemList` 的同步 effect。
+   * D-158 真正要修的是「搜索框显示为空、筛选却还在生效」——那层已由 `ItemList`
+   * 的挂载初值 + 空闲对齐 + `queryEpoch` 修好，搜索词既然**始终看得见**（含一键清空按钮），
+   * 就轮不到替用户清。**回不去的不是「没清词」，是「看不见自己在筛」**。
    *
-   * 刻意**不**在「切标签往返」时清：那是暂时离开、回到同一位置，搜索词应当保留
-   * （`ItemList` 挂载时从 store 取初值，正好覆盖这条路径）。
+   * 反面取舍：若这里继续清词，用户刚建立的多条件视角每点一次侧栏就丢一次；
+   * 若连搜索词也不让清，则「看全库」确实退化成不可达 —— 那条路由清空按钮承担。
    */
-  private resetQueryOnNavigate(): void {
-    if (this.query === '') {
-      return;
-    }
-    this.query = '';
-    this.queryEpoch += 1;
-  }
 
   /** 选择分组。 */
   async selectFolder(folderId: string | null): Promise<void> {
     this.selectedFolderId = folderId;
     this.ungroupedOnly = false;
     this.favoriteOnly = false;
-    this.resetQueryOnNavigate();
     await this.load();
   }
 
@@ -141,13 +132,12 @@ class VaultStore {
    *
    * 与 `selectFolder(null)`（全部）的 `selectedFolderId` 都是 null，靠 `ungroupedOnly` 区分。
    * 清掉收藏与分组：三者是**同级单一视图**——同时点亮两行会让侧栏出现两个高亮，
-   * 用户也无法解释「为什么未分组里只剩收藏的」。
+   * 用户也无法解释「为什么未分组里只剩收藏的」。搜索词不动（D-159）。
    */
   async selectUngrouped(): Promise<void> {
     this.selectedFolderId = null;
     this.ungroupedOnly = true;
     this.favoriteOnly = false;
-    this.resetQueryOnNavigate();
     await this.load();
   }
 
@@ -156,7 +146,6 @@ class VaultStore {
     this.favoriteOnly = !this.favoriteOnly;
     // 与「未分组」同级：切到收藏时清掉未分组标记，避免两个视图标记同时成立。
     this.ungroupedOnly = false;
-    this.resetQueryOnNavigate();
     await this.load();
   }
 

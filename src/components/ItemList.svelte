@@ -348,11 +348,17 @@
     <!-- D-158：空态要区分「库里没有」和「被搜索词筛掉了」。
          统一写「还没有条目」时，搜一个不存在的词会让人以为数据丢了（D-152 同型焦虑）。
          判据用 `vault.query`（**实际生效**的筛选词）而不是本地 `query`：空态解释的是
-         「列表为什么是空的」，而列表是按 store 里的词过滤的。 -->
+         「列表为什么是空的」，而列表是按 store 里的词过滤的。
+         D-159：搜索词跨分组保留后，空列表**一半是「这组没东西」一半是「这组没有 j」**，
+         所以还要把词本身写出来、并就地给一个清空出口——否则用户得先意识到「上面那个框里
+         有字」才找得到 ×。 -->
     <div class="list-center list-empty">
       {#if vault.query.length > 0}
         <Icon name="search" size={26} />
-        <p>{ui.t('item.empty_search')}</p>
+        <p>{ui.t('item.empty_search', { q: vault.query })}</p>
+        <button class="pms-btn is-ghost is-sm" type="button" onclick={clearSearch}>
+          <Icon name="close" size={14} />{ui.t('common.clear_search')}
+        </button>
       {:else}
         <Icon name="key" size={26} />
         <p>{ui.t('item.empty')}</p>

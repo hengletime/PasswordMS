@@ -123,7 +123,7 @@ export const enUS: Messages = {
     new_login: 'New login',
     new_note: 'New note',
     empty: 'No items yet',
-    empty_search: 'No matching items',
+    empty_search: 'No items matching “{q}”',
     no_results: 'No matching items',
     favorite: 'Favorite',
     unfavorite: 'Unfavorite',

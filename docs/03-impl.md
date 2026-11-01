@@ -1763,3 +1763,46 @@ const scopeLabel = $derived(
 三个视图切换都清词、且**真的不带旧词重查**）。**变异 8 条全真红**。
 
 **全量**：前端 68 文件 596 例、`npm run check` 0/0、CSS 0 FAIL 6 WARN（与基线一致）。
+
+### 13.35 D-159：切分组不再清搜索词（v1.5.15，2026-11-01）
+
+**背景**：1.5.14（D-158）加了「切视图清词」，装上去当天被主人推翻：「搜 j → 直接点侧栏
+『个人』，搜索框不应该自动清空，应该只显示『个人』分组里 j 的搜索结果。」
+
+#### 13.35.1 改了什么
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/stores/vault.svelte.ts` | 删 `resetQueryOnNavigate()` 及三处调用（`selectFolder` / `selectUngrouped` / `toggleFavoriteOnly`），原位置留 D-159 语义说明 |
+| `src/components/ItemList.svelte` | 空态文案改为 `ui.t('item.empty_search', { q: vault.query })`；空态内新增「清除搜索」按钮（`onclick={clearSearch}`） |
+| `src/lib/i18n/{zh-CN,zh-TW,en-US,th}.ts` | `empty_search` 带 `{q}` 占位符 |
+| `src/lib/stores/vault.test.ts` | D-158 段 4 例改写为 D-159 段 5 例（保留词 + 新请求带词，而非清词） |
+| `src/lib/d158-search-echo-guard.test.ts` | 空态两处断言随文案升级（行为未变，只跟形式） |
+| `src/lib/d159-search-scope-guard.test.ts` | 新增 5 例接线守门 |
+
+#### 13.35.2 为什么这是「删代码」而不是「加开关」
+
+搜索词与分组在**查询层一直就是叠加的**（`FolderScope` + `query` 同时进 SQL 条件，D-153）。
+1.5.14 的清词是前端单方面把后端的叠加语义抹掉，属于**界面与数据语义不同构**。
+所以正确修法是删掉那条多余的写入，而不是加一个「要不要清词」的配置。
+
+D-158 的可见性修复（挂载初值 + 空闲对齐 + `queryEpoch`）**一行未动**——那部分是对的，
+它保证「词始终看得见」，词看得见之后就没有理由替用户清。
+
+#### 13.35.3 守门为什么按函数切片
+
+`d159` 第 ① 例把 `selectFolder` / `selectUngrouped` / `toggleFavoriteOnly` 三个函数各自
+切出函数体（`section(store, 'async selectFolder(', '\n  }')`），断言体内不出现
+`this.query` 与 `queryEpoch`。全文断言做不到这点：D-81 的 `revealSavedItem` **有权**清词
+（保存后条目被筛住必须让它可见），全文扫 `this.query = ''` 会误伤它。
+
+#### 13.35.4 变异与门禁
+
+**变异 4 条全真红**：
+1. `selectFolder` 里塞回 `this.query = '';` → ① 红 + 2 条行为例红（最像「随手补一句」的错法）；
+2. 空态文案退回不带 `{q}` → ③ 红 + D-158 空态例红；
+3. 删掉空态「清除搜索」按钮 → ③ 红；
+4. 泰语 `empty_search` 去掉 `{q}` → ④ 红（只补三语言的典型漏法）。
+
+**门禁**：前端 **69 文件 602 例全绿**、`npm run check` 0 errors / 0 warnings、
+CSS 契约 0 FAIL / 6 WARN（与基线一致，均为既有主按钮对比度项）。

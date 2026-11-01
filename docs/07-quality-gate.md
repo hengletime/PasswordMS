@@ -302,6 +302,40 @@ panic 消息去重都可能，我没有下结论。**但结论不依赖它**：`
 **不适用于 serde 字段名**。以后验协议类改动，首选**搜 serde 字段名字符串**——
 它必然进二进制、必然可 grep、必然新旧可对拍。
 
+**1.5.15 门禁（D-159，2026-11-01 实跑）**：前端 `npm run test` **69 文件 602 例全绿**
+（较 1.5.14 的 68/596 新增 1 文件 5 例 `d159-search-scope-guard.test.ts`，另 D-158 段的
+4 例改写为 D-159 段 5 例）/ `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN
+（老账未动，本轮零样式改动）/ Rust core 零改动（仅 `Cargo.toml` 版本串）/
+`cargo fmt --all -- --check` 干净（EXIT=0）/ clippy 代码警告 0（唯一 warning 行是 windres
+兜底的 build-script 提示）/ 体积门禁桌面 + APK 双过（MSI 2.78 MB、NSIS 1.96 MB、APK 7.39 MB）。
+
+**1.5.15 实际产物（出包实测，非推算）**：
+APK `7,754,155 B`（`b6e34927`，versionCode 1005015 / versionName 1.5.15；**字节数与之前七版
+完全相同，第七次**）/ NSIS `2,057,438 B`（`7f5abf8b`）/ MSI `2,916,352 B`（`cff27461`）/
+裸 exe **`4,998,656 B`**（`f1cb0c6b`，ProductVersion 1.5.15；较 1.5.14 的 4,997,120 B
+**+1,536 B**——本轮新增了一个空态按钮与四语言文案，桌面二进制如实变大）/
+绿色版 zip `2,422,958 B`（`83ce2a25`）；**zip 内 exe 与裸 exe 哈希一致**（`f1cb0c6b`，
+同为 4,998,656 B）。`sha256sum -c target/SHA256SUMS-1.5.15.txt` 四文件全 OK。
+
+**包内取证（1.5.15）——同一判据的第三种输入**：
+
+| 判据 | 位置 | 1.5.14 | 1.5.15 |
+|---|---|---|---|
+| `b1ZNiHRj`（本次 `App-*.js`） | APK 内 `libpasswordms_lib.so` | **0** | **1** |
+| `GU9_siLv`（本次 `index-*.js`） | 同上 | **0** | **1** |
+| `BScF0NTj` / `CyNRiLgU`（1.5.14 的 JS 名） | 同上 | 1 / 1 | **0 / 0** |
+| `jc_arBlM`（`style-*.css`） | 同上 | **1** | **1** |
+| 版本串 `1.5.14` / `1.5.15` | 同上 | 1 / 0 | **0 / 1** |
+
+> **三轮三种输入**：1.5.13 改样式 → CSS 名变；1.5.14 零样式改动 → CSS 名不变（JS 名变）；
+> 1.5.15 改了模板与文案、仍零样式改动 → CSS 名**再次不变**（`jc_arBlM` 三版都是 1），
+> JS 名照旧换。桌面 `passwordms.exe` 同样含五个名字各 1 次（`CflwYoSr` / `CPpMbYHn`
+> 两个分包名也只在新包里出现）。
+> 这轮的意义：**CSS 名不变不是「我没验证」，而是本轮确实没动 CSS**——按钮复用了既有的
+> `pms-btn is-ghost is-sm`，没有新增规则。判据与改动内容一致，才说明它在测内容。
+> 表格里 1.5.14 与 1.5.15 两列的每个数字，都是**两个 APK 同时躺在 `target/` 下时当场数出来的**
+> （`zipfile` 读 `lib/arm64-v8a/libpasswordms_lib.so` 逐字节 count），不是抄上一轮的结论。
+
 **1.5.14 门禁（D-158，2026-11-01 实跑）**：前端 `npm run test` **68 文件 596 例全绿**
 （较 1.5.13 的 67/584 新增 1 文件 8 例 `d158-search-echo-guard.test.ts`，另 `vault.test.ts`
 新增 4 例行为）/ `npm run check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（老账未动，
