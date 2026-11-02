@@ -16,6 +16,7 @@ English | [简体中文](README.zh-CN.md)
 - **Auto-lock**: locks automatically after inactivity (1 / 5 / 15 minutes); Android locks immediately when returning from background after timeout
 - **Attachments**: login / note entries can carry attachments (up to 16 per entry, ≤ 20 MB each), encrypted with the vault
 - **Trash**: soft delete → restore → delete permanently; attachments are cleaned up alongside entries
+- **Two-factor codes (TOTP)**: login entries can store a 2FA secret, and the detail view shows the live code; four ways in — camera scan, image file, paste screenshot, screenshot with crop (the last two on desktop)
 - **Tiny footprint**: desktop installer ≈ 2.0 MB, APK ≈ 7.4 MB
 
 ## 📦 Download
@@ -37,6 +38,40 @@ Grab the latest build from [Releases](https://github.com/hengletime/PasswordMS/r
 2. Create a vault on first launch and set a **master password** — memorize it: **there is no recovery mechanism whatsoever**
 3. Add login / note entries; drag in attachments as needed
 4. Multi-device sync: `Devices → Pair new device`, then scan the QR code from the other device (both devices must be on the same LAN). Sync is **manual** — either side can trigger it; see the next section
+
+## 🔑 Two-factor codes (TOTP)
+
+A login entry can carry a TOTP secret. The detail view keeps showing the current 6-digit code and the seconds left in the period, and rolls over to the next code automatically.
+
+### Four ways to get the secret in
+
+Pick by where the code is:
+
+| Where the code is | What to use |
+|---|---|
+| On another device's screen (phone, second laptop) | **Scan**: open the camera panel and frame the code |
+| Already saved as an image file | **From image**: pick the file and it is decoded |
+| Just screenshotted, still on the clipboard | **Paste screenshot**: press `Ctrl+V` right in the editor (**no need to click anything first**), or click the button |
+| On this very screen, hidden behind PasswordMS itself | **Screenshot**: click it → the app hides itself → the whole screen is captured → the app comes back holding that **frozen still image** → drag a box around the code → release |
+
+A few notes:
+
+- "Paste screenshot" and "Screenshot" are **desktop-only** — Android cannot read bitmaps off the clipboard, so a button there would be a lie. Phones therefore show only "Scan" and "From image".
+- The screenshot captures **all monitors at once**, so a code on a secondary display can be framed as well.
+- Cropping happens on that **captured still image**: once taken it never changes, so whether the window is visible afterwards makes no difference to what you framed — which is why the app can sit right in front while you drag.
+- The crop overlay accepts a reverse drag (bottom-right to top-left); a bare click or a hairline drag is not treated as an error; `Esc` cancels. **A failed decode keeps the overlay open** so you can simply reframe instead of taking another screenshot.
+- You can also paste the site's `otpauth://` link straight into the TOTP field, or type the Base32 secret. The secret is test-computed before saving, so an invalid key or an unsupported parameter set is rejected on the spot with a specific reason instead of being stored as a string that can never produce a valid code.
+
+### Supported parameters (one hard limit)
+
+Only **6 digits, 30-second period, SHA1** — what the vast majority of sites use. For a QR code or link asking for 8 digits, a 60-second period or SHA256, the app **refuses explicitly and says why** ("this site uses an 8-digit code, only 6 digits are supported") rather than silently storing it and leaving you staring at a code the site keeps rejecting.
+
+Counter-based HOTP (no time period) is rejected the same way.
+
+### Security
+
+- The secret sits in the encrypted vault like any other field and is encrypted with the whole vault (exports and LAN sync include it).
+- Codes are computed **locally**; QR decoding also happens on your machine (jsQR) — the image is never sent anywhere, and nothing goes online.
 
 ## 🔄 How sync works (one hard limitation)
 
