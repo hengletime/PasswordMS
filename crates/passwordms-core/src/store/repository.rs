@@ -2264,6 +2264,69 @@ impl Repository {
         Ok(ids.len())
     }
 
+    /// 批量原子写入条目与分组（D-172：导入的唯一落库入口）。
+    ///
+    /// 语义是**全成或全无**，这是导入这个操作唯一说得清的口径：
+    ///
+    /// 1. **校验与编码全部先做**（JSON 序列化、384 KiB 明文上限、UUID 形状、AEAD 封装），
+    ///    这一段完全不碰磁盘——所以「有一条不合格」的结局是「一条都没写」，不是
+    ///    「写到第 700 条才发现」。
+    /// 2. **一次追加 + 一次 `sync_all`**（[`Container::append_frames`]），失败即截回。
+    /// 3. **写完立刻重扫索引**（[`Self::rebuild_index`]）——它会把每帧解密一遍，
+    ///    等于对刚写下的字节做了一次回读校验（D-144 的教训：跨层写入「没报错」不等于
+    ///    「写进去了」）。解不回来就把整批截掉，别等用户下次解锁才发现库坏了。
+    /// 4. 计数落盘（`persist_header`）失败同样整批回滚：头部没更新却写进了记录区，
+    ///    正是「界面说失败、库里却有数据」的那一半成因。
+    ///
+    /// 回滚失败时不做第二次尝试——把状态说清楚比假装成功有用（见 `truncate_to`）。
+    pub fn put_records_atomic(&mut self, folders: &[Folder], items: &[Item]) -> CoreResult<()> {
+        if folders.is_empty() && items.is_empty() {
+            return Ok(());
+        }
+
+        // 1) 全量校验 + 编码（零写入）。
+        let mut records: Vec<(u8, [u8; 16], Vec<u8>)> =
+            Vec::with_capacity(folders.len() + items.len());
+        for folder in folders {
+            let rid = record_id_to_bytes(&folder.folder_id)?;
+            records.push((RECORD_TYPE_FOLDER, rid, serde_json::to_vec(folder)?));
+        }
+        for item in items {
+            let bytes = serde_json::to_vec(item)?;
+            if bytes.len() > MAX_ITEM_PLAINTEXT_BYTES {
+                return Err(CoreError::Validation(format!(
+                    "sync item_too_large: {} > {MAX_ITEM_PLAINTEXT_BYTES} bytes",
+                    bytes.len()
+                )));
+            }
+            let rid = record_id_to_bytes(&item.item_id)?;
+            records.push((RECORD_TYPE_ITEM, rid, bytes));
+        }
+
+        // 2) 编帧（AEAD 加密）同样在写盘前做完。
+        let mut frames: Vec<Frame> = Vec::with_capacity(records.len());
+        for (record_type, rid, payload) in &records {
+            frames.push(self.build_frame(*record_type, rid, 0, payload)?);
+        }
+
+        // 3) 一次追加（内部已保证失败截回），然后回读校验。
+        let mark = self.container.file_size()?;
+        self.container.append_frames(&frames)?;
+        if let Err(err) = self.rebuild_index() {
+            let _ = self.container.truncate_to(mark);
+            let _ = self.rebuild_index();
+            return Err(err);
+        }
+
+        // 4) 计数落盘；失败整批回滚。
+        if let Err(err) = self.persist_header() {
+            let _ = self.container.truncate_to(mark);
+            let _ = self.rebuild_index();
+            return Err(err);
+        }
+        Ok(())
+    }
+
     /// 直接落库（同步应用远端变更；不改写 rev 语义由调用方决定）。
     ///
     /// **D-106（豆包审查 3.1-6）**：补 384KiB 统一明文上限校验——本地 create/update

@@ -65,6 +65,15 @@ pub fn import_preview(
 }
 
 /// F-14 执行导入（`source_path` / `format` 仅用于契约对齐；实际使用缓存的预览）。
+///
+/// **F-08：预览的消费时机是「成功之后」**。旧实现先 `remove(&preview_token)` 再拿会话锁，
+/// 于是库已自动锁定、写盘失败、校验失败三种结局都会把预览一并吃掉——用户只能重新选
+/// 文件、重新解析，明明什么都没导进去。现在：
+///
+/// 1. 先拿会话锁（锁失败时预览**原封不动**）；
+/// 2. 再 `remove` 取出（take 语义，防同一预览被并发提交两次）；
+/// 3. `apply` 成功才算消费；失败把预览**放回缓存**——core 侧已保证「全成或全无」，
+///    所以放回去的预览与库的状态仍然对得上，用户点重试就是真正的重试。
 #[tauri::command(rename_all = "snake_case")]
 pub fn import_apply(
     state: tauri::State<'_, AppState>,
@@ -74,6 +83,10 @@ pub fn import_apply(
 ) -> IpcResult<ImportResultDto> {
     let _ = source_path;
     let _ = format;
+
+    // 锁先于取预览：这一句的顺序就是 F-08 的全部修法。
+    let mut session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo_mut()?;
 
     let preview = state
         .pending_imports
@@ -86,10 +99,18 @@ pub fn import_apply(
             ))
         })?;
 
-    let mut session = state.lock_session().map_err(lock_err)?;
-    let repo = session.repo_mut()?;
-    let result = import::apply(&preview, repo)?;
-    Ok(ImportResultDto::from(result))
+    match import::apply(&preview, repo) {
+        Ok(result) => Ok(ImportResultDto::from(result)),
+        Err(err) => {
+            // 失败归还。`apply` 失败时磁盘一字未动（D-172），预览仍然有效。
+            // 归还这句拿不到锁（中毒）就只能放弃——那是另一条错误路径，不该吞掉
+            // 原始错误；此时用户重试会看到 `preview_token`，也就是旧行为。
+            if let Ok(mut cache) = state.pending_imports.lock() {
+                cache.insert(preview_token, preview);
+            }
+            Err(err.into())
+        }
+    }
 }
 
 /// D-72：把 CSV 模板写到用户选定位置（Android `content://` / 桌面路径）。

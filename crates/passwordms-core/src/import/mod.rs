@@ -158,7 +158,13 @@ pub fn preview_from_str(content: &str, format: ImportFormat) -> CoreResult<Impor
     Ok(preview)
 }
 
-/// 将预览落库（D-90：先与现有库做同名合并/查重，再直接写入）。
+/// 将预览落库（D-90 合并查重 + D-172 全成或全无）。
+///
+/// **两段式**：先纯内存做完全部规划（同名合并、查重、`folder_id` 重定向），得到
+/// 「要新建哪些分组、哪些条目」，再交给 [`Repository::put_records_atomic`] 一次写完。
+/// 这个顺序是本函数的要害——旧实现边算边逐条 `put_folder_direct` / `put_item_direct`，
+/// 第 700 条失败时前 699 条**已经 fsync 落盘**，而返回值只是一个 Err：界面说「导入
+/// 失败」，库里却多了半批数据，用户重导时又被查重逻辑挡掉一部分（Kimi 审计 F-07）。
 ///
 /// - **同名文件夹合并**：按 `name` 在现有库找同名分组，命中则**复用其 folder_id**
 ///   （条目归入既有分组，不建新的）；预览内条目的 `folder_id` 全部经映射表重定向。
@@ -167,9 +173,13 @@ pub fn preview_from_str(content: &str, format: ImportFormat) -> CoreResult<Impor
 /// - **同名同型条目跳过**：`title` 与 `type` 都相同即视为重复，跳过并计数，
 ///   **绝不覆盖现有数据**；同名不同型正常导入。回收站条目不在 `items` 中，
 ///   不阻碍重导入（用户删掉的就是想要重导的）。
+///
+/// 失败即等于「什么都没发生」：用户可以拿同一份预览（同一个 `preview_token`）
+/// 直接重试，不需要重新选文件、重新解析（F-08）。
 pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<ImportResult> {
     let mut folder_map: HashMap<String, String> = HashMap::new();
     let mut merged_folders = 0usize;
+    let mut folders_to_add: Vec<Folder> = Vec::new();
     for folder in &preview.folders {
         let existing = repo
             .list_folders()
@@ -182,7 +192,7 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
             }
             None => {
                 folder_map.insert(folder.folder_id.clone(), folder.folder_id.clone());
-                repo.put_folder_direct(folder.clone())?;
+                folders_to_add.push(folder.clone());
             }
         }
     }
@@ -193,7 +203,7 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
         .map(|it| (it.kind.title().to_string(), it.kind.type_name()))
         .collect();
 
-    let mut imported_items = 0usize;
+    let mut items_to_add: Vec<Item> = Vec::new();
     let mut duplicate_skipped = 0usize;
     // D-108（豆包审查 3.3-3）：不再整体 `preview.items.clone()`（万条导入峰值内存
     // 约双倍）——按引用遍历，**只对真正要落库的条目**逐个克隆（重复项零克隆）。
@@ -209,17 +219,18 @@ pub fn apply(preview: &ImportPreview, repo: &mut Repository) -> CoreResult<Impor
         if let Some(fid) = item.folder_id.take() {
             item.folder_id = Some(folder_map.get(&fid).cloned().unwrap_or(fid));
         }
-        repo.put_item_direct(item)?;
-        imported_items += 1;
+        items_to_add.push(item);
         // 【D-96】回填去重集合：同一预览文件内的重复条目（两条同名同型）此前
         // 会双双落库——首条写入后集合未更新，第二条判定「不重复」再次写入。
         // 回填后与「现有库查重」语义一致：只导首条，后续计 duplicate_skipped。
         existing_keys.insert(key);
     }
-    repo.persist_counts()?;
+
+    // 唯一的落库调用：全成或全无（含计数落盘）。
+    repo.put_records_atomic(&folders_to_add, &items_to_add)?;
     Ok(ImportResult {
-        imported_items,
-        imported_folders: preview.folders.len() - merged_folders,
+        imported_items: items_to_add.len(),
+        imported_folders: folders_to_add.len(),
         skipped: preview.skipped,
         duplicate_skipped,
         merged_folders,

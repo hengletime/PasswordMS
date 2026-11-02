@@ -262,6 +262,8 @@ export const zhTW = {
     skipped: '略過',
     apply: '開始匯入',
     done: '匯入完成',
+    // D-172（Kimi F-08）：匯入「全成或全無」，失敗後預覽仍有效，能直接重試。
+    nothing_written: '匯入失敗，沒有寫入任何資料。可以直接再點「匯入」重試，不用重新選擇檔案。',
     mapping_known: '已識別欄',
     mapping_custom: '自訂欄位欄',
     encrypted_hint: '不支援加密匯出檔案，請匯出為未加密格式。',

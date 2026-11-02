@@ -280,6 +280,8 @@ export const zhCN = {
     skipped: '跳过',
     apply: '开始导入',
     done: '导入完成',
+    // D-172（Kimi F-08）：导入「全成或全无」，失败后预览仍有效，能直接重试。
+    nothing_written: '导入失败，没有写入任何数据。可以直接再点「导入」重试，不用重新选择文件。',
     mapping_known: '已识别列',
     mapping_custom: '自定义字段列',
     encrypted_hint: '不支持加密导出文件，请导出为未加密格式。',

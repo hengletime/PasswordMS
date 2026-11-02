@@ -34,6 +34,9 @@
   let customFields = $state<string[]>([]);
   let busy = $state(false);
   let resultText = $state('');
+  // D-172：结果文本有两种语义——「导入完成」与「一条都没写入」。后者用成功色显示会
+  // 让人以为导进去了（绿字写着「导入失败」是最糟的一种组合）。
+  let resultIsError = $state(false);
 
   // D-86：Modal 归属变更后，本组件在 Settings 里**常驻挂载**（原来内容随 Settings 的
   // Modal `{#if open}` 关闭而卸载、状态天然清空）—— 每次打开都要显式回到初始态，
@@ -111,6 +114,8 @@
     if (preview === null) {
       return;
     }
+    resultText = '';
+    resultIsError = false;
     busy = true;
     try {
       const result = await api.importer.apply(sourcePath, format, preview.preview_token);
@@ -123,12 +128,18 @@
         parts.push(ui.t('import.merged_folders', { n: result.merged_folders }));
       }
       resultText = `${ui.t('import.done')}: ${parts.join(' · ')}`;
+      resultIsError = false;
       ui.toast('success', 'import.done');
       await vault.load();
       // D-86：footer 随弹窗一起关闭（resultText 的赋值保留——重开前的瞬间仍可读，语义不变）。
       onclose();
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
+      // D-172 / Kimi F-08：core 侧「全成或全无」+ 命令层失败归还预览 ⇒ 这次失败
+      // 意味着库里什么都没变，同一个 token 仍然有效。不写在弹窗里，用户会按旧习惯
+      // 重新选文件重来一遍（甚至怀疑库被写脏了）。
+      resultText = ui.t('import.nothing_written');
+      resultIsError = true;
     } finally {
       busy = false;
     }
@@ -263,7 +274,7 @@
       {/if}
 
       {#if resultText}
-        <p class="imp-result">{resultText}</p>
+        <p class="imp-result" class:is-error={resultIsError}>{resultText}</p>
       {/if}
     </div>
   </Modal>
@@ -336,5 +347,8 @@
   }
   .imp-result {
     color: var(--pms-success);
+  }
+  .imp-result.is-error {
+    color: var(--pms-danger);
   }
 </style>

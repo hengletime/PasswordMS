@@ -277,6 +277,8 @@ export const enUS: Messages = {
     skipped: 'Skipped',
     apply: 'Start import',
     done: 'Import complete',
+    // D-172 (Kimi F-08): import is all-or-nothing, so a failed run leaves nothing behind and the same preview can be retried.
+    nothing_written: 'Import failed and nothing was written. Press Import again to retry — you do not need to pick the file again.',
     mapping_known: 'Mapped columns',
     mapping_custom: 'Custom field columns',
     encrypted_hint: 'Encrypted export files are not supported. Export an unencrypted file instead.',

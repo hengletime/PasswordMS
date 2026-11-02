@@ -288,6 +288,58 @@ impl Container {
         Ok(offset)
     }
 
+    /// 批量追加帧（D-172 导入用）：**全成或全无**。
+    ///
+    /// 与逐条 [`Self::append_frame`] 的差别不只是性能（万余条导入 = 万余次
+    /// `sync_all`），而是失败语义：任一处写入出错就把文件截回写前长度，磁盘上
+    /// 一条都不留。逐条追加做不到——中途失败会留下半批已落盘的记录，而调用方
+    /// 只看到「导入失败」（Kimi 审计 F-07：界面说失败、库里却已有部分数据）。
+    ///
+    /// 帧在**打开文件之前**全部编码完成（[`Frame::encode`] 有形状校验，可能失败），
+    /// 所以编码类错误发生时磁盘一字未动。截断本身失败时只把两个错误一起报出来，
+    /// 不再重试第二遍——把失败原因说清楚，比刷出一个「看起来成功」的状态有用。
+    pub fn append_frames(&self, frames: &[Frame]) -> CoreResult<()> {
+        let mut encoded: Vec<Vec<u8>> = Vec::with_capacity(frames.len());
+        for frame in frames {
+            encoded.push(frame.encode()?);
+        }
+        if encoded.is_empty() {
+            return Ok(());
+        }
+
+        // 先拿到写前长度：截断必须以它为界，否则回滚会把上一批数据一起切掉。
+        let start = self.file_size()?;
+        let mut file = OpenOptions::new().append(true).open(&self.path)?;
+        for bytes in &encoded {
+            if let Err(write_err) = file.write_all(bytes) {
+                drop(file);
+                return Err(match self.truncate_to(start) {
+                    Ok(()) => write_err.into(),
+                    Err(rollback_err) => CoreError::Internal(format!(
+                        "batch append failed ({write_err}); rollback to {start} failed ({rollback_err})"
+                    )),
+                });
+            }
+        }
+        file.sync_all()?;
+        Ok(())
+    }
+
+    /// 把文件截到指定长度（D-172 批量写入的回滚原语）。
+    ///
+    /// 只允许往小里截：`len` 大于当前长度时什么都不做（`set_len` 在 Windows 上会
+    /// 用 0 填充延长文件——那会把记录区变成一堆零字节，反而毁库）。
+    pub fn truncate_to(&self, len: u64) -> CoreResult<()> {
+        if self.file_size()? <= len {
+            return Ok(());
+        }
+        // 重开一个写句柄：append 模式打开的句柄不保证支持改文件长度。
+        let file = OpenOptions::new().write(true).open(&self.path)?;
+        file.set_len(len)?;
+        file.sync_all()?;
+        Ok(())
+    }
+
     /// 在指定偏移处覆写一帧（要求字节长度不变）。
     ///
     /// **D-106（豆包审查 3.1-1）**：同 [`Self::append_frame`] 补 `sync_all()`。
