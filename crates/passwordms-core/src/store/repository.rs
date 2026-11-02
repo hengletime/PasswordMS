@@ -593,12 +593,21 @@ impl Repository {
     }
 
     /// 将附件 blob 置为墓碑。
+    ///
+    /// **D-164（Kimi 审计 F-05）**：顺序必须与 `tombstone` 一致 —— 先写盘、成功后再删
+    /// 内存索引。原实现先 `blobs.remove(id)` 再 `pwrite_frame`：一旦写盘失败（磁盘满、
+    /// 权限变更），内存已认为 blob 不存在、磁盘却仍是活跃帧，同一运行周期内的后续 GC
+    /// 不会再重试这个索引项，只能等重开库时按磁盘内容"复活"再走一遍维护流程。
+    /// D-106 修过 `live` 的同一处毛病，这条 blob 分支当时漏了 —— **同一个不变量不能
+    /// 只在一条分支上成立**（与 D-161 三处视图位只清两位是同一类错误）。
     fn tombstone_blob(&mut self, id: &str) -> CoreResult<()> {
-        if let Some(idx) = self.blobs.remove(id) {
+        if let Some(idx) = self.blobs.get(id).copied() {
             let mut tomb = self.slots[idx].frame.clone();
             tomb.flags |= crate::constants::FLAG_TOMBSTONE;
             self.container.pwrite_frame(self.slots[idx].offset, &tomb)?;
             self.slots[idx].frame = tomb;
+            // 写盘成功才让内存跟上。
+            self.blobs.remove(id);
         }
         Ok(())
     }

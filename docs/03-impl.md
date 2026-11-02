@@ -1949,3 +1949,35 @@ Rust 零改动 / `fmt` 干净 / clippy 代码警告 0。
 CSS 契约 0 FAIL 6 WARN / `fmt` 干净 / clippy 代码警告 0 /
 新增 2 条 IPC 命令（属性与名字均 77/73，无平台分立）。
 
+### 13.40 D-164：取图信号必须有第二来源（v1.5.20，2026-11-02）
+
+#### 13.40.1 改动清单
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/clipboard-image.ts` | `ClipboardImage` 增加 `fingerprint`；新增 `captureClipboardBaseline()`、`fingerprintOf()`（导出供行为测试）；`waitForClipboardImage()` 改为**两级判据**（序号加速 + 指纹轮询），空/旧图一律继续等；超时 60 s → 30 s |
+| `src/lib/screenshot-flow.ts` | **新增**。`runWithWindowHidden()`：hide → 等 180 ms → 执行 action → 等 1.2 s → finally 里 show + setFocus |
+| `src/components/ItemEditor.svelte` | 粘贴改为**三路判定**（图片文件 / 文本放行 / 两者皆无→原生读图）+ keydown 兜底；`startScreenshot()` 改走 `runWithWindowHidden` |
+| `src-tauri/capabilities/default.json` | 新增 `core:window:allow-hide` / `allow-show` / `allow-set-focus` |
+| `crates/passwordms-core/src/store/container.rs` | F-04：头部扩容整文件重写补 `sync_all` |
+| `crates/passwordms-core/src/store/repository.rs` | F-05：`tombstone_blob` 改为先写盘再删内存索引 |
+| `src/lib/stores/sync.svelte.ts` | F-06：`resolve()` 成功路径补 `await vault.load()` |
+| `src/lib/d164-totp-clipboard-robust-guard.test.ts` | **新增** 19 例（含 3 条行为判据） |
+| `src/lib/d164-audit-fixes-guard.test.ts` | **新增** 6 例（F-04/F-05/F-06 防回退） |
+| `src/lib/d163-totp-clipboard-guard.test.ts` | ⑥ 跟改：baseline 取法收进封装后，断言跨两处（更强） |
+
+#### 13.40.2 三个容易写错的点
+
+1. **`preventDefault` 的时机决定文本粘贴是否被吃掉**。三路判定里，只有「确认没有文本」才能
+   `preventDefault` 并转原生读图。判定顺序写反，用户往密码框粘一个手抄密钥就会静默失效。
+2. **keydown 兜底不能无条件抢占**。只在「Ctrl+V 之后 200 ms 内没收到 paste 事件」时读图——
+   那种情况下浏览器本来也没粘任何东西，读图不会抢文本；反之则必须先让它走原路。
+3. **`show()` 必须以「真的藏过」为条件，且写在 `finally`**。缺前者会把用户自己最小化的
+   窗口弹出来，缺后者会在 `action` 抛错时留下一个再也回不来的窗口。
+
+#### 13.40.3 门禁
+
+前端 **76 文件 694 例全绿**（较 1.5.19 的 74/669：新增 2 文件 25 例 + 1 处切片跟改）/
+`check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN / `fmt` 干净 / clippy 代码警告 0 /
+IPC 命令数不变（77/73，本轮只加窗口权限不加命令）。
+

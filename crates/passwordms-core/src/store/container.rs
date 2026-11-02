@@ -168,7 +168,12 @@ impl Container {
             for (_, frame) in &frames {
                 file.write_all(&frame.encode()?)?;
             }
+            // D-164（Kimi 审计 F-04）：与上方就地写头分支、以及 `rewrite_with_frames`
+            // 保持同一持久化顺序。只 `flush` 不 `sync_all`，掉电后可能出现
+            // 「rename 已可见、内容仍在 page cache」—— 而这条路径**同样承载改主密码**
+            // （头部扩容时新 VK 更大），失败代价是库永久锁死，不只是元数据回退。
             file.flush()?;
+            file.sync_all()?;
         }
         fs::rename(&tmp, &self.path)?;
         self.header = header;

@@ -348,6 +348,10 @@ class SyncStore {
     try {
       // D-112：KeepBoth 副本标题后缀按当前 UI 语言传入（core 不硬编码文案）。
       await api.sync.resolveConflict(conflictId, choice, ui.t('conflict.copy_suffix'));
+      // D-164（Kimi 审计 F-06）：仲裁会改条目（KeepLocal / TakeRemote）甚至新增副本
+      // （KeepBoth），只刷冲突箱不刷业务视图，用户会看到「冲突没了、数据还是旧的」，
+      // 于是以为仲裁没生效并重复操作。与 `syncNow` 的成功路径保持同一收尾。
+      await vault.load();
       await this.loadConflicts();
       return true;
     } catch (err) {

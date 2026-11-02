@@ -13,9 +13,11 @@
   import {
     clipboardImageSupported,
     readClipboardImage,
+    captureClipboardBaseline,
     waitForClipboardImage,
     type ClipboardImage,
   } from '../lib/clipboard-image';
+  import { runWithWindowHidden } from '../lib/screenshot-flow';
   import { system } from '../lib/ipc';
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
@@ -202,10 +204,15 @@
   }
 
   /**
-   * 「截图」：唤起系统截图工具，框选完成后自动把图接过来。
+   * 「截图」：藏起窗口 → 唤起系统截图工具 → 框选完成后自动把图接过来。
    *
-   * 只做「唤起」而把「读图」留给剪贴板，是因为用户已经有顺手的截图工具
-   * （Win+Shift+S 的覆盖层）；我们缺的是**接手**那一步，不是重造一个截屏器。
+   * 三个决定值得写下来：
+   * 1. **必须藏窗口**。点「截图」的动机十有八九是「二维码就在我这个窗口后面」
+   *    （网页在浏览器里、App 在手机上）；窗口不藏，用户框到的是 PasswordMS 自己的界面。
+   * 2. **先取 baseline 再唤起**。取晚了会把刚截好的新图当成旧图，死等到超时 ——
+   *    但 baseline 只是加速信号，拿不到时 `waitForClipboardImage` 会退化为指纹轮询。
+   * 3. 唤起后只藏 1.2 秒就恢复：覆盖层一出现屏幕已经冻结，恢复窗口不影响框选内容；
+   *    而用户中途按 Esc 时，窗口也不会一直不见。
    */
   async function startScreenshot(): Promise<void> {
     if (shotPending) {
@@ -215,24 +222,18 @@
     shotAbort?.abort();
     const controller = new AbortController();
     shotAbort = controller;
-    // baseline 必须在**唤起工具之前**取。取晚了（用户手快、框选又快）新图会被当成旧图，
-    // 于是等到 60 秒超时 —— 一次「偶尔失灵」的经典来路。
-    let baseline: number | null = null;
-    try {
-      baseline = await system.clipboardSequenceNumber();
-    } catch {
-      baseline = null;
-    }
-    try {
-      await system.openScreenshotTool();
-    } catch {
-      // 平台不支持（非 Windows）或系统调不起来：直接说，别让按钮看起来按了有反应。
-      totpHint = { key: 'editor.shot_unavailable' };
-      return;
-    }
     shotPending = true;
-    totpHint = { key: 'editor.shot_waiting' };
     try {
+      const baseline = await captureClipboardBaseline();
+      try {
+        await runWithWindowHidden(() => system.openScreenshotTool());
+      } catch {
+        // 平台不支持（非 Windows）或系统调不起来。窗口已由 runWithWindowHidden 恢复，
+        // 这里只负责说话 —— 按钮按下去没有任何反应是最难排查的一种失败。
+        totpHint = { key: 'editor.shot_unavailable' };
+        return;
+      }
+      totpHint = { key: 'editor.shot_waiting' };
       await consumeClipboard(await waitForClipboardImage(baseline, controller.signal));
     } finally {
       shotPending = false;
@@ -257,29 +258,97 @@
   // 于是功能明明在，却表现为「截图在剪贴板里，按了没反应」。功能被一层
   // 没人知道的开关挡着，和没做是一样的。
   //
-  // 现在改成编辑器挂载期间全程监听，靠**「剪贴板里真有图片」**来收窄范围：
-  // 没有图片就一个字节都不碰（用户可能就想粘文本到密码框）。这比"某个面板是否展开"
+  /**
+   * 读粘贴内容里的纯文本。
+   *
+   * 包 `try`：`getData` 在个别宿主上会因剪贴板权限抛异常，而这里一抛，
+   * 整个 paste 处理器就中断了 —— 用户看到的是「粘贴彻底没反应」，
+   * 比「没识别到图片」难查得多。读不到就当作没有文本，交给后面的兜底。
+   */
+  function textOf(data: DataTransfer | null): string {
+    try {
+      return data?.getData('text/plain') ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  // 现在改成编辑器挂载期间全程监听，靠**「这次粘贴到底有没有内容」**来收窄范围：
+  // 没有内容就一个字节都不碰（用户可能就想粘文本到密码框）。这比"某个面板是否展开"
   // 更贴近真正要保护的东西。
+  //
+  // D-164：只看 `items` 里有没有 image/* 还不够。桌面 WebView2 经常出现
+  // 「paste 事件派发了，但 DataTransfer 里既没有图片文件也没有文本」——
+  // 宿主根本没把剪贴板位图转换过来。此时唯一的路是原生 `readImage()`，
+  // 也就是「粘贴截图」按钮那条已被真机验证可用的路。三路判定，缺一路就表现为
+  // 「截图明明在剪贴板里，Ctrl+V 却毫无反应」：
+  //   ① 有 image/* 文件 → 直接解码；
+  //   ② 有文本         → 放行，让浏览器正常粘贴（可能就是在粘 otpauth:// 整串）；
+  //   ③ 两者都没有     → preventDefault + 原生读图。
   $effect((): (() => void) => {
+    let sawPaste = false;
+    let fallbackTimer = 0;
+
     const onPaste = (event: ClipboardEvent): void => {
-      const items = event.clipboardData?.items;
-      if (items === undefined) {
-        return;
-      }
-      for (const item of Array.from(items)) {
-        if (item.kind === 'file' && item.type.startsWith('image/')) {
+      sawPaste = true;
+      const data = event.clipboardData;
+      const items = data?.items;
+      // 有没有「文件」项，和有没有「图片」项是两件事：
+      // 从资源管理器复制一个 .txt 过来时 items 里有 file 但 type 不是 image，
+      // 那不是我们该接的东西 —— 放行，别拦下来再弹一句「剪贴板里没有图片」。
+      let hasAnyFile = false;
+      if (items !== undefined) {
+        for (const item of Array.from(items)) {
+          if (item.kind !== 'file') {
+            continue;
+          }
+          hasAnyFile = true;
+          if (!item.type.startsWith('image/')) {
+            continue;
+          }
           const file = item.getAsFile();
           if (file !== null) {
-            // 只有真拿到图片才 preventDefault：没有图片时让粘贴照常走（用户可能就想粘文本）。
             event.preventDefault();
             void ingestImage(file);
             return;
           }
         }
       }
+      if (hasAnyFile) {
+        return;
+      }
+      if (textOf(data) !== '') {
+        // 正常的文本粘贴：一个字节都别碰。
+        return;
+      }
+      // ③ 宿主什么都没交给我们 —— 但剪贴板里很可能正躺着一张截图。
+      event.preventDefault();
+      void pasteImage();
     };
+
+    // 兜底：有的宿主根本不派发 paste 事件。此时浏览器自己也没粘任何东西
+    // （否则事件会来），所以这里读原生剪贴板不会抢走用户的文本粘贴。
+    const onKeydown = (event: KeyboardEvent): void => {
+      const combo = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+      if (!combo || event.key.toLowerCase() !== 'v') {
+        return;
+      }
+      sawPaste = false;
+      window.clearTimeout(fallbackTimer);
+      fallbackTimer = window.setTimeout(() => {
+        if (!sawPaste) {
+          void pasteImage();
+        }
+      }, 200);
+    };
+
     window.addEventListener('paste', onPaste);
-    return (): void => window.removeEventListener('paste', onPaste);
+    window.addEventListener('keydown', onKeydown);
+    return (): void => {
+      window.clearTimeout(fallbackTimer);
+      window.removeEventListener('paste', onPaste);
+      window.removeEventListener('keydown', onKeydown);
+    };
   });
 
   // 面板展开时开摄像头，收起 / 卸载时释放。

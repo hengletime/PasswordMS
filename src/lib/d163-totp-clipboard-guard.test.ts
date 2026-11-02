@@ -110,16 +110,25 @@ describe('D-163：桌面端三个入口与平台分支', () => {
   });
 
   it('⑥ 截图流程：baseline 必须在唤起工具**之前**取', () => {
-    const body = section(src('/ItemEditor.svelte'), 'async function startScreenshot(', '\n  }');
+    const editor = src('/ItemEditor.svelte');
+    const body = section(editor, 'async function startScreenshot(', '\n  }');
     expect(body, 'startScreenshot 切片失败').not.toBe('');
-    const seqAt = body.indexOf('system.clipboardSequenceNumber()');
+    // D-164 起 baseline 的取法收进 `captureClipboardBaseline()`：断言因此跨两处，
+    // 比只看函数体更强 —— 它同时要求「封装里真的读了序号」，否则基线永远是 null。
+    const baseAt = body.indexOf('captureClipboardBaseline()');
     const openAt = body.indexOf('system.openScreenshotTool()');
-    expect(seqAt, '没有取剪贴板 baseline').toBeGreaterThan(-1);
+    expect(baseAt, '没有取剪贴板 baseline').toBeGreaterThan(-1);
     expect(openAt, '没有唤起系统截图工具').toBeGreaterThan(-1);
     expect(
       openAt,
       'baseline 取晚了：用户手快框选完，新图会被当成旧图，于是等到超时',
-    ).toBeGreaterThan(seqAt);
+    ).toBeGreaterThan(baseAt);
+
+    const lib = section(src('/clipboard-image.ts'), 'export async function captureClipboardBaseline(', '\n}');
+    expect(lib, 'captureClipboardBaseline 切片失败').not.toBe('');
+    expect(lib, 'baseline 里没读剪贴板序号：截图后只能盲读等超时').toContain(
+      'system.clipboardSequenceNumber()',
+    );
   });
 
   it('⑦ 每种剪贴板结局都有可见文案（不许静默失败）', () => {
