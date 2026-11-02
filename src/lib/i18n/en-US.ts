@@ -20,6 +20,7 @@ export const enUS: Messages = {
     copied: 'Copied',
     copied_countdown: 'Clipboard clears in {n}s',
     copied_countdown_field: '{field} copied. Clipboard clears in {n}s',
+    copied_totp_expiring: 'One-time code copied — it expires in {n}s, and the clipboard clears with it',
     confirm: 'Confirm',
     back: 'Back',
     search: 'Search',

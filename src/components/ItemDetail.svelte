@@ -3,7 +3,7 @@
   import Icon from './common/Icon.svelte';
   import AttachmentView from './AttachmentView.svelte';
   import SecureNoteView from './SecureNoteView.svelte';
-  import { copySecretWithAutoClear } from '../lib/clipboard';
+  import { copySecretWithAutoClear, planSecretCopy } from '../lib/clipboard';
   import { copiedFieldLabelKey, type CopiedField } from '../lib/copied-field';
   import { formatDateTime } from '../lib/constants';
   import { toAppError } from '../lib/errors';
@@ -103,12 +103,19 @@
    * 【D-146】`field` 是必需参数：剪贴板只有一格，提示必须说清**现在里面是什么**。上一轮
    * 复制的倒计时由 `copySecretWithAutoClear` 在内部作废（旧代的 tick 不再转发），这里只需
    * 把「当前字段」换过来；toast 走 `dedupeKey` 顶掉上一条，不再两条并排堆着。
+   *
+   * 【D-167】动态口令的清空时刻**跟着口令走**，不跟剪贴板设置走：口令 20 秒后换码，
+   * 剪贴板却按 30 秒留着，用户粘出来的就是一个已作废的码。故 TTL 取两者中更早的那个，
+   * 并在剩余不足 5 秒时换一条提示，说明为什么剪贴板马上要空（判定见 `planSecretCopy`）。
    */
   async function copyText(text: string, field: CopiedField): Promise<void> {
     if (text.length === 0) {
       return;
     }
-    const ttl = settings.value.clipboard_clear_secs;
+    // 在这里取一次 `Date.now()`：口令剩余寿命要按「按下复制的那一刻」算，
+    // 等 await 回来再算会平白少掉一次 IPC 的时间。
+    const plan = planSecretCopy(field, settings.value.clipboard_clear_secs, Date.now());
+    const ttl = plan.ttlSecs;
     await copySecretWithAutoClear(text, ttl, (remaining: number): void => {
       copyCountdown = remaining;
       if (remaining === 0) {
@@ -117,7 +124,13 @@
       }
     });
     copiedField = field;
-    ui.toast('success', 'common.copied_countdown', { n: ttl }, 'clipboard-copy');
+    if (plan.warnExpiring) {
+      // 只剩几秒就换码：照实复制（用户可能就是急着用），但必须说清它为什么马上消失，
+      // 否则「刚复制就没了」看起来像 bug。
+      ui.toast('info', 'common.copied_totp_expiring', { n: ttl }, 'clipboard-copy');
+    } else {
+      ui.toast('success', 'common.copied_countdown', { n: ttl }, 'clipboard-copy');
+    }
     // #531：使用埋点（密码 / 用户名的复制都走这里）。后端 60s 节流；
     // 复制已成功才埋 —— 失败不算「使用」。
     if (item !== null) {

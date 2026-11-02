@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 
 - **Zero-knowledge encryption**: whole-vault encryption (Argon2id key derivation + XChaCha20-Poly1305 authenticated encryption). The master password is never uploaded and cannot be recovered.
 - **Auto-lock**: locks after 1 / 5 / 15 minutes of inactivity (configurable); on Android it locks immediately when returning from background after the timeout
-- **Clipboard auto-clear**: copied passwords, usernames and one-time codes are wiped after the configured number of seconds (5–120, default 30), with a visible countdown
+- **Clipboard auto-clear**: copied passwords, usernames and one-time codes are wiped after the configured number of seconds (5–120, default 30), with a visible countdown. **One-time codes are the exception** — they live in the clipboard only as long as the code itself does, so you can never paste one that has already rolled over
 - **Quick unlock**: Windows Hello (PIN / fingerprint / face) or Android fingerprint instead of typing the master password every time; the key stays on this device and is **never** included in backups or sync
 - **URL safety**: only `http` / `https` may be opened; `javascript:`, `file:` and friends are blocked
 
@@ -69,7 +69,7 @@ Grab the latest build from [Releases](https://github.com/hengletime/PasswordMS/r
 
 ## 🔑 Two-factor codes (TOTP)
 
-A login entry can carry a TOTP secret. The detail view keeps showing the current 6-digit code and the seconds left in the period, and rolls over to the next code automatically; the copy button at the end of that row hands the code straight to your clipboard (the clipboard is auto-cleared after the configured seconds, like any other secret).
+A login entry can carry a TOTP secret. The detail view keeps showing the current 6-digit code and the seconds left in the period, and rolls over to the next code automatically; the copy button at the end of that row hands the code straight to your clipboard. **The clipboard lives exactly as long as the code does** — 12 seconds left means 12 seconds on the clipboard, and under 5 seconds it tells you the code is about to roll over, so you never paste a stale one and blame your password.
 
 ### Four ways to get the secret in
 
@@ -144,7 +144,7 @@ Other requirements and notes:
 - The vault is **fully encrypted**; keys are derived from the master password via Argon2id and never written to disk
 - LAN sync is end-to-end encrypted: paired devices share the vault key; traffic is unreadable to other devices on the network
 - Auto-lock after inactivity; sensitive data in memory is zeroized when locked
-- Secrets in the clipboard are wiped after the configured seconds (anything can read the clipboard; this is the only exposure window we can shrink)
+- Secrets in the clipboard are wiped after the configured seconds (anything can read the clipboard; this is the only exposure window we can shrink); one-time codes go further and leave as soon as they expire
 - This software **never uploads any data** — everything stays on your machine (and the LAN devices you explicitly pair). The single exception: if you turn on "Check for updates" yourself, it asks GitHub for the version number
 
 ## ⚠️ Disclaimer / Terms of Use

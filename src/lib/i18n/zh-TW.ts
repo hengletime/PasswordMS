@@ -18,6 +18,7 @@ export const zhTW = {
     copied: '已複製',
     copied_countdown: '剪貼簿將在 {n} 秒後清空',
     copied_countdown_field: '已複製{field}，剪貼簿將在 {n} 秒後清空',
+    copied_totp_expiring: '已複製動態密碼，但它只剩 {n} 秒就換新碼了，剪貼簿同期清空',
     confirm: '確認',
     back: '返回',
     search: '搜尋',

@@ -18,6 +18,7 @@ export const zhCN = {
     copied: '已复制',
     copied_countdown: '剪贴板将在 {n} 秒后清空',
     copied_countdown_field: '已复制{field}，剪贴板将在 {n} 秒后清空',
+    copied_totp_expiring: '已复制动态口令，但它只剩 {n} 秒就换新码了，剪贴板同期清空',
     confirm: '确认',
     back: '返回',
     search: '搜索',

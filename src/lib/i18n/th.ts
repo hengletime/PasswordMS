@@ -19,6 +19,7 @@ export const th = {
     copied: 'คัดลอกแล้ว',
     copied_countdown: 'คลิปบอร์ดจะถูกล้างในอีก {n} วินาที',
     copied_countdown_field: 'คัดลอก{field}แล้ว คลิปบอร์ดจะถูกล้างในอีก {n} วินาที',
+    copied_totp_expiring: 'คัดลอกรหัส OTP แล้ว แต่รหัสจะเปลี่ยนในอีก {n} วินาที และคลิปบอร์ดจะถูกล้างพร้อมกัน',
     confirm: 'ยืนยัน',
     back: 'กลับ',
     search: 'ค้นหา',

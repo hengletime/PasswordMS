@@ -4,8 +4,50 @@
 // 不常驻任何明文。
 
 import { CLIPBOARD_TTL_SECS } from './constants';
+import type { CopiedField } from './copied-field';
 import { api } from './ipc';
 import { ui } from './stores/ui.svelte';
+import { secondsRemaining } from './totp';
+
+/** 动态口令剩余寿命不超过该值时，复制后改口提示「马上就要失效」（D-167）。 */
+export const TOTP_EXPIRY_WARN_SECS = 5;
+
+/** 一次复制的清空计划。 */
+export interface CopyPlan {
+  /** 实际用于自动清空的秒数。 */
+  ttlSecs: number;
+  /** 是否该改口提示「口令即将换码、剪贴板同期清空」（只有动态口令、且剩余很短时为真）。 */
+  warnExpiring: boolean;
+}
+
+/**
+ * 决定「这次复制要不要按别的时长清空、要不要换一句提示」（D-167）。
+ *
+ * 用户名与密码用用户设定的 TTL；**动态口令取「用户设定」与「当前口令剩余寿命」中更早的
+ * 那一个**。理由：口令本身随 30 秒窗口作废，剪贴板里多留的那段时间只会让用户粘出一个
+ * 已经失效的码——「剪贴板还留着」在这里不是保障，是误导。
+ *
+ * 剩余寿命**必须按 `nowMs` 现算**，不能读组件里那份每秒刷新的 `totpRemaining`：
+ * 刚挂载、或 TOTP 效应还没跑第一轮时它是 0，照它算等于「复制即清空」（D-135 的同一类
+ * 坑——把「还没算出来」当成「已经到期」）。
+ *
+ * 抽成纯函数而不是留在组件里，是为了让「算对没算对」能喂数据断言：写在 `copyText`
+ * 里的三元表达式只能靠字符串切片猜，而这段逻辑有五个边界（1 秒、整周期、用户更严、
+ * 用户更宽、非口令字段）。
+ *
+ * `configuredSecs` 由设置页 `clampClipboardTtl` 保证在 5–120 之间，故 ttlSecs 不会是 0。
+ */
+export function planSecretCopy(
+  field: CopiedField,
+  configuredSecs: number,
+  nowMs: number,
+): CopyPlan {
+  if (field !== 'totp') {
+    return { ttlSecs: configuredSecs, warnExpiring: false };
+  }
+  const ttlSecs = Math.min(configuredSecs, secondsRemaining(nowMs));
+  return { ttlSecs, warnExpiring: ttlSecs <= TOTP_EXPIRY_WARN_SECS };
+}
 
 /** 可取消的倒计时句柄。 */
 export interface CountdownTimer {
