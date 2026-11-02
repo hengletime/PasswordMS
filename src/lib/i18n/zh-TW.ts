@@ -575,6 +575,8 @@ export const zhTW = {
     backup_empty: '這個備份檔案是空的（0 位元組），裡面沒有資料。請重新匯出一份備份再還原。',
     backup_not_vault: '這個檔案不是 PasswordMS 備份。請選擇由「設定 → 匯出保險庫」產生、以 .vault 結尾的檔案。',
     backup_corrupt: '這個備份檔案已損壞（內容不完整）。請換一份備份再試。',
+    backup_unsupported:
+      '這個備份檔案來自不相容的版本（格式或加密演算法較新），目前應用程式無法使用。請升級 PasswordMS 後再還原。',
     totp_invalid:
       '動態密碼金鑰無效：須為 Base32 金鑰（字母 A-Z、數字 2-7，不含 0/1/8/9），或直接貼上 otpauth:// 連結自動擷取。',
     totp_invalid_detail: '動態密碼金鑰無效，請編輯項目修正。',

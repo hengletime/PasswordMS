@@ -187,6 +187,9 @@ fn backup_reject(path: &Path, err: CoreError) -> IpcError {
         "err.backup_empty"
     } else if detail == "corrupt_vault_backup" {
         "err.backup_corrupt"
+    } else if detail == "unsupported_vault_backup" {
+        // F-02：格式版本 / 算法名不认识——用户该做的是升级应用，不是另找文件。
+        "err.backup_unsupported"
     } else {
         "err.backup_not_vault"
     };

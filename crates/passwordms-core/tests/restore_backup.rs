@@ -178,6 +178,209 @@ fn record_start_of(bytes: &[u8]) -> usize {
     CONTAINER_PREFIX_LEN + header_len
 }
 
+/// 造一份真实备份：建库（1 条）→ 导出。返回 (本机库, 备份) 两个路径。
+fn make_backup(tag: &str) -> (PathBuf, PathBuf) {
+    let vault_path = tmp_path(&format!("{tag}-vault"));
+    let backup_path = tmp_path(&format!("{tag}-bak"));
+    let mut session = Session::create(&vault_path, MASTER, true).expect("create");
+    session
+        .repo_mut()
+        .expect("repo")
+        .create_item(login_draft(&format!("qa_restore_{tag}")))
+        .expect("item");
+    session
+        .repo()
+        .expect("repo")
+        .export_vault(&backup_path, MASTER)
+        .expect("export");
+    drop(session);
+    (vault_path, backup_path)
+}
+
+fn expect_validation(err: CoreError, want: &str) {
+    match err {
+        CoreError::Validation(ref m) => assert_eq!(m, want, "错误码不符"),
+        other => panic!("期望 Validation({want})，实际 {other:?}"),
+    }
+}
+
+/// 恢复候选文件路径（与 `container::restore_temp_path` 同构）：
+/// 同目录、文件名追加 `.restore-tmp`。
+fn candidate_of(dest: &std::path::Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    dest.with_file_name(format!("{name}.restore-tmp"))
+}
+
+/// ⑥【F-02】头部 JSON 损坏（长度与帧流都合法，只有头部是垃圾）→ 拒绝，
+/// 且**目标库字节不变**（本机库已存在时，失败不得留下半份覆盖）。
+///
+/// 旧实现只查 magic + 帧流，这种文件会被判定「可恢复」，覆盖之后用户再也打不开库。
+#[test]
+fn restore_rejects_bad_header_json_without_touching_existing_vault() {
+    let (vault_path, backup_path) = make_backup("badjson");
+    let original = std::fs::read(&vault_path).expect("read vault");
+
+    let mut bytes = std::fs::read(&backup_path).expect("read backup");
+    let start = record_start_of(&bytes);
+    // 头部区填成非 JSON（保持长度不变，帧流照样自洽）。
+    for byte in &mut bytes[CONTAINER_PREFIX_LEN..start] {
+        *byte = b'!';
+    }
+    std::fs::write(&backup_path, &bytes).expect("write bad header");
+
+    let err = restore_backup_from(&backup_path, &vault_path).expect_err("坏头部必须拒绝");
+    expect_validation(err, "corrupt_vault_backup");
+    assert_eq!(
+        std::fs::read(&vault_path).expect("read vault"),
+        original,
+        "恢复失败时当前库必须保持原样"
+    );
+    assert!(
+        !candidate_of(&vault_path).exists(),
+        "失败后不得残留恢复候选文件"
+    );
+
+    let _ = std::fs::remove_file(&vault_path);
+    let _ = std::fs::remove_file(&backup_path);
+}
+
+/// ⑦【F-02】`header_len == 0` 的最短前缀文件（审计点名的形态：magic 正确、
+/// 零头长、无记录区）→ 拒绝。旧实现会放行，恢复后 `open` 直接报 `zero header`。
+#[test]
+fn restore_rejects_zero_header_len() {
+    let (_vault_path, backup_path) = make_backup("zerohead");
+    let dest = tmp_path("zerohead-dest");
+
+    let mut bytes = std::fs::read(&backup_path).expect("read backup");
+    // 只留前缀并把 header_len 置 0：magic 正确、帧区为空。
+    bytes.truncate(CONTAINER_PREFIX_LEN);
+    bytes[10] = 0;
+    bytes[11] = 0;
+    std::fs::write(&backup_path, &bytes).expect("write zero header");
+
+    let err = restore_backup_from(&backup_path, &dest).expect_err("零头长必须拒绝");
+    expect_validation(err, "corrupt_vault_backup");
+    assert!(!dest.exists(), "校验失败时不得创建目标文件");
+
+    let _ = std::fs::remove_file(&backup_path);
+}
+
+/// ⑧【F-02】`format_version` 不受支持（来自更新版本的备份）→ 单独的错误码，
+/// 前端据此提示「升级应用」而不是「文件损坏」。
+#[test]
+fn restore_rejects_unsupported_format_version() {
+    let (_vault_path, backup_path) = make_backup("badver");
+    let dest = tmp_path("badver-dest");
+
+    let mut bytes = std::fs::read(&backup_path).expect("read backup");
+    bytes[8] = 99;
+    bytes[9] = 0;
+    std::fs::write(&backup_path, &bytes).expect("write bad version");
+
+    let err = restore_backup_from(&backup_path, &dest).expect_err("版本不受支持必须拒绝");
+    expect_validation(err, "unsupported_vault_backup");
+    assert!(!dest.exists(), "校验失败时不得创建目标文件");
+
+    let _ = std::fs::remove_file(&backup_path);
+}
+
+/// ⑨【F-02】头部能解析、但 KDF 算法名不认识 → 恢复出来的库必然打不开，必须提前拒。
+#[test]
+fn restore_rejects_unknown_kdf_algorithm() {
+    let (_vault_path, backup_path) = make_backup("badkdf");
+    let dest = tmp_path("badkdf-dest");
+
+    let mut bytes = std::fs::read(&backup_path).expect("read backup");
+    let start = record_start_of(&bytes);
+    // 等长替换（头部已按固定容量填充空格，改字符不改布局）。
+    let needle = b"argon2id";
+    let pos = bytes[CONTAINER_PREFIX_LEN..start]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .expect("备份头部应含 KDF 算法名")
+        + CONTAINER_PREFIX_LEN;
+    bytes[pos] = b'X';
+    std::fs::write(&backup_path, &bytes).expect("write bad kdf");
+
+    let err = restore_backup_from(&backup_path, &dest).expect_err("未知 KDF 必须拒绝");
+    expect_validation(err, "unsupported_vault_backup");
+    assert!(!dest.exists(), "校验失败时不得创建目标文件");
+
+    let _ = std::fs::remove_file(&backup_path);
+}
+
+/// ⑩【F-02 判据本体】恢复的接受条件必须与 `Container::open` 一致：
+/// 同一批坏文件，两边都得拒；且**只有** restore 额外收紧的那一条（KDF 未知）
+/// 允许 open 通过。
+#[test]
+fn restore_acceptance_matches_container_open() {
+    use passwordms_core::store::container::Container;
+
+    let (_vault_path, backup_path) = make_backup("parity");
+    let good = std::fs::read(&backup_path).expect("read backup");
+
+    // 三个「结构上开不了」的变体：零头长 / 坏头部 JSON / 版本不受支持。
+    let mut zero_header = good.clone();
+    zero_header[10] = 0;
+    zero_header[11] = 0;
+    let mut bad_json = good.clone();
+    let start = record_start_of(&good);
+    for byte in &mut bad_json[CONTAINER_PREFIX_LEN..start] {
+        *byte = b'!';
+    }
+    let mut bad_version = good.clone();
+    bad_version[8] = 99;
+
+    for (tag, bytes) in [
+        ("zero_header", zero_header),
+        ("bad_json", bad_json),
+        ("bad_version", bad_version),
+    ] {
+        let path = tmp_path(&format!("parity-{tag}"));
+        std::fs::write(&path, &bytes).expect("write variant");
+        assert!(
+            Container::open(&path).is_err(),
+            "{tag}：open 必须拒绝（否则该变体不能用来证「恢复更宽」）"
+        );
+        let dest = tmp_path(&format!("parity-{tag}-dest"));
+        let err = restore_backup_from(&path, &dest).expect_err("恢复必须同样拒绝");
+        assert!(
+            matches!(err, CoreError::Validation(_)),
+            "{tag}：恢复侧应是 Validation（用户文件不合格），实际 {err:?}"
+        );
+        assert!(!dest.exists(), "{tag}：拒绝时不得落后半个库");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    let _ = std::fs::remove_file(&backup_path);
+}
+
+/// ⑪【F-03】成功路径的原子替换收尾：库内容与备份逐字节一致，且不残留
+/// `*.restore-tmp` 候选文件（rename 是生效时刻，成功就不该留下它）。
+#[test]
+fn restore_leaves_no_candidate_file_and_is_byte_identical() {
+    let (vault_path, backup_path) = make_backup("atomic");
+    let source = std::fs::read(&backup_path).expect("read backup");
+
+    restore_backup_from(&backup_path, &vault_path).expect("restore");
+
+    assert_eq!(
+        std::fs::read(&vault_path).expect("read vault"),
+        source,
+        "恢复后库内容应与备份逐字节一致"
+    );
+    assert!(
+        !candidate_of(&vault_path).exists(),
+        "成功路径不得残留恢复候选文件"
+    );
+
+    let _ = std::fs::remove_file(&vault_path);
+    let _ = std::fs::remove_file(&backup_path);
+}
+
 /// ④ 帧体截断（QA caseA 形态：截断点落在第一帧帧体内）→ restore 返回
 /// `Validation("corrupt_vault_backup")`，且目标文件不得被创建。
 /// （恢复入口提前拦截后，存量 unlock 路径对截断帧报 ERR_INTERNAL 的行为不再可达。）

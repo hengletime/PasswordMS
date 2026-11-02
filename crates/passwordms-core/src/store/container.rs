@@ -14,17 +14,74 @@
 //! 使 `item_count`/`folder_count` 等计数更新可在原位移位写入，满足 A-02。
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::constants::FRAME_HEADER_LEN;
 use crate::constants::{
-    CONTAINER_PREFIX_LEN, FORMAT_VERSION, HEADER_RESERVED_BYTES, MAX_HEADER_BYTES, VAULT_MAGIC,
+    CONTAINER_PREFIX_LEN, ENCRYPTION_SCHEME, FORMAT_VERSION, HEADER_RESERVED_BYTES, KDF_ALGORITHM,
+    MAX_HEADER_BYTES, VAULT_MAGIC,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::model::vault::Vault;
 use crate::store::frame::Frame;
+
+/// 容器前缀的结构缺陷分类。
+///
+/// 抽成枚举而不是「就地返回错误」：同一条判定要服务**两种错误语汇**——`open` 走
+/// `Internal(...)`（库坏了，是运行期内部错误），`restore_backup_from` 走
+/// `Validation("…bakcup")`（这是用户交上来的文件不合格）。两边各自负责翻译，判定
+/// 只写一遍，才不会有「打开时查、恢复时不查」这种只差一行的漏洞（F-02）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeaderDefect {
+    /// magic 不是 `PMSVAULT`。
+    BadMagic,
+    /// `format_version` 与当前 `FORMAT_VERSION` 不一致（通常是更新的版本导出的备份）。
+    UnsupportedVersion,
+    /// `header_len == 0`：容器不可能合法（打开时会被拒，这里必须同样拒）。
+    ZeroHeader,
+}
+
+/// 校验容器前缀（前 [`CONTAINER_PREFIX_LEN`] 字节），返回头部长度。
+fn check_prefix(prefix: &[u8]) -> Result<usize, HeaderDefect> {
+    debug_assert!(prefix.len() >= CONTAINER_PREFIX_LEN, "prefix 不足 16 字节");
+    if &prefix[0..8] != VAULT_MAGIC {
+        return Err(HeaderDefect::BadMagic);
+    }
+    let format_version = u16::from_le_bytes([prefix[8], prefix[9]]);
+    if format_version != FORMAT_VERSION {
+        return Err(HeaderDefect::UnsupportedVersion);
+    }
+    let header_len = u16::from_le_bytes([prefix[10], prefix[11]]) as usize;
+    if header_len == 0 {
+        return Err(HeaderDefect::ZeroHeader);
+    }
+    Ok(header_len)
+}
+
+/// 头部「能不能打开」的最低条件（F-02）。
+///
+/// 结构上解析成功不等于能解锁：KDF 算法名不认识、密文/校验位为空，恢复出来的库
+/// 一定打不开。这类文件必须在**覆盖当前库之前**被拒——否则用户看到「恢复成功」，
+/// 下次解锁才发现进不去（`.bak` 是事后补救，不是事务保证）。
+fn verify_header_usable(header: &Vault) -> CoreResult<()> {
+    let corrupt = || CoreError::Validation("corrupt_vault_backup".to_string());
+    if header.kdf.algorithm != KDF_ALGORITHM || header.encryption_scheme != ENCRYPTION_SCHEME {
+        // 算法不认识 = 本版本打不开（不是文件坏了，但同样不能用）。
+        return Err(CoreError::Validation(
+            "unsupported_vault_backup".to_string(),
+        ));
+    }
+    if header.kdf_salt.is_empty()
+        || header.verify_mac.is_empty()
+        || header.wrapped_vault_key.ct.is_empty()
+        || header.wrapped_vault_key.nonce.is_empty()
+    {
+        return Err(corrupt());
+    }
+    Ok(())
+}
 
 /// 容器句柄：封装路径、头部与预留容量。
 pub struct Container {
@@ -74,17 +131,15 @@ impl Container {
         let mut prefix = [0u8; CONTAINER_PREFIX_LEN];
         file.read_exact(&mut prefix)?;
 
-        if &prefix[0..8] != VAULT_MAGIC {
-            return Err(CoreError::Internal("bad magic".to_string()));
-        }
-        let format_version = u16::from_le_bytes([prefix[8], prefix[9]]);
-        if format_version != FORMAT_VERSION {
-            return Err(CoreError::Internal("unsupported format".to_string()));
-        }
-        let header_len = u16::from_le_bytes([prefix[10], prefix[11]]) as usize;
-        if header_len == 0 {
-            return Err(CoreError::Internal("zero header".to_string()));
-        }
+        // F-02：前缀判定与「备份预检」共用 [`check_prefix`]，避免两处条件漂移——
+        // 恢复路径曾经只查 magic，于是「能过恢复、打不开库」的文件被放行。
+        let header_len = check_prefix(&prefix).map_err(|defect| match defect {
+            HeaderDefect::BadMagic => CoreError::Internal("bad magic".to_string()),
+            HeaderDefect::UnsupportedVersion => {
+                CoreError::Internal("unsupported format".to_string())
+            }
+            HeaderDefect::ZeroHeader => CoreError::Internal("zero header".to_string()),
+        })?;
         let mut header_bytes = vec![0u8; header_len];
         file.read_exact(&mut header_bytes)?;
         let header: Vault = serde_json::from_slice(&header_bytes)?;
@@ -407,34 +462,107 @@ pub fn verify_frame_stream(bytes: &[u8]) -> CoreResult<()> {
     Ok(())
 }
 
-/// D-55 从备份恢复：校验源文件确为 PasswordMS 保险库备份，然后**字节级**复制到目标路径。
+/// 备份可用性全检（F-02）：结构 + 头部 + 帧流，一次性做完。
 ///
-/// - 校验：源文件存在、不短于容器前缀（[`CONTAINER_PREFIX_LEN`]）、头部 magic 为
-///   [`VAULT_MAGIC`]（"PMSVAULT"）；不符返回 `CoreError::Validation("not_a_vault_backup")`，
-///   此时**不得触碰目标文件**。
-/// - **整库帧流完整性校验**（[`verify_frame_stream`]）：从记录区起点逐帧解码至恰好
-///   EOF，挡住「尾部截断的备份」——否则 restore 成功但记录静默丢失（QA 实证 caseA/
-///   caseB）；不符返回 `CoreError::Validation("corrupt_vault_backup")`，不复制。
-/// - 复制用 [`fs::copy`]：Windows/Unix 上都会**保留源文件的修改时间**——「备份文件的
-///   mtime = 库数据最后写入时刻」是导出（`export_vault`）既有的语义，客户明确要求
-///   恢复路径保留一致。
-/// - 目标已存在时会被覆盖；调用方（src-tauri `restore_backup` 命令）负责先留
-///   `.bak-<unix_ms>` 覆盖保护。
+/// 与 [`Container::open`] 共用 [`check_prefix`]，并补上 `open` 会拒、旧版恢复却放行的
+/// 三项：`header_len == 0`、头部 JSON 解析、头部「可打开性」最低条件
+/// （[`verify_header_usable`]）。这里**只读**、不建任何状态——任何一项不过，调用方
+/// 都不得触碰目标库。
+fn verify_backup_container(bytes: &[u8]) -> CoreResult<()> {
+    let not_vault = || CoreError::Validation("not_a_vault_backup".to_string());
+    let corrupt = || CoreError::Validation("corrupt_vault_backup".to_string());
+    if bytes.len() < CONTAINER_PREFIX_LEN {
+        return Err(not_vault());
+    }
+    let header_len = match check_prefix(&bytes[..CONTAINER_PREFIX_LEN]) {
+        Ok(len) => len,
+        Err(HeaderDefect::BadMagic) => return Err(not_vault()),
+        Err(HeaderDefect::UnsupportedVersion) => {
+            return Err(CoreError::Validation(
+                "unsupported_vault_backup".to_string(),
+            ))
+        }
+        Err(HeaderDefect::ZeroHeader) => return Err(corrupt()),
+    };
+    let record_start = CONTAINER_PREFIX_LEN + header_len;
+    if record_start > bytes.len() {
+        return Err(corrupt());
+    }
+    let header: Vault = serde_json::from_slice(&bytes[CONTAINER_PREFIX_LEN..record_start])
+        .map_err(|_| corrupt())?;
+    verify_header_usable(&header)?;
+    verify_frame_stream(bytes)
+}
+
+/// 候选文件的回读复核（F-03）：长度 + 逐块字节相等。
+///
+/// **两侧都从磁盘读**，而不是拿内存里的 `bytes` 比：要证明的是「写进去的东西和源
+/// 一致」，拿内存副本比只能证明「源没变」。分块比较是为了不把库再整份读进内存
+/// （`fs::read` 已经占了一份，大库上再翻倍会顶到移动端内存上限）。
+fn files_equal(a: &Path, b: &Path) -> CoreResult<bool> {
+    if fs::metadata(a)?.len() != fs::metadata(b)?.len() {
+        return Ok(false);
+    }
+    let mut fa = BufReader::new(File::open(a)?);
+    let mut fb = BufReader::new(File::open(b)?);
+    let mut buf_a = vec![0u8; 64 * 1024];
+    let mut buf_b = vec![0u8; 64 * 1024];
+    loop {
+        let read = fa.read(&mut buf_a)?;
+        if read == 0 {
+            // a 到尾：b 也必须同时到尾（长度已比过，这里兜住并发增长）。
+            return Ok(fb.read(&mut buf_b)? == 0);
+        }
+        fb.read_exact(&mut buf_b[..read])?;
+        if buf_a[..read] != buf_b[..read] {
+            return Ok(false);
+        }
+    }
+}
+
+/// 恢复候选文件路径：必须与目标**同目录**，`rename` 才是同卷原子移位。
+fn restore_temp_path(dest: &Path) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "passwordms.vault".to_string());
+    dest.with_file_name(format!("{name}.restore-tmp"))
+}
+
+/// D-55 从备份恢复：校验源文件确为**可解锁的** PasswordMS 保险库备份，然后原子替换目标。
+///
+/// - 校验（[`verify_backup_container`]）：源文件存在、不短于容器前缀、magic 为
+///   [`VAULT_MAGIC`]、`format_version` 受支持、`header_len` 非零、头部 JSON 可解析为
+///   [`Vault`] 且具备可打开的最低条件、整库帧流从记录区起点恰好解码到 EOF。
+///   magic / 长度不符 → `not_a_vault_backup`；版本不受支持 → `unsupported_vault_backup`；
+///   其余结构问题 → `corrupt_vault_backup`。**任何一项不过都不触碰目标文件**。
+/// - **原子替换（F-03）**：先写同目录候选 `*.restore-tmp`，回读逐字节复核并 `sync_all`，
+///   最后 `rename`。旧实现 `fs::copy(src, dest)` 直接覆盖——复制中途失败会让当前库
+///   停在「半份旧 + 半份新」，而调用方的 `.bak` 只是事后补救，不是事务保证。
+/// - `fs::copy` 负责候选文件：Windows 上它会连文件时间一起复制，「备份文件的 mtime =
+///   库数据最后写入时刻」这条导出语义（客户明确要求）因此在恢复后依旧成立。
+/// - 目标已存在时会被覆盖；调用方（src-tauri `restore_backup` 命令）仍负责先留
+///   `.bak-<unix_ms>` 覆盖保护（用户反悔的后路，与原子性无关）。
 pub fn restore_backup_from(src: &Path, dest: &Path) -> CoreResult<()> {
-    let meta = fs::metadata(src)?;
-    if meta.len() < CONTAINER_PREFIX_LEN as u64 {
-        return Err(CoreError::Validation("not_a_vault_backup".to_string()));
-    }
-    let mut file = File::open(src)?;
-    let mut magic = [0u8; 8];
-    file.read_exact(&mut magic)?;
-    if &magic != VAULT_MAGIC {
-        return Err(CoreError::Validation("not_a_vault_backup".to_string()));
-    }
-    // QA 实证加固：仅查 magic 会放行尾部截断的备份（restore Ok → unlock 成功但
-    // record_count=0，静默丢数据）。复制前先做整库帧流校验。
     let bytes = fs::read(src)?;
-    verify_frame_stream(&bytes)?;
-    fs::copy(src, dest)?;
-    Ok(())
+    verify_backup_container(&bytes)?;
+
+    let tmp = restore_temp_path(dest);
+    // 上次中断留下的候选必然是半成品：`rename` 是最后一步，成功就不会留下它。
+    let _ = fs::remove_file(&tmp);
+    let outcome = (|| -> CoreResult<()> {
+        fs::copy(src, &tmp)?;
+        if !files_equal(src, &tmp)? {
+            return Err(CoreError::Validation("corrupt_vault_backup".to_string()));
+        }
+        // 先刷盘再改名：只 rename 不 sync，掉电会得到「名字已换、内容还在 page cache」
+        // 的半份库（与 `update_header` 扩容分支、`rewrite_with_frames` 同一论证）。
+        OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
+        fs::rename(&tmp, dest)?;
+        Ok(())
+    })();
+    if outcome.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    outcome
 }

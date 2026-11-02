@@ -636,6 +636,8 @@ export const enUS: Messages = {
     backup_empty: 'This backup file is empty (0 bytes) — there is no data in it. Export a fresh backup and restore from that.',
     backup_not_vault: 'This file is not a PasswordMS backup. Choose a .vault file created by Settings → Export vault.',
     backup_corrupt: 'This backup file is damaged (incomplete contents). Try a different backup.',
+    backup_unsupported:
+      'This backup was created by an incompatible version (newer format or encryption) and cannot be used by this app. Update PasswordMS and try again.',
     // D-97: TOTP secret validation failure (editor) and error state (detail page).
     totp_invalid:
       'Invalid TOTP secret: use a Base32 key (letters A-Z, digits 2-7, no 0/1/8/9), or paste an otpauth:// URI to extract it automatically.',

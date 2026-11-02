@@ -340,6 +340,39 @@ MSI `2,920,448 B`（`89c4552a`）/ 裸 exe **`4,997,120 B`**（`919505df`，Prod
 > 两种结果，这才是它在测内容、而不是在测「必然变化」。桌面 `passwordms.exe` 的五个新名字
 > 同样各出现 1 次，十个旧名字各 0 次。
 
+**1.5.26 门禁（D-170 / Kimi F-02+F-03，2026-11-02 实跑）**：前端 `npm run test` **82 文件 770 例全绿**
+（较 1.5.25 的 81/760：新增 `d170-backup-restore-guard.test.ts` 10 例）/ `npm run check`
+0 error 0 warning / CSS 契约 **0 FAIL 6 WARN** / `cargo fmt --all -- --check` 干净 /
+`clippy --workspace --all-targets` 代码警告 0 / `cargo test -p passwordms-core` 全通过
+（`restore_backup` 由 6 例扩到 **12 例**）/ 体积门禁桌面 + APK 双过（NSIS 1.97 MB、APK 7.34 MB）。
+**变异实测 8 条全真红**（`target/mutate-170.py`）。
+
+> **本轮变异打「顺序」和「接线」**：①恢复改回直接覆盖；②删掉可打开性复检；③错误码多一个
+> 字母；④先 rename 再 sync_all；⑤失败不清候选文件；⑥`open` 又长回自己一套 magic 判定；
+> ⑦src-tauri 消费分支错拼；⑧泰语字典键名写错。
+>
+> **③ 的教训值得记：前端那条守卫只红了 0 次**（`ts=0`），全靠 Rust 测试抓住。原因是
+> `container.rs` 里 `"unsupported_vault_backup"` 出现两次，脚本只替换第一处，剩下那处
+> 让 `toContain` 依旧成立。**「多处出现的关键字」用 `replace(..., 1)` 做变异，
+> 只能证明「其中一处还在」**——要么全替换，要么改判据只钉单点。
+
+**1.5.26 实际产物（出包实测，非推算）**：
+APK **`7,762,347 B`**（`d56de660`，versionCode **1005026** / versionName 1.5.26）/
+NSIS `2,062,797 B`（`f96210d8`）/ MSI `2,924,544 B`（`6d9b8c06`）/
+裸 exe **`5,009,920 B`**（`07c87d16`）/ 绿色版 zip `2,429,805 B`（`d891039c`）；
+**zip 内 exe 与裸 exe 哈希一致**（`07c87d16`，同为 5,009,920 B）。
+
+> **APK 连续六版 7,762,347 B**（1.5.21–1.5.26）。本轮 `.so` 实测 5,726,656 B（构建日志
+> 四门比对通过），差异又被 zipalign 吸收——体积依旧零信息量。
+
+**包内取证（1.5.26）——只动 Rust，用「本轮才有的字符串」取证**：
+
+| 判据 | 位置 | 计数 |
+|---|---|---|
+| `.restore-tmp`（本轮新增的候选文件后缀，`format!` 真用到） | 桌面 exe / APK `.so` | 1 / 1 |
+| `unsupported_vault_backup`（本轮新增错误码） | 桌面 exe / APK `.so` | 1 / 2 |
+| `dist/index.html` mtime 早于 APK | — | 19:38:22 < 19:41:57 |
+
 **1.5.25 门禁（D-169，2026-11-02 实跑）**：前端 `npm run test` **81 文件 760 例全绿**
 （较 1.5.24 的 80/743：新增 `d169-settings-instant-save-guard.test.ts` 17 例）/ `npm run check`
 0 error 0 warning / CSS 契约 **0 FAIL 6 WARN** / **Rust 零改动**：`cargo fmt --all -- --check`

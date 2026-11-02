@@ -652,6 +652,8 @@ export const zhCN = {
     backup_empty: '这个备份文件是空的（0 字节），里面没有数据。请重新导出一份备份再恢复。',
     backup_not_vault: '这个文件不是 PasswordMS 备份。请选择由「设置 → 导出保险库」生成、以 .vault 结尾的文件。',
     backup_corrupt: '这个备份文件已损坏（内容不完整）。请换一份备份再试。',
+    backup_unsupported:
+      '这个备份文件来自不兼容的版本（格式或加密算法较新），当前应用无法使用。请升级 PasswordMS 后再恢复。',
     // D-97：TOTP 密钥入库前校验失败（编辑器）与展示错误态（详情页）。
     // 必须点名合法形态（Base32 / otpauth 链接）——只说「输入无效」用户不知道改什么。
     totp_invalid:
