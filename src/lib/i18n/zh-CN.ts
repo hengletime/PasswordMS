@@ -131,6 +131,8 @@ export const zhCN = {
     unfavorite: '取消收藏',
     copy_username: '复制用户名',
     copy_password: '复制密码',
+    // D-166：动态口令一键复制（详情页 TOTP 行）。
+    copy_totp: '复制动态口令',
     open_url: '打开网址',
     delete: '删除',
     delete_perm: '彻底删除',

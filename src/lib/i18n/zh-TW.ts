@@ -123,6 +123,7 @@ export const zhTW = {
     unfavorite: '取消最愛',
     copy_username: '複製使用者名稱',
     copy_password: '複製密碼',
+    copy_totp: '複製動態密碼',
     open_url: '開啟網址',
     delete: '刪除',
     delete_perm: '永久刪除',

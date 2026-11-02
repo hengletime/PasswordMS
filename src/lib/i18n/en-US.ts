@@ -129,6 +129,7 @@ export const enUS: Messages = {
     unfavorite: 'Unfavorite',
     copy_username: 'Copy username',
     copy_password: 'Copy password',
+    copy_totp: 'Copy one-time code',
     open_url: 'Open URL',
     delete: 'Delete',
     delete_perm: 'Delete permanently',

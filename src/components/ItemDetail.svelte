@@ -4,6 +4,7 @@
   import AttachmentView from './AttachmentView.svelte';
   import SecureNoteView from './SecureNoteView.svelte';
   import { copySecretWithAutoClear } from '../lib/clipboard';
+  import { copiedFieldLabelKey, type CopiedField } from '../lib/copied-field';
   import { formatDateTime } from '../lib/constants';
   import { toAppError } from '../lib/errors';
   import { api } from '../lib/ipc';
@@ -29,7 +30,8 @@
    * 什么」和「还剩几秒」是两个事实——之前只存秒数，复制用户名再把密码复制进剪贴板后，
    * 提示行既说不出剪贴板里换成了密码，还会被两路定时器轮流写秒数。
    */
-  let copiedField = $state<'username' | 'password' | null>(null);
+  let copiedField = $state<CopiedField | null>(null);
+
   let totpCode = $state('');
   let totpRemaining = $state(0);
   // D-97（B）：密钥无效进入错误态——只弹一次 toast，行内给出可见错误行，
@@ -102,7 +104,7 @@
    * 复制的倒计时由 `copySecretWithAutoClear` 在内部作废（旧代的 tick 不再转发），这里只需
    * 把「当前字段」换过来；toast 走 `dedupeKey` 顶掉上一条，不再两条并排堆着。
    */
-  async function copyText(text: string, field: 'username' | 'password'): Promise<void> {
+  async function copyText(text: string, field: CopiedField): Promise<void> {
     if (text.length === 0) {
       return;
     }
@@ -332,17 +334,6 @@
         </div>
       {/if}
 
-      {#if copyCountdown > 0 && copiedField !== null}
-        <!-- D-146：提示行必须点名「现在剪贴板里是什么」。原先只写「将在 {n} 秒后清空」
-             且挂在密码行内，复制用户名时既错位、也不说清复制的是哪个字段。 -->
-        <p class="pms-hint is-warning" role="status">
-          {ui.t('common.copied_countdown_field', {
-            field: ui.t(copiedField === 'username' ? 'editor.field_username' : 'editor.field_password'),
-            n: copyCountdown,
-          })}
-        </p>
-      {/if}
-
       {#if totpSecret}
         <div class="detail-totp">
           <span class="pms-label">{ui.t('editor.totp_now')}</span>
@@ -352,8 +343,33 @@
           {:else}
             <strong class="detail-mono detail-totp-code">{formatCode(totpCode)}</strong>
             <span class="pms-meta">{ui.t('common.seconds', { n: totpRemaining })}</span>
+            <!-- D-166：动态口令同样需要一键复制。手抄 6 位数字到登录框，正是两步验证
+                 最容易出错的一步（看错一位就白等一个周期）。走与密码**完全同一条**
+                 路径：按用户配置的 TTL 到期清空 + 倒计时提示 + 使用埋点。 -->
+            <button
+              class="pms-icon-btn"
+              type="button"
+              aria-label={ui.t('item.copy_totp')}
+              disabled={totpCode.length === 0}
+              onclick={() => void copyText(totpCode, 'totp')}
+            >
+              <Icon name="copy" size={16} />
+            </button>
           {/if}
         </div>
+      {/if}
+
+      {#if copyCountdown > 0 && copiedField !== null}
+        <!-- D-146：提示行必须点名「现在剪贴板里是什么」。原先只写「将在 {n} 秒后清空」
+             且挂在密码行内，复制用户名时既错位、也不说清复制的是哪个字段。
+             D-166：动态口令也有复制按钮后，这行必须排在**所有可复制字段之后**——
+             留在密码行下面，复制口令时提示会跑到口令行上方，看起来像在说另一件事。 -->
+        <p class="pms-hint is-warning" role="status">
+          {ui.t('common.copied_countdown_field', {
+            field: ui.t(copiedFieldLabelKey(copiedField)),
+            n: copyCountdown,
+          })}
+        </p>
       {/if}
 
       {#if item.kind.notes}

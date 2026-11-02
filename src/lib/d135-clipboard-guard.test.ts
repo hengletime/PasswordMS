@@ -69,7 +69,7 @@ describe('D-135 剪贴板清理的代际归属', () => {
 });
 
 describe('D-135 调用点不得再传 TTL=0', () => {
-  it('三个复制入口都不传 0，且详情页用户名/密码同走带倒计时的路径', () => {
+  it('三个复制入口都不传 0，且详情页用户名/密码/口令同走带倒计时的路径', () => {
     const entries = Object.entries(components);
     expect(entries).toHaveLength(3);
     for (const [key, src] of entries) {
@@ -80,8 +80,9 @@ describe('D-135 调用点不得再传 TTL=0', () => {
     expect(detailKey, 'ItemDetail 必须在扫描面内').toBeDefined();
     const detail = components[detailKey as string];
     // 用户名与密码必须走同一个出口（同一出口才谈得上「两者行为一致」）。
-    // D-146 起该调用拆成多行并多带一个字段名参数，按调用前缀计数。
-    expect(detail.match(/void copyText\(/g) ?? []).toHaveLength(2);
+    // D-146 起该调用拆成多行并多带一个字段名参数，按调用前缀计数；
+    // D-166 起动态口令也用这同一个出口（第三条），所以是 3 而不是 2。
+    expect(detail.match(/void copyText\(/g) ?? []).toHaveLength(3);
     expect(detail).toContain('await copySecretWithAutoClear(text, ttl');
   });
 });

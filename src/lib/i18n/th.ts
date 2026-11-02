@@ -126,6 +126,7 @@ export const th = {
     unfavorite: 'นำออกจากรายการโปรด',
     copy_username: 'คัดลอกชื่อผู้ใช้',
     copy_password: 'คัดลอกรหัสผ่าน',
+    copy_totp: 'คัดลอกรหัส OTP',
     open_url: 'เปิด URL',
     delete: 'ลบ',
     delete_perm: 'ลบถาวร',
