@@ -51,7 +51,13 @@ class SettingsStore {
     }
   }
 
-  /** 保存。 */
+  /**
+   * 保存并**弹「已保存」提示**。
+   *
+   * D-169 起设置页改用 `saveQuiet`（逐项即时保存，连着改三项不该连弹三次提示），
+   * 故此方法当前没有调用方。**保留而不删**：它是「一次性提交多项、需要明确回执」的
+   * 唯一入口，将来若出现需要先校验再统一写入的设置组还要用它；静默版无法替代。
+   */
   async save(next: VaultSettings): Promise<boolean> {
     this.busy = true;
     try {

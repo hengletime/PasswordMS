@@ -503,6 +503,8 @@ export const zhCN = {
     update_failed: '检查失败，请稍后重试。',
     update_download: '前往下载',
     saved: '设置已保存',
+    instant_hint: '这里的改动都会立即生效，不需要再点保存。',
+    save_failed: '设置没能写入，改动没有生效，请重试。',
     // D-130：同步两个开关改为勾选即存（不进底部保存按钮那条路）。
   },
   sync: {

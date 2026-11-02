@@ -443,6 +443,8 @@ export const zhTW = {
     update_failed: '檢查失敗，請稍後重試。',
     update_download: '前往下載',
     saved: '設定已儲存',
+    instant_hint: '這裡的改動都會立即生效，不需要再點儲存。',
+    save_failed: '設定沒能寫入，改動沒有生效，請重試。',
   },
   sync: {
     title: '同步',

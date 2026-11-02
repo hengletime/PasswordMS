@@ -26,6 +26,14 @@ export const MAX_NOTE_BYTES = 256 * 1024;
 // ===== 剪贴板 / 自动锁 =====
 /** 剪贴板自动清空秒数。 */
 export const CLIPBOARD_TTL_SECS = 30;
+/**
+ * 剪贴板 TTL 可设范围（D-169）。
+ *
+ * 与设置页输入框的 `min`/`max` 同源：两处各写一份数字，改一处就会让「界面允许但保存被
+ * 夹紧」悄悄发生——用户填 200，看到输入框里是 200，实际存的是 120。
+ */
+export const CLIPBOARD_TTL_MIN = 5;
+export const CLIPBOARD_TTL_MAX = 120;
 /** 自动锁默认分钟数。 */
 export const AUTO_LOCK_MINUTES = 5;
 /** 自动锁合法档位。 */
@@ -46,6 +54,11 @@ export const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export const HEALTH_WEAK_MAX_LEN = 8;
 /** 超期未改天数阈值。 */
 export const HEALTH_STALE_DAYS = 180;
+/** 体检阈值的可设范围（与设置页输入框 min/max 同源，理由同 `CLIPBOARD_TTL_MIN`）。 */
+export const HEALTH_WEAK_MIN = 4;
+export const HEALTH_WEAK_MAX = 16;
+export const HEALTH_STALE_MIN = 30;
+export const HEALTH_STALE_MAX = 365;
 
 // ===== TOTP =====
 export const TOTP_PERIOD_SECS = 30;

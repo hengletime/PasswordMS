@@ -490,6 +490,8 @@ export const enUS: Messages = {
     update_failed: 'Check failed. Please try again later.',
     update_download: 'Get the new version',
     saved: 'Settings saved',
+    instant_hint: 'Changes here take effect immediately — there is no Save button to press.',
+    save_failed: 'Settings could not be written; your change did not take effect. Please retry.',
   },
   sync: {
     title: 'Sync',

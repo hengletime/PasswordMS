@@ -103,6 +103,8 @@ Counter-based HOTP (no time period) is rejected the same way.
 
 ## 🧩 Where things live
 
+> Every setting takes effect **the moment you change it** — there is no Save button to forget.
+
 | What you want to do | Where |
 |---|---|
 | Generate a strong password | The dice button in the editor's password field, or set generator defaults (length / character classes / symbol set) in Settings |

@@ -10,7 +10,18 @@
   import LegalDialog from './LegalDialog.svelte';
   import Modal from './common/Modal.svelte';
   import Spinner from './common/Spinner.svelte';
-  import { AUTO_LOCK_OPTIONS, formatBytes, formatDateTime } from '../lib/constants';
+  import {
+    AUTO_LOCK_OPTIONS,
+    CLIPBOARD_TTL_MAX,
+    CLIPBOARD_TTL_MIN,
+    HEALTH_STALE_MAX,
+    HEALTH_STALE_MIN,
+    HEALTH_WEAK_MAX,
+    HEALTH_WEAK_MIN,
+    formatBytes,
+    formatDateTime,
+  } from '../lib/constants';
+  import { clampClipboardTtl, clampHealthSettings } from '../lib/settings-clamp';
   import {
     BACKUP_STALE_DAYS,
     recordBackup,
@@ -544,19 +555,30 @@
   }
 
   /**
-   * D-106（豆包审查 3.5-4）：剪贴板 TTL 钳制——HTML min/max 不阻止键入，
-   * 0/负值会导致复制即清空、极大值会让密码长期残留剪贴板。
-   */  function clampClipboardTtl(raw: number): number {
-    const n = Math.floor(Number(raw));
-    if (!Number.isFinite(n)) {
-      return 30;
-    }
-    return Math.min(120, Math.max(5, n));
-  }
-
-  async function saveSettings(): Promise<void> {
+   * 把当前 `draft` 写回设置（D-169）。
+   *
+   * 设置页原先有个孤零零的「保存」按钮，只服务三处输入框，而它上面还隔着两张卡、
+   * 旁边一堆**改了立刻生效**的控件（主题、语言、热键、自启、自动锁定、快速解锁）。
+   * 主人实测时就是这么踩的：「改了剪贴板秒数，以为数字改完就好了，结果没生效」。
+   *
+   * 现在改成**失焦即保存**（`onchange` 在值变化且失焦/回车时触发，不是每敲一个键都写）：
+   * 页面上不再存在「要不要按保存」这类需要用户记住的规则。
+   *
+   * 走 `saveQuiet` 而不是 `save`：连着改三项会连弹三次「设置已保存」。失败必须可见——
+   * 静默失败等于让用户以为改生效了（这正是本轮要消灭的那类误导）。
+   */
+  async function applySettings(): Promise<void> {
     draft.clipboard_clear_secs = clampClipboardTtl(draft.clipboard_clear_secs);
-    await settings.save($state.snapshot(draft));
+    const health = clampHealthSettings($state.snapshot(draft.health));
+    draft.health.weak_max_len = health.weak_max_len;
+    draft.health.stale_days = health.stale_days;
+    const ok = await settings.saveQuiet($state.snapshot(draft));
+    if (!ok) {
+      ui.toast('error', 'settings.save_failed');
+      return;
+    }
+    // 写成功后再以库里的值为准：后端可能对某些字段有额外规整，界面不该停在「我以为的值」上。
+    draft = $state.snapshot(settings.value);
   }
 
   async function changePassword(): Promise<void> {
@@ -714,6 +736,10 @@
 
 <section class="set">
   <h2 class="set-title">{ui.t('settings.title')}</h2>
+  <!-- D-169：这一行替换掉原先孤零零的「保存」按钮。
+       设置页曾经同时存在三种生效方式（改了就生效 / 要按保存 / 点了直接执行），
+       而没有任何视觉区分，主人实测时踩到的正是「改了剪贴板秒数以为已经生效」。 -->
+  <p class="pms-hint">{ui.t('settings.instant_hint')}</p>
 
   <div class="pms-card set-card">
     <h3>{ui.t('settings.group_appearance')}</h3>
@@ -832,8 +858,8 @@
     {/if}
     <div class="set-row">
       <label class="set-label" for="set-ttl">{ui.t('settings.clipboard_ttl')}</label>
-      <input id="set-ttl" class="pms-input set-ctl" type="number" min="5" max="120" bind:value={draft.clipboard_clear_secs}
-        onchange={() => { draft.clipboard_clear_secs = clampClipboardTtl(draft.clipboard_clear_secs); }} />
+      <input id="set-ttl" class="pms-input set-ctl" type="number" min={CLIPBOARD_TTL_MIN} max={CLIPBOARD_TTL_MAX} bind:value={draft.clipboard_clear_secs}
+        onchange={() => void applySettings()} />
     </div>
   </div>
 
@@ -968,17 +994,15 @@
     <h3>{ui.t('settings.group_health')}</h3>
     <div class="set-row">
       <label class="set-label" for="set-weak">{ui.t('settings.weak_max_len')}</label>
-      <input id="set-weak" class="pms-input set-ctl" type="number" min="4" max="16" bind:value={draft.health.weak_max_len} />
+      <input id="set-weak" class="pms-input set-ctl" type="number" min={HEALTH_WEAK_MIN} max={HEALTH_WEAK_MAX} bind:value={draft.health.weak_max_len}
+        onchange={() => void applySettings()} />
     </div>
     <div class="set-row">
       <label class="set-label" for="set-stale">{ui.t('settings.stale_days')}</label>
-      <input id="set-stale" class="pms-input set-ctl" type="number" min="30" max="365" bind:value={draft.health.stale_days} />
+      <input id="set-stale" class="pms-input set-ctl" type="number" min={HEALTH_STALE_MIN} max={HEALTH_STALE_MAX} bind:value={draft.health.stale_days}
+        onchange={() => void applySettings()} />
     </div>
   </div>
-
-  <button class="pms-btn is-primary" type="button" onclick={() => void saveSettings()}>
-    {ui.t('common.save')}
-  </button>
 
   <div class="pms-card set-card">
     <h3>{ui.t('import.title')}</h3>
