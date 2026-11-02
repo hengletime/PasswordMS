@@ -26,8 +26,8 @@
 //! 1. **失败不阻断保存，但绝不静默**：备份是旁路，写不进去也要让用户改得动数据；
 //!    但失败必须变成可见警告（[`BackupOutcome::error`]），否则用户以为有备份。
 //! 2. **不留半成品**：先写 `.tmp`、校验长度与源一致，再 `rename` 到最终名。
-//! 3. **恢复期间暂停轮转**（[`RestoreGuard`]）：靠调用方「记得别删」守不住，
-//!    所以把状态放在本模块内部，由 RAII 守卫维护。
+//! 3. **占用期间暂停轮转**（[`RestoreGuard`] / [`RekeyWindow`]）：靠调用方「记得别删」
+//!    守不住，所以把状态放在本模块内部，由 RAII 守卫维护。
 //!
 //! ## 日期为什么是 UTC
 //!
@@ -43,6 +43,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreResult;
+use crate::model::now_ms;
 
 /// 日备份保留份数。
 pub const DAILY_KEEP: usize = 5;
@@ -88,7 +89,17 @@ pub const QUOTA_MAX_BYTES: u64 = 1024 * 1024 * 1024;
 pub enum EventTag {
     /// 恢复备份之前（整库替换，最危险的动作）。
     PreRestore,
-    /// 换主密码成功之后（这份用**新**主密码可开，是用户忘了新密码时的退路）。
+    /// 换主密码**之前**。
+    ///
+    /// 用**旧**主密码可开——**这是"忘了新主密码"唯一的真退路**。换密是产品里唯一
+    /// 真正不可逆的操作，而 `pre-restore` / `pre-compact` / `pre-import` 这些可挽回的
+    /// 操作都拍了前置快照，它没有，这个不一致的方向是错的。
+    PreRekey,
+    /// 换主密码成功之后。**用新密码可开。**
+    ///
+    /// 它的价值是"换密过程本身出问题"（重包裹写坏、头部不一致）时能退回。
+    /// **它救不了忘记新密码的人**——那要靠 [`EventTag::PreRekey`]。用新密码加密的备份，
+    /// 拿新密码去开才有意义，这个逻辑不能写反。
     PostRekey,
     /// 压缩之前（会丢弃旧帧）。
     PreCompact,
@@ -101,12 +112,27 @@ impl EventTag {
     pub fn prefix(self) -> &'static str {
         match self {
             EventTag::PreRestore => "pre-restore",
+            EventTag::PreRekey => "pre-rekey",
             EventTag::PostRekey => "post-rekey",
             EventTag::PreCompact => "pre-compact",
             EventTag::PreImport => "pre-import",
         }
     }
 }
+
+/// 全部事件类型（新增变体时**必须**在这里加，`inventory` / `prune` / `parse_event_tag`
+/// 都从这里取）。
+///
+/// 为什么抽成一处：这三处原本各自写一遍 4 项数组，加变体时漏一处就有具体后果——
+/// 漏 `inventory` 则界面说不出这一份是什么，漏 `prune` 则它永不被轮转。
+/// **"加变体要改四处"是记不住的，"加变体只改这里"才记得住。**
+const ALL_EVENT_TAGS: [EventTag; 5] = [
+    EventTag::PreRestore,
+    EventTag::PreRekey,
+    EventTag::PostRekey,
+    EventTag::PreCompact,
+    EventTag::PreImport,
+];
 
 /// 备份被跳过的原因（**只含正常跳过**，全部不上面向用户的界面）。
 ///
@@ -129,6 +155,8 @@ pub enum SkipReason {
     Throttled,
     /// 正在恢复，整体暂停。
     Restoring,
+    /// 正在换主密码，整体暂停（见 [`RekeyWindow`]）。
+    Rekeying,
     /// 源文件不存在（首次创建库时）。
     ///
     /// **必须保留**：它决定恢复入口要不要放行，见 [`restore_safety`] 与
@@ -265,22 +293,61 @@ pub struct BackupOutcome {
     pub error: Option<String>,
 }
 
+/// 会真正相撞的两个失败环节名。
+///
+/// 抽成常量而不是散落字面量：`fail_kind` 的判定依赖这两个名字**完全相等**。写成字面量时，
+/// 改一处拼写（`"daily"` → `"day"`）会让规则静默失效——`fail_kind` 从"last 覆盖 daily"
+/// 退回"first-wins"，而且不报错、不报警、测试也未必覆盖。**按字面量判的规则，迟早被拼写
+/// 改坏。**
+const STAGE_DAILY: &str = "daily";
+const STAGE_LAST: &str = "last";
+
 impl BackupOutcome {
-    /// 记录一次失败的原因与环节（第一条生效，后来的不覆盖）。
+    /// 记录一次失败的原因与环节，**两者同源、整对替换**。
     ///
-    /// 只留第一条：一次写入里多个环节可能连环失败，**根因通常是第一条**，后面的多是它的
-    /// 后果。界面报"磁盘空间不足"比报"某个 rename 失败"有用得多。
-    fn fail_kind(&mut self, kind: BackupErrorKind, stage: &str) {
-        if self.error_kind.is_none() {
+    /// ## 唯一会真正相撞的一组：`daily` 与 `last`
+    ///
+    /// 只有 [`snapshot_before_write`] 会先后记录两次失败，且两者共用同一组 `used`/`quota`。
+    /// `dir` 是早退路径（`return out`），`daily`/`last` 在那种调用里根本没跑；事件前缀在
+    /// [`snapshot_event`] 里只记一次。所以规则只需要一条：**`last` 覆盖 `daily`，其余
+    /// first-wins**。
+    ///
+    /// 为什么不是更细的优先级表：一张 4 级表会**暗示存在一个不存在的碰撞**——后来的人会
+    /// 以为 `dir` 与 `daily` 会同时出现、需要比优先级，然后为这个假想场景加测试或改逻辑。
+    /// 注释比代码多说一句，代价就是这样。
+    ///
+    /// 为什么 `last` 优先：日备份丢的是「回到今天开始时」，`last.bak` 丢的是「退回刚才那次
+    /// 改动」——**按丢的最小单位报，不按最先发生的错报**。
+    ///
+    /// 两条同败的组合都不会指错动作：都因配额时 kind 相同、只差 stage；都因磁盘满时 kind
+    /// 是 `NoSpace`，动作仍是"腾磁盘"。**"daily 因空间不足、last 因配额"没有生成路径**
+    /// ——daily 的 `make_room` 能过就说明配额够 `src_len`，而 `last` 的净增（`src_len -
+    /// last_existing`）只会更小，必然也能过。
+    ///
+    /// 返回是否采纳，供 [`Self::fail`] 决定日志文本要不要一起写。
+    fn fail_kind(&mut self, kind: BackupErrorKind, stage: &str) -> bool {
+        let take = match self.error_stage.as_deref() {
+            None => true,
+            Some(STAGE_DAILY) => stage == STAGE_LAST,
+            Some(_) => false,
+        };
+        if take {
             self.error_kind = Some(kind);
             self.error_stage = Some(stage.to_string());
         }
+        take
     }
 
-    /// 记录一次 IO 失败（原因归类 + 环节 + 原始文本留日志）。
+    /// 记录一次 IO 失败。
+    ///
+    /// `error`（原始文本）与 `error_kind`/`error_stage` **同进同退**，不是"始终记最后一次"。
+    /// 理由不是"它不进界面所以无所谓"，而是**日志行必须自洽**：一条日志写着
+    /// `stage=last, kind=quota`，文本却是 `"daily: permission denied"`，它在同时说两件事，
+    /// 排障的人会被带偏。**自相矛盾的日志比少一条日志更坏，因为它看起来完整。**
     fn fail(&mut self, stage: &str, e: &std::io::Error) {
-        self.fail_kind(classify_io(e), stage);
-        self.error = Some(format!("{stage}: {e}"));
+        if self.fail_kind(classify_io(e), stage) {
+            self.error = Some(format!("{stage}: {e}"));
+        }
     }
 }
 
@@ -342,6 +409,20 @@ fn created_ms_from_name(name: &str) -> Option<i64> {
     tail.parse::<i64>().ok()
 }
 
+/// 备份目录里事件快照的最大时刻（没有则为 0）。
+///
+/// 只服务一件事：给换密时新写的快照挑一个**不与既有文件重名**的时间戳。
+/// 它**不参与**任何"这份属于哪一代"的判断——那个问题由调用方传进来的"换密前文件清单"
+/// 回答（见 [`isolate_old_key_backups`]）。
+pub fn latest_ms_timestamp(vault_path: &Path) -> i64 {
+    inventory(vault_path)
+        .iter()
+        .filter(|f| f.event.is_some())
+        .map(|f| f.created_ms)
+        .max()
+        .unwrap_or(0)
+}
+
 /// `civil_from_days` 的逆运算（年月日 → 1970-01-01 起的天数）。
 fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -353,18 +434,82 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-// ── 恢复期暂停（core 内部状态，不依赖调用方自觉）──────────────────────────
+// ── 占用期暂停（core 内部状态，不依赖调用方自觉）──────────────────────────
 
-fn restoring_registry() -> &'static Mutex<Vec<PathBuf>> {
-    static REG: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+/// 备份目录被谁占着。
+///
+/// 两种占用的**后果**不同（恢复怕"正在被读的那份被 prune 删掉"，换密怕"`last.bak`
+/// 被原地覆盖后错判世代"），但**要求完全一致：这段时间一个字节都不许写进备份目录**。
+/// 所以只做一个注册表——分成两个静态量的话，加第三种占用时必然漏掉其中一个，
+/// 而漏掉的那一个正是"守卫形同虚设"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BusyKind {
+    Restore,
+    Rekey,
+}
+
+impl BusyKind {
+    fn skip_reason(self) -> SkipReason {
+        match self {
+            BusyKind::Restore => SkipReason::Restoring,
+            BusyKind::Rekey => SkipReason::Rekeying,
+        }
+    }
+}
+
+fn busy_registry() -> &'static Mutex<Vec<(PathBuf, BusyKind)>> {
+    static REG: OnceLock<Mutex<Vec<(PathBuf, BusyKind)>>> = OnceLock::new();
     REG.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn is_restoring() -> bool {
-    restoring_registry()
-        .lock()
-        .map(|g| !g.is_empty())
-        .unwrap_or(false)
+/// 这条库当前是否被占用；有则返回对应 [`SkipReason`]。
+///
+/// **按路径判，不是全局**：全局版在单库应用里行为相同，但两个库同时开着时，
+/// 给 A 换密会让 B 的备份静默停摆——而"停摆"没有任何界面症状，只有 [`staleness`]
+/// 事后才看得见。既然两个入口（`snapshot_before_write` / `snapshot_event`）都拿得到
+/// `vault_path`，就没有理由再退化成全局。
+fn busy_reason(vault_path: &Path) -> Option<SkipReason> {
+    let key = canonical_key(vault_path);
+    busy_registry().lock().ok().and_then(|g| {
+        g.iter()
+            .find(|(p, _)| p == &key)
+            .map(|(_, k)| k.skip_reason())
+    })
+}
+
+/// 占用守卫。`drop` 时释放**一次**占用。
+///
+/// 允许重复入栈、逐个弹出，而不是"已存在就跳过"：后者在嵌套路径上，
+/// 内层 `drop` 会把外层那份占用一起清掉——外层还开着，备份已经恢复轮转。
+/// 而这只在嵌套时才出现，正常测试永远跑不到。
+struct BusyGuard {
+    path: PathBuf,
+    kind: BusyKind,
+}
+
+impl BusyGuard {
+    fn enter(vault_path: &Path, kind: BusyKind) -> Self {
+        let path = canonical_key(vault_path);
+        if let Ok(mut g) = busy_registry().lock() {
+            g.push((path.clone(), kind));
+        }
+        Self { path, kind }
+    }
+}
+
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        if let Ok(mut g) = busy_registry().lock() {
+            // 按 `(路径, 种类)` 精确出栈：同一路径上恢复与换密可能同时挂着，
+            // 只按路径删会删掉别人的那一条，把"谁占着"报错成另一种原因。
+            if let Some(i) = g
+                .iter()
+                .position(|(p, k)| p == &self.path && *k == self.kind)
+            {
+                g.remove(i);
+            }
+        }
+    }
 }
 
 /// 恢复期守卫：构造时暂停全部轮转与快照，`drop` 时恢复。
@@ -373,27 +518,75 @@ fn is_restoring() -> bool {
 /// 线程触发轮转，可能把**正在被恢复的那一份**删掉——恢复到一半源文件没了。
 /// 而"让调用方记得别删"这种约定守不住（本项目在此类约定上已经踩过坑）。
 pub struct RestoreGuard {
-    path: PathBuf,
+    _busy: BusyGuard,
 }
 
 impl RestoreGuard {
-    /// 进入恢复期。同一路径可重入（嵌套调用只记一次）。
+    /// 进入恢复期。
     pub fn new(vault_path: &Path) -> Self {
-        let path = canonical_key(vault_path);
-        if let Ok(mut g) = restoring_registry().lock() {
-            if !g.contains(&path) {
-                g.push(path.clone());
-            }
+        Self {
+            _busy: BusyGuard::enter(vault_path, BusyKind::Restore),
         }
-        Self { path }
     }
 }
 
-impl Drop for RestoreGuard {
-    fn drop(&mut self) {
-        if let Ok(mut g) = restoring_registry().lock() {
-            g.retain(|p| p != &self.path);
+/// 换密窗口：拍下"换密开始时目录里有什么"，并在整段时间内独占备份目录。
+///
+/// ## 为什么必须独占，而不是只靠清单
+///
+/// 隔离旧代的判据是「换密开始那一刻它在不在目录里」。这对**新增文件**是完备的：
+/// 窗口内新写的路径不在清单里 → 判"新一代" → 留下。
+///
+/// 但 `last.bak` 是 [`copy_atomic`] **原地替换**的（`last.bak` → 临时文件 → `rename`
+/// 回 `last.bak`，**路径不变**）。窗口内若真发生一次快照，日备份会因
+/// `DailyExists` 不产新文件，而 `last.bak` 被覆盖后**路径仍在清单里** → 判"上一代"
+/// → 搬进 `old-key/` 并贴上"要用旧主密码开"的标签。可它其实是用**新**密钥写出来的。
+///
+/// 也就是说：窗口内最可能发生的那一种写入，恰好是清单判据**看不见**的那一种；
+/// 而 `inventory()` 还跳过 `.tmp`，连"正在替换"都看不见。
+///
+/// 所以不是去**检测**覆盖（检测不到），而是让覆盖**不可能发生**：窗口内所有快照入口
+/// 一律返回 [`SkipReason::Rekeying`]。窗口只覆盖重包裹那一步（两次 Argon2 都在
+/// [`RekeyWindow::open`] 之前做完），代价可以忽略。
+///
+/// ## 顺序（照抄 [`RestoreGuard`] 的既有约定：`pre-*` 快照必须在守卫之前写）
+///
+/// ```text
+/// snapshot_event(PreRekey)   ← 守卫之外 → 进 `before` 清单 → 会被搬走
+/// RekeyWindow::open          ← 拍清单 + 独占
+/// update_key_material
+/// window.isolate()           ← 搬完即释放占用
+/// snapshot_event(PostRekey)  ← 守卫之外 → 不在清单里，且已在扫描之后，不进 `kept`
+/// ```
+pub struct RekeyWindow {
+    vault_path: PathBuf,
+    before: Vec<PathBuf>,
+    _busy: BusyGuard,
+}
+
+impl RekeyWindow {
+    /// 必须在 `pre-rekey` 快照**写完之后**、改密钥**之前**调用。
+    ///
+    /// - 早于 `pre-rekey`：那份快照会落进"窗口内新增"，`kept` 每次换密必响一次，
+    ///   报警变成噪音，真出事时没人看；
+    /// - 晚于改密钥：清单里已经混进新一代文件，判据从根上失效。
+    pub fn open(vault_path: &Path) -> Self {
+        let busy = BusyGuard::enter(vault_path, BusyKind::Rekey);
+        let before = inventory(vault_path).into_iter().map(|f| f.path).collect();
+        Self {
+            vault_path: vault_path.to_path_buf(),
+            before,
+            _busy: busy,
         }
+    }
+
+    /// 把清单里的一切搬进 `old-key/<epoch-ms>/`，然后**释放占用**。
+    ///
+    /// 取 `self` 而不是 `&self`：占用必须在这里结束（`post-rekey` 还要写），
+    /// 用 `&self` 就把释放时机交回给调用方了——而"让调用方记得"正是本模块开头
+    /// 那条硬约束第 3 点已经否决过的东西。
+    pub fn isolate(self) -> IsolateOutcome {
+        isolate_old_key_backups(&self.vault_path, now_ms(), &self.before)
     }
 }
 
@@ -524,14 +717,9 @@ pub fn inventory(vault_path: &Path) -> Vec<BackupFile> {
         } else if name.starts_with("bak.") {
             BackupClass::Daily
         } else {
-            let tag = [
-                EventTag::PreRestore,
-                EventTag::PostRekey,
-                EventTag::PreCompact,
-                EventTag::PreImport,
-            ]
-            .into_iter()
-            .find(|t| name.starts_with(t.prefix()));
+            let tag = ALL_EVENT_TAGS
+                .into_iter()
+                .find(|t| name.starts_with(t.prefix()));
             match tag {
                 Some(t) => {
                     out.push(BackupFile {
@@ -560,6 +748,16 @@ pub fn inventory(vault_path: &Path) -> Vec<BackupFile> {
     out
 }
 
+/// 当前代是否有任何备份。
+///
+/// **必须问磁盘，不能从 `.state` 推。** `.state` 是缓存：它可能被删掉（用户清了备份）、
+/// 被写坏、或来自旧版本，读出来都会是"没有备份"。而对一个用户身家全在备份里的产品，
+/// 「当前没有备份」是最不该误报的一句话——这是用户决定"要不要恢复"的时刻，
+/// **假阴性会让他放弃**。宁可多读一次目录。
+pub fn has_backups(vault_path: &Path) -> bool {
+    !inventory(vault_path).is_empty()
+}
+
 /// 备份占用总字节与文件数（设置卡用来报「占了多少」）。
 pub fn usage(vault_path: &Path) -> (u64, usize) {
     let files = inventory(vault_path);
@@ -576,14 +774,9 @@ pub fn old_key_usage(vault_path: &Path) -> (u64, usize) {
 }
 
 fn parse_event_tag(name: &str) -> Option<EventTag> {
-    [
-        EventTag::PreRestore,
-        EventTag::PostRekey,
-        EventTag::PreCompact,
-        EventTag::PreImport,
-    ]
-    .into_iter()
-    .find(|t| name.starts_with(t.prefix()))
+    ALL_EVENT_TAGS
+        .into_iter()
+        .find(|t| name.starts_with(t.prefix()))
 }
 
 /// 列出旧密钥隔离区里的备份（按创建时刻升序）。
@@ -641,11 +834,27 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
 /// 换主密码后隔离旧备份的结果。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct IsolateOutcome {
-    /// 挪走的备份份数。
+    /// 挪进旧代的份数。
     pub moved: usize,
+    /// 因**不在**换密前清单里而被故意留下的份数。
+    ///
+    /// 正常应为 0。非 0 意味着"在本该没有任何写入的窗口里发生了写入"——写入顺序被破坏，
+    /// 或有人绕过了 [`RekeyWindow`] 的独占。留下是对的（那是新一代文件），但必须让调用方看见。
+    pub kept: usize,
+    /// **没能搬走**的份数（rename 失败：被占用、杀软锁、只读）。
+    ///
+    /// 这不是统计。搬不走的那份会留在当前代，被 `inventory()` 当成普通日备份/事件快照，
+    /// 界面上贴着"当前主密码可开"——而它其实只能用旧密码开。用户忘记新密码时按这个标签
+    /// 去开必然失败，而那是他最后一次尝试。`failed > 0` 时界面**必须**说出来。
+    pub failed: usize,
     /// 隔离目录（没挪任何东西时为 `None`，不留空目录）。
     pub dir: Option<PathBuf>,
     /// 失败原因。**非空不代表换密失败**——换密已经成功了，只是旧备份没挪走。
+    ///
+    /// `serde(skip)`：它是原始 `io::Error` 文本（跟系统语言、可能带绝对路径），
+    /// 只进日志。**将来接界面时不要顺手加回来**，对外只暴露 [`Self::moved`] 与
+    /// 「有没有失败」这个布尔。
+    #[serde(skip)]
     pub error: Option<String>,
 }
 
@@ -669,11 +878,37 @@ pub struct IsolateOutcome {
 /// 换两次密码就有两批旧备份，密钥各不相同。混在一个目录里无法判断哪份对应哪把钥匙；
 /// 按时刻分目录后，每一批天然对应一次换密动作。
 ///
+/// ## 判据：`before` 清单，不是时间戳
+///
+/// `before` 是**换密开始那一刻目录里已有的文件清单**。在清单里 = 属于上一代，搬走；
+/// 不在 = 换密窗口内新写的，留下并计入 [`IsolateOutcome::kept`]。
+///
+/// 为什么不用 `cutoff_ms` 比时间戳（试过，改掉了）：
+/// 1. 时间戳是**代理**，而换密前它在不在就是**定义本身**；
+/// 2. 时钟回拨期间，`max(now, 目录里最晚时刻 + 1)` 恒定高于任何新写文件的时刻，
+///    `kept` 永远是 0——**探测能力恰好在时钟有偏差的那段时间被关掉**，而那正是最该报警
+///    的时候；
+/// 3. 它逼着给每个文件定时刻由谁算，而 `bak.<yyyyMMdd>` 是日粒度、`last.bak` 只能靠
+///    mtime（源库带来的、跨机不准）。定义了判据就得定义一半取整。
+///
+/// 清单没有这些边界：只问成员关系。目录扫描的内容恰好就是换密前那一刻的备份集合。
+///
+/// ## 清单看不见的东西（所以还需要 [`RekeyWindow`]）
+///
+/// 清单对**新增路径**完备，对**原地覆盖**完全无效：`last.bak` 由 [`copy_atomic`]
+/// 临时文件 + `rename` 回**同一个路径**替换，窗口内被覆盖一次，路径照样在清单里。
+/// 这一条不能靠"再加一个字段"补——覆盖前后路径相同、`inventory()` 又跳过 `.tmp`，
+/// 磁盘上没有任何可观察的差异可作判据。所以改成结构排除：窗口内禁止一切写入。
+///
 /// ## 调用时机
 ///
-/// 必须在**换密成功之后、写 `post-rekey` 快照之前**：`post-rekey` 那份是用新材料写的，
-/// 属于"新一代"，不能被挪进 `old-key/`。
-pub fn isolate_old_key_backups(vault_path: &Path, now_ms: i64) -> IsolateOutcome {
+/// 生产代码请走 [`RekeyWindow::isolate`]，它保证 `before` 拍在正确的位置、
+/// 且在隔离期间独占备份目录。直接调本函数只用于测试。
+pub fn isolate_old_key_backups(
+    vault_path: &Path,
+    now_ms: i64,
+    before: &[PathBuf],
+) -> IsolateOutcome {
     let mut out = IsolateOutcome::default();
     let dir = backup_dir(vault_path);
     let files = inventory(vault_path);
@@ -695,15 +930,47 @@ pub fn isolate_old_key_backups(vault_path: &Path, now_ms: i64) -> IsolateOutcome
     }
 
     let mut moved = 0usize;
+    let mut kept = 0usize;
+    let mut failed = 0usize;
     for f in files {
-        let Some(name) = f.path.file_name() else {
+        let Some(name) = f.path.file_name().and_then(|n| n.to_str()) else {
+            failed += 1;
             continue;
         };
+        // 判据只有一条：换密开始那一刻它在不在目录里。
+        // 不在 = 这个窗口内新写的（正常只有 `post-rekey`，或有人反序调用），留下。
+        if !before.contains(&f.path) {
+            kept += 1;
+            continue;
+        }
         if fs::rename(&f.path, dest_dir.join(name)).is_ok() {
             moved += 1;
+        } else {
+            // **必须计数**：这份会留在当前代，被 `inventory()` 归为普通日备份/事件快照，
+            // 界面上贴着"当前主密码可开"——而它其实只能旧密码开。用户忘记新密码时按这个
+            // 标签去开，必然失败，而那是他最后一次尝试。静默吞掉等于给它贴了错标签。
+            failed += 1;
         }
     }
     out.moved = moved;
+    out.kept = kept;
+    out.failed = failed;
+    // `kept > 0` 是**异常信号**，不是一个正常的计数：正确顺序下 `isolate` 那一刻磁盘上
+    // 不可能有"换密窗口内写入"的文件，[`RekeyWindow`] 还从结构上把写入挡掉了。
+    // 真出现了 = 顺序被破坏 / 有人绕过了守卫 / 守卫被提前释放。
+    //
+    // **不写 `error`**：`error` 只有一个含义——整个隔离动作没做成（连批次目录都没建起来），
+    // 命令层据此置 `isolate_error`，回执会说"旧备份没能归档"。而这里其实**全都归档了**，
+    // 只是多留了一份没搬。把这句塞进 `error` 等于用一句错话代替一句真话。
+    //
+    // 也不进界面：用户对"多留了 1 份"既看不出差别、也没有可执行的动作（C-49），
+    // 摆出来只会稀释真正的失败提示。所以只留在返回值里给调用方/测试判，加一行日志。
+    if out.kept > 0 {
+        eprintln!(
+            "[backup] isolate: {} 份快照出现在换密窗口内（本不该有任何写入），已保留在当前代",
+            out.kept
+        );
+    }
     // `.state` **删掉而不是跟着走**：它只是当前代的节流/健康缓存，旧代已经不会再被写入，
     // 留着没有任何用处；而留着会让批次目录永远非空，[`clear_old_key`] 清不干净。
     // 删掉同时达到目的：新库读不到旧库的"上次备份"和那条早已无关的失败警告。
@@ -717,6 +984,38 @@ pub fn isolate_old_key_backups(vault_path: &Path, now_ms: i64) -> IsolateOutcome
         let _ = fs::remove_dir(&dest_dir);
     }
     out
+}
+
+/// 换主密码后的备份处置结果。
+///
+/// 为什么把两件事分开而不是塞进一个 `error`：它们的回执完全不同，而且**互相不能推断**。
+///
+/// ## 四种组合，四种说法（少一种就会说错话）
+///
+/// | `isolate.moved` | `pre_rekey_saved` | 用户手上还剩什么 |
+/// |---|---|---|
+/// | `> 0` | `true` | 旧代已归档 + 一份换密前快照，都能用旧主密码打开 |
+/// | `> 0` | `false` | 旧代已归档（旧密码可开），但没有「换密前最后一刻」那一份 |
+/// | `0`   | `true` | 换密前没有旧备份，只有这一份换密前快照 |
+/// | `0`   | `false` | **什么都没有**——这才是"当前没有旧的退路" |
+///
+/// 所以 `pre_rekey_saved == false` **不等于**"没有退路"：已经归档的旧代同样是退路，
+/// 只是老一点。把它写成"当前没有旧的退路"会让用户在明明还有救的时候放弃，
+/// 而这正是「假保险」的反面——假警报同样会让人下次不信真话。
+///
+/// 同理 `moved == 0` 也不等于没关系：它可能本来就是零份，也可能是整批没搬。
+/// 判「有没有旧代」要问 [`old_key_usage`]，不要从这两个字段推。
+///
+/// **失败信息必须告诉用户手上还剩什么。**
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RekeyOutcome {
+    /// 旧代隔离结果。
+    pub isolate: IsolateOutcome,
+    /// 换密前那一份库是否成功存下。
+    ///
+    /// `false` 时只能说"没能额外存下一份换密前的副本"，**不得**宣称"忘了新密码就救不回来"
+    /// ——除非 `isolate.moved == 0`（那才是真的什么都没有）。
+    pub pre_rekey_saved: bool,
 }
 
 /// 删除**旧密钥代**的备份（独立动作，不复用「删除全部备份」）。
@@ -733,7 +1032,13 @@ pub fn clear_old_key(vault_path: &Path) -> CoreResult<usize> {
     // 顺手清掉空批次目录，别在设置页留一堆空文件夹（非空会失败，忽略即可）。
     if let Ok(batches) = fs::read_dir(old_key_dir(vault_path)) {
         for batch in batches.flatten() {
-            let _ = fs::remove_dir(batch.path());
+            let batch_path = batch.path();
+            // `old_key_inventory` 刻意跳过 `.state`（它不是备份）。不在这里补一刀的话，
+            // 批次目录里若残留一份 `.state` 就永远非空、`remove_dir` 必然失败，
+            // 「清空旧主密码备份」会变成清不干净。
+            let _ = fs::remove_file(batch_path.join(STATE_FILE));
+            let _ = fs::remove_file(batch_path.join(format!("{STATE_FILE}.tmp")));
+            let _ = fs::remove_dir(&batch_path);
         }
     }
     let _ = fs::remove_dir(old_key_dir(vault_path));
@@ -765,12 +1070,7 @@ fn prune(vault_path: &Path) -> Vec<PathBuf> {
 
     // 事件快照**按类型**分别计数：`pre-restore` 2 份，其余各 1 份。
     // 混在一起算总数会让「连续恢复两次」把 `pre-compact` 挤掉——那是另一件事的退路。
-    for tag in [
-        EventTag::PreRestore,
-        EventTag::PostRekey,
-        EventTag::PreCompact,
-        EventTag::PreImport,
-    ] {
+    for tag in ALL_EVENT_TAGS {
         let keep = if tag == EventTag::PreRestore {
             PRE_RESTORE_KEEP
         } else {
@@ -961,10 +1261,15 @@ fn read_state(dir: &Path) -> BackupState {
     let last_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let last_error_ms = it.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let token = it.next().unwrap_or("");
-    // 一致性兜底：没有时刻就没有"未清除的失败"，半条记录一律当没有。
-    // 反之有时刻但 token 认不出，必须落 `Other` 而不是 `None`——失败确实发生过，
-    // 只是原因来自更新的版本，不能因为认不出来就把警告抹掉。
-    let last_error_kind = if last_error_ms == 0 {
+    // 三种"没有失败"要分开处理，不能合并：
+    // 1. `last_error_ms == 0` —— 从来没有失败；
+    // 2. token 是 `-` —— 写侧明确标注了"无失败"；
+    // 3. token 为空 —— **既可能是老格式的正常状态，也可能是被截断的写坏文件**。
+    //
+    // 第 3 种按 `Other` 处理：把写坏的文件当成"没有失败"，会让一个真实的失败记录
+    // 静默消失；而当它是老格式时多报一条 `Other`，代价只是诊断日志里多一行。
+    // **两个方向的代价不对称，所以选能看见的那一边。**
+    let last_error_kind = if last_error_ms == 0 || token == "-" {
         None
     } else {
         Some(BackupErrorKind::from_token(token))
@@ -977,16 +1282,37 @@ fn read_state(dir: &Path) -> BackupState {
     }
 }
 
+/// 落盘状态（**原子写**）。
+///
+/// 为什么不能直接 `fs::write`：它是先 truncate 再写，进程在两者之间被杀会留下 **0 字节
+/// 或半行**的 `.state`。而读侧对坏数据的兜底是"当作全新库"——`daily_ms` 归零、粘性错误
+/// 消失，于是备份系统的整段历史被静默抹掉，且**两个方向都可能**：既可能白丢一条失败警告，
+/// 也可能立刻多生成一份日备份。这个文件很小、写得很少，值得一次 tmp + rename。
+///
+/// 顺序：写 tmp → fsync → rename。rename 只保证换名原子，不保证数据落盘。
 fn write_state(dir: &Path, st: &BackupState) {
-    // 写不进去不影响数据安全（只是下次可能多备份一次 / 少一条历史），故忽略错误。
+    use std::io::Write;
+
     let kind = st.last_error_kind.map(|k| k.as_str()).unwrap_or("-");
-    let _ = fs::write(
-        dir.join(STATE_FILE),
-        format!(
-            "{} {} {} {}",
-            st.daily_ms, st.last_ms, st.last_error_ms, kind
-        ),
+    let body = format!(
+        "{} {} {} {}",
+        st.daily_ms, st.last_ms, st.last_error_ms, kind
     );
+    let final_path = dir.join(STATE_FILE);
+    let tmp = dir.join(format!("{STATE_FILE}.tmp"));
+
+    let Ok(mut file) = fs::File::create(&tmp) else {
+        return; // 写不进去不影响数据安全（下次可能多备份一次），故忽略。
+    };
+    if file.write_all(body.as_bytes()).is_err() || file.sync_all().is_err() {
+        let _ = fs::remove_file(&tmp);
+        return;
+    }
+    drop(file);
+    tighten_permissions(&tmp);
+    if fs::rename(&tmp, &final_path).is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 /// 当前备份状态（界面读「上次备份」与粘性错误用）。
@@ -1021,11 +1347,19 @@ pub enum Staleness {
 /// 判断备份是否陈旧。
 ///
 /// 用**库文件 mtime** 而不是 `now_ms` 做参照：用户三天没改库，备份也停在三天前，那是正常
-/// 的，不该告警。只有「库一直在变、备份没跟上」才是真问题——而 `RestoreGuard` 泄漏导致
-/// `is_restoring()` 永久为真、所有备份静默停摆，这是唯一能看见它的通道。
+/// 的，不该告警。只有「库一直在变、备份没跟上」才是真问题——而占用守卫（[`RestoreGuard`] /
+/// [`RekeyWindow`]）泄漏会让 [`busy_reason`] 永久有值、所有备份静默停摆，这是唯一能看见它的通道。
 pub fn staleness(vault_path: &Path, last_ms: i64) -> Staleness {
-    if last_ms == 0 {
+    // "有没有备份"**只问磁盘**，不许从 `.state` 推。
+    //
+    // `.state` 是缓存：它可能被删掉（用户清了备份）、被写坏、或来自没有该字段的旧版本。
+    // 从它推会得到"当前没有备份"——这是用户决定"要不要恢复"的时刻，假阴性会让他直接
+    // 放弃。而反过来（有文件、时间未知）报 `Unknown` 只是不告警，界面照常列得出文件。
+    if !has_backups(vault_path) {
         return Staleness::Never;
+    }
+    if last_ms == 0 {
+        return Staleness::Unknown;
     }
     let Some(vault_mtime) = mtime_ms(vault_path) else {
         return Staleness::Unknown;
@@ -1058,15 +1392,24 @@ pub enum RestoreSafety {
 
 /// 由 `pre-restore` 快照的返回值判断恢复能不能自动往下走。
 ///
-/// ## 为什么判据只看 `error_kind`，不按 `SkipReason` 逐一豁免
+/// ## 判据只看 `error_kind`，不按 `SkipReason` 逐一豁免
 ///
 /// 按枚举写白名单需要在 `SkipReason` 每次加值时重新审一遍，漏一个就把用户挡在唯一出路
 /// 门外。而这里要回答的问题其实只有一个：**当前有没有可保住的东西**。
 ///
-/// 没有（库不存在 / 本来就读不到源），这个目的就自动消失，不算失败。
-/// 所以判据是 [`BackupOutcome::error_kind`] —— 它非空才代表"该保的没保住"。
-pub fn restore_safety(outcome: &BackupOutcome) -> RestoreSafety {
-    if outcome.skipped == Some(SkipReason::NoSource) {
+/// ## "库在不在"问事实，不读 `skipped`
+///
+/// 早先这里写的是 `skipped == Some(SkipReason::NoSource)`。那是 `snapshot_event` 的一次
+/// **观测**，而"库文件在不在"是**可以直接问的事实**——用观测代理事实，等于给下一个人留下
+/// 一个可以照着加第二个枚举分支的模板。它当时不锁门（`NoSource` 时 `error_kind` 也是
+/// `None`，同样放行），但形态是错的。
+pub fn restore_safety(vault_path: &Path, outcome: &BackupOutcome) -> RestoreSafety {
+    // 用 `is_file()` 而不是 `exists()`：`exists()` 对**目录**也为真。库路径被同名目录
+    // 占住时，`exists()` 会返回 true 并落到 `Clear`——那就"有东西可保住"了吗？没有，
+    // 那份备份必然失败，而失败又一次被当作成功放行。`is_file()` 与
+    // `snapshot_before_write` / `snapshot_event` 的早退条件（`!vault_path.is_file()`）
+    // 是同一个问题、同一个答案，必须一致。
+    if !vault_path.is_file() {
         return RestoreSafety::NothingToLose;
     }
     match outcome.error_kind {
@@ -1084,8 +1427,11 @@ pub fn restore_safety(outcome: &BackupOutcome) -> RestoreSafety {
 /// [`BackupOutcome::error`] 里，由调用方转成可见警告。
 pub fn snapshot_before_write(vault_path: &Path, now_ms: i64) -> BackupOutcome {
     let mut out = BackupOutcome::default();
-    if is_restoring() {
-        out.skipped = Some(SkipReason::Restoring);
+    // 占用期一律不碰备份目录。除了"恢复中不能删正在被读的那份"，这里还挡着换密窗口内
+    // 对 `last.bak` 的**原地覆盖**——覆盖后路径不变，隔离判据（`before` 清单）看不见它，
+    // 于是新一代的 `last.bak` 会被错搬进旧代并贴上"要用旧主密码开"。见 [`RekeyWindow`]。
+    if let Some(reason) = busy_reason(vault_path) {
+        out.skipped = Some(reason);
         return out;
     }
     if !vault_path.is_file() {
@@ -1118,12 +1464,14 @@ pub fn snapshot_before_write(vault_path: &Path, now_ms: i64) -> BackupOutcome {
                         out.created.push(daily_path);
                         st.daily_ms = now_ms;
                     }
-                    Err(e) => out.fail("daily", &e),
+                    Err(e) => out.fail(STAGE_DAILY, &e),
                 }
             }
             // 配额装不下 → 走**失败**通道，不是"正常跳过"。备份从这一刻起停了。
             // `error` 保持 `None`：这不是 IO 错误，是策略性拒绝，不该有系统报错文本。
-            Err(kind) => out.fail_kind(kind, "daily"),
+            Err(kind) => {
+                out.fail_kind(kind, STAGE_DAILY);
+            }
         }
     }
 
@@ -1151,10 +1499,12 @@ pub fn snapshot_before_write(vault_path: &Path, now_ms: i64) -> BackupOutcome {
                         // 否则界面会显示"上次备份：刚刚"，而实际一次也没写成。
                         st.last_ms = now_ms;
                     }
-                    Err(e) => out.fail("last", &e),
+                    Err(e) => out.fail(STAGE_LAST, &e),
                 }
             }
-            Err(kind) => out.fail_kind(kind, "last"),
+            Err(kind) => {
+                out.fail_kind(kind, STAGE_LAST);
+            }
         }
     }
 
@@ -1180,8 +1530,12 @@ pub fn snapshot_event(vault_path: &Path, tag: EventTag, now_ms: i64) -> BackupOu
     // 恢复期一律不碰备份目录：此时可能有另一线程正把某份备份读进内存，
     // 而本函数的尾部会 `prune()` 删旧文件——删到正在被读的那一份就等于恢复失败。
     // 调用约定：`pre-restore` 快照必须在 [`RestoreGuard::new`] **之前**写。
-    if is_restoring() {
-        out.skipped = Some(SkipReason::Restoring);
+    //
+    // 换密窗口同样一律不写，且这里**必须挡**：窗口内若允许写事件快照，
+    // `post-rekey` 之外的任何一个 tag 都会落进"本该没有任何写入"的窗口里。
+    // 只挡 [`snapshot_before_write`] 等于没挡——两条入口是并列的，不是包含关系。
+    if let Some(reason) = busy_reason(vault_path) {
+        out.skipped = Some(reason);
         return out;
     }
     if !vault_path.is_file() {
@@ -1238,10 +1592,17 @@ pub fn snapshot_event(vault_path: &Path, tag: EventTag, now_ms: i64) -> BackupOu
     out
 }
 
-/// 删除全部备份，返回删除的文件数。
+/// 删除**当前代**的全部备份，返回删除的文件数。
 ///
 /// 为什么需要：Android 备份目录在应用私有存储里，用户**进不去**（没有文件管理器入口，
 /// 也没有 SAF 授权），只能靠应用内提供出口。删完立即刷新占用。
+///
+/// ## 范围只有当前代（名字里的 all 指的是"当前代里的全部"）
+///
+/// `backups/old-key/` 一份都不动——那是**另一把密码**的退路，见 [`clear_old_key`]。
+/// 这个区别必须在界面上说出来：回执若只写「已删除全部备份」，用户会以为磁盘上再也没有
+/// 能用旧主密码打开的库，而实际上还躺着整整一代。**删旧代是另一个动作、另一个按钮、
+/// 另一句话。**
 ///
 /// `.state` 一并删掉：它是**这次**备份历史的一部分。留着会让界面在"已删除全部备份"之后
 /// 仍然显示"上次备份：昨天 21:14"，用户以为还有东西可恢复。删掉后 [`staleness`] 回到
@@ -1254,7 +1615,11 @@ pub fn clear_all(vault_path: &Path) -> CoreResult<usize> {
             removed += 1;
         }
     }
-    let _ = fs::remove_file(backup_dir(vault_path).join(STATE_FILE));
+    let dir = backup_dir(vault_path);
+    let _ = fs::remove_file(dir.join(STATE_FILE));
+    // 原子写的临时文件一起清：留一份 `.state.tmp` 会让目录"看起来还有东西"，
+    // 也会被用户当成残留文件。
+    let _ = fs::remove_file(dir.join(format!("{STATE_FILE}.tmp")));
     Ok(removed)
 }
 
@@ -1579,6 +1944,11 @@ mod tests {
         }
     }
 
+    /// 当前代目录里已有的文件清单 —— 即 `before` 参数在真实调用里的取值。
+    fn paths_now(vault: &Path) -> Vec<PathBuf> {
+        inventory(vault).into_iter().map(|f| f.path).collect()
+    }
+
     #[test]
     fn 配额不足时由旧到新裁剪且保住上次改动前与恢复前() {
         let (_root, vault) = temp_vault("quota-trim");
@@ -1660,6 +2030,45 @@ mod tests {
     }
 
     #[test]
+    fn 两张同时被配额挡住时报更近的那条退路() {
+        let (_root, vault) = temp_vault("quota-both");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+        // 缩到 512 → 配额 6144，而保底三份就有 12288，两张都装不下。
+        // （缩到 1024 不够：那时 last.bak 净增为 0，裁到保底恰好装得下，它会成功。）
+        fs::write(&vault, vec![6u8; 512]).unwrap();
+
+        let out = snapshot_before_write(&vault, base + 5 * 90_000_000 + 700);
+        assert_eq!(out.error_kind, Some(BackupErrorKind::QuotaExceeded));
+        assert_eq!(
+            out.error_stage.as_deref(),
+            Some("last"),
+            "报 daily 会让用户以为只有今日备份缺失；last.bak 才是他五秒后最想用的那条"
+        );
+        assert!(out.created.is_empty(), "两张都挡，一份都写不成");
+    }
+
+    #[test]
+    fn 失败日志文本与环节同源() {
+        let (_root, vault) = temp_vault("fail-log");
+        let base = 1_793_491_200_000;
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(dir.join("last.bak")).unwrap();
+
+        let out = snapshot_before_write(&vault, base);
+        assert!(out.error.is_some());
+        // 日志行必须与 stage/kind 说同一件事。`daily` 成功、`last` 失败时，
+        // 文本若还写着 "daily: ..."，排障的人会被带偏。
+        assert!(
+            out.error.as_deref().unwrap_or("").starts_with("last:"),
+            "日志文本与环节不同源：{:?}",
+            out.error
+        );
+        assert_eq!(out.error_stage.as_deref(), Some("last"));
+    }
+
+    #[test]
     fn 配额被挡时记失败但不推进上次备份时间() {
         let (_root, vault) = temp_vault("quota-state");
         let base = 1_793_491_200_000;
@@ -1691,9 +2100,11 @@ mod tests {
         fill_slots(&vault, 4096, base);
         assert_eq!(usage(&vault).1, 8);
 
-        let out = isolate_old_key_backups(&vault, base + 10_000_000);
+        let before = paths_now(&vault);
+        let out = isolate_old_key_backups(&vault, base + 460_000_001, &before);
         assert!(out.error.is_none(), "{:?}", out.error);
         assert_eq!(out.moved, 8, "旧备份应全部挪走");
+        assert_eq!(out.kept, 0, "清单里的一切都属上一代，一份都不该留");
         assert!(out.dir.is_some());
 
         assert_eq!(usage(&vault).1, 0, "当前代必须归零");
@@ -1720,7 +2131,8 @@ mod tests {
         let (_root, vault) = temp_vault("clear-scope");
         let base = 1_793_491_200_000;
         fill_slots(&vault, 4096, base);
-        isolate_old_key_backups(&vault, base + 10_000_000);
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
         snapshot_before_write(&vault, base + 10_000_001);
         assert_eq!(usage(&vault).1, 2, "新一代应有日备份 + last.bak");
 
@@ -1740,9 +2152,140 @@ mod tests {
     }
 
     #[test]
+    fn 状态文件的畸形输入不会假装成失败() {
+        let (_root, vault) = temp_vault("state-parse");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(STATE_FILE);
+        let base = 1_793_491_200_000;
+
+        // 1) 正常写入（无失败）：`-` 是占位符，不是"认不出的原因"。
+        //    早先这里会读成 `Some(Other)`，于是"写过任何备份"的库都被判成
+        //    "上次备份失败：unknown"。
+        write_state(
+            &dir,
+            &BackupState {
+                daily_ms: base,
+                last_ms: base,
+                ..Default::default()
+            },
+        );
+        let st = state(&vault);
+        assert_eq!(st.last_ms, base);
+        assert_eq!(st.last_error_kind, None, "`-` 不是失败原因");
+
+        // 2) 有时刻 + 未知 token → 回落 `Other`（**不能**抹成"没有失败"：
+        //    失败确实发生过，只是原因来自更新的版本）。
+        fs::write(&path, format!("{base} {base} {base} garbage")).unwrap();
+        assert_eq!(state(&vault).last_error_kind, Some(BackupErrorKind::Other));
+
+        // 3) 老格式（只有两字段）：没有错误记录。
+        fs::write(&path, format!("{base} {base}")).unwrap();
+        let st = state(&vault);
+        assert_eq!(st.last_error_ms, 0);
+        assert_eq!(st.last_error_kind, None);
+
+        // 4) 有时刻但 token 是 `-`：视为无失败。
+        fs::write(&path, format!("{base} {base} {base} -")).unwrap();
+        assert_eq!(state(&vault).last_error_kind, None);
+
+        // 5) 被截断的半行：不能 panic，也不能编出一个错误。
+        fs::write(&path, base.to_string()).unwrap();
+        let st = state(&vault);
+        assert_eq!(st.last_ms, 0);
+        assert_eq!(st.last_error_kind, None);
+    }
+
+    #[test]
+    fn 换密之后的快照不会被误搬进旧代() {
+        let (_root, vault) = temp_vault("isolate-seq");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+
+        let rekey_ms = base + 460_000_000;
+        // 清单拍在写快照**之前**——这才是 `before` 的定义（换密开始那一刻目录里有什么）。
+        let before = paths_now(&vault);
+        // 反序调用：先写一份"换密之后"的快照，再执行隔离 —— 正是将来有人把
+        // `post-rekey` 提前、或窗口内被别的写入插进来时会发生的事。
+        let post = snapshot_event(&vault, EventTag::PostRekey, rekey_ms + 1);
+        assert_eq!(post.created.len(), 1);
+
+        let out = isolate_old_key_backups(&vault, rekey_ms + 2, &before);
+        assert_eq!(out.kept, 1, "换密之后的快照必须留在当前代");
+        assert_eq!(out.failed, 0);
+        assert_eq!(out.moved, 8, "更早的 8 份应全部进旧代");
+
+        let files = inventory(&vault);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].event, Some(EventTag::PostRekey));
+        // 关键：它一旦被搬进旧代，界面会告诉用户"这批要用旧主密码开"，
+        // 而它其实要用新密码开——用户按提示去开必然失败，那正是他最需要它的时候。
+        assert!(
+            !old_key_inventory(&vault)
+                .iter()
+                .any(|f| f.event == Some(EventTag::PostRekey)),
+            "post-rekey 被误搬进旧代"
+        );
+    }
+
+    #[test]
+    fn 换密窗口内一条备份都不许写() {
+        let (_root, vault) = temp_vault("rekey-window");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+        // 换一份内容：否则窗口内即使 `last.bak` 被原地覆盖，字节也一模一样，
+        // 下面那条"未被替换"的断言会假绿。长度不变，别扰动配额。
+        fs::write(&vault, vec![9u8; 4096]).unwrap();
+        let last_path = backup_dir(&vault).join("last.bak");
+        let last_before = fs::read(&last_path).expect("fill_slots 应已产生 last.bak");
+
+        // 真实顺序：`pre-rekey` 在守卫之外写（写在守卫里会被直接跳过）。
+        let pre = snapshot_event(&vault, EventTag::PreRekey, base + 460_000_000);
+        assert_eq!(pre.created.len(), 1, "pre-rekey 必须写得进去");
+        assert_eq!(pre.skipped, None);
+
+        let window = RekeyWindow::open(&vault);
+
+        // ① 两条入口都必须被挡。只挡一条等于没挡——`last.bak` 的原地覆盖走的是
+        //    `snapshot_before_write`，事件快照走的是另一条，两条是并列关系。
+        let blocked = snapshot_before_write(&vault, base + 460_000_100);
+        assert_eq!(blocked.skipped, Some(SkipReason::Rekeying));
+        assert!(blocked.created.is_empty(), "窗口内不许新建任何备份");
+        assert_eq!(
+            fs::read(&last_path).expect("last.bak 不该消失"),
+            last_before,
+            "last.bak 被原地覆盖了：路径集合判据对它完全不可见，只能靠守卫挡住"
+        );
+
+        let blocked_ev = snapshot_event(&vault, EventTag::PreCompact, base + 460_000_200);
+        assert_eq!(
+            blocked_ev.skipped,
+            Some(SkipReason::Rekeying),
+            "事件快照入口也必须挡（这是第二条入口，不是同一个函数）"
+        );
+        assert!(blocked_ev.created.is_empty());
+
+        // ② 窗口被守住时，清单里的一切都属上一代，一份都不该留。
+        let out = window.isolate();
+        assert_eq!(out.kept, 0, "窗口内没有写入 ⇒ kept 必须是 0");
+        assert_eq!(out.failed, 0);
+        assert_eq!(
+            out.moved, 9,
+            "5 日备份 + 2 pre-restore + last.bak + pre-rekey"
+        );
+        assert_eq!(usage(&vault).1, 0, "当前代必须归零");
+
+        // ③ 守卫随 `isolate(self)` 一起释放，`post-rekey` 必须写得进去。
+        let post = snapshot_event(&vault, EventTag::PostRekey, base + 460_000_300);
+        assert_eq!(post.skipped, None, "守卫没在 isolate 结束时释放");
+        assert_eq!(post.created.len(), 1);
+        assert_eq!(usage(&vault).1, 1);
+    }
+
+    #[test]
     fn 没有旧备份时不留下空隔离目录() {
         let (_root, vault) = temp_vault("isolate-empty");
-        let out = isolate_old_key_backups(&vault, 1_793_491_200_000);
+        let out = isolate_old_key_backups(&vault, 1_793_491_200_001, &[]);
         assert_eq!(out.moved, 0);
         assert!(out.dir.is_none());
         assert!(!old_key_dir(&vault).exists());
@@ -1799,11 +2342,18 @@ mod tests {
     }
 
     #[test]
-    fn 陈旧判定把从未备份与时间倒流都当成不告警() {
+    fn 没有备份判从未备份时间异常判未知() {
         let (_root, vault) = temp_vault("stale");
         let now = mtime_ms(&vault).expect("临时库应有 mtime");
 
+        // 一份备份都没有：判「从未备份」，而不是拿 `.state` 里的时刻去算差值。
         assert_eq!(staleness(&vault, 0), Staleness::Never);
+        // 下面几条验的是**有备份时**怎么算差值，所以得先真的放一份文件——
+        // 否则 `has_backups` 会把它们全部短路成 `Never`，测的就不再是差值逻辑。
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("last.bak"), b"x").unwrap();
+
         // 备份时刻在未来：改过系统时间 / 跨时区 / 库从别的机器拷来。
         assert_eq!(staleness(&vault, now + 10 * 86_400_000), Staleness::Unknown);
         // 超出十年可信区间：一律未知，不许显示"已 19000 天未更新"。
@@ -1831,12 +2381,12 @@ mod tests {
         let missing = vault.with_file_name("missing.vault");
         let out = snapshot_event(&missing, EventTag::PreRestore, base);
         assert_eq!(out.skipped, Some(SkipReason::NoSource));
-        assert_eq!(restore_safety(&out), RestoreSafety::NothingToLose);
+        assert_eq!(restore_safety(&missing, &out), RestoreSafety::NothingToLose);
 
         // 2) 正常快照写成 → 放行。
         let ok = snapshot_event(&vault, EventTag::PreRestore, base);
         assert!(ok.error_kind.is_none(), "{:?}", ok.error_kind);
-        assert_eq!(restore_safety(&ok), RestoreSafety::Clear);
+        assert_eq!(restore_safety(&vault, &ok), RestoreSafety::Clear);
 
         // 3) 配额挡住快照 → 拦住，且要能说出原因（前端据此给不同动作）。
         let root2 = std::env::temp_dir().join("pms-backup-test-restore-safety-block");
@@ -1852,7 +2402,7 @@ mod tests {
             "铺场后缩库应触发配额"
         );
         assert_eq!(
-            restore_safety(&blocked),
+            restore_safety(&v2, &blocked),
             RestoreSafety::Blocked(BackupErrorKind::QuotaExceeded)
         );
     }
@@ -1862,7 +2412,8 @@ mod tests {
         let (_root, vault) = temp_vault("two-gen");
         let base = 1_793_491_200_000;
         fill_slots(&vault, 4096, base);
-        isolate_old_key_backups(&vault, base + 10_000_000);
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
         snapshot_before_write(&vault, base + 10_000_001);
 
         // 新一代的 `.state` 独立存在，且不指向旧代的任何文件。

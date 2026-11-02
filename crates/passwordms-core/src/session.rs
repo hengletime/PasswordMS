@@ -19,7 +19,7 @@ use crate::crypto::{kdf, verify};
 use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::vault::{KdfParams, Vault};
-use crate::store::backup::{self, IsolateOutcome};
+use crate::store::backup::{self, EventTag, RekeyOutcome};
 use crate::store::container::Container;
 use crate::store::repository::Repository;
 
@@ -311,16 +311,16 @@ impl Session {
     ///
     /// 返回**旧备份的隔离结果**。换密不会让既有备份失效——旧密文里的 VK 在密码学意义
     /// 上仍然有效，只有**旧主密码**能开。所以成功后必须把旧代整体挪进
-    /// `backups/old-key/`（[`crate::store::backup::isolate_old_key_backups`]），
+    /// `backups/old-key/`（[`crate::store::backup::RekeyWindow`]），
     /// 否则"换了密码，旧的就都失效了"这个用户假设是错的。
     ///
     /// 隔离失败**不返回 Err**：密码已经换成功了，回 Err 会让调用方以为失败而重复操作。
-    /// 失败落在 [`IsolateOutcome::error`] 里，由命令层转成可见警告。
+    /// 失败落在 [`crate::store::backup::IsolateOutcome`] 的计数里，由命令层转成可见警告。
     pub fn change_master_password(
         &mut self,
         old_password: &str,
         new_password: &str,
-    ) -> CoreResult<IsolateOutcome> {
+    ) -> CoreResult<RekeyOutcome> {
         if new_password.chars().count() < MIN_MASTER_PASSWORD_LEN {
             return Err(CoreError::WeakMasterPassword);
         }
@@ -330,9 +330,13 @@ impl Session {
         };
 
         let header = unlocked.repo.header().clone();
+        let vault_path = unlocked.repo.path();
 
         // 【D-115】校验旧密码：失败一律 `WrongMasterPassword`，理由同
         // `verify_master_password`（已解锁会话，不是锁屏入口）。
+        //
+        // 这一步**必须排在 `pre-rekey` 之前**：快照是整库复制，而旧密码错了这次换密
+        // 注定失败，为一次注定失败的操作多复制一份整库没有意义——尤其库大的时候。
         let mk_old = match kdf::derive_master_key(old_password, &header.kdf_salt, &header.kdf) {
             Ok(mk) => mk,
             Err(_) => return Err(CoreError::WrongMasterPassword),
@@ -359,15 +363,43 @@ impl Session {
         let verify_new = kdf::derive_verify_key(&mk_new[..])?;
         drop(mk_new);
 
+        // ── 换密的四步顺序，每一步的位置都是硬约束 ──
+        // 1. pre-rekey（旧密钥可开 —— 忘了新主密码时的**唯一**退路）
+        // 2. RekeyWindow::open（拍清单 + 独占备份目录）
+        // 3. update_key_material（新头部落盘）→ isolate（旧代搬进 old-key/）
+        // 4. post-rekey（新密钥可开，救"换密过程本身出问题"）
+        //
+        // 时间戳只为**避免重名**与界面排序，不参与世代判断（判据是 `before` 清单）。
+        // 取 `max(现在, 目录里最晚的毫秒时刻 + 1)`：既要压过已有文件的时刻（时钟回拨、
+        // 跨机同步带进来的未来时刻），也要让 `post-rekey` 稳稳排在 `pre-rekey` 之后。
+        // 写失败不阻断换密：换密是主操作，备份是旁路。但这一份写不成意味着
+        // "忘了新密码"没有退路，返回值由调用方转成可见状态。
+        let pre_ms = now_ms().max(backup::latest_ms_timestamp(&vault_path) + 1);
+        let pre_rekey = backup::snapshot_event(&vault_path, EventTag::PreRekey, pre_ms);
+
+        // 守卫在 `pre-rekey` **之后**开：pre-rekey 必须进 `before` 清单，否则它会被判成
+        // "窗口内新增"、`kept` 每次换密必响一次，真出事时没人看。
+        // 守卫在 `update_key_material` **之前**开：`last.bak` 是原地替换，路径集合看不见
+        // 它——窗口内被覆盖一次就会把新一代的 `last.bak` 错搬进旧代。见 `RekeyWindow`。
+        let window = backup::RekeyWindow::open(&vault_path);
+
         let verify_mac = verify::compute_verify_mac(&verify_new)?;
         let wrapped = keys::wrap_vault_key(&kek_new, &unlocked.repo.vault_key()[..])?;
         unlocked.repo.update_key_material(wrapped, verify_mac)?;
         unlocked.kek = Some(kek_new);
 
-        // 【R-5】换密**成功之后**才隔离旧备份，且必须在写 `post-rekey` 快照之前——
-        // 那份是用新材料写的，属于新一代，不能被挪进 `old-key/`。
-        let vault_path = unlocked.repo.path();
-        Ok(backup::isolate_old_key_backups(&vault_path, now_ms()))
+        // 3) 隔离旧代：清单里的一切都搬走，窗口内新写的留下（正常一份都不该有）。
+        //    `isolate` 取 `self`，搬完即释放独占——`post-rekey` 还要写。
+        let isolated = window.isolate();
+        // 4) post-rekey：写在扫描之后，所以不进 `kept`；它本来也不在清单里。
+        let _ = backup::snapshot_event(&vault_path, EventTag::PostRekey, now_ms().max(pre_ms + 1));
+        // pre-rekey 写成没写成，是回执分支的自变量：失败时**不得**宣称"有退路"。
+        Ok(RekeyOutcome {
+            isolate: isolated,
+            pre_rekey_saved: pre_rekey.error_kind.is_none()
+                && pre_rekey.skipped.is_none()
+                && !pre_rekey.created.is_empty(),
+        })
     }
 
     /// 采用 Host 下发的 VK（U1/U2 裁定）。
