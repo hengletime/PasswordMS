@@ -140,6 +140,7 @@ Other requirements and notes:
 - **On Android the app needs the "Nearby devices" permission**: since Android 17 (API 37), LAN access requires the `ACCESS_LOCAL_NETWORK` runtime grant. Without it the system **silently drops** this app's connections (you see "network timeout" while the same phone's browser and keyboard still reach the LAN just fine). From v1.5.0 the app asks for it on launch — **tap Allow**. If you declined, re-enable it under Settings → Apps → PasswordMS → Permissions → Nearby devices
 - **Last-resort fallback**: enable a **mobile hotspot** on the desktop and connect the phone to it before pairing/syncing — inside a hotspot the desktop *is* the phone's gateway, and that path is not affected by the permission above (measured 2026-10-30 on two routers' Wi‑Fi vs hotspot; root-caused 2026-10-31 to the missing permission, fixed in v1.5.0)
 - The sync page shows this device's IP, the current listening port, and the recorded address of every paired device — compare both ends to tell "stale address" apart from "peer is away"
+- **When both sides changed the same item or folder, nothing is silently overwritten**: the later sync does not clobber the earlier edit; both versions go into **Sync → Conflict resolution**, where you pick "Keep this device" or "Take the other side". Items additionally offer "Keep both" (a separate copy); folders do not — duplicating an empty folder is pointless, but you can "take the other side" to accept its deletion
 
 ## 🔐 Security Model
 

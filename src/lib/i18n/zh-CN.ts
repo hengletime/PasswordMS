@@ -598,6 +598,10 @@ export const zhCN = {
     detected_at: '发现于',
     // D-112：KeepBoth 副本标题后缀（保留前导空格）。
     copy_suffix: ' (冲突副本)',
+    // D-171：冲突箱混合条目与分组，卡片上标明类型；分组没有「两者都留」。
+    kind_item: '条目',
+    kind_folder: '分组',
+    remote_deleted: '（远端已删除）',
   },
   // D-63：法律条款弹窗（免责声明 / 用户协议）的标题与按钮文案；
   // 正文不从 i18n 取，见 src/lib/legal-content.ts（逐条实质内容 + 统一 updated）。

@@ -340,6 +340,44 @@ MSI `2,920,448 B`（`89c4552a`）/ 裸 exe **`4,997,120 B`**（`919505df`，Prod
 > 两种结果，这才是它在测内容、而不是在测「必然变化」。桌面 `passwordms.exe` 的五个新名字
 > 同样各出现 1 次，十个旧名字各 0 次。
 
+**1.5.27 门禁（D-171 / Kimi F-01，2026-11-02 实跑）**：前端 `npm run test` **83 文件 784 例全绿**
+（较 1.5.26 的 82/770：新增 `d171-folder-conflict-guard.test.ts` 14 例）/ `npm run check`
+0 error 0 warning / CSS 契约 **0 FAIL 6 WARN**（与 1.5.26 同：全是已知 F-09 浅色对比度口径）/
+`cargo fmt --all -- --check` 干净 / `clippy --workspace --all-targets` 代码警告 0 /
+`cargo test -p passwordms-core` 全通过（新增 `d171_folder_conflict` **13 例**）。
+体积门禁桌面 + APK 双过（NSIS 1.97 MB、APK 7.42 MB）。
+**变异实测 11 条全真红**（`target/mutate-171.py`）。
+
+> **本轮变异打「分流」和「可见性」**：①分组双改直接覆盖；②分组删除不看本端 rev；
+> ③KeepLocal 不抬 rev；④TakeRemote 高抬 rev；⑤分组允许 keep_both；⑥仲裁分流放在条目之后；
+> ⑦分组冲突复用 0x04；⑧命令层只列条目；⑨面板写死三选一；⑩分组选项塞回 keep_both；
+> ⑪泰语字典少一条键。
+>
+> **两条教训**：①`M2` / `M3` 的第一版片段在**条目与分组分支里各出现一次**（`Some(local) if
+> local.rev > change.rev` / `winner.rev = ...max(...) + 1`），`replace(..., 1)` 只改到条目那处，
+> 分组语义没变当然不红。判据片段必须**带上分组特有的上下文**（`get_folder_opt` 那一行 /
+> `let folder_id = winner.folder_id` 那一行）才算钉住。②`en-US.ts` 里给注释写 "the conflict
+> box" 直接把 `d105-locale-polish` 撞红——那条守卫是防英文文案里出现「直译腔」的，注释也算。
+
+**1.5.27 实际产物（出包实测，非推算）**：
+APK **`7,782,827 B`**（`46e5d14f`，versionCode **1005027** / versionName 1.5.27）/
+NSIS `2,069,843 B`（`da80b2f3`）/ MSI `2,932,736 B`（`d85ee0de`）/
+裸 exe **`5,027,840 B`**（`9e772eff`）/ 绿色版 zip `2,438,401 B`（`b7289e0a`）；
+**zip 内 exe 与裸 exe 哈希一致**（`9e772eff`，同为 5,027,840 B）。
+
+> **APK 连六版等体积（7,762,347 B，1.5.21–1.5.26）到此结束**，本轮 +20,480 B。上一轮已记
+> 「体积零信息量」：`.so` 里的实际字节变化会被 zipalign 的 4 KiB 对齐吸收掉，直到越过下一个
+> 对齐边界才反映到 APK 大小上。故**体积变化既不能证明也不能否定代码进了包**，取证仍看字符串。
+
+**包内取证（1.5.27）——只动 Rust 与前端，用「本轮才有的字符串」取证**：
+
+| 判据 | 位置 | 计数 |
+|---|---|---|
+| `folder_conflict_no_keep_both`（本轮新增错误码） | 桌面 exe / APK `.so` | 1 / 1 |
+| `.restore-tmp`（1.5.26 引入，确认仍在） | APK `.so` | 1 |
+| `dist/index.html` mtime 早于 APK | — | 21:18:36 < 21:21:55 |
+| 前端 CSS 分块名随本轮变化 | `style-DlGng6yX` → `style-CpIyiKAB` | 改过面板样式，符合预期 |
+
 **1.5.26 门禁（D-170 / Kimi F-02+F-03，2026-11-02 实跑）**：前端 `npm run test` **82 文件 770 例全绿**
 （较 1.5.25 的 81/760：新增 `d170-backup-restore-guard.test.ts` 10 例）/ `npm run check`
 0 error 0 warning / CSS 契约 **0 FAIL 6 WARN** / `cargo fmt --all -- --check` 干净 /

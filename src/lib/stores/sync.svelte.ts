@@ -2,7 +2,7 @@
 
 import type { ConflictChoice, ConflictDto, DeviceDto, PairingDto, SyncStatusDto } from '../../types';
 import { listen } from '@tauri-apps/api/event';
-import { DEFAULT_CONFLICT_CHOICE } from '../conflict';
+import { DEFAULT_CONFLICT_CHOICE, isChoiceAllowed } from '../conflict';
 import { ErrorCode, toAppError } from '../errors';
 import { api } from '../ipc';
 import { nextPairingState, PAIRING_ENDED_EVENT } from '../pairing-state';
@@ -342,6 +342,13 @@ class SyncStore {
   async resolve(conflictId: string): Promise<boolean> {
     const choice = this.choiceOf(conflictId);
     if (choice === null) {
+      ui.toast('error', 'conflict.choose');
+      return false;
+    }
+    // D-171：分组冲突不支持 KeepBoth（core 会拒）。按钮本来就不画，这里再挡一次——
+    // 否则一旦选择状态从别处带过来，用户会收到一个看不懂的后端校验错误。
+    const target = this.conflicts.find((c) => c.conflict_id === conflictId);
+    if (target && !isChoiceAllowed(target.record_type, choice)) {
       ui.toast('error', 'conflict.choose');
       return false;
     }

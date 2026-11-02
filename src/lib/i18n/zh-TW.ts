@@ -524,6 +524,10 @@ export const zhTW = {
     detected_at: '發現於',
     // D-112：KeepBoth 副本標題後綴（保留前導空格）。
     copy_suffix: ' (衝突副本)',
+    // D-171：衝突箱混合條目與分組，卡片上標明類型；分組沒有「兩者都留」。
+    kind_item: '條目',
+    kind_folder: '分組',
+    remote_deleted: '（遠端已刪除）',
   },
   legal: {
     disclaimer_title: '免責聲明',

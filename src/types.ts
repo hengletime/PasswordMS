@@ -153,13 +153,21 @@ export interface TrashDto {
 /** 冲突条目。 */
 export interface ConflictDto {
   conflict_id: string;
-  item_id: string;
+  /** D-171：`item` = 条目冲突，`folder` = 分组冲突（后者只有两个仲裁选项）。 */
+  record_type: ConflictRecordType;
+  /** 记录 ID（条目 id 或分组 id）。 */
+  record_id: string;
   local_title: string;
   remote_title: string;
   local_updated_at: number;
   remote_updated_at: number;
   detected_at: number;
+  /** 远端版本是一次删除（远端快照为删除前内容，「采用远端」= 接受删除）。 */
+  remote_deleted: boolean;
 }
+
+/** 冲突涉及的记录类型（D-171）。 */
+export type ConflictRecordType = 'item' | 'folder';
 
 /** 冲突三选一。 */
 export type ConflictChoice = 'keep_local' | 'take_remote' | 'keep_both';

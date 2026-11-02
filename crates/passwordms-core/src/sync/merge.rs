@@ -5,7 +5,8 @@
 
 use crate::constants::{RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM};
 use crate::error::CoreResult;
-use crate::model::conflict::ConflictEntry;
+use crate::model::conflict::{ConflictEntry, FolderConflictEntry};
+use crate::model::folder::Folder;
 use crate::model::item::Item;
 use crate::model::now_ms;
 use crate::model::sync_state::{BaseRev, DeviceSyncState};
@@ -22,26 +23,57 @@ pub struct MergeReport {
 
 /// 「双改」冲突探测：基准存在且两端 `rev` 均大于基准，且内容摘要不同。
 pub fn detect_conflict(local: &Item, remote: &Item, base: Option<&BaseRev>) -> CoreResult<bool> {
-    let (local_changed, remote_changed) = match base {
-        Some(b) => (local.rev > b.rev, remote.rev > b.rev),
+    Ok(detect_change_conflict(
+        local.rev,
+        remote.rev,
+        item_hash(local)?,
+        item_hash(remote)?,
+        base,
+    ))
+}
+
+/// 分组版「双改」探测（D-171）。
+///
+/// 判定逻辑与条目**共用同一个函数**（[`detect_change_conflict`]），只有哈希口径不同——
+/// 分组用 [`folder_hash`]、条目用 [`item_hash`]。共用是为了避免「条目修好了、分组还
+/// 留着一份旧判定」这类只差一行的漏洞（D-170 的 F-02 就是这么来的）。
+pub fn detect_folder_conflict(
+    local: &Folder,
+    remote: &Folder,
+    base: Option<&BaseRev>,
+) -> CoreResult<bool> {
+    Ok(detect_change_conflict(
+        local.rev,
+        remote.rev,
+        folder_hash(local)?,
+        folder_hash(remote)?,
+        base,
+    ))
+}
+
+/// 「双改」判定的本体：只看 rev 与内容摘要，与记录类型无关。
+fn detect_change_conflict(
+    local_rev: u64,
+    remote_rev: u64,
+    local_hash: [u8; 32],
+    remote_hash: [u8; 32],
+    base: Option<&BaseRev>,
+) -> bool {
+    match base {
         // D-109：无基准（本端从未收过该对端的此记录）时，同 rev 异内容必为双端
         // 独立修改——单侧修改的传播会随接收建立 base，不会停留在无基准态；同 id
         // 同 rev 异内容不可能是单侧传播（传播版本单调同源）。此时若走无基准 LWW，
         // 后改一端会静默覆盖先改一端（Q3 裁定禁止静默覆盖），故直接判冲突交 UI 仲裁。
-        None => {
-            if local.rev == remote.rev {
-                return Ok(item_hash(local)? != item_hash(remote)?);
+        None => local_rev == remote_rev && local_hash != remote_hash,
+        Some(b) => {
+            // 基准存在：两端都推进过才可能是「双改」；单侧推进是无冲突的常规传播。
+            if !(local_rev > b.rev && remote_rev > b.rev) {
+                return false;
             }
-            return Ok(false);
+            // 双端都改但内容一致 → 视为无冲突。
+            local_hash != remote_hash
         }
-    };
-    if !(local_changed && remote_changed) {
-        return Ok(false);
     }
-    let local_hash = item_hash(local)?;
-    let remote_hash = item_hash(remote)?;
-    // 双端都改但内容一致 → 视为无冲突。
-    Ok(local_hash != remote_hash)
 }
 
 /// 应用一批远端变更（含条目与分组），并按需写入冲突箱。
@@ -216,7 +248,36 @@ pub fn apply_changes(
                             continue;
                         }
                     }
-                    repo.remove_folder_direct(&change.record_id)?;
+                    // D-171 删除-修改拉锯（分组版，镜像条目 D-56）：本端 rev 更高说明
+                    // 本端改过（改名 / 换图标 / 钉住）→ 死亡快照入冲突箱交 UI 仲裁。
+                    // 旧实现无条件 `remove_folder_direct`：对端删分组时本端刚改的名字
+                    // 连痕迹都不留，其下条目全部掉进「未分组」。
+                    match repo.get_folder_opt(&change.record_id) {
+                        Some(local) if local.rev > change.rev => {
+                            let remote_snapshot = repo.change_to_folder(change)?;
+                            let entry = FolderConflictEntry {
+                                conflict_id: uuid::Uuid::new_v4().to_string(),
+                                folder_id: change.record_id.clone(),
+                                local_updated_at: local.updated_at,
+                                remote_updated_at: remote_snapshot.updated_at,
+                                local_snapshot: local,
+                                remote_snapshot,
+                                detected_at: now_ms(),
+                                resolved: false,
+                                remote_deleted: true,
+                            };
+                            repo.add_folder_conflict(entry)?;
+                            report.conflicts.push(change.record_id.clone());
+                        }
+                        Some(local) => {
+                            repo.remove_folder_direct(&local.folder_id)?;
+                            report.applied += 1;
+                        }
+                        // 本端从未有该分组（或已删）→ 删除意图已达成。
+                        None => {
+                            report.skipped += 1;
+                        }
+                    }
                     state.base.insert(
                         change.record_id.clone(),
                         BaseRev {
@@ -224,7 +285,6 @@ pub fn apply_changes(
                             hash: [0u8; 32],
                         },
                     );
-                    report.applied += 1;
                     continue;
                 }
                 let remote = repo.change_to_folder(change)?;
@@ -235,17 +295,79 @@ pub fn apply_changes(
                 );
                 if suppressed {
                     report.skipped += 1;
-                } else {
-                    repo.put_folder_direct(remote.clone())?;
-                    report.applied += 1;
+                    state.base.insert(
+                        change.record_id.clone(),
+                        BaseRev {
+                            rev: change.rev,
+                            hash: [0u8; 32],
+                        },
+                    );
+                    continue;
                 }
-                state.base.insert(
-                    change.record_id.clone(),
-                    BaseRev {
-                        rev: remote.rev,
-                        hash: folder_hash(&remote)?,
-                    },
-                );
+                let remote_rev = remote.rev;
+                let remote_hash = folder_hash(&remote)?;
+                match repo.get_folder_opt(&change.record_id) {
+                    Some(local) => {
+                        let base = state.base.get(&change.record_id).cloned();
+                        // D-171：分组双改同样不得静默覆盖（Q3 裁定）。旧实现直接
+                        // put_folder_direct，等于无条件 LWW——两端各改一次，谁后同步
+                        // 谁的名字留下，另一边看不到任何提示。
+                        if detect_folder_conflict(&local, &remote, base.as_ref())? {
+                            let entry = FolderConflictEntry {
+                                conflict_id: uuid::Uuid::new_v4().to_string(),
+                                folder_id: change.record_id.clone(),
+                                local_updated_at: local.updated_at,
+                                remote_updated_at: remote.updated_at,
+                                local_snapshot: local.clone(),
+                                remote_snapshot: remote.clone(),
+                                detected_at: now_ms(),
+                                resolved: false,
+                                remote_deleted: false,
+                            };
+                            repo.add_folder_conflict(entry)?;
+                            report.conflicts.push(change.record_id.clone());
+                            // 保留本机为正式分组，基准推进到远端 rev（同条目语义）。
+                            state.base.insert(
+                                change.record_id.clone(),
+                                BaseRev {
+                                    rev: remote_rev,
+                                    hash: remote_hash,
+                                },
+                            );
+                            continue;
+                        }
+                        let take_remote = remote.updated_at > local.updated_at
+                            || (remote.updated_at == local.updated_at && remote_rev > local.rev);
+                        if take_remote {
+                            repo.put_folder_direct(remote)?;
+                            // D-171：分组本体已换新版本，挂着的旧冲突快照过时（同条目
+                            // D-111 的「事实解决」收口）。
+                            repo.expire_folder_conflicts_for(&change.record_id)?;
+                            report.applied += 1;
+                        } else {
+                            report.skipped += 1;
+                        }
+                        state.base.insert(
+                            change.record_id.clone(),
+                            BaseRev {
+                                rev: remote_rev.max(local.rev),
+                                hash: remote_hash,
+                            },
+                        );
+                    }
+                    None => {
+                        repo.put_folder_direct(remote)?;
+                        repo.expire_folder_conflicts_for(&change.record_id)?;
+                        report.applied += 1;
+                        state.base.insert(
+                            change.record_id.clone(),
+                            BaseRev {
+                                rev: remote_rev,
+                                hash: remote_hash,
+                            },
+                        );
+                    }
+                }
             }
             _ => {
                 report.skipped += 1;

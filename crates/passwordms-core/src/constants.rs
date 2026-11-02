@@ -85,6 +85,15 @@ pub const RECORD_TYPE_SETTINGS: u8 = 0x05;
 pub const RECORD_TYPE_DEVICE: u8 = 0x06;
 /// 每设备同步状态记录【偏差 D-3：持久化 §5.1 `DeviceSyncState` 新增】。
 pub const RECORD_TYPE_SYNC_STATE: u8 = 0x07;
+/// 分组冲突记录【D-171】。
+///
+/// **为什么另立类型而不塞进 0x04**：0x04 的载荷结构是 `ConflictEntry`，其
+/// `item_id` / `local_snapshot: Item` 都是必填字段。把分组冲突写成 0x04 的变体
+/// （少这两个字段）会让**旧版本**在 `rebuild_index` 反序列化时 `?` 失败 → 整库
+/// **打不开**（不是「看到一条看不懂的冲突」，是「库全废」）。新类型走旧版本
+/// `rebuild_index` 的 `_ => {}` 兜底：静默跳过、不影响解锁，代价只是旧版本看不到
+/// 分组冲突（可接受，降级不是常规路径）。
+pub const RECORD_TYPE_FOLDER_CONFLICT: u8 = 0x08;
 
 // ===== 记录帧 flags =====
 /// bit0：墓碑（已删除占位）。

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use passwordms_core::health::HealthReport;
 use passwordms_core::import::{ImportPreview, ImportResult};
-use passwordms_core::model::conflict::ConflictEntry;
+use passwordms_core::model::conflict::ConflictView;
 use passwordms_core::model::folder::Folder;
 use passwordms_core::model::item::{Item, ItemKind};
 use passwordms_core::model::sync_state::PairedDevice;
@@ -149,28 +149,54 @@ impl From<TrashEntry> for TrashDto {
     }
 }
 
-/// 冲突 DTO。
+/// 冲突 DTO（条目与分组共用一张冲突箱）。
+///
+/// **D-171**：`record_type` 决定 UI 的可选项——分组没有「两者都留」（复制一个空分组壳
+/// 既不可辨识也不带其下条目），前端按它渲染两个按钮；`remote_deleted` 让「对端把这个
+/// 分组删了、本端改过」这种冲突不至于显示成两个一模一样的名字。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConflictDto {
     pub conflict_id: String,
-    pub item_id: String,
+    /// `"item"` 或 `"folder"`。
+    pub record_type: String,
+    /// 记录 ID（条目 id 或分组 id）。
+    pub record_id: String,
+    /// 本端标题（条目标题 / 分组名）。
     pub local_title: String,
+    /// 远端标题（条目标题 / 分组名）。
     pub remote_title: String,
     pub local_updated_at: i64,
     pub remote_updated_at: i64,
     pub detected_at: i64,
+    /// 远端版本是一次删除（远端快照为删除前内容，「采用远端」= 接受删除）。
+    pub remote_deleted: bool,
 }
 
-impl From<ConflictEntry> for ConflictDto {
-    fn from(c: ConflictEntry) -> Self {
-        Self {
-            conflict_id: c.conflict_id,
-            item_id: c.item_id,
-            local_title: c.local_snapshot.title().to_string(),
-            remote_title: c.remote_snapshot.title().to_string(),
-            local_updated_at: c.local_updated_at,
-            remote_updated_at: c.remote_updated_at,
-            detected_at: c.detected_at,
+impl From<ConflictView> for ConflictDto {
+    fn from(view: ConflictView) -> Self {
+        match view {
+            ConflictView::Item(c) => Self {
+                conflict_id: c.conflict_id,
+                record_type: "item".to_string(),
+                record_id: c.item_id,
+                local_title: c.local_snapshot.title().to_string(),
+                remote_title: c.remote_snapshot.title().to_string(),
+                local_updated_at: c.local_updated_at,
+                remote_updated_at: c.remote_updated_at,
+                detected_at: c.detected_at,
+                remote_deleted: c.remote_deleted,
+            },
+            ConflictView::Folder(c) => Self {
+                conflict_id: c.conflict_id,
+                record_type: "folder".to_string(),
+                record_id: c.folder_id,
+                local_title: c.local_snapshot.name,
+                remote_title: c.remote_snapshot.name,
+                local_updated_at: c.local_updated_at,
+                remote_updated_at: c.remote_updated_at,
+                detected_at: c.detected_at,
+                remote_deleted: c.remote_deleted,
+            },
         }
     }
 }

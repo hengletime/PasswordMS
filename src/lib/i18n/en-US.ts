@@ -583,6 +583,10 @@ export const enUS: Messages = {
     detected_at: 'Detected',
     // D-112: KeepBoth duplicate title suffix (leading space is intentional).
     copy_suffix: ' (conflict copy)',
+    // D-171: conflicts may be items or folders, so label the type. Folders have no "keep both".
+    kind_item: 'Item',
+    kind_folder: 'Folder',
+    remote_deleted: ' (deleted remotely)',
   },
   // D-63: legal dialog (disclaimer / terms) titles and button label.
   // The body text lives in src/lib/legal-content.ts, not in i18n.

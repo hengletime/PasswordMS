@@ -422,13 +422,16 @@ pub fn sync_status(state: tauri::State<'_, AppState>) -> IpcResult<SyncStatusDto
     })
 }
 
-/// 列出未仲裁冲突。
+/// 列出未仲裁冲突（条目 + 分组，按检测时间倒序）。
+///
+/// **D-171**：这里必须用 `list_all_conflicts`——原实现只列条目冲突，分组被对端覆盖
+/// 时用户看不到任何提示（改过的分组名一轮同步后变回对端旧名）。
 #[tauri::command(rename_all = "snake_case")]
 pub fn list_conflicts(state: tauri::State<'_, AppState>) -> IpcResult<Vec<ConflictDto>> {
     let session = state.lock_session().map_err(lock_err)?;
     Ok(session
         .repo()?
-        .list_conflicts()
+        .list_all_conflicts()
         .into_iter()
         .map(ConflictDto::from)
         .collect())

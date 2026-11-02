@@ -535,6 +535,10 @@ export const th = {
     detected_at: 'พบเมื่อ',
     // D-112: KeepBoth duplicate title suffix (leading space is intentional).
     copy_suffix: ' (สำเนาข้อขัดแย้ง)',
+    // D-171: กล่องข้อขัดแย้งมีทั้งรายการและโฟลเดอร์ ต้องระบุชนิด (โฟลเดอร์ไม่มี "เก็บทั้งสอง")
+    kind_item: 'รายการ',
+    kind_folder: 'โฟลเดอร์',
+    remote_deleted: ' (ถูกลบจากอีกเครื่อง)',
   },
   legal: {
     disclaimer_title: 'ข้อปฏิเสธความรับผิด',

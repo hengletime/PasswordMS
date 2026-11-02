@@ -12,13 +12,16 @@ use sha2::{Digest, Sha256};
 use crate::constants::{
     ATTACHMENT_CHUNK_BYTES, FLAG_BLOB, MAX_ATTACHMENTS_PER_ITEM, MAX_ATTACHMENT_BYTES,
     MAX_ATTACHMENT_FILENAME_BYTES, MAX_ITEM_PLAINTEXT_BYTES, MAX_NOTE_BYTES, MAX_VAULT_BYTES,
-    MS_PER_DAY, RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER, RECORD_TYPE_ITEM,
-    RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH, TRASH_RETENTION_DAYS, USAGE_THROTTLE_MS,
+    MS_PER_DAY, RECORD_TYPE_CONFLICT, RECORD_TYPE_DEVICE, RECORD_TYPE_FOLDER,
+    RECORD_TYPE_FOLDER_CONFLICT, RECORD_TYPE_ITEM, RECORD_TYPE_SYNC_STATE, RECORD_TYPE_TRASH,
+    TRASH_RETENTION_DAYS, USAGE_THROTTLE_MS,
 };
 use crate::crypto::keys::{self, VaultKey};
 use crate::crypto::{aead, rng};
 use crate::error::{CoreError, CoreResult};
-use crate::model::conflict::{ConflictChoice, ConflictEntry, WatermarkReset};
+use crate::model::conflict::{
+    ConflictChoice, ConflictEntry, ConflictView, FolderConflictEntry, WatermarkReset,
+};
 use crate::model::folder::Folder;
 use crate::model::item::{AttachmentMeta, Item, ItemKind};
 use crate::model::now_ms;
@@ -181,6 +184,8 @@ struct RepositoryCounts {
     folders: usize,
     trash: usize,
     conflicts: usize,
+    /// D-171：分组冲突另一张表，压缩前后同样必须守恒（漏计 = 压缩丢了冲突箱也发现不了）。
+    folder_conflicts: usize,
     devices: usize,
     sync_states: usize,
     blobs: usize,
@@ -207,6 +212,9 @@ pub struct Repository {
     items: BTreeMap<String, Item>,
     trash: BTreeMap<String, TrashEntry>,
     conflicts: BTreeMap<String, ConflictEntry>,
+    /// D-171：分组冲突。与 `conflicts` 分开存是因为记录类型不同（载荷结构不同）；
+    /// 对用户的语义只有一张冲突箱，见 [`Self::list_all_conflicts`]。
+    folder_conflicts: BTreeMap<String, FolderConflictEntry>,
     devices: BTreeMap<String, PairedDevice>,
     sync_states: BTreeMap<String, DeviceSyncState>,
     /// 【D-96】打开期一致性检查的警告（如头部计数与实际扫描不符）。
@@ -242,6 +250,7 @@ impl Repository {
             items: BTreeMap::new(),
             trash: BTreeMap::new(),
             conflicts: BTreeMap::new(),
+            folder_conflicts: BTreeMap::new(),
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
             open_warnings: Vec::new(),
@@ -276,6 +285,7 @@ impl Repository {
             items: BTreeMap::new(),
             trash: BTreeMap::new(),
             conflicts: BTreeMap::new(),
+            folder_conflicts: BTreeMap::new(),
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
             open_warnings: Vec::new(),
@@ -394,6 +404,7 @@ impl Repository {
         self.items.clear();
         self.trash.clear();
         self.conflicts.clear();
+        self.folder_conflicts.clear();
         self.devices.clear();
         self.sync_states.clear();
         self.decrypted_frames = 0;
@@ -440,6 +451,11 @@ impl Repository {
                 RECORD_TYPE_CONFLICT => {
                     let entry: ConflictEntry = serde_json::from_slice(&pt)?;
                     self.conflicts.insert(entry.conflict_id.clone(), entry);
+                }
+                RECORD_TYPE_FOLDER_CONFLICT => {
+                    let entry: FolderConflictEntry = serde_json::from_slice(&pt)?;
+                    self.folder_conflicts
+                        .insert(entry.conflict_id.clone(), entry);
                 }
                 RECORD_TYPE_DEVICE => {
                     let device: PairedDevice = serde_json::from_slice(&pt)?;
@@ -1916,7 +1932,8 @@ impl Repository {
 
     // ===== 冲突箱 =====
 
-    /// 列出未仲裁冲突。
+    /// 列出未仲裁的**条目**冲突（分组冲突见 [`Self::list_folder_conflicts`]；
+    /// UI 要的是两类合一的 [`Self::list_all_conflicts`]）。
     pub fn list_conflicts(&self) -> Vec<ConflictEntry> {
         let mut out: Vec<ConflictEntry> = self
             .conflicts
@@ -1925,6 +1942,42 @@ impl Repository {
             .cloned()
             .collect();
         out.sort_by_key(|c| std::cmp::Reverse(c.detected_at));
+        out
+    }
+
+    /// 列出未仲裁的**分组**冲突（D-171）。
+    pub fn list_folder_conflicts(&self) -> Vec<FolderConflictEntry> {
+        let mut out: Vec<FolderConflictEntry> = self
+            .folder_conflicts
+            .values()
+            .filter(|c| !c.resolved)
+            .cloned()
+            .collect();
+        out.sort_by_key(|c| std::cmp::Reverse(c.detected_at));
+        out
+    }
+
+    /// 冲突箱统一视图：条目 + 分组，按 `detected_at` 倒序（D-171）。
+    ///
+    /// 原实现只列条目冲突，而分组被对端覆盖是**静默**发生的：用户改过的分组名在一轮
+    /// 同步后变回对端旧名，界面上一点痕迹都没有。分组的仲裁选项少一项（无「两者都留」），
+    /// 那条规则由 `record_type` 带到 UI，不在这里裁剪。
+    pub fn list_all_conflicts(&self) -> Vec<ConflictView> {
+        let mut out: Vec<ConflictView> = self
+            .conflicts
+            .values()
+            .filter(|c| !c.resolved)
+            .cloned()
+            .map(|c| ConflictView::Item(Box::new(c)))
+            .collect();
+        out.extend(
+            self.folder_conflicts
+                .values()
+                .filter(|c| !c.resolved)
+                .cloned()
+                .map(|c| ConflictView::Folder(Box::new(c))),
+        );
+        out.sort_by_key(|v| std::cmp::Reverse(v.detected_at()));
         out
     }
 
@@ -1943,6 +1996,13 @@ impl Repository {
         choice: ConflictChoice,
         copy_suffix: &str,
     ) -> CoreResult<Vec<WatermarkReset>> {
+        // D-171：分组冲突与条目冲突共用一个入口（UI 只有一个冲突箱、一个确认按钮），
+        // 按 conflict_id 落在哪张表分流。两张表的载荷结构不同，所以这里不是「同一份
+        // 代码两用」，而是两个实现挂同一个门——分流条件必须**先判分组**，否则分组
+        // 冲突会落到条目分支里报 ItemNotFound（用户看到「找不到该条目」）。
+        if self.folder_conflicts.contains_key(conflict_id) {
+            return self.resolve_folder_conflict(conflict_id, choice);
+        }
         let entry = self
             .conflicts
             .get(conflict_id)
@@ -2062,6 +2122,92 @@ impl Repository {
         Ok(resets)
     }
 
+    /// 分组冲突仲裁（D-171）：语义与条目同构（D-109 / D-111），但只有两项选择。
+    ///
+    /// - **保留本机**：本机快照抬 rev（`max(local, remote) + 1`）落地并上交修正清单
+    ///   → 下一轮同步自然重发，全网收敛到本机版本。**不是「本机原地不动」**：原 rev
+    ///   早已在发送水位线上（`rev <= 水位` 免重发），对端永远收不到。
+    /// - **采用远端**：原样落地对方快照（不造新版本，否则双端互采会反复振荡）；
+    ///   `remote_deleted` 时按接受删除处理——移除分组壳（其下条目是各自独立记录，
+    ///   不在这里级联，与「对端删分组」的既有语义一致）。
+    /// - **两者都留**：分组没有这个语义（复制一个空分组壳既不可辨识、也不带上其下
+    ///   条目），返回 `folder_conflict_no_keep_both`，且**冲突保持未解决**——不能让
+    ///   用户以为处理过了。
+    fn resolve_folder_conflict(
+        &mut self,
+        conflict_id: &str,
+        choice: ConflictChoice,
+    ) -> CoreResult<Vec<WatermarkReset>> {
+        let entry = self
+            .folder_conflicts
+            .get(conflict_id)
+            .cloned()
+            .ok_or(CoreError::ItemNotFound)?;
+        let mut resets: Vec<WatermarkReset> = Vec::new();
+        match choice {
+            ConflictChoice::KeepBoth => {
+                return Err(CoreError::Validation(
+                    "folder_conflict_no_keep_both".to_string(),
+                ));
+            }
+            ConflictChoice::KeepLocal => {
+                let mut winner = entry.local_snapshot.clone();
+                winner.rev = winner.rev.max(entry.remote_snapshot.rev) + 1;
+                winner.updated_at = now_ms();
+                let folder_id = winner.folder_id.clone();
+                let new_rev = winner.rev;
+                let winner_hash = folder_hash(&winner)?;
+                self.put_folder_direct(winner)?;
+                resets.push(WatermarkReset {
+                    record_id: folder_id,
+                    new_rev,
+                    new_hash: winner_hash,
+                });
+            }
+            ConflictChoice::TakeRemote => {
+                if entry.remote_deleted {
+                    self.remove_folder_direct(&entry.folder_id)?;
+                } else {
+                    let snapshot = entry.remote_snapshot.clone();
+                    let landed_rev = snapshot.rev;
+                    let folder_id = snapshot.folder_id.clone();
+                    let landed_hash = folder_hash(&snapshot)?;
+                    self.put_folder_direct(snapshot)?;
+                    resets.push(WatermarkReset {
+                        record_id: folder_id,
+                        new_rev: landed_rev,
+                        new_hash: landed_hash,
+                    });
+                }
+            }
+        }
+        let mut updated = entry;
+        updated.resolved = true;
+        self.write_record(
+            RECORD_TYPE_FOLDER_CONFLICT,
+            &updated.conflict_id,
+            0,
+            &serde_json::to_vec(&updated)?,
+        )?;
+        self.folder_conflicts
+            .insert(updated.conflict_id.clone(), updated);
+        self.persist_header()?;
+        Ok(resets)
+    }
+
+    /// 写入分组冲突箱（供同步合并使用，D-171）。
+    pub fn add_folder_conflict(&mut self, entry: FolderConflictEntry) -> CoreResult<()> {
+        self.write_record(
+            RECORD_TYPE_FOLDER_CONFLICT,
+            &entry.conflict_id,
+            0,
+            &serde_json::to_vec(&entry)?,
+        )?;
+        self.folder_conflicts
+            .insert(entry.conflict_id.clone(), entry);
+        Ok(())
+    }
+
     /// 写入冲突箱（供同步合并使用）。
     pub fn add_conflict(&mut self, entry: ConflictEntry) -> CoreResult<()> {
         self.write_record(
@@ -2092,6 +2238,27 @@ impl Repository {
                 entry.resolved = true;
                 let bytes = serde_json::to_vec(entry)?;
                 self.write_record(RECORD_TYPE_CONFLICT, cid, 0, &bytes)?;
+            }
+        }
+        Ok(ids.len())
+    }
+
+    /// D-171：将某**分组**的未解决冲突全部标记为已解决（不落地任何快照）。
+    ///
+    /// 与 [`Self::expire_conflicts_for`] 同语义：分组本体已收到更新版本，挂着的旧快照
+    /// 已不代表现状，继续仲裁只会把过时版本写回去。
+    pub fn expire_folder_conflicts_for(&mut self, folder_id: &str) -> CoreResult<usize> {
+        let ids: Vec<String> = self
+            .folder_conflicts
+            .values()
+            .filter(|c| c.folder_id == folder_id && !c.resolved)
+            .map(|c| c.conflict_id.clone())
+            .collect();
+        for cid in &ids {
+            if let Some(entry) = self.folder_conflicts.get_mut(cid) {
+                entry.resolved = true;
+                let bytes = serde_json::to_vec(entry)?;
+                self.write_record(RECORD_TYPE_FOLDER_CONFLICT, cid, 0, &bytes)?;
             }
         }
         Ok(ids.len())
@@ -2169,7 +2336,11 @@ impl Repository {
 
     /// 业务记录总数（不含墓碑 / blob），用于 VK 采用前的「空库」判定。
     pub fn record_count(&self) -> usize {
-        self.items.len() + self.folders.len() + self.trash.len() + self.conflicts.len()
+        self.items.len()
+            + self.folders.len()
+            + self.trash.len()
+            + self.conflicts.len()
+            + self.folder_conflicts.len()
     }
 
     /// 【D-113】本次打开时**实际解密成功**的帧数。
@@ -2597,6 +2768,7 @@ impl Repository {
             folders: self.folders.len(),
             trash: self.trash.len(),
             conflicts: self.conflicts.len(),
+            folder_conflicts: self.folder_conflicts.len(),
             devices: self.devices.len(),
             sync_states: self.sync_states.len(),
             blobs: self.blobs.len(),
@@ -2635,6 +2807,7 @@ impl Repository {
             items: BTreeMap::new(),
             trash: BTreeMap::new(),
             conflicts: BTreeMap::new(),
+            folder_conflicts: BTreeMap::new(),
             devices: BTreeMap::new(),
             sync_states: BTreeMap::new(),
             open_warnings: Vec::new(),
@@ -2918,6 +3091,10 @@ impl Repository {
             for a in entry.item_snapshot.attachments.iter_mut() {
                 a.wipe_plaintext();
             }
+        }
+        for entry in self.folder_conflicts.values_mut() {
+            entry.local_snapshot.wipe_plaintext();
+            entry.remote_snapshot.wipe_plaintext();
         }
         for entry in self.conflicts.values_mut() {
             entry.local_snapshot.kind.wipe_plaintext();
