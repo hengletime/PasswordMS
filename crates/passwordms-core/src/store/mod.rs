@@ -1,5 +1,6 @@
 //! 存储层：单文件容器与仓储。
 
+pub mod backup;
 pub mod container;
 pub mod frame;
 pub mod repository;

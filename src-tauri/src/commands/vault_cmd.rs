@@ -7,7 +7,7 @@ use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
 use passwordms_core::store::container::restore_backup_from;
 
-use crate::dto::StatusDto;
+use crate::dto::{ChangeMasterPasswordDto, StatusDto};
 use crate::error::{lock_err, IpcError, IpcResult};
 use crate::state::{ensure_resync_listener, stop_resync_listener, vault_path, AppState};
 
@@ -108,9 +108,12 @@ pub fn change_master_password(
     state: tauri::State<'_, AppState>,
     old_password: String,
     new_password: String,
-) -> IpcResult<()> {
+) -> IpcResult<ChangeMasterPasswordDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
-    session.change_master_password(&old_password, &new_password)?;
+    // 【R-5】返回的是旧备份的隔离结果：换密**不会**让旧备份失效（它们仍能用旧主密码
+    // 打开），所以 core 已把旧代挪进 `backups/old-key/`。隔离失败不会让换密失败，
+    // 但必须让用户知道「旧备份还在原处」，否则他会以为旧密码已经彻底作废。
+    let isolated = session.change_master_password(&old_password, &new_password)?;
     // D-113（`docs/08` §18.5 约束 2）：改密会让 `verify_mac` 变 ⇒ 现有生物识别封印**必然**
     // 被判失效（core 的 `bind` 已覆盖，不会交出错误密钥）。但「改密即失效」只对应用层成立：
     // 旧密文里的 VK 在密码学意义上仍然有效（§4.3 H-2）。真正撤销 = 删掉这条封印，
@@ -120,7 +123,10 @@ pub fn change_master_password(
         // 命令层无 AppHandle，走 eprintln（桌面 GUI 会丢弃，但 Android logcat 可见）。
         eprintln!("[biometric] remove seal after password change failed: {e:?}");
     }
-    Ok(())
+    Ok(ChangeMasterPasswordDto {
+        isolated_backups: isolated.moved,
+        isolate_failed: isolated.error.is_some(),
+    })
 }
 
 /// O-03 导出保险库（需重新验证主密码；二次确认与明文风险提示由前端负责）。

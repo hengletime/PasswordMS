@@ -43,11 +43,11 @@ pub fn generate(opts: &GeneratorOptions) -> CoreResult<String> {
 
     // 每个选中字符集至少取一个，保证强度语义。
     for p in &pools {
-        let idx = rand_below(p.len() as u32)? as usize;
+        let idx = rng::below(p.len() as u32)? as usize;
         chars.push(p[idx]);
     }
     while chars.len() < opts.length as usize {
-        let idx = rand_below(all.len() as u32)? as usize;
+        let idx = rng::below(all.len() as u32)? as usize;
         chars.push(all[idx]);
     }
 
@@ -63,29 +63,13 @@ fn pool(source: &str, exclude_ambiguous: bool) -> Vec<char> {
         .collect()
 }
 
-/// 无模偏置地生成 `[0, n)` 区间内的随机数。
-fn rand_below(n: u32) -> CoreResult<u32> {
-    if n == 0 {
-        return Err(CoreError::Internal("rand_below(0)".to_string()));
-    }
-    // 拒绝采样：丢弃落在 [2^32 - (2^32 % n), 2^32) 的值以消除模偏置。
-    let limit = u32::MAX - (u32::MAX % n);
-    loop {
-        let bytes = rng::random_bytes(4)?;
-        let v = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-        if v < limit {
-            return Ok(v % n);
-        }
-    }
-}
-
 /// Fisher-Yates 洗牌（CSPRNG）。
 fn shuffle(chars: &mut [char]) -> CoreResult<()> {
     if chars.len() <= 1 {
         return Ok(());
     }
     for i in (1..chars.len()).rev() {
-        let j = rand_below((i + 1) as u32)? as usize;
+        let j = rng::below((i + 1) as u32)? as usize;
         chars.swap(i, j);
     }
     Ok(())

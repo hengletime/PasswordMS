@@ -45,3 +45,27 @@ pub fn random_salt16() -> CoreResult<[u8; 16]> {
     fill(&mut out)?;
     Ok(out)
 }
+
+/// 无模偏置地生成 `[0, n)` 区间内的随机数。
+///
+/// 拒绝采样：丢弃落在 `[limit, 2^32)` 的值以消除 `% n` 的模偏置。
+/// **v1.5.29 起从 `generator.rs` 提到这里**：口令短语（`passphrase.rs`）要用同一套
+/// 抽样逻辑。两份实现各写一遍迟早会漂移——一份修了偏置、另一份没修，就是
+/// 「密码生成器安全、短语生成器不安全」这种最难发现的问题。
+///
+/// # Panics
+/// `n == 0` 返回 `Internal` 错误而非 panic：调用方都是「池子非空」的前置校验之后的
+/// 路径，真走到这里说明上游逻辑错了，报错比崩掉更容易定位。
+pub fn below(n: u32) -> CoreResult<u32> {
+    if n == 0 {
+        return Err(CoreError::Internal("rng::below(0)".to_string()));
+    }
+    let limit = u32::MAX - (u32::MAX % n);
+    loop {
+        let bytes = random_bytes(4)?;
+        let v = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if v < limit {
+            return Ok(v % n);
+        }
+    }
+}

@@ -22,6 +22,19 @@ pub struct StatusDto {
     pub locked: bool,
 }
 
+/// 换主密码的结果（1.5.29 / R-5）。
+///
+/// 只回两个字段，**不回路径**：旧备份落在哪个目录属于实现细节，前端只需要知道
+/// 「挪走了几份」与「有没有挪失败」。失败时旧备份还留在原处、仍能被**旧主密码**打开，
+/// 这是用户必须知道的事实，所以要能被界面呈现。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeMasterPasswordDto {
+    /// 被隔离进 `old-key/` 的旧备份份数（0 = 本来就没有旧备份，或隔离失败）。
+    pub isolated_backups: usize,
+    /// 隔离是否失败。`true` 时旧备份仍在原处，界面须提示「旧备份未能归档」。
+    pub isolate_failed: bool,
+}
+
 /// 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10 / §23）。
 ///
 /// **只带状态，不带任何密钥材料**（§18.5 约束 6）：IPC 里永远不出现 VK、`sealed_vk`

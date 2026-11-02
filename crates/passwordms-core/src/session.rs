@@ -19,6 +19,7 @@ use crate::crypto::{kdf, verify};
 use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::vault::{KdfParams, Vault};
+use crate::store::backup::{self, IsolateOutcome};
 use crate::store::container::Container;
 use crate::store::repository::Repository;
 
@@ -307,11 +308,19 @@ impl Session {
     }
 
     /// 修改主密码（O-08）：仅重包裹 VK，不重写任何条目密文。
+    ///
+    /// 返回**旧备份的隔离结果**。换密不会让既有备份失效——旧密文里的 VK 在密码学意义
+    /// 上仍然有效，只有**旧主密码**能开。所以成功后必须把旧代整体挪进
+    /// `backups/old-key/`（[`crate::store::backup::isolate_old_key_backups`]），
+    /// 否则"换了密码，旧的就都失效了"这个用户假设是错的。
+    ///
+    /// 隔离失败**不返回 Err**：密码已经换成功了，回 Err 会让调用方以为失败而重复操作。
+    /// 失败落在 [`IsolateOutcome::error`] 里，由命令层转成可见警告。
     pub fn change_master_password(
         &mut self,
         old_password: &str,
         new_password: &str,
-    ) -> CoreResult<()> {
+    ) -> CoreResult<IsolateOutcome> {
         if new_password.chars().count() < MIN_MASTER_PASSWORD_LEN {
             return Err(CoreError::WeakMasterPassword);
         }
@@ -354,7 +363,11 @@ impl Session {
         let wrapped = keys::wrap_vault_key(&kek_new, &unlocked.repo.vault_key()[..])?;
         unlocked.repo.update_key_material(wrapped, verify_mac)?;
         unlocked.kek = Some(kek_new);
-        Ok(())
+
+        // 【R-5】换密**成功之后**才隔离旧备份，且必须在写 `post-rekey` 快照之前——
+        // 那份是用新材料写的，属于新一代，不能被挪进 `old-key/`。
+        let vault_path = unlocked.repo.path();
+        Ok(backup::isolate_old_key_backups(&vault_path, now_ms()))
     }
 
     /// 采用 Host 下发的 VK（U1/U2 裁定）。
