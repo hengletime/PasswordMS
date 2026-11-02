@@ -25,3 +25,34 @@ const LABEL_KEYS = {
 export function copiedFieldLabelKey(field: CopiedField): string {
   return LABEL_KEYS[field];
 }
+
+/** 复制提示行的可见性输入（D-168）。 */
+export interface CopyHintState {
+  /** 剩余秒数。 */
+  countdown: number;
+  /** 剪贴板里是哪个字段；null = 无人在等提示。 */
+  field: CopiedField | null;
+  /** 复制发生时所在的条目；null = 不知道（例如复制时详情页没有条目）。 */
+  copiedItemId: string | null;
+  /** 当前详情页展示的条目。 */
+  currentItemId: string | null;
+}
+
+/**
+ * 提示行该不该显示（D-168）。
+ *
+ * 剪贴板是**全局**的，但提示行是**条目详情页的一部分**。原先只要倒计时没走完就渲染，
+ * 于是复制了 A 的用户名后切到 B，B 的详情页顶上挂着「已复制用户名，剪贴板将在 23 秒后
+ * 清空」——用户看到的是「我明明没在这个条目上复制过」。判据必须是「这次复制属于哪个条目」。
+ *
+ * `copiedItemId !== null` 那条不能省：详情页没有条目时 `currentItemId` 也是 null，
+ * 两者相等，单靠相等判断会在空详情页上渲染提示。
+ */
+export function shouldShowCopyHint(state: CopyHintState): boolean {
+  return (
+    state.countdown > 0 &&
+    state.field !== null &&
+    state.copiedItemId !== null &&
+    state.copiedItemId === state.currentItemId
+  );
+}

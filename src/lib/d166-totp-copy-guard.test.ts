@@ -55,7 +55,7 @@ describe('D-166 组件接线', () => {
   it('动态口令行里有复制按钮，并调用 copyText(码, "totp")', () => {
     // 区间取「TOTP 行起点 → 剪贴板提示行起点」，整段口令行都在里面（按钮的注释
     // 就在按钮上方，所以不能用注释当终点标记，否则切不到按钮本身）。
-    const totpBlock = section(detail, '{#if totpSecret}', '{#if copyCountdown > 0', 'TOTP 行');
+    const totpBlock = section(detail, '{#if totpSecret}', '{#if copyHintVisible}', 'TOTP 行');
     // 复制按钮的 aria-label 用的是新增的 item.copy_totp。
     expect(totpBlock).toContain("ui.t('item.copy_totp')");
     // 必须把**当前这一屏上的码**交给 copyText，且字段名是 totp。
@@ -63,7 +63,7 @@ describe('D-166 组件接线', () => {
   });
 
   it('码还没算出来（空串）时按钮禁用，不能复制空气还报「已复制」', () => {
-    const totpBlock = section(detail, '{#if totpSecret}', '{#if copyCountdown > 0', 'TOTP 行');
+    const totpBlock = section(detail, '{#if totpSecret}', '{#if copyHintVisible}', 'TOTP 行');
     expect(totpBlock).toContain('disabled={totpCode.length === 0}');
   });
 
@@ -89,7 +89,7 @@ describe('D-166 组件接线', () => {
   });
 
   it('提示行排在所有可复制字段之后（口令复制后提示不能跑到它上面）', () => {
-    const hintAt = detail.indexOf("{#if copyCountdown > 0 && copiedField !== null}");
+    const hintAt = detail.indexOf('{#if copyHintVisible}');
     const totpAt = detail.indexOf('{#if totpSecret}');
     expect(hintAt).toBeGreaterThan(0);
     expect(totpAt).toBeGreaterThan(0);

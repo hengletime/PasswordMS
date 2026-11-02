@@ -127,7 +127,11 @@ describe('D-146 调用点', () => {
     const detail = components[detailKey as string];
     // 提示文案必须带字段占位符（否则「已复制」到底复制了什么，用户只能猜）。
     expect(detail).toContain('common.copied_countdown_field');
-    expect(detail).toMatch(/\{#if copyCountdown > 0 && copiedField !== null\}/);
+    // D-168 起条件收敛成 `copyHintVisible`（纯函数判定：倒计时 > 0、字段非空、
+    // 且这次复制**属于当前条目**）。这里只钉「渲染被这一个条件支配」，
+    // 三个子条件的行为由 d168 用喂数据的方式测。
+    expect(detail).toContain('{#if copyHintVisible}');
+    expect(detail).toContain('shouldShowCopyHint({');
     // 三个复制出口（用户名 / 密码 / 动态口令，D-166 起）都必须传字段名——
     // 少一个就会出现「字段永远是上一次的值」。逗号或右括号都算（调用可能单行收尾）。
     expect(detail.match(/'(?:username|password|totp)'[,)]/g) ?? []).toHaveLength(3);

@@ -4,7 +4,7 @@
   import AttachmentView from './AttachmentView.svelte';
   import SecureNoteView from './SecureNoteView.svelte';
   import { copySecretWithAutoClear, planSecretCopy } from '../lib/clipboard';
-  import { copiedFieldLabelKey, type CopiedField } from '../lib/copied-field';
+  import { copiedFieldLabelKey, shouldShowCopyHint, type CopiedField } from '../lib/copied-field';
   import { formatDateTime } from '../lib/constants';
   import { toAppError } from '../lib/errors';
   import { api } from '../lib/ipc';
@@ -31,6 +31,33 @@
    * 提示行既说不出剪贴板里换成了密码，还会被两路定时器轮流写秒数。
    */
   let copiedField = $state<CopiedField | null>(null);
+  /**
+   * 这次复制发生在哪个条目上（D-168）。
+   *
+   * 提示行是详情页的一部分，剪贴板却是全局的。没有这个字段就无法回答「这条提示属于谁」，
+   * 复制 A 的用户名后切到 B，B 的页面上也会挂着「已复制用户名」——用户以为程序串了。
+   * 复制**成功之后**才写；到点归零时与 `copiedField` 一起清空。
+   */
+  let copiedItemId = $state<string | null>(null);
+
+  /** 提示行只在「复制的那个条目」上显示（判定抽成纯函数，见 `shouldShowCopyHint`）。 */
+  const copyHintVisible = $derived(
+    shouldShowCopyHint({
+      countdown: copyCountdown,
+      field: copiedField,
+      copiedItemId,
+      currentItemId: item?.item_id ?? null,
+    }),
+  );
+
+  /**
+   * 提示行里的字段名（i18n 键）。
+   *
+   * 单独取出而不是在模板里直接调 `copiedFieldLabelKey(copiedField)`：条件收成
+   * `copyHintVisible` 之后，TypeScript 不再能从模板的 `{#if}` 收窄 `copiedField`，
+   * 会报「`CopiedField | null` 不能传成 `CopiedField`」。空串只在提示行不渲染时存在。
+   */
+  const copiedFieldKey = $derived(copiedField === null ? '' : copiedFieldLabelKey(copiedField));
 
   let totpCode = $state('');
   let totpRemaining = $state(0);
@@ -38,14 +65,24 @@
   // 不再每个 30s 窗口 / 每次切回条目都骚扰一次（旧版 toast 会堆积）。
   let totpInvalid = $state(false);
 
-  // 切换条目时复位秘密展示状态。
+  /**
+   * 更换条目时复位秘密展示状态（D-168 修过一次）。
+   *
+   * 判据必须是**条目 id 变了**，不能是「`item` 变了个对象」。复制成功会写使用埋点
+   * （`vault.recordItemUsage` → `load()`），后端返回的新列表让 `selectedItem` 变成
+   * 一个新对象引用——若在这里无条件复位，用户每复制一次，动态口令就被清成空串、
+   * 密码重新藏回去，而口令要等下一个 30 秒窗口才回来（界面上就是「复制完口令它就没了」）。
+   */
+  let lastResetId: string | null = null;
   $effect((): void => {
     const id = item?.item_id ?? null;
+    if (id === lastResetId) {
+      return;
+    }
+    lastResetId = id;
     revealed = false;
     totpCode = '';
     totpInvalid = false;
-    // 引用 id 以建立依赖（切换条目即复位）。
-    void id;
   });
 
   const totpSecret = $derived(
@@ -121,9 +158,12 @@
       if (remaining === 0) {
         // 到点就收起提示行：剪贴板已清空，再挂着「还剩 0 秒」是另一种谎话。
         copiedField = null;
+        copiedItemId = null;
       }
     });
     copiedField = field;
+    // D-168：记下「这次复制属于哪个条目」，切走就不该再显示提示。
+    copiedItemId = item?.item_id ?? null;
     if (plan.warnExpiring) {
       // 只剩几秒就换码：照实复制（用户可能就是急着用），但必须说清它为什么马上消失，
       // 否则「刚复制就没了」看起来像 bug。
@@ -372,14 +412,16 @@
         </div>
       {/if}
 
-      {#if copyCountdown > 0 && copiedField !== null}
+      {#if copyHintVisible}
         <!-- D-146：提示行必须点名「现在剪贴板里是什么」。原先只写「将在 {n} 秒后清空」
              且挂在密码行内，复制用户名时既错位、也不说清复制的是哪个字段。
              D-166：动态口令也有复制按钮后，这行必须排在**所有可复制字段之后**——
-             留在密码行下面，复制口令时提示会跑到口令行上方，看起来像在说另一件事。 -->
+             留在密码行下面，复制口令时提示会跑到口令行上方，看起来像在说另一件事。
+             D-168：条件再收一层「同一条目」——剪贴板全局、提示行属于详情页，
+             复制 A 后切到 B 不该在 B 上显示。 -->
         <p class="pms-hint is-warning" role="status">
           {ui.t('common.copied_countdown_field', {
-            field: ui.t(copiedFieldLabelKey(copiedField)),
+            field: ui.t(copiedFieldKey),
             n: copyCountdown,
           })}
         </p>

@@ -3143,3 +3143,78 @@ nowMs=0、用户更严、用户更宽）——写在组件里的三元表达式�
 - 提示行文案不改：`common.copied_countdown_field` 的 `n` 直接吃实际 ttl，读起来自然。
 - 用户名 / 密码的清空逻辑一字未动（哪怕口令只剩 2 秒，它们照用户的 TTL）。
 - `dedupeKey='clipboard-copy'`、代际号 `gen`、使用埋点全部沿用原路径。
+
+### 6.59 详情页的两处「状态归属」修正（D-168，1.5.24）
+
+#### 6.59.1 复制提示只属于复制的那个条目
+
+**现象**（主人实测）：在条目 A 复制用户名 → 切到条目 B、C、D……每个详情页顶部都挂着
+「已复制用户名，剪贴板将在 23 秒后清空」。用户会认为程序把 A 的东西串到 B 上了。
+
+**根因**：剪贴板是**全局**资源，提示行却是**详情页的一部分**。1.5.22 的渲染条件只有
+`copyCountdown > 0 && copiedField !== null` 两个全局事实，缺「这条提示属于谁」。
+
+**修法**：新增 `copiedItemId`（复制成功时写入当前条目 id），渲染条件收成一个纯函数：
+
+```ts
+shouldShowCopyHint({ countdown, field, copiedItemId, currentItemId })
+  = countdown > 0 && field !== null && copiedItemId !== null && copiedItemId === currentItemId
+```
+
+行为：
+
+| 场景 | 结果 |
+|---|---|
+| 在 A 复制 → 留在 A | 显示，秒数照常递减 |
+| 在 A 复制 → 切到 B | **不显示** |
+| 切走再切回 A（仍在有效期内） | **重新显示**，秒数接着走（不重置） |
+| 倒计时归零 | 字段与归属一起清空 |
+
+⚠️ `copiedItemId !== null` 这条不能省：详情页没有条目时 `currentItemId` 也是 `null`，
+只判相等会在空详情页上渲染提示（`null === null`）。
+
+#### 6.59.2 秘密展示状态按**条目 id** 复位，不按对象引用
+
+**现象**（主人实测）：复制用户名 / 密码 / 动态口令后，动态口令的显示都会消失。
+
+**根因**：复位 effect 原本无条件执行，只靠「读一下 `item`」建立依赖：
+
+```ts
+$effect(() => { revealed = false; totpCode = ''; totpInvalid = false; void item?.item_id; });
+```
+
+而复制成功会写使用埋点 → `vault.recordItemUsage()` → `await this.load()` → `items` 重建
+→ `selectedItem`（getter 里的 `items.find(...)`）返回**新对象引用** → effect 重跑 →
+`totpCode` 被清成空串。更要命的是**重新取码要等下一个 30 秒窗口**（TOTP 那条 effect 的
+`lastWindow` 没变、不会立即重取），所以界面上是「复制完口令，它就没了，几十秒后才回来」。
+`revealed` 同样被反复复位——点开密码后任何列表刷新都会把它藏回去。
+
+**修法**：只认 id。
+
+```ts
+let lastResetId: string | null = null;
+$effect(() => {
+  const id = item?.item_id ?? null;
+  if (id === lastResetId) return;   // 同一条目（哪怕对象换了）不复位
+  lastResetId = id;
+  revealed = false; totpCode = ''; totpInvalid = false;
+});
+```
+
+改条目时仍然复位——换条目还显示上一条的口令，比「不消失」糟得多。
+
+#### 6.59.3 动态口令本来就该一直显示
+
+回答主人的第二问：**没有任何理由隐藏**。口令是每 30 秒作废的公开读数，不是长期秘密；
+藏着它只会让人手抄 6 位数字（两步验证最容易错的一步）。详情页从 1.5.22 起就是常显的，
+本轮修的是「复制后误清空」，不是「改成常显」。
+
+常显还有个附带好处：复制口令后你能直接看着它跳到下一个值，从而知道剪贴板里那个已经
+过期了——这与 §6.58 的「剪贴板跟随口令寿命」是同一个设计意图的两面。
+
+#### 6.59.4 顺带修掉的一处工程噪音
+
+`Reference/`（参考的第三方密码管理器源码）里的 `vite.config.ts` 会被 `svelte-check`
+当作本项目的配置去加载，报 `Cannot find package '@tailwindcss/vite'`。已在
+`package.json` 的 `check` 脚本里显式指定 `--config ./vite.config.ts`——
+svelte-check 的语义是「指定了这个，下面的配置文件一概忽略」。

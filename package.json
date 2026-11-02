@@ -1,14 +1,14 @@
 {
   "name": "passwordms",
   "private": true,
-  "version": "1.5.23",
+  "version": "1.5.24",
   "type": "module",
   "description": "PasswordMS —— 体积小巧、本地优先、零知识的密码管理工具（Tauri 2 + Svelte 5）",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check": "svelte-check --tsconfig ./tsconfig.json --config ./vite.config.ts",
     "check:css": "node scripts/check-css-contract.mjs",
     "test": "vitest run",
     "tauri": "tauri"

@@ -14,7 +14,7 @@ English | [简体中文](README.zh-CN.md)
 
 - **Zero-knowledge encryption**: whole-vault encryption (Argon2id key derivation + XChaCha20-Poly1305 authenticated encryption). The master password is never uploaded and cannot be recovered.
 - **Auto-lock**: locks after 1 / 5 / 15 minutes of inactivity (configurable); on Android it locks immediately when returning from background after the timeout
-- **Clipboard auto-clear**: copied passwords, usernames and one-time codes are wiped after the configured number of seconds (5–120, default 30), with a visible countdown. **One-time codes are the exception** — they live in the clipboard only as long as the code itself does, so you can never paste one that has already rolled over
+- **Clipboard auto-clear**: copied passwords, usernames and one-time codes are wiped after the configured number of seconds (5–120, default 30), with a visible countdown. **One-time codes are the exception** — they live in the clipboard only as long as the code itself does, so you can never paste one that has already rolled over. The countdown notice only shows on **the entry you copied from** — it does not follow you to other entries
 - **Quick unlock**: Windows Hello (PIN / fingerprint / face) or Android fingerprint instead of typing the master password every time; the key stays on this device and is **never** included in backups or sync
 - **URL safety**: only `http` / `https` may be opened; `javascript:`, `file:` and friends are blocked
 
@@ -69,7 +69,7 @@ Grab the latest build from [Releases](https://github.com/hengletime/PasswordMS/r
 
 ## 🔑 Two-factor codes (TOTP)
 
-A login entry can carry a TOTP secret. The detail view keeps showing the current 6-digit code and the seconds left in the period, and rolls over to the next code automatically; the copy button at the end of that row hands the code straight to your clipboard. **The clipboard lives exactly as long as the code does** — 12 seconds left means 12 seconds on the clipboard, and under 5 seconds it tells you the code is about to roll over, so you never paste a stale one and blame your password.
+A login entry can carry a TOTP secret. The detail view keeps showing the current 6-digit code and the seconds left in the period, and rolls over to the next code automatically; the copy button at the end of that row hands the code straight to your clipboard. **The clipboard lives exactly as long as the code does** — 12 seconds left means 12 seconds on the clipboard, and under 5 seconds it tells you the code is about to roll over, so you never paste a stale one and blame your password. **That row never hides** — copying a username or password won't tuck it away, so you can always watch it roll over.
 
 ### Four ways to get the secret in
 
