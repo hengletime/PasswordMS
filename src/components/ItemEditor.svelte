@@ -13,12 +13,27 @@
   import {
     clipboardImageSupported,
     readClipboardImage,
-    captureClipboardBaseline,
-    waitForClipboardImage,
     type ClipboardImage,
   } from '../lib/clipboard-image';
-  import { runWithWindowHidden } from '../lib/screenshot-flow';
-  import { system } from '../lib/ipc';
+  import {
+    captureScreen,
+    cropShotToBlob,
+    disposeShot,
+    type CropRect,
+    type ScreenShot,
+  } from '../lib/screen-capture';
+  import ScreenCrop from './ScreenCrop.svelte';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { tick } from 'svelte';
+
+  /**
+   * 藏窗口后等多久再抓屏。
+   *
+   * 窗口从"被要求隐藏"到"真的从合成器上消失"之间有动画与合成延迟；藏完立刻抓，
+   * 抓到的是还没消失的那一帧 —— 那一帧里正好是本应用自己的界面。180ms 在本机实测
+   * 足够，且用户察觉不到（本来就要等抓屏）。
+   */
+  const HIDE_SETTLE_MS = 180;
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import type { CustomField, ItemDraftDto, ItemDto } from '../types';
@@ -85,17 +100,25 @@
   // 刻意不用 $state：它是设备句柄，不是渲染数据；若做成响应式，下面的 effect 会因
   // 「赋值 scan」而重跑，等于每启动一次摄像头就重启一次。
   let scan: CameraScan | null = null;
-  /** 截图流程进行中：按钮禁用，并显示「框选完成后自动读取」。 */
+  /** 截图流程进行中：按钮禁用（藏窗口 + 抓屏 + 还原，几百毫秒的忙期）。 */
   let shotPending = $state(false);
   /** 读剪贴板 + 解码的进行中标记（防连点；这条路径有几十毫秒的忙期）。 */
   let pastePending = $state(false);
   /**
-   * 截图等待的取消句柄。
+   * 抓下来的屏幕快照，非 `null` 时框选层展开。
    *
-   * 不在 `$state` 里、也不靠 `shotPending` 判断：等待最长 60 秒，用户中途离开编辑器时
-   * 必须**立刻**停 —— 否则组件已卸载、轮询还在跑，读到的图无处可去。
+   * 它是**冻结**的画面：抓下来之后屏幕怎么变都与它无关，所以窗口可以立刻还原，
+   * 用户框到的永远是抓取那一刻的内容。这正是 1.5.20 缺的东西 ——
+   * 那次把窗口还给了用户，画面却是活的，窗口自己被框了进去。
    */
-  let shotAbort: AbortController | null = null;
+  let cropShot = $state<ScreenShot | null>(null);
+  /**
+   * 框选层里显示的提示文案。
+   *
+   * 复用 `totpHint` 而不是另开一份：字段下方与框选层说的是同一件事，
+   * 分两份状态必然出现「框选层说没识别到、字段下方还挂着上一条」的错位。
+   */
+  const cropHint = $derived(totpHint === null ? null : ui.t(totpHint.key, totpHint.params));
 
   /**
    * 消费一张码解出的文本。
@@ -146,16 +169,24 @@
     scanCameraFailed = false;
   }
 
-  async function ingestImage(file: Blob): Promise<void> {
+  /**
+   * 解码一张图并把结果落到表单。
+   *
+   * @returns 是否**成功填入**。框选层用它决定要不要收起：填成功了就退，
+   * 没识别到就留在原地让用户再框一次（退出重来要多付一次整屏抓取）。
+   */
+  async function ingestImage(file: Blob): Promise<boolean> {
     const text = await decodeQrFromBlob(file);
     if (text === null) {
       totpHint = { key: 'editor.scan_no_qr' };
-      return;
+      return false;
     }
     if (!handleScannedText(text)) {
       // 解出了码但不是两步验证码：明确说出来，别表现成「点了没反应」。
       totpHint = { key: 'editor.scan_not_otpauth' };
+      return false;
     }
+    return true;
   }
 
   async function pickImage(event: Event): Promise<void> {
@@ -181,9 +212,6 @@
       case 'unsupported':
         totpHint = { key: 'editor.paste_unsupported' };
         return;
-      case 'timeout':
-        totpHint = { key: 'editor.shot_timeout' };
-        return;
       default:
         totpHint = { key: 'editor.paste_failed' };
     }
@@ -204,50 +232,100 @@
   }
 
   /**
-   * 「截图」：藏起窗口 → 唤起系统截图工具 → 框选完成后自动把图接过来。
+   * 「截图」：藏窗口 → **自己抓屏** → 还原窗口 → 在冻结的画面上框选。
    *
-   * 三个决定值得写下来：
-   * 1. **必须藏窗口**。点「截图」的动机十有八九是「二维码就在我这个窗口后面」
-   *    （网页在浏览器里、App 在手机上）；窗口不藏，用户框到的是 PasswordMS 自己的界面。
-   * 2. **先取 baseline 再唤起**。取晚了会把刚截好的新图当成旧图，死等到超时 ——
-   *    但 baseline 只是加速信号，拿不到时 `waitForClipboardImage` 会退化为指纹轮询。
-   * 3. 唤起后只藏 1.2 秒就恢复：覆盖层一出现屏幕已经冻结，恢复窗口不影响框选内容；
-   *    而用户中途按 Esc 时，窗口也不会一直不见。
+   * 上一版（1.5.20）走的是系统截图工具 `ms-screenclip:`，并且相信「覆盖层一出现
+   * 屏幕就冻结了」，于是 1.2 秒后把窗口还给了用户。实测：**覆盖层是活画面**，
+   * 窗口一回来就出现在框里 —— 用户还没开始框，图里已经有 PasswordMS 了。
+   *
+   * 现在把顺序倒过来：**先抓，再还原**。抓下来的像素不会变，用户框哪儿就是哪儿，
+   * 窗口什么时候回来都无所谓。这也顺带解决了「用户按 Esc 取消后窗口回不来」——
+   * 框选层是我们自己的，取消立刻生效。
+   *
+   * 窗口藏失败（缺权限 / 非 Tauri）不阻断流程：抓到的图里会包含本应用窗口，
+   * 但至少功能还能用，用户框的时候能看见该怎么绕开。
    */
   async function startScreenshot(): Promise<void> {
     if (shotPending) {
       return;
     }
     totpHint = null;
-    shotAbort?.abort();
-    const controller = new AbortController();
-    shotAbort = controller;
     shotPending = true;
+    // 句柄本身也可能拿不到（非 Tauri 运行时）。放在 try 里取，否则这一步抛错会把
+    // `shotPending` 永远卡在 true —— 按钮从此点不动，而且没有任何提示。
+    let win: ReturnType<typeof getCurrentWindow> | null = null;
+    let hidden = false;
     try {
-      const baseline = await captureClipboardBaseline();
       try {
-        await runWithWindowHidden(() => system.openScreenshotTool());
+        win = getCurrentWindow();
+        await win.hide();
+        hidden = true;
       } catch {
-        // 平台不支持（非 Windows）或系统调不起来。窗口已由 runWithWindowHidden 恢复，
-        // 这里只负责说话 —— 按钮按下去没有任何反应是最难排查的一种失败。
-        totpHint = { key: 'editor.shot_unavailable' };
+        // 权限缺失 / 非 Tauri 运行时：不藏也要把截图做下去。
+      }
+      if (hidden) {
+        // 等窗口真的从合成器上消失。藏完立刻抓，抓到的是还没消失的那一帧 ——
+        // 这一帧里正好是本应用自己的界面。
+        await new Promise((resolve) => setTimeout(resolve, HIDE_SETTLE_MS));
+      }
+      const result = await captureScreen();
+      if (result.kind !== 'ok') {
+        totpHint = {
+          key: result.kind === 'unsupported' ? 'editor.shot_unavailable' : 'editor.shot_failed',
+        };
         return;
       }
-      totpHint = { key: 'editor.shot_waiting' };
-      await consumeClipboard(await waitForClipboardImage(baseline, controller.signal));
+      disposeShot(cropShot);
+      cropShot = result.shot;
+      // 等 Svelte 把框选层渲染出来再还原窗口：否则窗口先出现、编辑器闪一下，
+      // 用户会以为「点了截图，什么都没发生」。
+      await tick();
     } finally {
-      shotPending = false;
-      if (shotAbort === controller) {
-        shotAbort = null;
+      if (hidden && win !== null) {
+        try {
+          await win.show();
+          await win.setFocus();
+        } catch {
+          // 恢复失败无处可退：窗口还在任务栏，用户至少能再点一次。
+        }
       }
+      shotPending = false;
     }
   }
 
-  // 卸载即取消等待；顺手把摄像头也交代清楚（面板那条 effect 只管面板自己的生命周期）。
+  /** 收掉框选层并把快照的像素内存还回去（4K 一张 33MB，不能等 GC）。 */
+  function closeCrop(): void {
+    disposeShot(cropShot);
+    cropShot = null;
+  }
+
+  /**
+   * 框选完成 → 裁出那一块 → 解码。
+   *
+   * 失败（这块里没有码 / 不是 otpauth）时**不收框选层**：提示留在画面上，
+   * 用户可以直接再框一次。收掉的话，重来要再藏一次窗口再抓一次屏。
+   */
+  async function onCropPick(rect: CropRect): Promise<void> {
+    const shot = cropShot;
+    if (shot === null) {
+      return;
+    }
+    totpHint = null;
+    const blob = await cropShotToBlob(shot, rect);
+    if (blob === null) {
+      totpHint = { key: 'editor.paste_failed' };
+      return;
+    }
+    if (await ingestImage(blob)) {
+      closeCrop();
+    }
+  }
+
+  // 卸载时把快照的像素还回去（面板那条 effect 只管摄像头自己的生命周期）。
   $effect((): (() => void) => {
     return () => {
-      shotAbort?.abort();
-      shotAbort = null;
+      disposeShot(cropShot);
+      cropShot = null;
     };
   });
 
@@ -709,6 +787,12 @@
     <button class="pms-btn is-primary" type="submit" disabled={!canSave}>{ui.t('editor.save')}</button>
   </div>
 </form>
+
+<!-- D-165：冻结快照的框选层。放在 form 之外：它是覆盖整个窗口的一层，
+     夹在表单里会被 .editor-scroll 的滚动容器影响（fixed 不受，但语义上也该在外层）。 -->
+{#if cropShot}
+  <ScreenCrop shot={cropShot} hint={cropHint} onpick={(rect) => void onCropPick(rect)} oncancel={closeCrop} />
+{/if}
 
 <style>
   /* D-92：flex:1 桌面/移动统一生效——.pane 桌面端 display:contents，form.editor

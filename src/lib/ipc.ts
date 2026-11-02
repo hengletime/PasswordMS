@@ -53,13 +53,9 @@ export const system = {
   clearSecretIfOwn: (gen: number): Promise<boolean> =>
     invoke<boolean>('clear_secret_if_own', { gen }),
   openUrl: (url: string): Promise<void> => invoke<void>('open_url', { url }),
-  // D-163：唤起系统截图工具（Windows 的 `ms-screenclip:`）。截好的图落在**系统剪贴板**，
-  // 由 `clipboard-image.ts` 接手解码 —— 命令本身不返回任何像素。
-  openScreenshotTool: (): Promise<void> => invoke<void>('open_screenshot_tool'),
-  // D-163：剪贴板序号（O(1)）。用来判断「用户框选完了、剪贴板真换了」，
-  // 而不是反复读整张位图（4K 截图一张 33MB）。非 Windows 返回 null。
-  clipboardSequenceNumber: (): Promise<number | null> =>
-    invoke<number | null>('clipboard_sequence_number'),
+  // D-165：抓一张整屏快照。返回的是**原始字节**：前 8 字节宽高（u32 小端），其后 RGBA。
+  // 走裸字节而不是 JSON 数组 —— 4K 一张 33MB，序列化成数字数组体积与解析开销都翻十倍。
+  captureScreen: (): Promise<ArrayBuffer> => invoke<ArrayBuffer>('capture_screen'),
   vaultFileInfo: (): Promise<VaultFileInfoDto> => invoke<VaultFileInfoDto>('vault_file_info'),
   // D-76：保险库体积构成（只读：不解密 blob、不写任何字节）+ 压缩（重写容器，只留活跃帧）。
   // 两条命令都不带参数 —— 后端签名是 `vault_compaction_stats(state)` / `compact_vault(app)`；

@@ -81,9 +81,9 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
-    # D-163：`GetClipboardSequenceNumber`（截图后判断剪贴板是否真被替换，
-    # 避免为了等新图去反复读整张位图 —— 4K 截图一次 33MB）。
-    "Win32_System_DataExchange",
+    # D-165：`BitBlt` / `GetDIBits` / `GetSystemMetrics` —— 自己抓屏。系统截图工具的
+    # 覆盖层是**活的**，窗口一还原就会被框进去，所以这条路走不通。
+    "Win32_Graphics_Gdi",
     # 守门测试用 `RtlGetVersion` 判 build（决定 interop 是否该可用）。
     "Win32_System_LibraryLoader",
     # IUserConsentVerifierInterop / RoGetActivationFactory：Windows 11 22000+ 才有，

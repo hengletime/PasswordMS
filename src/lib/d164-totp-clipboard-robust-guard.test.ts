@@ -7,22 +7,14 @@
 // 于是功能明明在，表现却都是「按了没反应」。本文件钉住四件事，防止回退：
 //   ① 粘贴三路判定齐全（有图 / 有文本 / 两者皆无 → 原生读取）；
 //   ② 文本粘贴必须放行（不然往密码框粘文字会被吃掉）；
-//   ③ 截图先藏窗口（二维码就在窗口后面），恢复放 finally；
-//   ④ 等新图的两级判据：序号是加速不是唯一；空/旧图都必须继续等，不许当结果交出。
+//   ③ 文本 / 文件 / 两者皆无 三路都不能互相吞掉。
+// （截图流程的判据已迁到 D-165：用系统截图工具那条路已经被证明做不到「冻结」）
 
-import { describe, expect, it, vi } from 'vitest';
-
-// 只测纯函数，挡掉两个运行时依赖，避免把 IPC / 插件拉进来。
-vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ readImage: vi.fn() }));
-vi.mock('./ipc', () => ({ system: {} }));
-
-import { fingerprintOf } from './clipboard-image';
+import { describe, expect, it } from 'vitest';
 
 const raw = import.meta.glob(
   [
     '../components/ItemEditor.svelte',
-    './clipboard-image.ts',
-    './screenshot-flow.ts',
     '../../src-tauri/capabilities/default.json',
   ],
   { query: '?raw', import: 'default', eager: true },
@@ -45,7 +37,6 @@ function section(text: string, open: string, close: string): string {
 }
 
 const editor = src('/ItemEditor.svelte');
-const lib = src('/clipboard-image.ts');
 
 describe('D-164：Ctrl+V 的三路判定', () => {
   // 结束标记用清理函数的开头，而不是某个 `addEventListener`：
@@ -129,41 +120,8 @@ describe('D-164：Ctrl+V 的三路判定', () => {
   });
 });
 
-describe('D-164：截图先藏窗口，恢复放 finally', () => {
-  const shot = section(editor, 'async function startScreenshot(', '\n  }');
 
-  it('⑯ 唤起截图工具必须包在「藏窗口」里（二维码就在窗口后面）', () => {
-    expect(shot, 'startScreenshot 切片失败').not.toBe('');
-    const hideAt = shot.indexOf('runWithWindowHidden(');
-    const openAt = shot.indexOf('system.openScreenshotTool()');
-    expect(hideAt, '截图前没有藏窗口：框到的是我们自己').toBeGreaterThan(-1);
-    expect(openAt, '没有唤起系统截图工具').toBeGreaterThan(-1);
-    expect(openAt, 'openScreenshotTool 没在 runWithWindowHidden 里').toBeGreaterThan(hideAt);
-  });
-
-  it('⑰ 窗口恢复必须在 finally 里，且以 hidden 为条件', () => {
-    const flow = src('/screenshot-flow.ts');
-    const finallyAt = flow.indexOf('} finally {');
-    expect(finallyAt, '没有 finally：action 抛错时窗口会一直藏着').toBeGreaterThan(-1);
-    const after = flow.slice(finallyAt);
-    expect(after, 'finally 里没有恢复窗口').toContain('win.show()');
-    expect(after, '恢复后没有取回焦点：用户还得再点一下').toContain('win.setFocus()');
-    // 恢复必须以「真的藏过」为条件：无条件 show 会把用户自己最小化的窗口也弹出来。
-    const guardAt = after.indexOf('if (hidden)');
-    expect(guardAt, '恢复没有 hidden 前置判断').toBeGreaterThan(-1);
-    expect(after.indexOf('win.show()'), 'show 跑在判断之前，条件形同虚设').toBeGreaterThan(
-      guardAt,
-    );
-  });
-
-  it('⑱ 唤起前先等窗口消失（否则覆盖层截到的是还没消失的那一帧）', () => {
-    const flow = src('/screenshot-flow.ts');
-    const hideAt = flow.indexOf('await win.hide()');
-    const settleAt = flow.indexOf('await delay(HIDE_SETTLE_MS)');
-    expect(hideAt).toBeGreaterThan(-1);
-    expect(settleAt, '藏完立刻唤起：动画未结束，截到的还是自己').toBeGreaterThan(hideAt);
-  });
-
+describe('D-164：截图的窗口权限仍然要齐（流程改到 D-165，权限没变）', () => {
   it('⑲ 权限齐全（缺 hide/show 会让「截图」闪一下就回来）', () => {
     const caps = src('capabilities/default.json');
     expect(caps, '权限文件读取失败').toContain('clipboard-manager:allow-read-image');
@@ -177,84 +135,5 @@ describe('D-164：截图先藏窗口，恢复放 finally', () => {
   });
 });
 
-describe('D-164：等新图的两级判据', () => {
-  const wait = section(lib, 'export async function waitForClipboardImage(', '\n}');
-
-  it('⑳ 等待函数切片成功', () => {
-    expect(wait).not.toBe('');
-    expect(wait).toContain('while (Date.now() < deadline)');
-  });
-
-  it('㉑ 序号读不到时必须持续轮询，不能「只给一次机会」', () => {
-    expect(wait, '缺少无序号时的直读节奏常量').toContain('FALLBACK_READ_INTERVAL_MS');
-    expect(wait, '又回到「拿不到序号就只试一次」的老写法').not.toContain('if (baseline === null) {');
-    // 退化分支必须在循环里（否则等于没循环）
-    const loopAt = wait.indexOf('while (');
-    const fallbackAt = wait.indexOf('FALLBACK_READ_INTERVAL_MS');
-    expect(fallbackAt).toBeGreaterThan(loopAt);
-  });
-
-  it('㉒ 读到空剪贴板要继续等，不许当结果返回', () => {
-    const at = wait.indexOf("if (got.kind === 'empty') {");
-    expect(at, '没有处理「读到空」的情况').toBeGreaterThan(-1);
-    const body = wait.slice(at, wait.indexOf('}', at));
-    expect(body, '读到空就 continue，用户还在框选').toContain('continue');
-    expect(body, '读到空就返回，会把「还没框完」误报成失败').not.toContain('return');
-  });
-
-  it('㉓ 读到「截图前那张旧图」要继续等，不许填进去', () => {
-    const at = wait.indexOf('got.fingerprint === baseline.fingerprint');
-    expect(at, '缺少旧图判定：会把上一个二维码填进表单').toBeGreaterThan(-1);
-    const body = wait.slice(at, wait.indexOf('}', at));
-    expect(body, '旧图必须 continue').toContain('continue');
-    expect(body, '旧图不许当结果交出').not.toContain('return got');
-  });
-
-  it('㉔ 指纹必须来自真实像素，不能只看尺寸', () => {
-    const fp = section(lib, 'function fingerprintOf(', '\n}');
-    expect(fp, '指纹函数切片失败').not.toBe('');
-    expect(fp, '指纹没混入宽度').toContain('mix(width)');
-    expect(fp, '指纹没混入高度').toContain('mix(height)');
-    expect(fp, '指纹没混入像素：所有同尺寸截图会被当成同一张').toContain('mix(rgba[at])');
-    expect(lib, 'readClipboardImage 没把指纹带出来').toContain(
-      'fingerprint: fingerprintOf(width, height, rgba)',
-    );
-  });
-
-  it('㉕ 等待上限不超过 45 秒（窗口已恢复，没有理由让用户干等一分钟）', () => {
-    const m = /const WAIT_TIMEOUT_MS = ([\d_]+);/.exec(lib);
-    expect(m, '找不到等待上限常量').not.toBeNull();
-    const ms = Number((m as RegExpExecArray)[1].replace(/_/g, ''));
-    expect(ms).toBeGreaterThan(5_000);
-    expect(ms, '等待太久：取消截图后用户能察觉到一个卡住的流程').toBeLessThanOrEqual(45_000);
-  });
-});
-
-describe('D-164：指纹必须真的跟着像素走（行为判据）', () => {
-  // 文本判据只能证明「代码里调了 mix(rgba)」。如果有人加一行提前 return，
-  // 文本照样绿，而用户会看到「每次截图都被当成旧图，永远填不进去」。
-  // 唯一能挡住这种改动的判据，是喂两份数据看结果是否不同。
-
-  it('㉖ 同尺寸、只差一个像素 → 指纹必须不同', () => {
-    const w = 16;
-    const h = 16;
-    const a = new Uint8Array(w * h * 4).fill(200);
-    const b = new Uint8Array(w * h * 4).fill(200);
-    b[0] = 10;
-    expect(fingerprintOf(w, h, b), '指纹没跟着像素变：所有截图都会被视为同一张').not.toBe(
-      fingerprintOf(w, h, a),
-    );
-    expect(fingerprintOf(w, h, a), '同一份数据两次结果不一致').toBe(fingerprintOf(w, h, a));
-  });
-
-  it('㉗ 尺寸不同 → 指纹不同（1080p 与 4K 不能被当成同一张）', () => {
-    const px = new Uint8Array(8 * 8 * 4).fill(120);
-    const taller = new Uint8Array(8 * 9 * 4).fill(120);
-    expect(fingerprintOf(8, 9, taller)).not.toBe(fingerprintOf(8, 8, px));
-  });
-
-  it('㉘ 像素长度不足时不许崩溃（插件侧异常不该把编辑器带下去）', () => {
-    expect(() => fingerprintOf(64, 64, new Uint8Array(8))).not.toThrow();
-    expect(fingerprintOf(64, 64, new Uint8Array(8))).toContain('invalid');
-  });
-});
+// 截图流程本身（抓屏、冻结快照、框选）已整体重做，判据迁到 d165-screen-crop-guard.test.ts。
+// 这里留下的只有粘贴链路与权限：它们不依赖「用什么方式拿到一张图」。

@@ -1981,3 +1981,29 @@ CSS 契约 0 FAIL 6 WARN / `fmt` 干净 / clippy 代码警告 0 /
 `check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN / `fmt` 干净 / clippy 代码警告 0 /
 IPC 命令数不变（77/73，本轮只加窗口权限不加命令）。
 
+
+### 13.41 D-165：自己抓屏 + 冻结快照框选（v1.5.21，2026-11-02）
+
+**改动面**：
+
+| 文件 | 改动 |
+|---|---|
+| `src-tauri/src/commands/system_cmd.rs` | **删** `open_screenshot_tool` / `clipboard_sequence_number`；**加** `capture_screen` + `capture_virtual_screen()`（GDI `BitBlt`/`GetDIBits`，虚拟桌面，`biHeight` 取负，BGRA→RGBA 就地交换，裸字节返回） |
+| `src-tauri/Cargo.toml` | 打开 `Win32_Graphics_Gdi`；**去掉** `Win32_System_DataExchange`（序号命令已删，留着是死 feature） |
+| `src/lib/screen-capture.ts` | 新增：`captureScreen()` / `clampRect()` / `cropShotToBlob()` / `disposeShot()` |
+| `src/components/ScreenCrop.svelte` | 新增：冻结快照 + 拖框 + Esc + 失败提示（`z-index: 200`，高于通用模态） |
+| `src/components/ItemEditor.svelte` | `startScreenshot` 改「先抓再还原」；新增 `cropShot` / `cropHint` / `onCropPick` / `closeCrop`；`ingestImage` 改为回报成败 |
+| `src/lib/clipboard-image.ts` | 删 `captureClipboardBaseline` / `waitForClipboardImage` / `fingerprintOf` / `sleep`；`ClipboardImage` 去掉 `timeout` 与 `fingerprint` |
+| `src/lib/screenshot-flow.ts` | **删除**（`runWithWindowHidden` 已被「抓完再还原」取代，不需要延时恢复） |
+| `src/lib/ipc.ts` | `openScreenshotTool` / `clipboardSequenceNumber` → `captureScreen(): Promise<ArrayBuffer>` |
+| i18n ×4 | 删 `shot_waiting` / `shot_timeout`；新增 `crop_hint` / `shot_failed`；`shot_unavailable` 改口径（不再提系统截图工具） |
+| 测试 | 新增 `d165-screen-crop-guard.test.ts` 23 例；`d163` 删第⑥例、`d164` 保留粘贴链路与权限（截图判据整体迁往 d165）；`ipc-contract` 76/72 |
+
+**门禁读数（2026-11-02 实跑）**：前端 **77 文件 705 例全绿** / `check` 0 error 0 warning /
+CSS 契约 0 FAIL 6 WARN（`ScreenCrop.svelte` 组件内新增 7 条布局规则，未改 `global.css`）/
+`cargo fmt --all` 干净 / `clippy -p passwordms --all-targets` 代码警告 0 /
+`cargo test -p passwordms-core` 全通过。**变异 10 条全真红**。
+
+**一处必须记下来的自我修正**：1.5.20 的注释与文档都写着「覆盖层一出现屏幕就冻结」——
+这句话是错的，而且它足够可信，所以没人去验。现在这条链路上每一个「所以可以……」的推断
+都必须能被一次变异或一次实测推翻，否则不写进注释。

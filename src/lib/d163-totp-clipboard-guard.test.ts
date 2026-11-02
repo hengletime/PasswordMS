@@ -4,11 +4,10 @@
 // 而用户看到二维码的第一反应是当场截图、当场 Ctrl+V，不会去点一个他并不知道要点的按钮。
 // 于是表现成「截图在剪贴板里，按了没反应」——和没做这个功能一模一样。
 //
-// 本文件钉的是四件容易在后续改动中被悄悄改坏的事：
+// 本文件钉的是几件容易在后续改动中被悄悄改坏的事：
 //   ① 粘贴监听不得再依赖 `scanOpen`（否则又回到"被隐形开关挡着"）；
 //   ② 只有真拿到图片才 `preventDefault`（否则用户往密码框粘文字会被吃掉）；
-//   ③ 截图流程的 baseline 必须在**唤起工具之前**取（取晚了＝把新图当旧图，等到超时）；
-//   ④ `readImage()` 的返回是**未压缩 RGBA**，必须经 canvas 编成真 PNG
+//   ③ `readImage()` 的返回是**未压缩 RGBA**，必须经 canvas 编成真 PNG
 //      （插件文档那句 `new Blob([rgba])` 造出来的不是图片文件）。
 
 import { describe, expect, it } from 'vitest';
@@ -109,35 +108,12 @@ describe('D-163：桌面端三个入口与平台分支', () => {
     expect(block, '移动端不该出现截图').not.toContain('editor.totp_screenshot');
   });
 
-  it('⑥ 截图流程：baseline 必须在唤起工具**之前**取', () => {
-    const editor = src('/ItemEditor.svelte');
-    const body = section(editor, 'async function startScreenshot(', '\n  }');
-    expect(body, 'startScreenshot 切片失败').not.toBe('');
-    // D-164 起 baseline 的取法收进 `captureClipboardBaseline()`：断言因此跨两处，
-    // 比只看函数体更强 —— 它同时要求「封装里真的读了序号」，否则基线永远是 null。
-    const baseAt = body.indexOf('captureClipboardBaseline()');
-    const openAt = body.indexOf('system.openScreenshotTool()');
-    expect(baseAt, '没有取剪贴板 baseline').toBeGreaterThan(-1);
-    expect(openAt, '没有唤起系统截图工具').toBeGreaterThan(-1);
-    expect(
-      openAt,
-      'baseline 取晚了：用户手快框选完，新图会被当成旧图，于是等到超时',
-    ).toBeGreaterThan(baseAt);
-
-    const lib = section(src('/clipboard-image.ts'), 'export async function captureClipboardBaseline(', '\n}');
-    expect(lib, 'captureClipboardBaseline 切片失败').not.toBe('');
-    expect(lib, 'baseline 里没读剪贴板序号：截图后只能盲读等超时').toContain(
-      'system.clipboardSequenceNumber()',
-    );
-  });
-
   it('⑦ 每种剪贴板结局都有可见文案（不许静默失败）', () => {
     const body = section(src('/ItemEditor.svelte'), 'async function consumeClipboard(', '\n  }');
     expect(body, 'consumeClipboard 切片失败').not.toBe('');
     for (const key of [
       'editor.paste_empty',
       'editor.paste_unsupported',
-      'editor.shot_timeout',
       'editor.paste_failed',
     ]) {
       expect(body, `结局缺文案：${key}`).toContain(key);
@@ -171,9 +147,9 @@ describe('D-163：四语言文案齐全', () => {
     'paste_empty',
     'paste_unsupported',
     'paste_failed',
-    'shot_waiting',
-    'shot_timeout',
     'shot_unavailable',
+    'shot_failed',
+    'crop_hint',
   ];
   for (const locale of ['zh-CN', 'zh-TW', 'en-US', 'th']) {
     it(`${locale} 覆盖本轮全部新键`, () => {
