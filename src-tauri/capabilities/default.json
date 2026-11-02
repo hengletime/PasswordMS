@@ -9,6 +9,7 @@
     "clipboard-manager:default",
     "clipboard-manager:allow-read-text",
     "clipboard-manager:allow-write-text",
+    "clipboard-manager:allow-read-image",
     "fs:default",
     "core:window:allow-set-theme",
     "core:window:allow-minimize",

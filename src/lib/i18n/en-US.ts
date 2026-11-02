@@ -176,6 +176,15 @@ export const enUS: Messages = {
     // D-162: two-factor QR code (camera scan / import image).
     totp_scan: 'Scan code',
     totp_scan_image: 'From image',
+    // D-163: the two entries that fit "the code is on this very screen".
+    totp_paste: 'Paste screenshot',
+    totp_screenshot: 'Screenshot',
+    paste_empty: 'No image on the clipboard. Take a screenshot first, then paste.',
+    paste_unsupported: 'This platform cannot read images from the clipboard. Use "From image".',
+    paste_failed: 'Could not read the clipboard image. Use "From image" instead.',
+    shot_waiting: 'Screenshot tool opened — the image will be picked up once you finish selecting',
+    shot_timeout: 'No new screenshot arrived. Try "Screenshot" again, or paste the image directly.',
+    shot_unavailable: 'Could not open the screenshot tool. Use "From image" or "Paste screenshot".',
     scan_hint: 'Point at the QR code, or paste a screenshot / pick an image file',
     scan_no_qr: 'No QR code found. Try a clearer image.',
     scan_not_otpauth: 'This is not a two-factor authentication QR code',

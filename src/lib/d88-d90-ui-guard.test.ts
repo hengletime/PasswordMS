@@ -21,7 +21,12 @@ describe('D-89：登录表单必须有备注编辑框', () => {
   it('登录分支内含 ed-notes textarea，绑定 notes 状态（导入的备注不再「看得见改不了」）', () => {
     const loginAt = src.indexOf("{#if kind === 'login'}");
     expect(loginAt).toBeGreaterThan(-1);
-    const elseAt = src.indexOf('{:else}', loginAt);
+    // 收尾标记必须带**行首两空格缩进**（D-163 教训）：登录分支内部后来长出了
+    // 自己的 `{:else}`（TOTP 字段按平台分入口），裸 `indexOf('{:else}')` 会切在
+    // 那里，把后半截表单（含备注框）挡在切片之外，于是这个测试假红。
+    // 判据要贴着「这一层的 else」写，而不是「随便哪个 else」。
+    const elseAt = src.indexOf('\n  {:else}', loginAt);
+    expect(elseAt, '登录分支必须有收尾的 {:else}').toBeGreaterThan(loginAt);
     const loginBlock = src.slice(loginAt, elseAt);
     const textareaAt = loginBlock.indexOf('id="ed-notes"');
     expect(textareaAt, '登录表单必须有备注 textarea').toBeGreaterThan(-1);

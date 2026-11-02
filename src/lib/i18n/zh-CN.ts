@@ -178,6 +178,15 @@ export const zhCN = {
     // D-162：两步验证二维码（扫码 / 从图片导入）。
     totp_scan: '扫码',
     totp_scan_image: '从图片',
+    // D-163：桌面端两个更贴近「码在你眼前这块屏幕上」的入口。
+    totp_paste: '粘贴截图',
+    totp_screenshot: '截图',
+    paste_empty: '剪贴板里没有图片。先截图（或复制图片），再点「粘贴截图」',
+    paste_unsupported: '这个平台读不到剪贴板图片，请改用「从图片」',
+    paste_failed: '读取剪贴板图片失败，请改用「从图片」',
+    shot_waiting: '已打开系统截图工具，框选完成后会自动读取',
+    shot_timeout: '没等到新截图。可以再点一次「截图」，或直接把截图粘进输入框',
+    shot_unavailable: '打不开系统截图工具，请改用「从图片」或「粘贴截图」',
     scan_hint: '对准二维码；也可以把二维码截图后粘贴，或选择图片文件',
     scan_no_qr: '没识别到二维码，换一张更清晰的图再试',
     scan_not_otpauth: '这不是两步验证二维码',

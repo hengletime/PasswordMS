@@ -225,6 +225,9 @@ pub fn run() {
             commands::system_cmd::copy_secret,
             commands::system_cmd::clear_secret_if_own,
             commands::system_cmd::open_url,
+            // D-163：桌面端「截图」入口（唤起系统截图工具，图片由前端从剪贴板接手）
+            commands::system_cmd::open_screenshot_tool,
+            commands::system_cmd::clipboard_sequence_number,
             commands::system_cmd::vault_file_info,
             commands::system_cmd::vault_compaction_stats,
             commands::system_cmd::compact_vault,

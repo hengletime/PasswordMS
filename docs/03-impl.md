@@ -1910,3 +1910,42 @@ D-158 那轮已经吃过一次这个教训：界面清了、数据还筛着，�
 前端 **75 文件 656 例全绿**（较 1.5.17 的 71/623 新增 2 文件 33 例 + 存量两条断言跟改）/
 `check` 0 error 0 warning / CSS 契约 0 FAIL 6 WARN（新增 4 条布局类，未引入任何外观规则）/
 Rust 零改动 / `fmt` 干净 / clippy 代码警告 0。
+
+---
+
+### 13.39 D-163：粘贴脱离面板 + 桌面截图入口（v1.5.19，2026-11-02）
+
+#### 13.39.1 改动清单
+
+| 文件 | 改动 |
+|------|------|
+| `src/lib/clipboard-image.ts` | **新增**。`readClipboardImage()`（原生 `readImage` → `size/rgba` → `ImageData` → PNG）、`waitForClipboardImage()`（序号轮询 + abort）、`clipboardImageSupported()` |
+| `src-tauri/src/commands/system_cmd.rs` | **新增** `open_screenshot_tool`（唤起 `ms-screenclip:`，`CREATE_NO_WINDOW`）、`clipboard_sequence_number`（`GetClipboardSequenceNumber`）；非 Windows 分别返回 `ERR_NOT_SUPPORTED` / `None` |
+| `src-tauri/src/lib.rs` | 注册两条新命令（77/77） |
+| `src-tauri/capabilities/default.json` | 新增 `clipboard-manager:allow-read-image` |
+| `src-tauri/Cargo.toml` | `windows` 加 `Win32_System_DataExchange` feature |
+| `src/components/ItemEditor.svelte` | 粘贴 effect **去掉 `scanOpen` 条件**；新增「粘贴截图 / 截图」入口 + `pasteImage()` / `startScreenshot()` / `consumeClipboard()`；卸载时 abort 截图等待 |
+| `src/components/common/Icon.svelte` | 新增 `clipboard` / `crop` 两个图标（截图用裁切框，**不用相机**） |
+| `src/lib/ipc.ts` | `system.openScreenshotTool` / `system.clipboardSequenceNumber` |
+| `src/lib/i18n/*.ts` | 8 个键 ×4 语言（两个入口 + 六种结局文案） |
+| `src/lib/d163-totp-clipboard-guard.test.ts` | **新增** 13 例 |
+| `src/lib/ipc-contract.test.ts` | 命令计数 75 → 77、名字 71 → 73（**不做平台分立**：非 Windows 返回空回答本身是正确答案） |
+| `src/lib/d88-d90-ui-guard.test.ts` | 切片标记收紧（假红修正，见 3.44.7） |
+
+#### 13.39.2 三个容易写错的点
+
+1. **`readImage()` 不是图片文件**。它给的是未压缩 RGBA，必须经 `ImageData` + canvas 编码。
+   插件文档的示例写法（把像素直接包进 Blob）会让 `createImageBitmap` 直接拒收，
+   而且报错信息指向的是"图片损坏"，不是"你用错了 API"——很容易误判成剪贴板里没图。
+2. **baseline 的取数时机**。截图流程要先取剪贴板序号再唤起工具。顺序反了不会编译错、
+   不会测试红，只会在"用户手快"时偶发超时。这种 bug 靠手测基本抓不到，只能靠顺序断言。
+3. **`consumeClipboard` 的每个分支都要有话可说**。`empty` / `unsupported` / `timeout` /
+   `failed` 四种结局在用户眼里都是"点了没反应"——不写文案就等于没实现这四种情况。
+
+#### 13.39.3 门禁
+
+前端 **74 文件 669 例全绿**（较 1.5.18 的 75/656：新增 1 文件 13 例，另有两处计数/切片跟改；
+文件数少 1 是因为 `d163` 合并了原计划的两个文件）/ `check` 0 error 0 warning /
+CSS 契约 0 FAIL 6 WARN / `fmt` 干净 / clippy 代码警告 0 /
+新增 2 条 IPC 命令（属性与名字均 77/73，无平台分立）。
+

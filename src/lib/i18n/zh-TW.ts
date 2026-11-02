@@ -167,6 +167,15 @@ export const zhTW = {
     // D-162：兩步驟驗證二維碼（掃碼 / 從圖片匯入）。
     totp_scan: '掃碼',
     totp_scan_image: '從圖片',
+    // D-163：桌面端兩個更貼近「碼就在眼前這塊螢幕上」的入口。
+    totp_paste: '貼上截圖',
+    totp_screenshot: '截圖',
+    paste_empty: '剪貼簿裡沒有圖片。先截圖（或複製圖片），再點「貼上截圖」',
+    paste_unsupported: '這個平台讀不到剪貼簿圖片，請改用「從圖片」',
+    paste_failed: '讀取剪貼簿圖片失敗，請改用「從圖片」',
+    shot_waiting: '已開啟系統截圖工具，框選完成後會自動讀取',
+    shot_timeout: '沒等到新截圖。可以再點一次「截圖」，或直接把截圖貼進輸入框',
+    shot_unavailable: '打不開系統截圖工具，請改用「從圖片」或「貼上截圖」',
     scan_hint: '對準二維碼；也可以把二維碼截圖後貼上，或選擇圖片檔案',
     scan_no_qr: '沒辨識到二維碼，換一張更清晰的圖再試',
     scan_not_otpauth: '這不是兩步驟驗證二維碼',

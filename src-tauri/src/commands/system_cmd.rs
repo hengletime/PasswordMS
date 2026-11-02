@@ -172,6 +172,72 @@ pub fn open_url(app: tauri::AppHandle, url: String) -> IpcResult<()> {
         .map_err(|_| IpcError::internal("open_url"))
 }
 
+/// 唤起系统截图工具（D-163，桌面端「截图」入口）。
+///
+/// **为什么不是应用内截屏**：自己抓屏幕要处理 Desktop Duplication / 多显示器 /
+/// DPI 缩放 / HDR，而且截出来的图里必然包含本应用自己的窗口。用户手上已经有一个
+/// 更熟的工具（Win+Shift+S 的覆盖层），我们真正缺的从来不是「截」，而是
+/// **把截好的图接过来**——那一步由前端调 `readImage()` 完成
+/// （见 `src/lib/clipboard-image.ts`）。
+///
+/// 所以本命令只做一件事：把覆盖层叫起来。框选完成后图片落在系统剪贴板，
+/// 前端按「剪贴板指纹变化」接手，而不是傻等一个固定时长。
+///
+/// 非 Windows 返回 `ERR_NOT_SUPPORTED`：macOS / Linux 的截图工具、剪贴板图片
+/// 格式都不同，不做「按钮点了、什么都没发生」的假实现。
+#[tauri::command(rename_all = "snake_case")]
+pub fn open_screenshot_tool() -> IpcResult<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NO_WINDOW：不要为这一次 shell 调用闪一个控制台黑框。
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        // `start "" ms-screenclip:` —— 首个空引号是 start 的**窗口标题占位**。
+        // 少了它，start 会把 URI 当成标题、然后开一个空的 cmd 窗口（经典坑）。
+        let child = std::process::Command::new("cmd")
+            .args(["/c", "start", "", "ms-screenclip:"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|_| IpcError::internal("open_screenshot_tool"))?;
+        // 不 wait：截图覆盖层要活到用户框选完，等它就是等用户。
+        // Windows 没有 POSIX 的僵尸进程语义，句柄随 Child drop 关闭即可。
+        drop(child);
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(IpcError::shell(
+            // 全路径而非顶部 import：这个常量只在非 Windows 分支出现，
+            // 顶部 import 会在 Windows 构建里变成 unused（本轮实测的编译警告）。
+            crate::error::shell_codes::ERR_NOT_SUPPORTED,
+            "err.desktop_only",
+        ))
+    }
+}
+
+/// 当前会话的剪贴板序号（D-163）。
+///
+/// **存在的唯一理由**：截图流程要判断「用户框选完成、剪贴板真的换了」。
+/// 用「反复读整张位图再比对」来做这件事代价太大 —— 4K 截图一张 33MB，
+/// 等 60 秒就是几百次全量拷贝。序号是 O(1) 的，只在它变了之后才去读像素。
+///
+/// 非 Windows 返回 `None`（没有这个信号），调用方据此退回「读一次就试」。
+#[tauri::command(rename_all = "snake_case")]
+pub fn clipboard_sequence_number() -> IpcResult<Option<u32>> {
+    #[cfg(target_os = "windows")]
+    {
+        // SAFETY: GetClipboardSequenceNumber 无参数、无副作用、只读当前会话的序号，
+        // 不解引用任何指针，返回值也不代表任何资源所有权。
+        Ok(Some(unsafe {
+            windows::Win32::System::DataExchange::GetClipboardSequenceNumber()
+        }))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(None)
+    }
+}
+
 /// 保险库文件信息（P-10 展示）。
 ///
 /// D-108（豆包审查 3.4-8）：只回传**文件名**——绝对路径对用户无增量价值

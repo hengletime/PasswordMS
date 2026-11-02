@@ -299,18 +299,22 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   `supported = false` 而不是另写一套实现，「这个权限在桌面不存在」本身就是正确回答。
     // D-152（侧栏条目数）：+1（item_counts），属性 74 → 75、命令名 70 → 71。
     //   同样不做平台分立：三端都从同一份活跃条目计数，桌面/移动端无差异。
-    expect(total).toBe(75);
-    expect(withAttr).toBe(75);
+    // D-163（TOTP 剪贴板 / 截图）：+2（open_screenshot_tool / clipboard_sequence_number），
+    //   属性 75 → 77、命令名 71 → 73。两者都**不做平台分立**：非 Windows 直接返回
+    //   `ERR_NOT_SUPPORTED` / `None`，因为「这个平台没有系统截图工具、没有剪贴板序号」
+    //   本身就是正确回答（与 D-149 同一取舍）。
+    expect(total).toBe(77);
+    expect(withAttr).toBe(77);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
-    // 若移动端桩写成 `prefs_get_mobile`，计数仍会是 71/71，但前端在 Android 上 invoke
-    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数 = 71**，
+    // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
+    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数 = 73**，
     // 即平台分立只许增加实现份数，不许增加命令名。
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(75);
-    expect(new Set(names).size).toBe(71);
+    expect(names.length).toBe(77);
+    expect(new Set(names).size).toBe(73);
   });
 });
 

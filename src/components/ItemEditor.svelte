@@ -10,6 +10,13 @@
   import { parseOtpauth, rejectMessage } from '../lib/otpauth';
   import { decodeQrFromBlob } from '../lib/qr';
   import { startCameraScan, type CameraScan } from '../lib/qr-camera';
+  import {
+    clipboardImageSupported,
+    readClipboardImage,
+    waitForClipboardImage,
+    type ClipboardImage,
+  } from '../lib/clipboard-image';
+  import { system } from '../lib/ipc';
   import { ui } from '../lib/stores/ui.svelte';
   import { vault } from '../lib/stores/vault.svelte';
   import type { CustomField, ItemDraftDto, ItemDto } from '../types';
@@ -76,6 +83,17 @@
   // 刻意不用 $state：它是设备句柄，不是渲染数据；若做成响应式，下面的 effect 会因
   // 「赋值 scan」而重跑，等于每启动一次摄像头就重启一次。
   let scan: CameraScan | null = null;
+  /** 截图流程进行中：按钮禁用，并显示「框选完成后自动读取」。 */
+  let shotPending = $state(false);
+  /** 读剪贴板 + 解码的进行中标记（防连点；这条路径有几十毫秒的忙期）。 */
+  let pastePending = $state(false);
+  /**
+   * 截图等待的取消句柄。
+   *
+   * 不在 `$state` 里、也不靠 `shotPending` 判断：等待最长 60 秒，用户中途离开编辑器时
+   * 必须**立刻**停 —— 否则组件已卸载、轮询还在跑，读到的图无处可去。
+   */
+  let shotAbort: AbortController | null = null;
 
   /**
    * 消费一张码解出的文本。
@@ -149,12 +167,100 @@
     await ingestImage(file);
   }
 
-  // 面板展开时接受粘贴：截图 → Ctrl+V 是最快的一条路（比"先存成文件再选"少两步）。
-  // 只在面板打开时监听，避免用户往其他输入框粘贴图片时被我们拦下来。
-  $effect((): (() => void) => {
-    if (!scanOpen) {
-      return () => {};
+  /** 把一次剪贴板读图的结果落到界面上 —— 每种结局都要有话说，不许「点了没反应」。 */
+  async function consumeClipboard(result: ClipboardImage): Promise<void> {
+    switch (result.kind) {
+      case 'image':
+        await ingestImage(result.blob);
+        return;
+      case 'empty':
+        totpHint = { key: 'editor.paste_empty' };
+        return;
+      case 'unsupported':
+        totpHint = { key: 'editor.paste_unsupported' };
+        return;
+      case 'timeout':
+        totpHint = { key: 'editor.shot_timeout' };
+        return;
+      default:
+        totpHint = { key: 'editor.paste_failed' };
     }
+  }
+
+  /** 「粘贴截图」：直接读剪贴板里的位图（不经过任何键盘事件）。 */
+  async function pasteImage(): Promise<void> {
+    if (pastePending) {
+      return;
+    }
+    pastePending = true;
+    totpHint = null;
+    try {
+      await consumeClipboard(await readClipboardImage());
+    } finally {
+      pastePending = false;
+    }
+  }
+
+  /**
+   * 「截图」：唤起系统截图工具，框选完成后自动把图接过来。
+   *
+   * 只做「唤起」而把「读图」留给剪贴板，是因为用户已经有顺手的截图工具
+   * （Win+Shift+S 的覆盖层）；我们缺的是**接手**那一步，不是重造一个截屏器。
+   */
+  async function startScreenshot(): Promise<void> {
+    if (shotPending) {
+      return;
+    }
+    totpHint = null;
+    shotAbort?.abort();
+    const controller = new AbortController();
+    shotAbort = controller;
+    // baseline 必须在**唤起工具之前**取。取晚了（用户手快、框选又快）新图会被当成旧图，
+    // 于是等到 60 秒超时 —— 一次「偶尔失灵」的经典来路。
+    let baseline: number | null = null;
+    try {
+      baseline = await system.clipboardSequenceNumber();
+    } catch {
+      baseline = null;
+    }
+    try {
+      await system.openScreenshotTool();
+    } catch {
+      // 平台不支持（非 Windows）或系统调不起来：直接说，别让按钮看起来按了有反应。
+      totpHint = { key: 'editor.shot_unavailable' };
+      return;
+    }
+    shotPending = true;
+    totpHint = { key: 'editor.shot_waiting' };
+    try {
+      await consumeClipboard(await waitForClipboardImage(baseline, controller.signal));
+    } finally {
+      shotPending = false;
+      if (shotAbort === controller) {
+        shotAbort = null;
+      }
+    }
+  }
+
+  // 卸载即取消等待；顺手把摄像头也交代清楚（面板那条 effect 只管面板自己的生命周期）。
+  $effect((): (() => void) => {
+    return () => {
+      shotAbort?.abort();
+      shotAbort = null;
+    };
+  });
+
+  // 粘贴监听**不挂在扫码面板上**（D-163 修的根因）。
+  //
+  // 原实现是「面板打开时才监听」，想法是"别拦用户往别处粘图"，实际效果却是：
+  // 用户看到二维码的第一反应是当场截图、当场 Ctrl+V，不会先去点开一个面板 ——
+  // 于是功能明明在，却表现为「截图在剪贴板里，按了没反应」。功能被一层
+  // 没人知道的开关挡着，和没做是一样的。
+  //
+  // 现在改成编辑器挂载期间全程监听，靠**「剪贴板里真有图片」**来收窄范围：
+  // 没有图片就一个字节都不碰（用户可能就想粘文本到密码框）。这比"某个面板是否展开"
+  // 更贴近真正要保护的东西。
+  $effect((): (() => void) => {
     const onPaste = (event: ClipboardEvent): void => {
       const items = event.clipboardData?.items;
       if (items === undefined) {
@@ -383,18 +489,47 @@
         aria-invalid={totpInvalid}
       />
 
-      <!-- D-162：两步验证二维码。网站设置页给的是二维码，手抄 Base32 才是那个绕远的办法；
-           两个入口并列而不是只做扫码 —— 二维码常显示在用户自己这块屏幕上，
-           摄像头拍自己屏幕最难对焦，「从图片」才是同屏场景的主力。 -->
+      <!-- D-162 / D-163：两步验证二维码的入口。
+           手机：码在别的设备上 → 扫码；截图就在相册里 → 从图片。
+           桌面：码几乎总在**这块屏幕自己**上，所以主力是「从图片 / 粘贴 / 截图」，
+           摄像头排最后 —— 拿笔记本摄像头拍自己的屏幕，是最难对焦的活。
+           「粘贴 / 截图」按平台能力给：Android 读不了剪贴板位图（插件明确不支持），
+           给了按钮也是骗人的。 -->
       <div class="editor-scan-row">
-        <button class="pms-btn is-ghost is-sm" type="button" onclick={toggleScan}>
-          <Icon name="qr" size={14} />{ui.t('editor.totp_scan')}
-        </button>
-        <button class="pms-btn is-ghost is-sm" type="button" onclick={() => fileInput?.click()}>
-          <Icon name="file" size={14} />{ui.t('editor.totp_scan_image')}
-        </button>
+        {#if clipboardImageSupported()}
+          <button class="pms-btn is-ghost is-sm" type="button" onclick={() => fileInput?.click()}>
+            <Icon name="file" size={14} />{ui.t('editor.totp_scan_image')}
+          </button>
+          <button
+            class="pms-btn is-ghost is-sm"
+            type="button"
+            disabled={pastePending}
+            onclick={() => void pasteImage()}
+          >
+            <Icon name="clipboard" size={14} />{ui.t('editor.totp_paste')}
+          </button>
+          <button
+            class="pms-btn is-ghost is-sm"
+            type="button"
+            disabled={shotPending}
+            onclick={() => void startScreenshot()}
+          >
+            <Icon name="crop" size={14} />{ui.t('editor.totp_screenshot')}
+          </button>
+          <button class="pms-btn is-ghost is-sm" type="button" onclick={toggleScan}>
+            <Icon name="qr" size={14} />{ui.t('editor.totp_scan')}
+          </button>
+        {:else}
+          <button class="pms-btn is-ghost is-sm" type="button" onclick={toggleScan}>
+            <Icon name="qr" size={14} />{ui.t('editor.totp_scan')}
+          </button>
+          <button class="pms-btn is-ghost is-sm" type="button" onclick={() => fileInput?.click()}>
+            <Icon name="file" size={14} />{ui.t('editor.totp_scan_image')}
+          </button>
+        {/if}
         <!-- 隐藏的原生文件选择：桌面与 Android 都走系统选择器，不需要额外插件权限。
-             不设 capture，避免在手机上强制唤起相机（相册里的截图同样是我们需要的那条路）。 -->
+             不设 capture，避免在手机上强制唤起相机（相册里的截图同样是我们需要的那条路）。
+             放在分支之外：两个平台都要用，重复一份会让 `bind:this` 指向哪份变得不确定。 -->
         <input
           class="editor-scan-file"
           type="file"
