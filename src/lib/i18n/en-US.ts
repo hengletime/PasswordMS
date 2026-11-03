@@ -483,7 +483,7 @@ export const enUS: Messages = {
     // Neither of these may assert what is inside: "still takes up disk space" was a claim
     // about content we never saw. For `None` we could not even list `old-key/`.
     restore_point_old_unreadable: '{count} old-batch folder(s) could not be identified or read and cannot be deleted here; they may still hold backups your old master password can open, and must be handled manually.',
-    restore_point_old_unreadable_uncounted: 'The old-batch folders could not be read, so the number is unknown; please open the backup folder and handle them manually.',
+    restore_point_old_unreadable_uncounted: 'The old-batch folders could not be read, so the number is unknown; they may still hold backups your old master password can open — please open the backup folder and handle them manually.',
     restore_point_failed: 'Delete failed: the restore points are still on this device. Please try again later.',
     restore_point_load_failed: 'Could not read the restore point status (your entries are not affected).',
     change_password_note_lock_only: 'Changing the master password replaces the lock, not the key inside the vault. If the old password or an old copy may have leaked, changing the password is not enough to stop someone from reading future data.',
