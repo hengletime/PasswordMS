@@ -504,7 +504,7 @@ export const zhCN = {
     restore_point_cleared_partial: '已删除 {count} 份，但还有 {remaining} 份没能删除，仍在原处。',
     restore_point_cleared_none: '一份都没能删除，还有 {remaining} 份在原处，请稍后重试。',
     restore_point_cleared_gone: '这份回滚点已经不在磁盘上了，没有可删除的内容。',
-    restore_point_old_unreadable: '还有 {count} 个旧代目录认不出或读不出，不能在这里删除；它们仍然占用磁盘空间，需要手动处理。',
+    restore_point_old_unreadable: '至少 {count} 个旧代目录认不出或读不出，不能在这里删除；它们仍然占用磁盘空间，需要手动处理。',
     restore_point_failed: '删除失败：回滚点仍在本机，请稍后重试。',
     restore_point_load_failed: '读取失败：未能取得回滚点状态（条目本身不受影响）。',
     change_password_note_lock_only: '改主密码会换掉锁，但不会换掉保险库里的钥匙。若旧密码或旧副本可能已泄露，改密不足以阻止对方读取今后的数据。',

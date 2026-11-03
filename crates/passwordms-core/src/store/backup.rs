@@ -952,6 +952,11 @@ pub struct OldKeyBatch {
 /// `old-key/` 本身读不出来时返回 1 而不是 0：`NotFound` 是"还没有旧代"，返回 0 是对的；
 /// 其余错误下 0 会被界面读成"一切正常"。返回 1 是**下界**——目的是让提示出现，不是
 /// 报准确个数。宁可说"这里有问题，你自己看一眼"，不要说"没有这个东西"。
+///
+/// **所以调用方只能把它写成"至少 N 个"**：正常路径下它是精确值，而 `old-key/` 整体
+/// 读不出时它只是下界（1，实际可能有 7 批）——「至少 N」在两种情况下都是真的，
+/// 写成「有 N 个」则在第二种情况下骗人。**在 doc 里承认是下界、却让具体数字走到
+/// 用户眼前，是 doc 与文案分家**，只是这次方向无害。
 pub fn unreadable_batch_dirs(vault_path: &Path) -> usize {
     let entries = match fs::read_dir(old_key_dir(vault_path)) {
         Ok(e) => e,
@@ -966,6 +971,17 @@ pub fn unreadable_batch_dirs(vault_path: &Path) -> usize {
         }
         let name_ok = entry.file_name().to_str().is_some();
         // "读得出目录、但读到某一项就失败"也算读不出：那一批列不全，界面同样会漏东西。
+        //
+        // **这次 `read_dir` 必须独立，不能"优化"成复用 [`old_key_inventory`] 的结果**：
+        // inventory 正是把读失败吞成 `continue` 的那一层，复用它的产出等于拿被污染的
+        // 证据自证清白。
+        //
+        // 这一支**没有测试覆盖**：Windows 上要改 ACL 才能构造出读不出的目录，本机造不
+        // 出来。不拿 `#[cfg(unix)]` 的用例充数——永不在本机跑的测试不是覆盖率，是
+        // "我们有测试"这句话的赝品，真实成本是让人停止寻找真的测法。
+        // 为什么可以不覆盖：**失效方向是多报，不是漏报**。这一支只可能多显示一句
+        // "去文件夹手动看看"（代价是白看一眼），不会漏掉一批（代价是用户以为删干净了，
+        // 而旧密码仍能打开里面的文件）。漏报才是 B-03 要治的病。
         let read_ok = match fs::read_dir(&path) {
             Ok(items) => items.into_iter().all(|item| item.is_ok()),
             Err(_) => false,

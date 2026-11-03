@@ -443,7 +443,7 @@ export const zhTW = {
     restore_point_cleared_partial: '已刪除 {count} 份，但還有 {remaining} 份沒能刪除，仍在原處。',
     restore_point_cleared_none: '一份都沒能刪除，還有 {remaining} 份在原處，請稍後重試。',
     restore_point_cleared_gone: '這份回滾點已經不在磁碟上了，沒有可刪除的內容。',
-    restore_point_old_unreadable: '還有 {count} 個舊代目錄無法辨識或讀取，不能在這裡刪除；它們仍然佔用磁碟空間，需要手動處理。',
+    restore_point_old_unreadable: '至少有 {count} 個舊代目錄無法辨識或讀取，不能在這裡刪除；它們仍然佔用磁碟空間，需要手動處理。',
     restore_point_failed: '刪除失敗：回滾點仍在本機，請稍後重試。',
     restore_point_load_failed: '讀取失敗：未能取得回滾點狀態（條目本身不受影響）。',
     change_password_note_lock_only: '改主密碼會換掉鎖，但不會換掉保險庫裡的鑰匙。若舊密碼或舊副本可能已洩漏，改密不足以阻止對方讀取今後的資料。',
