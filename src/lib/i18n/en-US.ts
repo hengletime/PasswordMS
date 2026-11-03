@@ -59,7 +59,7 @@ export const enUS: Messages = {
     restore_button: 'Restore from backup',
     restore_confirm_title: 'Restore from backup',
     restore_confirm_body: 'The selected backup will replace the local vault. Continue?',
-    restore_no_retreat_title: 'This restore has no automatic restore point',
+    restore_no_retreat_title: 'This restore left no backup behind',
     // P0: this is the last confirmation before an irreversible action, so the user treats
     // it as the only evidence they get. Two rules (full reasoning on the zh-CN counterpart):
     // (1) no cause — the usual trigger is our own backup quota (QUOTA_MULTIPLIER = 12), not
@@ -68,7 +68,7 @@ export const enUS: Messages = {
     // the backups/ quota, so it often succeeds exactly when the snapshot failed. Claiming
     // "cannot be recovered" is false in that case, and a user who later finds the `.bak`
     // concludes the app lies — a conclusion that spreads to every other message.
-    restore_no_retreat_body: 'The "before restoring" snapshot could not be saved, so this restore has no automatic restore point. Once you confirm, the current vault is overwritten. If you want a safety net, cancel first, copy the backup you want to restore somewhere else, then come back.',
+    restore_no_retreat_body: 'The copy taken just before restoring could not be saved, so this restore has no way back. Once you confirm, the current vault is overwritten. If you want a safety net, cancel first, copy the backup you want to restore somewhere else, then come back.',
     // Only shown when the confirmation dialog should have appeared but did not — its one job
     // is to report that bug, so it must say it plainly and offer an action.
     restore_no_retreat_short: 'This restore did not run: the app could not show the confirmation dialog. Your vault file is unchanged — please reopen the app and try again.',
@@ -455,47 +455,55 @@ export const enUS: Messages = {
     backup_never: 'No backup has ever been exported from this device. Uninstalling or switching devices will make the data unrecoverable.',
     // B-03（1.5.29）：自动回滚点。**不是**上面那个「导出备份」——那一个能带走、
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
-    restore_point: 'Automatic restore points',
+    restore_point: 'Automatic backups on this device',
     // P1: no "every change" — daily dedupe and large-vault throttling share one copy.
-    restore_point_hint: 'A copy is kept on this device before changes, so a mistake can be rolled back.',
-    restore_point_local_only: 'Restore points live only on this device. Uninstalling, switching devices, or clearing the data folder removes them too — export the vault regularly.',
-    restore_point_current: 'Under the current master password: {count} file(s), {size} in total.',
-    restore_point_never: 'No restore point exists under the current master password yet.',
-    restore_point_last_ok: 'Last restore point: {time}.',
-    restore_point_stale: 'No new restore point for more than {days} days.',
-    restore_point_error: 'The most recent restore point was not saved ({reason}) at {time}.',
+    restore_point_hint: 'Before a risky action, the whole vault is copied to this device. If something goes wrong, you can use it to go back.',
+    restore_point_local_only: 'These backups live only on this device. Uninstalling, switching devices, or clearing the data folder removes them too — export a backup regularly.',
+    restore_point_current: 'Opens with your current password: {count} file(s), {size} in total.',
+    restore_point_never: 'No backup like this yet.',
+    restore_point_last_ok: 'Last backup: {time}.',
+    restore_point_stale: 'No new backup for more than {days} days.',
+    restore_point_error: 'The most recent backup was not saved ({reason}) at {time}.',
     restore_point_reason_space: 'not enough space or quota',
     restore_point_reason_permission: 'no permission to write',
     restore_point_reason_device: 'the storage device was disconnected',
     restore_point_reason_other: 'read or write error',
     // P1: title states facts only; the password rule lives in `restore_point_old_note`.
-    restore_point_old_title: 'Restore points from before a password change',
+    restore_point_old_title: 'Backups from before a password change',
     restore_point_old_batch: 'Before the change on {time}: {count} file(s), {size} in total.',
-    restore_point_old_note: 'Each batch opens with the master password in effect when it was archived. The oldest batch needs your original password.',
-    restore_point_clear_current: 'Delete current restore points',
-    restore_point_clear_current_confirm: '{count} restore point(s) ({size}) under the current master password will be deleted. Batches from before a password change are not affected.',
+    restore_point_old_note: 'These backups open with the old password in effect at the time. The oldest batch needs your very first password.',
+    restore_point_clear_current: 'Delete the current backups',
+    restore_point_clear_current_confirm: 'This deletes {count} backup(s) ({size}) that open with your current password. Backups from before a password change are not touched.',
     restore_point_clear_batch: 'Delete this batch',
-    restore_point_clear_batch_confirm: 'The restore points from before the change on {time} ({count} file(s), {size}) will be permanently deleted. They are the only copy on this device that opens with that password.',
+    restore_point_clear_batch_confirm: 'The backups from before the change on {time} ({count} file(s), {size}) will be deleted for good. They are the only copy on this device that opens with that password.',
     restore_point_cleared: 'Deleted {count} file(s).',
     restore_point_cleared_partial: 'Deleted {count} file(s), but {remaining} could not be removed and are still there.',
     restore_point_cleared_none: 'Nothing could be deleted; {remaining} file(s) are still there. Please try again shortly.',
-    restore_point_cleared_gone: 'That restore point is no longer on disk, so there was nothing to delete.',
+    restore_point_cleared_gone: 'That backup is no longer on disk, so there was nothing to delete.',
     // Neither of these may assert what is inside: "still takes up disk space" was a claim
     // about content we never saw. For `None` we could not even list `old-key/`.
-    restore_point_old_unreadable: '{count} old-batch folder(s) could not be identified or read and cannot be deleted here; they may still hold backups your old master password can open, and must be handled manually.',
-    restore_point_old_unreadable_uncounted: 'The old-batch folders could not be read, so the number is unknown; they may still hold backups your old master password can open — please open the backup folder and handle them manually.',
-    restore_point_failed: 'Delete failed: the restore points are still on this device. Please try again later.',
-    restore_point_load_failed: 'Could not read the restore point status (your entries are not affected).',
-    change_password_note_lock_only: 'Changing the master password replaces the lock, not the key inside the vault. If the old password or an old copy may have leaked, changing the password is not enough to stop someone from reading future data.',
-    change_password_note_old: 'Archived restore points still open with the master password they were archived under. Deleting them only affects whoever gets this device later; copies already taken are not affected.',
+    restore_point_old_unreadable: '{count} backup folder(s) cannot be opened, so they cannot be deleted here. They may hold backups your old password can still open — please handle them manually.',
+    restore_point_old_unreadable_uncounted: 'Some backup folders cannot be opened, so the count is unknown. They may hold backups your old password can still open — please look in the backup folder and handle them manually.',
+    restore_point_failed: 'Delete failed: the backups are still on this device. Please try again later.',
+    restore_point_load_failed: 'Could not read the backup status (your entries are not affected).',
+    restore_point_restore: 'Go back with this one',
+    restore_point_restore_title: 'Go back with this backup',
+    restore_point_restore_body: 'The vault will be replaced with the copy from {time} ({size}). Everything changed since then will be gone.',
+    restore_point_restore_pwd: 'Enter your master password to confirm (just to confirm it is you)',
+    restore_point_restore_confirm: 'Go back',
+    restore_point_restored: 'Back to how it was at {time}. Please unlock again.',
+    restore_point_pwd_required: 'Enter your master password first.',
+    restore_point_nothing: 'There is no backup to go back to right now.',
+    change_password_note_lock_only: 'Changing the password replaces the lock on the door, not the key inside the vault. If the old password or an old copy leaked, changing it will not stop someone from reading your future data.',
+    change_password_note_old: 'Backups made before the change still open with the old password. Deleting them only affects whoever gets this device later; copies already taken are out of reach.',
     // P0: the "new vault + import" exit does not exist — export is an encrypted .vault only,
     // and import accepts Bitwarden JSON/CSV only, dropping attachments.
-    change_password_note_no_rekey: 'This version cannot re-key the vault. If you have paired other devices to this vault, it is worse: there is currently no way to make those devices lose access.',
-    password_changed_detail: 'Master password changed. {count} old restore point(s) archived (open with the previous password).',
-    password_changed_no_backup: 'Master password changed, but the copy from before the change could not be saved. Check the current list under "Automatic restore points" and export the vault now.',
+    change_password_note_no_rekey: 'This version cannot replace the key inside the vault. If you paired other devices to this vault it is worse: there is currently no way to cut their access.',
+    password_changed_detail: 'Master password changed. {count} backup(s) from before the change were saved separately (they open with the old password).',
+    password_changed_no_backup: 'Master password changed, but the backup from before the change was not saved. Check "Automatic backups on this device" and export a backup right now.',
     // P0: when `isolate` fails as a whole, moved and failed are both 0 and no branch fires.
-    password_changed_isolate_error: 'Master password changed, but the old restore points could not be archived — they stay where they are and will be shown as opening with the current password, while they actually need the old one. Check the list under "Automatic restore points".',
-    password_changed_isolate_failed: 'Master password changed, but {count} old restore point(s) could not be archived — they stay where they are and will be shown as opening with the current password, while they actually need the old one.',
+    password_changed_isolate_error: 'Master password changed, but the backups from before the change could not be stored separately — they stay where they are and will be listed as opening with the current password, while they actually need the old one. Check "Automatic backups on this device".',
+    password_changed_isolate_failed: 'Master password changed, but {count} backup(s) from before the change could not be stored separately — they stay where they are and will be listed as opening with the current password, while they actually need the old one.',
     vault_file: 'Vault file',
     size: 'Size',
     // D-73: the heading must explain itself — "what is this file for" beats a bare path.
@@ -722,8 +730,7 @@ export const enUS: Messages = {
     fingerprint: 'Fingerprint verification failed; sync aborted.',
     sync_aborted: 'Sync was aborted.',
     sync_busy: 'A sync is already in progress; please try again shortly.',
-    backup_busy:
-      'A restore or master-password change is in progress. Restore points cannot be deleted until it finishes.',
+    backup_busy: 'A restore or password change is running, so nothing can be deleted right now. Nothing was deleted; try again once it finishes.',
     load_partial: 'Some data failed to load. Please retry, or lock and unlock again.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',

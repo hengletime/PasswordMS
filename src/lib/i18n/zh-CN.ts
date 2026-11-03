@@ -57,7 +57,7 @@ export const zhCN = {
     restore_button: '从备份恢复',
     restore_confirm_title: '从备份恢复',
     restore_confirm_body: '将使用所选备份替换本机当前保险库。确认继续？',
-    restore_no_retreat_title: '这次恢复没有自动回滚点',
+    restore_no_retreat_title: '这次恢复没有留下备份',
     // P0：这段是**不可逆动作前的最后一次确认**，用户会拿它当唯一凭据，所以两条禁令：
     //
     // ① **不许写原因**。曾经写的是「（磁盘空间或权限问题）」——错在把最常见的成因漏了：
@@ -73,7 +73,7 @@ export const zhCN = {
     //    而这个结论会传染到所有别的提示上。
     //
     // 只说保证得了的两件事：这次没有自动回滚点、当前保险库会被覆盖。
-    restore_no_retreat_body: '刚才那份“恢复前”的快照没能存成，这次恢复没有自动回滚点。确认之后，当前的保险库会被覆盖。如果还想留一手，请先取消，把你要恢复的那份备份复制到别的位置，再回来恢复。',
+    restore_no_retreat_body: '刚才那份「恢复前」的备份没能存成，所以这次恢复没有退路。确认之后，当前的保险库会被覆盖。如果还想留一手，请先取消，把要恢复的那份备份复制到别的位置，再回来恢复。',
     // 这一句**只在"本该弹确认框却没弹"时出现**——它唯一的职责是把那个 bug 说出来，
     // 所以必须"说破"：讲清恢复没执行、给一个动作。
     // 曾经写的是「刚才那一步没有改动你的库文件。这次恢复没有自动回滚点。」——句子全是
@@ -478,32 +478,32 @@ export const zhCN = {
     backup_never: '从未成功导出过备份。卸载或换机将无法恢复本机数据。',
     // B-03（1.5.29）：自动回滚点。**不是**上面那个「导出备份」——那一个能带走、
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
-    restore_point: '自动回滚点',
+    restore_point: '本机自动备份',
     // P1：不能写「每次」——日备份去重与大库节流会让同一时段的多次改动共用一份。
-    restore_point_hint: '改动前会自动在本机留一份，改坏了能退回来。',
-    restore_point_local_only: '回滚点只在本机。卸载、换机、清空数据目录都会一起失去——请定期导出保险库。',
-    restore_point_current: '当前主密码下：{count} 份，共 {size}。',
-    restore_point_never: '当前主密码下还没有回滚点。',
-    restore_point_last_ok: '上次回滚点：{time}。',
-    restore_point_stale: '已超过 {days} 天没有新的回滚点。',
-    restore_point_error: '最近一次回滚点没有存成（{reason}），时间 {time}。',
+    restore_point_hint: '做危险操作前，先把整个库复制一份放在这台电脑上；改坏了可以用它退回去。',
+    restore_point_local_only: '这些备份只在这台电脑上。卸载、换电脑、清空数据目录都会一起没——请定期导出备份。',
+    restore_point_current: '用现在的密码能打开：{count} 份，共 {size}。',
+    restore_point_never: '还没有这样的备份。',
+    restore_point_last_ok: '上次备份：{time}。',
+    restore_point_stale: '已经超过 {days} 天没有新备份了。',
+    restore_point_error: '最近一次备份没存成（{reason}），时间 {time}。',
     restore_point_reason_space: '磁盘空间或配额不足',
     restore_point_reason_permission: '没有写入权限',
     restore_point_reason_device: '存储设备已断开',
     restore_point_reason_other: '读写出错',
     // P1：标题只写事实。两批以上时「改密前那把」指不清哪一把，密码规则只留在
     // `restore_point_old_note` 里说一次。
-    restore_point_old_title: '改密前的回滚点',
-    restore_point_old_batch: '{time} 改密前：{count} 份，共 {size}。',
-    restore_point_old_note: '每批要用它被归档时那把主密码打开。最早那批要用你最原始的密码。',
-    restore_point_clear_current: '删除当前回滚点',
-    restore_point_clear_current_confirm: '将删除当前主密码下的 {count} 份回滚点（共 {size}）。改密前的旧代不会被删除。',
+    restore_point_old_title: '改密码之前的备份',
+    restore_point_old_batch: '{time} 改密码前：{count} 份，共 {size}。',
+    restore_point_old_note: '这些备份要用当时的旧密码才能打开。最早那批，要用你最早的密码。',
+    restore_point_clear_current: '删除现在的备份',
+    restore_point_clear_current_confirm: '会删掉现在的密码能打开的 {count} 份备份（共 {size}）。改密码之前那些不会被删。',
     restore_point_clear_batch: '删除这一批',
-    restore_point_clear_batch_confirm: '{time} 改密前的这批回滚点（{count} 份，共 {size}）将被永久删除。它们是那把密码在本机的唯一副本。',
+    restore_point_clear_batch_confirm: '{time} 改密码前的这批备份（{count} 份，共 {size}）会被永久删除。它们是那把密码在这台电脑上的唯一副本。',
     restore_point_cleared: '已删除 {count} 份。',
     restore_point_cleared_partial: '已删除 {count} 份，但还有 {remaining} 份没能删除，仍在原处。',
     restore_point_cleared_none: '一份都没能删除，还有 {remaining} 份在原处，请稍后重试。',
-    restore_point_cleared_gone: '这份回滚点已经不在磁盘上了，没有可删除的内容。',
+    restore_point_cleared_gone: '这份备份已经不在磁盘上了，没有可删的内容。',
     // 两格分开，因为后端给的是 `Option<usize>`：`None` = 数不清，此时不许出现任何数字。
     // 早先只有一条文案、靠写「至少 N 个」来兜住"可能是下界"——那等于把不变量存在四份
     // 翻译里，少改一份就是一句看起来精确的假话。
@@ -514,25 +514,33 @@ export const zhCN = {
     // 有数字那格也只说"可能有"，`Some(n)` 只保证我们数出了 n 个目录，不保证里面还有备份。
     // 说的是"旧**主密码**能打开的备份"，不说"旧钥匙"：本版本换密码只换锁、不换钥匙，
     // 两种说法混用会让用户以为换密码换了钥匙（en-US 曾写 `old-key backups`，同病）。
-    restore_point_old_unreadable: '{count} 个旧代目录认不出或读不出，不能在这里删除；里面可能有旧主密码还能打开的备份，需要手动处理。',
+    restore_point_old_unreadable: '{count} 个备份文件夹打不开，没法在这里删除。里面有旧密码还能打开的备份，需要你手动处理。',
     // 数不清的那格**不出现数字**（连有几个都不知道，出现占位符就是"无法统计 null 个"），
     // 但**必须给后果**——只说"读不出"用户没有动机去翻文件夹。后果用"可能"有界：
     // 我们确实没看进去，所以能说"可能有"，不能断言"有"。
-    restore_point_old_unreadable_uncounted: '旧代目录读不出，无法统计有几个；里面可能有旧主密码还能打开的备份，请到备份目录里手动查看处理。',
-    restore_point_failed: '删除失败：回滚点仍在本机，请稍后重试。',
-    restore_point_load_failed: '读取失败：未能取得回滚点状态（条目本身不受影响）。',
-    change_password_note_lock_only: '改主密码会换掉锁，但不会换掉保险库里的钥匙。若旧密码或旧副本可能已泄露，改密不足以阻止对方读取今后的数据。',
-    change_password_note_old: '已归档的旧代回滚点仍能用归档时那把主密码打开；删除它们只对之后拿到这台设备的人有效，已经被复制走的副本不受影响。',
+    restore_point_old_unreadable_uncounted: '有备份文件夹打不开，数不清有几个。里面有旧密码还能打开的备份，请到备份文件夹里手动看看。',
+    restore_point_failed: '删除失败：备份还在这台电脑上，请稍后重试。',
+    restore_point_load_failed: '读取失败：拿不到备份信息（你的条目没有受影响）。',
+    restore_point_restore: '用这份退回去',
+    restore_point_restore_title: '用这份备份退回去',
+    restore_point_restore_body: '会把现在的库换成 {time} 的那一份（共 {size}）。从那时之后的改动都会没有。',
+    restore_point_restore_pwd: '输入主密码确认（只是确认是你本人）',
+    restore_point_restore_confirm: '退回去',
+    restore_point_restored: '已经回到 {time} 的样子。请重新解锁。',
+    restore_point_pwd_required: '请先输入主密码。',
+    restore_point_nothing: '现在没有可以退回去的备份。',
+    change_password_note_lock_only: '改密码只换了门上那把锁，没换柜子里的钥匙。所以旧密码或旧备份一旦泄露，光改密码挡不住对方读你以后的数据。',
+    change_password_note_old: '改密码之前留下的备份，仍然能用当时的旧密码打开。删掉它们只对以后拿到这台电脑的人有用；已经被拷走的副本删了也管不着。',
     // P0：原来的「新建库 + 导入」出口是**假的**——导出只有加密的 .vault，而导入只认
     // Bitwarden JSON/CSV，且导入会丢附件。留着它等于用一句做不到的话安慰人。
-    change_password_note_no_rekey: '本版本不支持更换保险库内部的钥匙。如果你在其它设备上配对过本保险库，情况会更复杂——目前没有让已配对设备失去访问的方法。',
-    password_changed_detail: '主密码已修改。已归档 {count} 份旧回滚点（用改密前的密码打开）。',
-    password_changed_no_backup: '主密码已修改。但换密前的那份回滚点没有存成。请到「自动回滚点」查看当前清单，并立刻导出一份保险库。',
-    password_changed_isolate_failed: '主密码已修改，但有 {count} 份旧回滚点没能归档——它们留在原处，会被显示成“当前主密码可开”，实际要用旧密码。',
+    change_password_note_no_rekey: '这个版本还不能换柜子里的钥匙。如果你在别的设备上配对过这个库，情况会更麻烦——现在没有办法让那些设备失去访问。',
+    password_changed_detail: '主密码已修改。另外存好了 {count} 份改密码之前的备份（要用旧密码打开）。',
+    password_changed_no_backup: '主密码已修改。但改密码之前的那份备份没存成。请到「本机自动备份」看看现在有什么，并立刻导出一次备份。',
+    password_changed_isolate_failed: '主密码已修改，但有 {count} 份改密码之前的备份没能单独存起来——它们还在原处，界面上会显示成"能用现在的密码打开"，其实要用旧密码。',
     // P0：`isolate` 整体没做成（批次目录都没建起来）时 `moved` 与 `failed` 双双为 0，
     // 上面两个分支一个都不进 → 回执只剩「主密码已修改」。而旧备份全都没归档、还留在
     // 当前代贴着错标签。这份不知道份数，所以不能说数字。
-    password_changed_isolate_error: '主密码已修改，但旧回滚点没能归档——它们仍在原处，会被显示成“当前主密码可开”，实际要用旧密码。请到「自动回滚点」查看清单。',
+    password_changed_isolate_error: '主密码已修改，但改密码之前的备份没能单独存起来——它们还在原处，会显示成"能用现在的密码打开"，其实要用旧密码。请到「本机自动备份」看看清单。',
     vault_file: '保险库文件',
     size: '大小',
     // D-73：标题必须自带解释。主人原话「保险库文件是什么作用？没有看到文件啊？」——
@@ -764,7 +772,7 @@ export const zhCN = {
     sync_aborted: '同步已中止。',
     sync_busy: '已有同步在进行中，请稍后再试。',
     // B-03：备份目录被占用（恢复中 / 换密中）。**不借用** sync_busy——同步根本没在跑。
-    backup_busy: '正在恢复或更换主密码，这段时间不能删除回滚点。一份都没有删除，等它结束后就能删。',
+    backup_busy: '正在恢复或改密码，这会儿不能删。一份都没删，等它做完再删。',
     // D-108（豆包审查 3.5-10）：解锁后五路加载失败的合并提示（重试一次后仍失败才弹）。
     load_partial: '部分数据加载失败，请重试或重新锁定后再试。',
     conflict: '存在未处理的冲突。',

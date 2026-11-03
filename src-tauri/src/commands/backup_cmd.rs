@@ -1,12 +1,21 @@
-//! 自动回滚点（`backups/`）的状态、清理与写入前快照。
+//! 本机自动备份（`backups/`）的状态、清理与写入前快照。
 //!
-//! ## 名词约定：回滚点 ≠ 备份
+//! ## 名词约定：两种「备份」，界面上必须能分开
 //!
-//! 本产品里「备份」已经被占成**用户主动导出、能带走的文件**（「设置 → 导出保险库」，
-//! 见 `lib/backup-reminder.ts`）。`backups/` 是另一种东西：应用自动维护、与库同目录、
-//! 用户看不见内部结构、**不可携带**——卸载或换机一样会跟着没。
+//! 本产品有两种东西，日常都叫"备份"，混起来会要命：
 //!
-//! 同名不同物在本项目已经踩过一次（"缓存 vs 事实"），所以界面一律叫**回滚点**。
+//! | 代码里 | 界面上 | 能不能带走 |
+//! |---|---|---|
+//! | `export_vault`（用户主动导出） | **「导出备份」** | 能，换机可用 |
+//! | `backups/`（本模块） | **「本机自动备份」** | 不能，卸载/换机一起没 |
+//!
+//! 代码里继续用 `restore_point` / `old-key` / `batch` 这些精确的词（它们描述的是
+//! 磁盘结构，改了就没人看得懂）；**界面上一个都不出现**——「回滚点」「旧代」「批次」
+//! 「归档」这些词在 1.5.29 发布后被用户明确指出看不懂（2026-11-03）。
+//!
+//! 两者不能合并称呼的理由，是那个会把用户推进坑里的推论：
+//! 一旦自动备份也叫「备份」，用户会以为「有备份了就不用导出了」——
+//! 那正好抵消掉唯一能救换机的提示。
 //!
 //! ## 为什么写入前快照不回头改各命令的返回值
 //!
@@ -80,6 +89,10 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         })
         .collect();
     let st = backup::state(&path);
+    // 「退回去」的源必须是 `pre-restore`，不能是任意一份整库副本——理由见
+    // [`backup::latest_point`]。取一次、下面两处都用它，免得"有没有"和"多大"分头问
+    // 两次目录，中间被轮转改掉。
+    let latest = backup::latest_point(&path);
 
     Ok(BackupStatusDto {
         current_bytes,
@@ -92,6 +105,9 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         last_error_ms: st.last_error_ms,
         last_error_kind: st.last_error_kind,
         staleness: backup::staleness(&path, st.last_ms),
+        // 「退回去」能用的那一份：没有就是 `0`，界面据此把按钮藏掉。
+        latest_point_ms: latest.as_ref().map(|f| f.created_ms).unwrap_or(0),
+        latest_point_bytes: latest.as_ref().map(|f| f.size_bytes).unwrap_or(0),
     })
 }
 

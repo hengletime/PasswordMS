@@ -312,43 +312,127 @@ pub fn restore_backup(
             eprintln!("[backup] restore 在没有自动回滚点的情况下由用户确认继续 kind={kind:?}");
         }
 
-        // 守卫挡住恢复期间的一切轮转：正在被读的那一份不能被 prune 删掉。
-        let _restore_guard = backup::RestoreGuard::new(&dest);
-        // 覆盖保护：原库先留 .bak 后路（unix_ms 时间戳避免同名覆盖）。
-        //
-        // 【F-07】**必须 sync 并核对长度**：`fs::copy` 返回 `Ok` 不等于字节已经落盘，
-        // 而紧接着 `restore_backup_from` 就会覆盖 `dest`。若这时掉电，`.bak` 可能停在
-        // "名字有了、内容还在 page cache"的半份状态——它本来就是"最后一条人工退路"，
-        // 半份的退路比没有更坏（用户以为能用，试的时候才发现不对）。
-        // 长度核对挡住"写了半截"，`sync_all` 挡住"没刷盘"。
-        // 不做逐字节回读：`restore_backup_from` 对**它自己**的候选文件做逐字节复核，
-        // 是因为那份要直接顶替当前库；这里多读一整遍只是把 IO 翻倍，
-        // 而它要防的失败模式（页缓存未刷）已经被 `sync_all` 覆盖。
-        // **失败只降级，不中止**：`pre-restore` 快照挂了已经让用户确认过"没有自动
-        // 回滚点"，这里再失败也只是同一件事更糟一点——此时用户正在救一个打不开的库，
-        // 中止等于把他锁在门外，而他手里那份备份本来是好的。
-        // 半成品要当场删掉：留着它，将来会被当成一份可用退路。
-        if dest.exists() {
-            let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));
-            let ok = std::fs::copy(&dest, &bak).is_ok()
-                && std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(&bak)
-                    .and_then(|f| f.sync_all())
-                    .is_ok()
-                && std::fs::metadata(&dest).map(|m| m.len()).ok()
-                    == std::fs::metadata(&bak).map(|m| m.len()).ok();
-            if !ok {
-                let _ = std::fs::remove_file(&bak);
-                eprintln!("[backup] restore: 覆盖保护副本写失败，本次恢复没有 .bak 退路");
-            }
-        }
-        restore_backup_from(&src, &dest).map_err(|e| backup_reject(&src, e))?;
+        // 覆盖动作与「用本机备份退回去」共用同一段代码：同一个文件、同一套判据。
+        overwrite_vault_with(&src, &dest)?;
         Ok(())
     })();
 
     // 成败都删临时文件：留在库目录旁边会被人当成备份，而它随时可能是一份半成品。
     let _ = std::fs::remove_file(&src);
+    outcome
+}
+
+/// 给"即将被覆盖的当前库"留一份 `.bak` 退路（best-effort，**失败只降级不中止**）。
+///
+/// 【F-07】**必须 sync 并核对长度**：`fs::copy` 返回 `Ok` 不等于字节已经落盘，而紧接着
+/// 就要覆盖目标文件。若这时掉电，`.bak` 可能停在"名字有了、内容还在 page cache"的
+/// 半份状态——它本来就是"最后一条人工退路"，半份的退路比没有更坏（用户以为能用，
+/// 试的时候才发现不对）。长度核对挡住"写了半截"，`sync_all` 挡住"没刷盘"。
+///
+/// 不做逐字节回读：落位流程对**它自己**的候选文件做逐字节复核，是因为那份要直接顶替
+/// 当前库；这里多读一整遍只是把 IO 翻倍，而要防的失败模式（页缓存未刷）已被
+/// `sync_all` 覆盖。
+///
+/// 失败不中止的理由：走到这里说明用户正在救一个打不开的库，中止等于把他锁在门外，
+/// 而他手里那份备份本来是好的。半成品必须当场删掉——留着它，将来会被当成可用退路。
+fn leave_bak_copy(dest: &Path) {
+    if !dest.exists() {
+        return;
+    }
+    let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));
+    let ok = std::fs::copy(dest, &bak).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .open(&bak)
+            .and_then(|f| f.sync_all())
+            .is_ok()
+        && std::fs::metadata(dest).map(|m| m.len()).ok()
+            == std::fs::metadata(&bak).map(|m| m.len()).ok();
+    if !ok {
+        let _ = std::fs::remove_file(&bak);
+        eprintln!("[backup] restore: 覆盖保护副本写失败，本次恢复没有 .bak 退路");
+    }
+}
+
+/// 把 `src` 整份覆盖到 `dest`：备份目录守卫 + `.bak` 退路 + 原子落位。
+///
+/// **两条路必须共用这一段**：「从备份恢复」（用户挑的文件）与「用本机备份退回去」
+/// （应用自己拍的 `pre-restore`）覆盖的是同一个文件。任何一条单独演化，另一条就会
+/// 悄悄少一次 `sync_all`、少一个守卫，而两边都叫"恢复"——用户没有理由怀疑其中一条
+/// 更不安全。判据只有一处，才谈得上"两边一样安全"。
+///
+/// 调用方负责：`src` 必须是**已暂存的副本**（不能是备份目录里的原文件——下面的
+/// 守卫会暂停轮转，但调用方在此之前拍的快照已经裁过一轮），并且已经用密码校验过。
+pub(crate) fn overwrite_vault_with(src: &Path, dest: &Path) -> IpcResult<()> {
+    // 守卫挡住恢复期间的一切轮转：正在被读的那一份不能被 prune 删掉。
+    let _restore_guard = backup::RestoreGuard::new(dest);
+    leave_bak_copy(dest);
+    restore_backup_from(src, dest).map_err(|e| backup_reject(src, e))
+}
+
+/// 「用本机备份退回去」：把库恢复成**最近一次恢复之前**的样子。
+///
+/// 与「从备份恢复」的区别只有两处，其余全部共用同一段代码：
+/// - 源文件由应用自己指定（`backups/pre-restore.<ms>`），用户不必去文件对话框里找；
+///   这也是必要的——那个文件没有 `.vault` 后缀，恢复对话框的过滤器根本列不出它。
+/// - 调用时界面是**已解锁**的（按钮在设置页），所以本命令要自己把会话锁掉再覆盖。
+///
+/// 返回恢复点的时刻（毫秒），供界面回显"回到了哪个时间点"。
+#[tauri::command(rename_all = "snake_case")]
+pub fn restore_latest_point(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    master_password: String,
+) -> IpcResult<i64> {
+    let dest = vault_path(&app)?;
+    // `latest_point` 为 `None` 时**不编造一份"差不多能用的"**（不拿 `pre-rekey` 顶上）：
+    // 界面在没有可退的东西时本来就不渲染按钮，走到这里只可能是两次调用之间被删掉了。
+    let point = match backup::latest_point(&dest) {
+        Some(p) => p,
+        None => {
+            let e = CoreError::Validation("restore_point_absent".to_string());
+            return Err(IpcError {
+                code: e.code().to_string(),
+                message_key: "settings.restore_point_nothing".to_string(),
+                record_count: None,
+            });
+        }
+    };
+
+    // ① 先把源复制到库目录旁边。`pre-restore` 快照自己就躺在 `backups/` 里，而紧接着
+    //    那次快照会按配额裁一轮，被裁的优先是最旧的一份——"最旧的一份"恰恰可能就是
+    //    用户此刻要用的这一份（第一次恢复之后再没有更早的了）。暂存之后，后面的校验
+    //    与落位只读副本，裁剪碰不到它。
+    let tmp = dest.with_file_name(format!("passwordms.restore-{}.tmp", now_ms()));
+    if std::fs::copy(&point.path, &tmp).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(CoreError::Io("restore_latest_point: stage".to_string()).into());
+    }
+
+    let outcome = (|| -> IpcResult<i64> {
+        // ② 先验密码。验不过**一个字节都不动**，而且**还没锁屏**——用户只是输错了密码，
+        //    不该被踢回锁屏页。顺序与「从备份恢复」一致：校验永远在覆盖之前。
+        verify_backup_password(&tmp, &master_password).map_err(|e| backup_pwd_reject(&tmp, e))?;
+        // ③ 给"退回去"这个动作本身也拍一份快照：退错了还能再退回来。
+        let pre = backup::snapshot_event(&dest, backup::EventTag::PreRestore, now_ms());
+        if let Some(kind) = pre.error_kind {
+            // 不阻断：用户此刻在救自己，快照没拍成不该把他挡在这里。
+            // 留痕走 `.state` → 设置页常驻行；这里只补一条 stderr 供 Android logcat 定位。
+            eprintln!(
+                "[backup] 退回去之前的快照失败 kind={kind:?} stage={:?}",
+                pre.error_stage
+            );
+        }
+        // ④ **必须先锁再覆盖**。反过来的顺序（覆盖完再锁）会在中间留下一瞬
+        //    "内存里是旧库、磁盘上是新库"的分叉，而 `.bak` 与备份目录守卫的语义
+        //    都假定这一刻不存在。守卫持有到覆盖结束，也顺带挡住"覆盖到一半有人来解锁"。
+        let mut session = state.lock_session().map_err(lock_err)?;
+        session.lock();
+        overwrite_vault_with(&tmp, &dest)?;
+        Ok(point.created_ms)
+    })();
+
+    let _ = std::fs::remove_file(&tmp);
     outcome
 }
 

@@ -839,6 +839,22 @@ pub fn old_key_usage(vault_path: &Path) -> (u64, usize) {
     (files.iter().map(|f| f.size_bytes).sum(), files.len())
 }
 
+/// 最近一份 `pre-restore` 快照 —— 「用本机备份退回去」唯一能用的那一份。
+///
+/// 只认 `pre-restore`：`pre-rekey` / `pre-compact` / `pre-import` 同样是整库副本，
+/// 但它们对应的是**别的**动作。混进来，界面上的「退回到上一个状态」就会指向
+/// 一次导入之前、一次压缩之前 —— 用户按下去，丢掉的是他根本没打算撤的那批改动。
+///
+/// 返回 `None` 有三种成因，调用方**都不许自己编一个数**：从没做过恢复、快照被配额
+/// 裁掉、目录读不出。界面上那个动作按钮必须跟着消失 —— 没有可退的东西，
+/// 按钮留在那里就是一句做不到的承诺。
+pub fn latest_point(vault_path: &Path) -> Option<BackupFile> {
+    inventory(vault_path)
+        .into_iter()
+        .filter(|f| f.event == Some(EventTag::PreRestore))
+        .max_by_key(|f| f.created_ms)
+}
+
 fn parse_event_tag(name: &str) -> Option<EventTag> {
     ALL_EVENT_TAGS
         .into_iter()
@@ -2039,6 +2055,37 @@ mod tests {
         let vault = root.join("passwordms.vault");
         fs::write(&vault, vec![7u8; 1024]).unwrap();
         (root, vault)
+    }
+
+    #[test]
+    fn 退回去只认pre_restore其余整库副本一律不碰() {
+        // 「退回去」= 撤掉**最近一次恢复**。其它事件快照（换密前 / 压缩前 / 导入前）
+        // 同样是整库副本，但对应的是别的动作。混进来，用户按一次「退回去」丢掉的
+        // 可能是他根本没打算撤的一批改动——而按钮上写的是"退回到上一次恢复之前"。
+        let (root, vault) = temp_vault("latest-point");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        // 三个文件都"更新"，但只有一个是对的源。
+        fs::write(dir.join("pre-restore.1000"), vec![1u8; 16]).unwrap();
+        fs::write(dir.join("pre-restore.3000"), vec![2u8; 32]).unwrap();
+        fs::write(dir.join("pre-rekey.5000"), vec![3u8; 48]).unwrap();
+        fs::write(dir.join("pre-import.6000"), vec![4u8; 64]).unwrap();
+
+        let p = latest_point(&vault).expect("应当找到 pre-restore");
+        assert_eq!(p.created_ms, 3000, "必须取最近一份 pre-restore");
+        assert_eq!(p.size_bytes, 32);
+        assert_eq!(p.event, Some(EventTag::PreRestore));
+
+        // 只留别的 tag：不许退而求其次拿一份"差不多能用"的。
+        fs::remove_file(dir.join("pre-restore.1000")).unwrap();
+        fs::remove_file(dir.join("pre-restore.3000")).unwrap();
+        assert!(
+            latest_point(&vault).is_none(),
+            "没有 pre-restore 就必须返回 None —— 界面据此把按钮藏掉，\
+             而不是拿一份 pre-rekey 顶上（那会让『退回去』指向一次换密）"
+        );
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

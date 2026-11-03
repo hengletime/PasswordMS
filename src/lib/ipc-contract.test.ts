@@ -311,8 +311,13 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   曾经还有第 4 条 backup_clear_old_all（一次清空全部旧代），已**刻意删除**：
     //   没有界面的入口仍然是入口，任何能 invoke 的路径都能一次抹掉所有旧代，
     //   而按批删才是最小不可逆动作。等「更换钥匙」落地再连它一起加回来。
-    expect(total).toBe(79);
-    expect(withAttr).toBe(79);
+    // B-03 补口（2026-11-03）：+1（restore_latest_point），属性 79 → 80、命令名 75 → 76。
+    //   用户验收时问「说改坏了能退回来，怎么退？」——那时只有 status / 两个 clear，
+    //   **没有任何回退动作**，而备份文件名是 `pre-restore.<ms>`（无 `.vault` 后缀），
+    //   「从备份恢复」的对话框按扩展名过滤，列都列不出来。承诺配一个不存在的入口，
+    //   比不承诺更糟，所以这一条命令是**补上一个已经写在界面上的承诺**，不是加功能。
+    expect(total).toBe(80);
+    expect(withAttr).toBe(80);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
@@ -321,8 +326,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(79);
-    expect(new Set(names).size).toBe(75);
+    expect(names.length).toBe(80);
+    expect(new Set(names).size).toBe(76);
   });
 });
 

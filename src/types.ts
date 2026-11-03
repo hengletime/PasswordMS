@@ -73,6 +73,19 @@ export interface BackupStatusDto {
   last_error_kind: string | null;
   /** `never` / `unknown` / `fresh` / `stale`。 */
   staleness: string;
+  /**
+   * 最近一份 `pre-restore` 快照的时刻（毫秒）。**`0` = 没有可退回去的**。
+   *
+   * 只给时刻、不给路径：路径由后端自己挑。前端要是能传路径，就等于给 WebView
+   * 一个"指定任意文件覆盖库"的入口，而这个入口没有任何界面需要。
+   *
+   * ⚠️ `0` 时那个动作按钮**必须不渲染**。留着它，用户点下去只会拿到一个错误码，
+   * 而按钮本身已经先承诺了"能退回去"——承诺一件可能不存在的事，与断言它不存在
+   * 是同一个错的两种方向（1.5.29 整轮在清这个）。
+   */
+  latest_point_ms: number;
+  /** 那份快照有多大（`0` 同上）。只用于确认框里显示体积，不参与任何判断。 */
+  latest_point_bytes: number;
 }
 
 /** 换主密码的回执（B-03：旧代归档结果）。 */

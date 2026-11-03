@@ -185,6 +185,11 @@
     | null
   >(null);
   let backupClearing = $state(false);
+  // 「用这份退回去」的确认弹窗。密码**不是**走过场：后端先用它把那份快照验一遍，
+  // 验不过一个字节都不动、也不锁屏。所以这个框既是一次确认，也是一次校验。
+  let restorePointOpen = $state(false);
+  let restorePointPwd = $state('');
+  let restorePointBusy = $state(false);
   /** 换密回执里关于回滚点的部分（`null` = 这次没有可说的）。 */
   let pwdBackupDetail = $state<{
     count: number;
@@ -272,8 +277,49 @@
     }
   }
 
-  /** 把后端枚举翻成一句话。认不出的按"读写出错"——不显示原始 token。 */
-  function backupReason(kind: string | null): string {
+  /**
+   * 用本机备份退回去（回到最近一次恢复之前的样子）。
+   *
+   * 这个按钮存在的理由：设置页写着「改坏了能退回来」，但在此之前**没有任何回退动作**
+   * ——备份文件躺在 `backups/` 里、没有 `.vault` 后缀，连「从备份恢复」的对话框都
+   * 列不出它。一句承诺配一个不存在的入口，比不承诺更糟。
+   *
+   * 成功后**不调 `api.vault.lock()`**：后端在覆盖库文件之前已经锁了会话，这里再锁一次
+   * 只是掩盖事实；只把界面状态同步成"已锁"，让用户回到锁屏页重新解锁。
+   */
+  async function runRestorePoint(): Promise<void> {
+    if (restorePointBusy) {
+      return;
+    }
+    if (restorePointPwd.length === 0) {
+      ui.toast('error', 'settings.restore_point_pwd_required');
+      return;
+    }
+    restorePointBusy = true;
+    try {
+      const at = await api.backups.restoreLatestPoint(restorePointPwd);
+      restorePointOpen = false;
+      restorePointPwd = '';
+      // 顺序要紧：先把界面送回去，再报结果。反过来会出现"toast 已经弹出、
+      // 页面还停在设置页"的一瞬，而那一刻后端已经是锁定的——用户点什么都会失败。
+      await session.lock();
+      ui.toast('success', 'settings.restore_point_restored', {
+        time: formatDateTime(at, ui.locale),
+      });
+    } catch (err) {
+      const appErr = toAppError(err);
+      // 「密码打不开」与「备份坏了」是两件事，后端已经分流好了（`lock.restore_password_cannot_open`
+      // vs 损坏类文案），这里照它的 key 说，不折成一句通用的失败。
+      ui.toast('error', appErr.messageKey);
+      // 只在失败时刷：成功时会话已经锁掉，`backup_status` 必然 `NotUnlocked`——
+      // 刷了只会把 `backupLoadFailed` 置成 true，而组件下一秒就随锁屏卸载了。
+      await refreshBackupStatus();
+    } finally {
+      restorePointBusy = false;
+    }
+  }
+
+  /** 把后端枚举翻成一句话。认不出的按"读写出错"——不显示原始 token。 */  function backupReason(kind: string | null): string {
     switch (kind) {
       case 'no_space':
       case 'quota_exceeded':
@@ -1257,6 +1303,21 @@
         </div>
       {/if}
 
+      <!-- 「退回去」的入口。`latest_point_ms === 0` 时**整块不渲染**：
+           没有可退的东西，按钮留着就是一句做不到的承诺。 -->
+      {#if backupStatus.latest_point_ms > 0}
+        <button
+          class="pms-btn is-ghost"
+          type="button"
+          onclick={() => {
+            restorePointPwd = '';
+            restorePointOpen = true;
+          }}
+        >
+          {ui.t('settings.restore_point_restore')}
+        </button>
+      {/if}
+
       {#if backupStatus.current_files > 0}
         <button
           class="pms-btn is-ghost"
@@ -1632,6 +1693,61 @@
       onclick={() => void runBackupClear()}
     >
       {ui.t('common.delete')}
+    </button>
+  {/snippet}
+</Modal>
+
+<!-- 「用这份退回去」确认框。三件事必须同时说清，缺一句都会让人点错：
+     ① 回到哪一刻（具体时间，不是"N 份"）② 那次之后的改动会没有
+     ③ 为什么还要再输一次密码（只是确认是你本人）。
+     不写「回滚点」三个字：这个词在界面上已经换掉了，改用"备份"。 -->
+<Modal
+  open={restorePointOpen}
+  titleKey="settings.restore_point_restore_title"
+  onclose={() => {
+    if (!restorePointBusy) {
+      restorePointOpen = false;
+      restorePointPwd = '';
+    }
+  }}
+>
+  <p class="pms-alert is-danger">
+    <Icon name="alert" size={16} />
+    <span>
+      {ui.t('settings.restore_point_restore_body', {
+        time: formatDateTime(backupStatus?.latest_point_ms ?? 0, ui.locale),
+        size: formatBytes(backupStatus?.latest_point_bytes ?? 0),
+      })}
+    </span>
+  </p>
+  <label class="pms-label" for="rp-pwd">{ui.t('settings.restore_point_restore_pwd')}</label>
+  <input
+    id="rp-pwd"
+    class="pms-input"
+    type="password"
+    autocomplete="current-password"
+    bind:value={restorePointPwd}
+    disabled={restorePointBusy}
+  />
+  {#snippet footer()}
+    <button
+      class="pms-btn is-ghost"
+      type="button"
+      disabled={restorePointBusy}
+      onclick={() => {
+        restorePointOpen = false;
+        restorePointPwd = '';
+      }}
+    >
+      {ui.t('common.cancel')}
+    </button>
+    <button
+      class="pms-btn is-primary"
+      type="button"
+      disabled={restorePointBusy}
+      onclick={() => void runRestorePoint()}
+    >
+      {ui.t('settings.restore_point_restore_confirm')}
     </button>
   {/snippet}
 </Modal>

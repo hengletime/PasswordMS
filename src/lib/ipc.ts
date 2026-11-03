@@ -155,6 +155,19 @@ export const backups = {
   /** 删除**某一批**旧代回滚点（`batch_ms` 来自 `status().old_batches`）。 */
   clearOldBatch: (dirName: string): Promise<BackupClearDto> =>
     invoke<BackupClearDto>('backup_clear_old_batch', { dir_name: dirName }),
+  /**
+   * **用本机备份退回去**：把库恢复成最近一次恢复之前的样子。
+   *
+   * 源文件由后端自己挑（`backups/pre-restore.<ms>`），前端**不传路径**——传路径就等于
+   * 给 WebView 一个"指定任意文件覆盖库"的入口。返回恢复点的时刻，用于回显"回到了哪一点"。
+   *
+   * `masterPassword` 不是可选的，也不是为了走个形式：后端先用它把那份快照验一遍，
+   * 验不过**一个字节都不动**、也不锁屏。这是这一版给「恢复前先验密码」补的第二条路。
+   *
+   * 成功后会话已被后端锁掉（覆盖库文件前必须锁），调用方要负责把界面送回锁屏页。
+   */
+  restoreLatestPoint: (masterPassword: string): Promise<number> =>
+    invoke<number>('restore_latest_point', { master_password: masterPassword }),
   // 刻意**没有** clearOldAll：按批删是最小不可逆动作。没有界面的入口仍是入口，
   // 任何能 invoke 的路径都能一次抹掉全部旧代。等「更换钥匙」落地再连它一起加。
 };
