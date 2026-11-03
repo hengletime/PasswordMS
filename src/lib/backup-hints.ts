@@ -12,7 +12,7 @@
 // 抽成纯函数是为了能对它写**正向**断言（"给定这些输入，必须说一句话"）。原来只能写
 // 黑名单（"这几句里不许出现 X"），黑名单挡不住"整块没渲染出来"。
 
-import type { BackupStatusDto } from '../types';
+import type { BackupPointKind, BackupStatusDto } from '../types';
 
 /**
  * 提示的身份。
@@ -79,3 +79,42 @@ export function backupHints(
   }
   return [{ id: 'old_unreadable', count: n }];
 }
+
+/**
+ * 「这份备份是哪一步的」→ 文案键。
+ *
+ * ## 为什么是 `Record` 而不是模板字符串
+ *
+ * 组件里写 `ui.t(\`settings.restore_point_kind_${kind}\`)` 能跑，但**加一种备份类型时
+ * 不会有任何东西变红**：四份字典各少一个键，界面就会把那串 key 原样显示给用户。
+ * `Record<BackupPointKind, string>` 让"少一种"变成**类型错误**，而 `backup-hints.test.ts`
+ * 再把每个键钉到四本字典上（缺一本就红）。
+ *
+ * 文案本身的人话标准：说「哪一步之前/之后」，不出现「回滚点」「旧代」「批次」「归档」。
+ * 用户要选的是"回到哪一刻"，不是"这是一份什么类型的产物"。
+ */
+export const RESTORE_POINT_KIND_KEY: Record<BackupPointKind, string> = {
+  restore_before: 'settings.restore_point_kind_restore_before',
+  password_before: 'settings.restore_point_kind_password_before',
+  password_after: 'settings.restore_point_kind_password_after',
+  compact_before: 'settings.restore_point_kind_compact_before',
+  import_before: 'settings.restore_point_kind_import_before',
+  daily: 'settings.restore_point_kind_daily',
+  last_write: 'settings.restore_point_kind_last_write',
+};
+
+/**
+ * 取文案键，**认不出的类型给一句通用话**而不是把 key 裸奔给用户。
+ *
+ * 后端类型是封闭枚举，理论上进不了兜底分支；但 IPC 的返回是解析出来的 JSON，
+ * 版本不一致（前端旧、后端新）时真会出现一个前端没听说过的 `kind`。
+ * 那一刻的正确表现是"还能退回去，只是说不清是哪一步"，不是让 `settings.restore_point_kind_xxx`
+ * 出现在屏幕上。
+ */
+export function restorePointKindKey(kind: string): string {
+  return (
+    (RESTORE_POINT_KIND_KEY as Record<string, string | undefined>)[kind] ??
+    'settings.restore_point_kind_other'
+  );
+}
+

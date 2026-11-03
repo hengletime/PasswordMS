@@ -839,20 +839,163 @@ pub fn old_key_usage(vault_path: &Path) -> (u64, usize) {
     (files.iter().map(|f| f.size_bytes).sum(), files.len())
 }
 
-/// 最近一份 `pre-restore` 快照 —— 「用本机备份退回去」唯一能用的那一份。
+/// 一份**能拿去覆盖当前库**的整库副本（「用这份退回去」的候选项）。
 ///
-/// 只认 `pre-restore`：`pre-rekey` / `pre-compact` / `pre-import` 同样是整库副本，
-/// 但它们对应的是**别的**动作。混进来，界面上的「退回到上一个状态」就会指向
-/// 一次导入之前、一次压缩之前 —— 用户按下去，丢掉的是他根本没打算撤的那批改动。
+/// ## 为什么不叫 `latest_point`（D-178）
 ///
-/// 返回 `None` 有三种成因，调用方**都不许自己编一个数**：从没做过恢复、快照被配额
-/// 裁掉、目录读不出。界面上那个动作按钮必须跟着消失 —— 没有可退的东西，
-/// 按钮留在那里就是一句做不到的承诺。
-pub fn latest_point(vault_path: &Path) -> Option<BackupFile> {
-    inventory(vault_path)
+/// 1.5.30 里那个函数只认 `pre-restore`，理由是"别让『退回去』指向一次导入之前"。
+/// 理由本身没错，但它导出了一个人没算到的后果：`pre-restore` **只有在用户已经做过
+/// 一次「从备份恢复」之后才会产生**。于是那个按钮的可见条件几乎不可能成立——
+/// 全新装的库、只用过同步的库、只改过一次密码的库，一辈子都看不到它。
+/// 真机实测：主人的 `backups/` 里有 3 份完整可用的库副本，按钮一次都没出现过。
+///
+/// **[`BackupFile::needs_old_password`] 把"该用哪把密码"变成数据，不再靠名字猜**：
+/// 上一版是靠"只列 `pre-restore`"绕开这个问题的——只要候选里有需要旧密码的那几份，
+/// 那个绕法就失效了。绕不过去的地方不能靠缩小候选集解决，得把这件事说出来。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupPoint {
+    /// 回传给后端的**不透明标识**，形如 `<文件名>` 或 `<批次目录>/<文件名>`。
+    ///
+    /// 它**不是路径**：后端拿到它之后只会去重新枚举出来的清单里找同名项
+    /// （见 [`find_restore_point`]），匹配不上就报错。给前端一个能拼路径的字符串，
+    /// 等于给 WebView 一个"指定任意文件覆盖库"的入口。
+    pub token: String,
+    /// 这一份是"哪一步之前/之后"的备份。
+    pub kind: BackupPointKind,
+    /// 文件名解析出的时刻（毫秒）。
+    pub created_ms: i64,
+    pub size_bytes: u64,
+    /// 认得出的批次时刻（`None` = 当前这一代）。
+    pub batch_ms: Option<i64>,
+    /// 打开它要用**改密码之前**那一把密码。
+    pub needs_old_password: bool,
+}
+
+/// 一份整库副本对应的是"哪一步"。
+///
+/// 与 [`EventTag`] 分开：日备份与 `last.bak` 不是事件，但它们同样是整库副本，
+/// 同样是「退回去」的合法目标（而且往往是最有用的那两个——"今天开始时"和"上一次改动之前"）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackupPointKind {
+    /// 上一次「从备份恢复」之前。
+    RestoreBefore,
+    /// 上一次改主密码之前（**旧密码可开**）。
+    PasswordBefore,
+    /// 上一次改完主密码之后（新密码可开）。
+    PasswordAfter,
+    /// 上一次清理库之前。
+    CompactBefore,
+    /// 上一次导入之前。
+    ImportBefore,
+    /// 某一天开始时的日备份。
+    Daily,
+    /// 上一次改动之前。
+    LastWrite,
+}
+
+impl BackupFile {
+    /// 「退回去」用的标识：当前代是文件名，旧代是 `<批次目录>/<文件名>`。
+    ///
+    /// 文件名不是合法 UTF-8 时返回 `None`（这种文件在候选清单里会被跳过——
+    /// 编一个 `to_string_lossy` 的假名字回来，用户点它必然匹配不上，界面只会说"不在了"）。
+    pub fn restore_token(&self) -> Option<String> {
+        let name = self.path.file_name()?.to_str()?;
+        Some(match &self.batch_dir {
+            Some(batch) => format!("{batch}/{name}"),
+            None => name.to_string(),
+        })
+    }
+
+    /// 打开这一份要用**改密码之前**那一把密码。
+    ///
+    /// 两条来源，缺一条就是"用现在的密码去试一份旧密码的备份"，而用户试错的那一次
+    /// 往往就是最后一次：
+    /// ① 它在 `old-key/<批次>/` 里——整批都是换密那一刻的存量，全用旧密码；
+    /// ② 它是 `pre-rekey`——换密**之前**拍的，内容就是旧密码的库。
+    ///    （正常会被 [`isolate_old_key_backups`] 挪进 `old-key/`；挪失败时留在当前代，
+    ///    这时它贴着"当前代"的外衣，只有这一条能把它认出来。）
+    pub fn needs_old_password(&self) -> bool {
+        self.class == BackupClass::OldKey || self.event == Some(EventTag::PreRekey)
+    }
+}
+
+/// 按**文件名**判这一份是哪一步（`None` = 认不出，不进候选清单）。
+///
+/// 为什么按名字而不按 [`BackupClass`]：`old-key/<批次>/` 里装的是换密那一刻的存量，
+/// 里面既有 `last.bak`、也有 `bak.<日期>`、也有各种事件快照。按 `class` 分类会把
+/// 一整个旧批次都说成"旧代"，界面就只能写一句"这几份是旧代的"，说不出它们各自
+/// 是什么时候的——而用户要选的正是"回到哪一刻"。
+fn point_kind_from_name(name: &str) -> Option<BackupPointKind> {
+    if name == "last.bak" {
+        return Some(BackupPointKind::LastWrite);
+    }
+    if name.starts_with("bak.") {
+        return Some(BackupPointKind::Daily);
+    }
+    parse_event_tag(name).map(|t| match t {
+        EventTag::PreRestore => BackupPointKind::RestoreBefore,
+        EventTag::PreRekey => BackupPointKind::PasswordBefore,
+        EventTag::PostRekey => BackupPointKind::PasswordAfter,
+        EventTag::PreCompact => BackupPointKind::CompactBefore,
+        EventTag::PreImport => BackupPointKind::ImportBefore,
+    })
+}
+
+/// 列出**全部**能拿去覆盖当前库的整库副本（新的在前）。
+///
+/// 范围刻意放开：日备份、`last.bak`、五种事件快照、`old-key/` 里的每一份，
+/// 只要文件名认得出是备份就列。上一版只列 `pre-restore`，结果是按钮几乎永不出现
+/// （见 [`BackupPoint`] 的 D-178 说明）——而"列哪些"这件事本来就不该由
+/// 一个人凭想象替用户决定：用户最想退回的往往就是"昨天开始时"或"刚才改错之前"。
+///
+/// 风险不靠缩小候选集来控，靠三件事：
+/// ① 每一行都写明"这是哪一步的备份"，用户看得见自己选的是什么；
+/// ② [`BackupFile::needs_old_password`] 明说该用哪把密码；
+/// ③ 覆盖之前先拍一份 `pre-restore`——**退回去本身可再退回来**。
+///
+/// 认不出名字的文件（用户自己丢进来的东西、`old-key/` 里的杂物）一律不列：
+/// 拿一个来历不明的文件去覆盖库，比什么都不做糟得多。
+pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
+    let mut files = inventory(vault_path);
+    files.extend(old_key_inventory(vault_path));
+    let mut out: Vec<BackupPoint> = files
         .into_iter()
-        .filter(|f| f.event == Some(EventTag::PreRestore))
-        .max_by_key(|f| f.created_ms)
+        .filter_map(|f| {
+            let name = f.path.file_name()?.to_str()?;
+            let kind = point_kind_from_name(name)?;
+            let token = f.restore_token()?;
+            Some(BackupPoint {
+                token,
+                kind,
+                created_ms: f.created_ms,
+                size_bytes: f.size_bytes,
+                batch_ms: f.batch_ms,
+                needs_old_password: f.needs_old_password(),
+            })
+        })
+        .collect();
+    // 新的在前：用户要找的几乎总是"刚才那一下"。同一时刻按标识兜底排序，
+    // 让顺序在两次调用之间保持稳定（否则列表会莫名抖动，用户点错行）。
+    out.sort_by(|a, b| {
+        b.created_ms
+            .cmp(&a.created_ms)
+            .then_with(|| a.token.cmp(&b.token))
+    });
+    out
+}
+
+/// 按 [`BackupPoint::token`] 取回那一份**真实的**文件。
+///
+/// **只在重新枚举出来的清单里找，绝不拿 token 拼路径。** token 来自 WebView，
+/// 拼路径等于给它一个"用任意文件覆盖库"的入口（比如 `../../某处/别人的.vault`）。
+/// 重新枚举之后，能匹配上的必然是备份目录里真实存在、且名字认得出的那一份。
+pub fn find_restore_point(vault_path: &Path, token: &str) -> Option<BackupFile> {
+    let mut files = inventory(vault_path);
+    files.extend(old_key_inventory(vault_path));
+    files
+        .into_iter()
+        .find(|f| f.restore_token().as_deref() == Some(token))
 }
 
 fn parse_event_tag(name: &str) -> Option<EventTag> {
@@ -2058,32 +2201,143 @@ mod tests {
     }
 
     #[test]
-    fn 退回去只认pre_restore其余整库副本一律不碰() {
-        // 「退回去」= 撤掉**最近一次恢复**。其它事件快照（换密前 / 压缩前 / 导入前）
-        // 同样是整库副本，但对应的是别的动作。混进来，用户按一次「退回去」丢掉的
-        // 可能是他根本没打算撤的一批改动——而按钮上写的是"退回到上一次恢复之前"。
-        let (root, vault) = temp_vault("latest-point");
+    fn 退回去要列出全部整库副本并说清各自是哪一步() {
+        // D-178：上一版只认 `pre-restore`，而那个文件只有在用户**已经做过一次恢复**
+        // 之后才存在 —— 按钮于是几乎永不出现（真机：3 份可用副本、一次没亮）。
+        // 现在全列，每一份都带"哪一步"与"要不要旧密码"。
+        let (root, vault) = temp_vault("restore-points");
         let dir = backup_dir(&vault);
         fs::create_dir_all(&dir).unwrap();
-        // 三个文件都"更新"，但只有一个是对的源。
-        fs::write(dir.join("pre-restore.1000"), vec![1u8; 16]).unwrap();
-        fs::write(dir.join("pre-restore.3000"), vec![2u8; 32]).unwrap();
-        fs::write(dir.join("pre-rekey.5000"), vec![3u8; 48]).unwrap();
-        fs::write(dir.join("pre-import.6000"), vec![4u8; 64]).unwrap();
+        // 事件快照的时刻由文件名里的 epoch-ms 决定（这里用 2026-11-02 起算的一串偏移），
+        // 日备份由 `bak.<日期>` 决定 —— 两者都不看 mtime，所以顺序断言与运行时钟无关。
+        let base = 1_793_577_600_000i64;
+        for (name, size) in [
+            (format!("pre-restore.{}", base + 1000), 16usize),
+            (format!("pre-rekey.{}", base + 2000), 32),
+            (format!("post-rekey.{}", base + 3000), 48),
+            (format!("pre-compact.{}", base + 4000), 64),
+            (format!("pre-import.{}", base + 5000), 80),
+            ("bak.20261031".to_string(), 96),
+            ("last.bak".to_string(), 112),
+            // 认不出名字的杂物不进清单：拿来历不明的文件覆盖库比什么都不做糟。
+            ("我的笔记.txt".to_string(), 6),
+        ] {
+            fs::write(dir.join(&name), vec![7u8; size]).unwrap();
+        }
+        // 旧代那一批：同一批里既有事件快照也有日备份，全都只能用旧密码开。
+        let old = old_key_dir(&vault).join("1793404800000");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("pre-rekey.9999"), vec![8u8; 24]).unwrap();
+        fs::write(old.join("bak.20261030"), vec![9u8; 40]).unwrap();
 
-        let p = latest_point(&vault).expect("应当找到 pre-restore");
-        assert_eq!(p.created_ms, 3000, "必须取最近一份 pre-restore");
-        assert_eq!(p.size_bytes, 32);
-        assert_eq!(p.event, Some(EventTag::PreRestore));
+        let points = restore_points(&vault);
+        // `last.bak` 的 `created_ms` 由文件 mtime 回填（文件名里没有时刻），
+        // 于是它恒排最前 —— 位置由运行时钟决定，这里只单独校验它在、且标记正确，
+        // 不把它钉进顺序断言（否则这条用例会因为"跑测试的日期"而红/绿）。
+        let last_write = points
+            .iter()
+            .find(|p| p.kind == BackupPointKind::LastWrite)
+            .expect("last.bak 也是整库副本，必须在候选里");
+        assert!(!last_write.needs_old_password);
+        assert_eq!(last_write.token, "last.bak");
 
-        // 只留别的 tag：不许退而求其次拿一份"差不多能用"的。
-        fs::remove_file(dir.join("pre-restore.1000")).unwrap();
-        fs::remove_file(dir.join("pre-restore.3000")).unwrap();
-        assert!(
-            latest_point(&vault).is_none(),
-            "没有 pre-restore 就必须返回 None —— 界面据此把按钮藏掉，\
-             而不是拿一份 pre-rekey 顶上（那会让『退回去』指向一次换密）"
+        let got: Vec<(BackupPointKind, bool)> = points
+            .iter()
+            .filter(|p| p.kind != BackupPointKind::LastWrite)
+            .map(|p| (p.kind, p.needs_old_password))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                // 新的在前。
+                (BackupPointKind::ImportBefore, false), // pre-import.  base+5000
+                (BackupPointKind::CompactBefore, false), // pre-compact. base+4000
+                (BackupPointKind::PasswordAfter, false), // post-rekey.  base+3000
+                (BackupPointKind::PasswordBefore, true), // pre-rekey.   base+2000
+                (BackupPointKind::RestoreBefore, false), // pre-restore. base+1000
+                (BackupPointKind::Daily, false),        // bak.20261031
+                (BackupPointKind::Daily, true),         // 旧代 bak.20261030
+                (BackupPointKind::PasswordBefore, true), // 旧代 pre-rekey.9999
+            ],
+            "候选清单不对（归类、旧密码标记或顺序）：{got:?}"
         );
+
+        // 每一条都必须能按标识找回原文件，且找回的**就是**清单里那一份。
+        for p in &points {
+            let f = find_restore_point(&vault, &p.token)
+                .unwrap_or_else(|| panic!("标识 {} 找不回原文件", p.token));
+            assert_eq!(f.size_bytes, p.size_bytes, "标识 {} 指错了文件", p.token);
+            assert_eq!(f.created_ms, p.created_ms, "标识 {} 时刻对不上", p.token);
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 旧代里的last_bak也要标成需要旧密码() {
+        // `isolate_old_key_backups` 搬的是换密那一刻的**全部存量**，里面必然有
+        // `last.bak` 和 `bak.<日期>`。按 `class` 分类会把它们漏成"当前代、新密码可开"，
+        // 用户就会拿新密码去试一份旧密码的备份——试错的那一次往往就是最后一次。
+        let (root, vault) = temp_vault("restore-old-last");
+        let old = old_key_dir(&vault).join("9000");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("last.bak"), vec![1u8; 64]).unwrap();
+
+        let points = restore_points(&vault);
+        assert_eq!(points.len(), 1);
+        assert_eq!(points[0].kind, BackupPointKind::LastWrite);
+        assert!(
+            points[0].needs_old_password,
+            "旧代里的 last.bak 只能用旧密码开 —— 标错方向等于让用户试错一次"
+        );
+        assert_eq!(points[0].batch_ms, Some(9000));
+        assert_eq!(points[0].token, "9000/last.bak");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 退回去的标识只能命中备份目录里真实存在的那一份() {
+        // 这是安全边界，不是礼貌校验：token 从 WebView 来，若被拼成路径使用，
+        // 拿到库写权限的人就能用任意文件覆盖保险库。判据 = 只认重新枚举出来的清单。
+        let (root, vault) = temp_vault("restore-token");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("pre-restore.1000"), vec![1u8; 16]).unwrap();
+        // 库本体就躺在备份目录的隔壁：任何能拼路径的实现在这里都会露出马脚。
+        fs::write(root.join("evil.vault"), vec![9u8; 32]).unwrap();
+
+        for bad in [
+            "../evil.vault",
+            "../../evil.vault",
+            "old-key/9000/../../evil.vault",
+            "pre-restore.1000/../../../evil.vault",
+            "pre-restore.9999",
+            "",
+            "我的笔记.txt",
+        ] {
+            assert!(
+                find_restore_point(&vault, bad).is_none(),
+                "非法标识 {bad:?} 竟然命中了文件"
+            );
+        }
+        assert!(find_restore_point(&vault, "pre-restore.1000").is_some());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 没有整库副本时候选清单是空的() {
+        // 空清单 = 界面一个按钮都不渲染。这里必须能区分"目录里什么都没有"与
+        // "有东西但都不认得出"——后者同样是空清单，但原因不同（前者是从来没备份，
+        // 后者是有人在备份目录里放了别的东西）。
+        let (root, vault) = temp_vault("restore-nothing");
+        assert!(restore_points(&vault).is_empty(), "备份目录都还没建");
+
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("hello.txt"), b"x").unwrap();
+        assert!(restore_points(&vault).is_empty(), "认不出名字的一律不列");
 
         let _ = fs::remove_dir_all(&root);
     }

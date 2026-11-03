@@ -156,18 +156,23 @@ export const backups = {
   clearOldBatch: (dirName: string): Promise<BackupClearDto> =>
     invoke<BackupClearDto>('backup_clear_old_batch', { dir_name: dirName }),
   /**
-   * **用本机备份退回去**：把库恢复成最近一次恢复之前的样子。
+   * **用本机备份退回去**：把库恢复成用户点的那一份的样子。
    *
-   * 源文件由后端自己挑（`backups/pre-restore.<ms>`），前端**不传路径**——传路径就等于
-   * 给 WebView 一个"指定任意文件覆盖库"的入口。返回恢复点的时刻，用于回显"回到了哪一点"。
+   * 收的是 `pointToken`（来自 `status().points` 的不透明标识），**不是路径**：
+   * 后端拿它只会去重新枚举出来的清单里找同名项，`../../某处.vault` 这种串匹配不上。
+   * 前端要是能传路径，就等于给 WebView 一个"用任意文件覆盖库"的入口。
    *
-   * `masterPassword` 不是可选的，也不是为了走个形式：后端先用它把那份快照验一遍，
-   * 验不过**一个字节都不动**、也不锁屏。这是这一版给「恢复前先验密码」补的第二条路。
+   * `masterPassword` 不是走过场：后端先用它把那一份验一遍，验不过**一个字节都不动**、
+   * 也不锁屏。换过主密码之后 `old-key/` 里那几份只能用**改密码之前**那把开——
+   * 那种行界面必须标出来（`needs_old_password`），并且退回去之后主密码会变回那一把。
    *
    * 成功后会话已被后端锁掉（覆盖库文件前必须锁），调用方要负责把界面送回锁屏页。
    */
-  restoreLatestPoint: (masterPassword: string): Promise<number> =>
-    invoke<number>('restore_latest_point', { master_password: masterPassword }),
+  restoreFromPoint: (pointToken: string, masterPassword: string): Promise<number> =>
+    invoke<number>('restore_from_point', {
+      point_token: pointToken,
+      master_password: masterPassword,
+    }),
   // 刻意**没有** clearOldAll：按批删是最小不可逆动作。没有界面的入口仍是入口，
   // 任何能 invoke 的路径都能一次抹掉全部旧代。等「更换钥匙」落地再连它一起加。
 };

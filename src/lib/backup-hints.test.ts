@@ -17,7 +17,8 @@
 // 把 `null` 当 `0` 处理，界面就会在"盘上有、我删不掉、我还不知道有几个"时保持沉默。
 
 import { describe, expect, it } from 'vitest';
-import { backupHints } from './backup-hints';
+import { RESTORE_POINT_KIND_KEY, backupHints, restorePointKindKey } from './backup-hints';
+import { LOCALES, hasKey } from './i18n/index';
 
 /** 只取函数关心的那个字段，其余留空（它不读别的，也不许读别的）。 */
 function status(unreadable_batches: number | null): { unreadable_batches: number | null } {
@@ -83,5 +84,71 @@ describe('D-175 组件接线：判定必须来自函数，不许写回布局', (
   it('两个键都还在模板里（抽了函数却只渲染一句 = 另一句被静默丢掉）', () => {
     expect(source).toContain("ui.t('settings.restore_point_old_unreadable_uncounted')");
     expect(source).toContain("ui.t('settings.restore_point_old_unreadable',");
+  });
+});
+
+// D-178：「用这份退回去」从"最近一份 pre-restore"改成"盘上有几份就列几份"。
+//
+// 上一版的错是**条件几乎不可能成立**（`pre-restore` 只有做过一次恢复之后才存在），
+// 而这一类错没有任何文案测试看得出来：键都在、字典都对、组件也确实渲染了——
+// 只是那一行永远不进入分支。所以这里钉住的是"清单存在时必须列出来"这个方向。
+describe('D-178 退回去的清单：每种备份类型都得有一句人话', () => {
+  it('七种类型全覆盖，且互不重复（复制粘贴换掉一个值，两条类型就共用一个键）', () => {
+    const keys = Object.values(RESTORE_POINT_KIND_KEY);
+    expect(keys).toHaveLength(7);
+    expect(new Set(keys).size).toBe(7);
+  });
+
+  it('每个键在四种语言里都是真存在的（少一本字典，界面就把 key 原样显示给用户）', () => {
+    const keys = [...Object.values(RESTORE_POINT_KIND_KEY), 'settings.restore_point_kind_other'];
+    for (const locale of LOCALES) {
+      for (const key of keys) {
+        expect(hasKey(locale, key), `${locale}:${key}`).toBe(true);
+      }
+    }
+  });
+
+  it('认不出的类型给一句通用话，不把 key 裸奔出去', () => {
+    // 版本不一致（前端旧、后端新）真会出现一个前端没听说过的 kind。
+    // 那一刻的正确表现是"还能退回去，只是说不清是哪一步"。
+    expect(restorePointKindKey('未来新增的类型')).toBe('settings.restore_point_kind_other');
+    expect(restorePointKindKey('')).toBe('settings.restore_point_kind_other');
+    // 正向：认得出的必须走自己的键，不能一律落到兜底（那样上面那条也会假绿）。
+    expect(restorePointKindKey('password_before')).toBe(
+      'settings.restore_point_kind_password_before',
+    );
+  });
+});
+
+describe('D-178 组件接线：清单来自后端，不许写死只认一种', () => {
+  const raw = import.meta.glob(['../components/Settings.svelte'], {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }) as Record<string, string>;
+  const source = (
+    Object.entries(raw).find(([p]) => p.endsWith('/Settings.svelte'))?.[1] ?? ''
+  ).replace(/\r\n/g, '\n');
+
+  it('先钉住守卫本身没空跑', () => {
+    expect(source.length).toBeGreaterThan(1000);
+    expect(source).toContain('backupStatus.points');
+  });
+
+  it('旧判据 `latest_point_ms` 一句都不许留（留着就是两个入口两套判据）', () => {
+    expect(source).not.toContain('latest_point_ms');
+    expect(source).not.toContain('restoreLatestPoint');
+  });
+
+  it('行上必须写"要旧密码"（用户是照着行文字决定点哪一行的）', () => {
+    expect(source).toContain("'settings.restore_point_needs_old_pwd'");
+  });
+
+  it('确认框的文案与密码说明都按 `needs_old_password` 分叉', () => {
+    // 只改一半是最坏的情形：文案说"这是旧密码的备份"，密码框却写着
+    // "输入主密码确认（只是确认是你本人）"——那一刻用户会去试现在的密码。
+    expect(source).toContain("'settings.restore_point_restore_body_old_pwd'");
+    expect(source).toContain("'settings.restore_point_restore_pwd_old'");
+    expect(source).toContain("'settings.restore_point_restored_old_pwd'");
   });
 });

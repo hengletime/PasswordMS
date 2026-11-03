@@ -13,7 +13,7 @@ use passwordms_core::model::item::{Item, ItemKind};
 use passwordms_core::model::sync_state::PairedDevice;
 use passwordms_core::model::trash::TrashEntry;
 use passwordms_core::model::vault::{GeneratorOptions, HealthConfig, VaultSettings};
-use passwordms_core::store::backup::{BackupErrorKind, Staleness};
+use passwordms_core::store::backup::{BackupErrorKind, BackupPointKind, Staleness};
 use passwordms_core::totp::TotpCode;
 
 /// 删除回滚点的回执。
@@ -88,16 +88,46 @@ pub struct BackupStatusDto {
     /// 由后端算而不是前端算：判据依赖库文件 mtime 与"磁盘上到底有没有备份"，
     /// 前端两样都拿不到。
     pub staleness: Staleness,
-    /// 最近一份 `pre-restore` 快照的时刻（毫秒；`0` = 没有可退回去的）。
+    /// 能拿去覆盖当前库的全部整库副本（新的在前）。
     ///
-    /// 单独给时刻、不给路径：路径是应用自己挑的，回传给前端只会多一个"前端能指定
-    /// 任意文件去覆盖库"的入口。界面要的只是"能回到哪个时间点"这一句话。
+    /// **为什么是一张清单而不是"最近的那一刻"**（D-178）：1.5.30 只给最近一份
+    /// `pre-restore`，而那个文件只有在用户**已经做过一次恢复**之后才存在 ——
+    /// 于是那个按钮几乎永不出现（真机：盘上 3 份完整可用副本，按钮一次没亮）。
+    /// 一个"存在但从不出现"的入口，和 1.5.29 那个"承诺却没有入口"是同一个错。
     ///
-    /// `0` 时界面**必须把动作按钮藏掉**——没有可退的东西，按钮留着就是一句做不到的
-    /// 承诺，而这正是 1.5.29 之前那一整轮在清的东西。
-    pub latest_point_ms: i64,
-    /// 那份快照的字节数（`0` 同上）。只用于确认框里的"共多大"，不参与任何判断。
-    pub latest_point_bytes: u64,
+    /// 清单为空时界面**一个按钮都不渲染**；只要非空，每一行都能点。
+    pub points: Vec<BackupPointDto>,
+}
+
+/// 一份能拿去覆盖当前库的整库副本。
+///
+/// 回传的是 [`BackupPointDto::token`] 而不是路径：后端拿它只会去**重新枚举出来的**
+/// 清单里找同名项。给前端一个能拼路径的字符串，等于给 WebView 一个"用任意文件
+/// 覆盖保险库"的入口——而这个入口没有任何界面需要。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupPointDto {
+    /// 不透明标识：`<文件名>` 或 `<批次目录>/<文件名>`。原样回传给
+    /// `restore_from_point`，不要在这里解析它。
+    pub token: String,
+    /// 这一份是"哪一步之前/之后"的备份（`restore_before` / `password_before` /
+    /// `password_after` / `compact_before` / `import_before` / `daily` / `last_write`）。
+    ///
+    /// 界面按它选文案。**不要**在前端自己从 token 猜——token 是文件名，
+    /// 解析文件名是后端的知识，散到前端就是第二份判据。
+    pub kind: BackupPointKind,
+    /// 文件名解析出的时刻（毫秒）。列表的排序依据也是它。
+    pub at_ms: i64,
+    pub bytes: u64,
+    /// 认得出的批次时刻（`null` = 当前这一代）。
+    ///
+    /// 只用于显示"这是哪一次改密码之前的那批"。**不参与任何判断**：
+    /// 同一批里可能混着解析不出的目录名。
+    pub batch_ms: Option<i64>,
+    /// 打开这一份要用**改密码之前**那一把密码。
+    ///
+    /// 界面必须在行上就说出来，并且把确认框里的密码说明换掉——那一步的密码
+    /// 不只是"确认是你本人"，它就是另一把钥匙；退回去之后主密码也会变回那一把。
+    pub needs_old_password: bool,
 }
 
 /// 启动 / 解锁状态。

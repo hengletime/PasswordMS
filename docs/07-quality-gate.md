@@ -180,6 +180,64 @@ D-174 的第一版让 `remove_folder_direct` 在删壳的同一次操作里把�
 - **产物新鲜度**：`find src src-tauri crates docs package.json -newer <exe>` 排除
   `target/` 与 `src-tauri/gen/`（Android 构建中间产物晚于桌面 exe 是正常时序）后为空。
 
+### 1.2j 最近一次完整实跑（2026-11-03 15:39 起 · v1.5.31 · D-178）
+
+> 口径：`bash scripts/gate-all.sh`（日志 `target/_gate_1531.log`），整轮墙钟
+> **8 分 37 秒**（`stat` 实测：15:39:26 起 / 15:48:03 止——比 1.5.30 那轮快，
+> 因为 Rust 测试二进制已在盘上、没有重新编译）。
+> 总判定 **PASS（通过 9 门 / 跳过 1 门 / 失败 0）**。
+> **锚：HEAD `02dfa5d`，开工时工作区已有未提交改动（版本号 + 本轮代码），
+> 锚自检比对的是"整轮期间 HEAD 与工作区文件集合未变"——通过，故读数可引用。**
+
+| # | 门 | 本次实测（v1.5.31） | 判定 |
+|---|----|------|------|
+| 0 | **版本同步门** | 四处一致 `1.5.31` + `cargo metadata --locked --offline` 通过 | ✅ 2s |
+| 1 | 前端单测 | **85 文件 816/816 通过**（1.5.30 是 85/809：+7 例，全部来自 D-178 的清单/文案/接线） | ✅ 5s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 6s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（既有浅色按钮对比度，未达 AA 4.5，已知项） | ✅ 1s |
+| 4 | fmt | **0 处差异** | ✅ 1s |
+| 5 | Rust 全量 | **400 通过 / 0 失败 / 1 ignored / 47 个测试二进制**（397 → 400：+3 例，备份候选清单） | ✅ 482s |
+| 6 | clippy | **0 warning**（`--workspace --all-targets`） | ✅ 12s |
+| 7 | 体积门-桌面 | 只核验 `PasswordMS_1.5.31_*` 两件 | ✅ 5s |
+| 8 | 体积门-Android | 跑门时尚未出包 → 跳过（出包后单独复跑，见下） | ⏭ |
+
+**这一轮门禁没逮住东西，是件需要说明的事**：D-178 改的是**候选集的判据**，
+而它在此之前没有任何测试覆盖（旧判据只认 `pre-restore`，谁也没为"哪些备份能退回去"
+写过断言）。所以本轮同时补了三条**正向**用例——它们是新写的，天然不会红。
+真正拦住冒烟的是变异检验（手工做，不进 CI）：
+
+| 变异 | 期望 | 实测 |
+|---|---|---|
+| `needs_old_password()` 恒返回 `false` | 两条用例红 | ✅ `退回去要列出全部整库副本…` 与 `旧代里的last_bak…` 双双 FAILED |
+
+**如实登记一处不严谨**：本轮实跑期间我改了 `docs/06-ui-design.md`
+（补 §6.64.12 与卡片线框图）。锚自检只比对 `git status --porcelain` 的**文件集合**
+与 HEAD，文档内容变动它看不见——所以"锚自检通过"这句话在这轮里**不等于"文件树一个
+字节没动"**。判据上的后果可控：没有任何门读 `docs/`（`npm run test` / `check` /
+`check-css` / `cargo test` / `clippy` / `check-size` 的输入都不含文档），代码与脚本
+在整轮期间零改动。要堵这个洞得把锚扩到内容哈希——**已知未修**，见 §1.2a 的锚自检说明。
+
+**出包（同日 15:52–15:58 实测，非推算）**：桌面构建 2 分 48 秒、Android 构建 3 分 37 秒。
+
+| 产物 | 字节 | sha256 前缀 |
+|---|---|---|
+| `PasswordMS_1.5.31_x64-setup.exe`（NSIS） | 2,104,255 | `6b5eb8829170` |
+| `PasswordMS_1.5.31_x64_en-US.msi` | 2,973,696 | `ebcf98382366` |
+| `PasswordMS-1.5.31-portable-x64.zip`（4 条目） | 2,476,111 | `829e47c4d291` |
+| `PasswordMS-1.5.31-arm64.apk`（V3 签名 + zipalign） | 7,856,555 | `14824b4ea329` |
+| 裸 exe | 5,100,544 | `a146683282eb` |
+
+- **体积门（出包后复跑 `check-size.sh all`，不加 `--allow-missing`）**：三件逐一达标
+  （NSIS 2.01 MB / MSI 2.84 MB / APK 7.49 MB），且只核验 1.5.31。
+- **zip 内 exe ↔ 裸 exe**：`a146683282eb…` 两边逐字节相同。
+- **双端同源**：`assets/index-DzGgGnPq.js` 在 `dist/index.html`、裸 exe、APK 内
+  `libpasswordms_lib.so` 三处一致（字节级搜资源名字符串）。
+- **NSIS 端到端静默安装**：`/S /D=<tmp>` 退出码 0，落地 exe `FileVersion = 1.5.31`、
+  `ProductVersion = 1.5.31`、5,100,544 B（安装后哈希与裸 exe 不同属正常，NSIS 改写资源段）。
+- **产物新鲜度**：`find src src-tauri crates docs scripts package.json Cargo.toml
+  -newer <裸 exe>` 排除 `target/` 与 `src-tauri/gen/` 后**输出为空**——没有源文件或文档
+  晚于 exe，说明树在构建前就冻结了。
+
 ### 1.2b 最近一次完整实跑（2026-10-30 11:40 起 · v1.4.16 · D-133/D-134）
 
 > 口径：`bash scripts/gate-all.sh --keep-going` 一次跑完 8 门，文件树在起跑前已静止（构建产物晚于全部源码）。

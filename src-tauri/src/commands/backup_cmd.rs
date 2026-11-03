@@ -28,7 +28,7 @@ use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
 use passwordms_core::store::backup;
 
-use crate::dto::{BackupBatchDto, BackupClearDto, BackupStatusDto};
+use crate::dto::{BackupBatchDto, BackupClearDto, BackupPointDto, BackupStatusDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
 
@@ -89,10 +89,19 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         })
         .collect();
     let st = backup::state(&path);
-    // 「退回去」的源必须是 `pre-restore`，不能是任意一份整库副本——理由见
-    // [`backup::latest_point`]。取一次、下面两处都用它，免得"有没有"和"多大"分头问
-    // 两次目录，中间被轮转改掉。
-    let latest = backup::latest_point(&path);
+    // 「退回去」的候选清单：**全部**能覆盖当前库的整库副本，不是只有 `pre-restore`
+    // ——理由见 [`backup::BackupPoint`]（D-178：只认一份会让按钮几乎永不出现）。
+    let points = backup::restore_points(&path)
+        .into_iter()
+        .map(|p| BackupPointDto {
+            token: p.token,
+            kind: p.kind,
+            at_ms: p.created_ms,
+            bytes: p.size_bytes,
+            batch_ms: p.batch_ms,
+            needs_old_password: p.needs_old_password,
+        })
+        .collect();
 
     Ok(BackupStatusDto {
         current_bytes,
@@ -105,9 +114,7 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         last_error_ms: st.last_error_ms,
         last_error_kind: st.last_error_kind,
         staleness: backup::staleness(&path, st.last_ms),
-        // 「退回去」能用的那一份：没有就是 `0`，界面据此把按钮藏掉。
-        latest_point_ms: latest.as_ref().map(|f| f.created_ms).unwrap_or(0),
-        latest_point_bytes: latest.as_ref().map(|f| f.size_bytes).unwrap_or(0),
+        points,
     })
 }
 

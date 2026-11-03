@@ -369,43 +369,58 @@ pub(crate) fn overwrite_vault_with(src: &Path, dest: &Path) -> IpcResult<()> {
     restore_backup_from(src, dest).map_err(|e| backup_reject(src, e))
 }
 
-/// 「用本机备份退回去」：把库恢复成**最近一次恢复之前**的样子。
+/// 「用这份退回去」：把库恢复成用户**点的那一份**本机备份的样子。
 ///
 /// 与「从备份恢复」的区别只有两处，其余全部共用同一段代码：
-/// - 源文件由应用自己指定（`backups/pre-restore.<ms>`），用户不必去文件对话框里找；
-///   这也是必要的——那个文件没有 `.vault` 后缀，恢复对话框的过滤器根本列不出它。
+/// - 源文件由界面从候选清单里挑（`backups/` 里的整库副本），用户不必去文件对话框里
+///   找——那些文件没有 `.vault` 后缀，恢复对话框的过滤器根本列不出它们。
 /// - 调用时界面是**已解锁**的（按钮在设置页），所以本命令要自己把会话锁掉再覆盖。
 ///
-/// 返回恢复点的时刻（毫秒），供界面回显"回到了哪个时间点"。
+/// ## 为什么收 `point_token` 而不是路径（D-178）
+///
+/// token 是**不透明标识**（`<文件名>` / `<批次目录>/<文件名>`），后端拿它只会去
+/// [`backup::find_restore_point`] 重新枚举出来的清单里找同名项。收路径就等于给 WebView
+/// 一个"用任意文件覆盖保险库"的入口；收 token 则连 `../../` 都匹配不上。
+///
+/// ## 为什么可能要用**另一把**密码
+///
+/// 换过主密码之后，`old-key/` 里那几批备份只能用**改密码之前**那把开。这一条不是
+/// 提示语问题：验过之后整份库都变成旧密码加密的，**主密码也就跟着变回那一把**。
+/// 所以界面必须按 [`backup::BackupPoint::needs_old_password`] 换掉确认框文案。
+///
+/// 返回恢复点的时刻（毫秒），供界面回显"回到了哪一刻"。
 #[tauri::command(rename_all = "snake_case")]
-pub fn restore_latest_point(
+pub fn restore_from_point(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
+    point_token: String,
     master_password: String,
 ) -> IpcResult<i64> {
     let dest = vault_path(&app)?;
-    // `latest_point` 为 `None` 时**不编造一份"差不多能用的"**（不拿 `pre-rekey` 顶上）：
-    // 界面在没有可退的东西时本来就不渲染按钮，走到这里只可能是两次调用之间被删掉了。
-    let point = match backup::latest_point(&dest) {
+    // 找不到时**不编造一份"差不多能用的"**，也不拿最近的一份顶上：用户点的是清单里
+    // 的那一行，换一份给他等于在没告知的情况下改了他选的恢复点。
+    // 走到这里通常意味着两次调用之间那份被删掉了（或者被配额裁掉）。
+    let point = match backup::find_restore_point(&dest, &point_token) {
         Some(p) => p,
         None => {
             let e = CoreError::Validation("restore_point_absent".to_string());
             return Err(IpcError {
                 code: e.code().to_string(),
-                message_key: "settings.restore_point_nothing".to_string(),
+                message_key: "settings.restore_point_gone".to_string(),
                 record_count: None,
             });
         }
     };
 
-    // ① 先把源复制到库目录旁边。`pre-restore` 快照自己就躺在 `backups/` 里，而紧接着
-    //    那次快照会按配额裁一轮，被裁的优先是最旧的一份——"最旧的一份"恰恰可能就是
-    //    用户此刻要用的这一份（第一次恢复之后再没有更早的了）。暂存之后，后面的校验
-    //    与落位只读副本，裁剪碰不到它。
+    // ① 先把源复制到库目录旁边。源就在 `backups/` 里，而紧接着那次快照会按配额裁
+    //    一轮，被裁的优先是最旧的一份——"最旧的一份"恰恰可能就是用户此刻要用的这一份。
+    //    暂存之后，后面的校验与落位只读副本，裁剪碰不到它。
+    //    顺带挡住 TOCTOU：校验读一次、落位再读一次，两次之间源若被换掉（同步工具、
+    //    另一个进程、用户手滑），就是"验的是 A、装的是 B"。
     let tmp = dest.with_file_name(format!("passwordms.restore-{}.tmp", now_ms()));
     if std::fs::copy(&point.path, &tmp).is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return Err(CoreError::Io("restore_latest_point: stage".to_string()).into());
+        return Err(CoreError::Io("restore_from_point: stage".to_string()).into());
     }
 
     let outcome = (|| -> IpcResult<i64> {

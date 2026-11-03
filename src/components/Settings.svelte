@@ -22,7 +22,7 @@
     formatDateTime,
   } from '../lib/constants';
   import { clampClipboardTtl, clampHealthSettings } from '../lib/settings-clamp';
-  import { backupHints } from '../lib/backup-hints';
+  import { backupHints, restorePointKindKey } from '../lib/backup-hints';
   import {
     BACKUP_STALE_DAYS,
     recordBackup,
@@ -62,6 +62,7 @@
   import { runVaultExport } from '../lib/vault-export';
   import { isSafeUrl } from '../lib/url-safety';
   import type {
+    BackupPointDto,
     BackupStatusDto,
     CompactionStatsDto,
     PrefsDto,
@@ -186,8 +187,13 @@
     | null
   >(null);
   let backupClearing = $state(false);
-  // 「用这份退回去」的确认弹窗。密码**不是**走过场：后端先用它把那份快照验一遍，
+  // 「用这份退回去」的确认弹窗。密码**不是**走过场：后端先用它把那一份验一遍，
   // 验不过一个字节都不动、也不锁屏。所以这个框既是一次确认，也是一次校验。
+  //
+  // `restorePointTarget` 记的是用户**点的那一行**，不是回到 `backupStatus` 现取：
+  // 列表在弹窗开着的时候可能被下一次刷新改掉，而确认框里说的必须是用户看清了的
+  // 那一份（时间、大小、要不要旧密码）。取现成的会在他读文案的几秒里换成另一份。
+  let restorePointTarget = $state<BackupPointDto | null>(null);
   let restorePointOpen = $state(false);
   let restorePointPwd = $state('');
   let restorePointBusy = $state(false);
@@ -279,17 +285,22 @@
   }
 
   /**
-   * 用本机备份退回去（回到最近一次恢复之前的样子）。
+   * 用本机备份退回去（回到用户点的那一份）。
    *
    * 这个按钮存在的理由：设置页写着「改坏了能退回来」，但在此之前**没有任何回退动作**
    * ——备份文件躺在 `backups/` 里、没有 `.vault` 后缀，连「从备份恢复」的对话框都
    * 列不出它。一句承诺配一个不存在的入口，比不承诺更糟。
    *
+   * 1.5.30 补了动作，却给了它一个几乎不可能成立的条件（只认 `pre-restore`，
+   * 而那个文件只有在用户**已经做过一次恢复**之后才存在）。所以现在是"清单 + 每行一个
+   * 按钮"：能退的东西盘上有几份就列几份（D-178）。
+   *
    * 成功后**不调 `api.vault.lock()`**：后端在覆盖库文件之前已经锁了会话，这里再锁一次
    * 只是掩盖事实；只把界面状态同步成"已锁"，让用户回到锁屏页重新解锁。
    */
   async function runRestorePoint(): Promise<void> {
-    if (restorePointBusy) {
+    const target = restorePointTarget;
+    if (restorePointBusy || target === null) {
       return;
     }
     if (restorePointPwd.length === 0) {
@@ -298,15 +309,22 @@
     }
     restorePointBusy = true;
     try {
-      const at = await api.backups.restoreLatestPoint(restorePointPwd);
+      const at = await api.backups.restoreFromPoint(target.token, restorePointPwd);
       restorePointOpen = false;
+      restorePointTarget = null;
       restorePointPwd = '';
       // 顺序要紧：先把界面送回去，再报结果。反过来会出现"toast 已经弹出、
       // 页面还停在设置页"的一瞬，而那一刻后端已经是锁定的——用户点什么都会失败。
       await session.lock();
-      ui.toast('success', 'settings.restore_point_restored', {
-        time: formatDateTime(at, ui.locale),
-      });
+      // 退回到的是**改密码之前**那一份时，库的密码也跟着变回那一把。用户下一秒
+      // 就会站在锁屏页上，拿现在的密码解不开——这句话必须在这里说，锁屏页说不出来。
+      ui.toast(
+        'success',
+        target.needs_old_password
+          ? 'settings.restore_point_restored_old_pwd'
+          : 'settings.restore_point_restored',
+        { time: formatDateTime(at, ui.locale) },
+      );
     } catch (err) {
       const appErr = toAppError(err);
       // 「密码打不开」与「备份坏了」是两件事，后端已经分流好了（`lock.restore_password_cannot_open`
@@ -1304,19 +1322,41 @@
         </div>
       {/if}
 
-      <!-- 「退回去」的入口。`latest_point_ms === 0` 时**整块不渲染**：
-           没有可退的东西，按钮留着就是一句做不到的承诺。 -->
-      {#if backupStatus.latest_point_ms > 0}
-        <button
-          class="pms-btn is-ghost"
-          type="button"
-          onclick={() => {
-            restorePointPwd = '';
-            restorePointOpen = true;
-          }}
-        >
-          {ui.t('settings.restore_point_restore')}
-        </button>
+      <!-- 「退回去」的入口：**盘上有几份能退的，就列几行**（D-178）。
+           上一版只认 `pre-restore`，而那个文件只有在用户已经做过一次恢复之后才存在
+           —— 按钮于是几乎永不出现。空清单时不渲染任何按钮：没有可退的东西，
+           按钮留着就是一句做不到的承诺。
+
+           每行必须说清两件事：**这是哪一步的备份**（回到哪一刻）和**要不要旧密码**。
+           后者不能只写在下面的提示里——用户是照着行文字决定点哪一行的。 -->
+      {#if backupStatus.points.length > 0}
+        <h4>{ui.t('settings.restore_point_pick')}</h4>
+        <ul class="set-list">
+          {#each backupStatus.points as point (point.token)}
+            <li class="set-list-row is-point">
+              <span class="set-point">
+                <span class="set-point-when">{formatDateTime(point.at_ms, ui.locale)}</span>
+                <span class="pms-hint">{ui.t(restorePointKindKey(point.kind))}</span>
+                {#if point.needs_old_password}
+                  <span class="pms-hint is-danger">
+                    {ui.t('settings.restore_point_needs_old_pwd')}
+                  </span>
+                {/if}
+              </span>
+              <button
+                class="pms-btn is-ghost is-sm"
+                type="button"
+                onclick={() => {
+                  restorePointTarget = point;
+                  restorePointPwd = '';
+                  restorePointOpen = true;
+                }}
+              >
+                {ui.t('settings.restore_point_restore')}
+              </button>
+            </li>
+          {/each}
+        </ul>
       {/if}
 
       {#if backupStatus.current_files > 0}
@@ -1700,8 +1740,12 @@
 </Modal>
 
 <!-- 「用这份退回去」确认框。三件事必须同时说清，缺一句都会让人点错：
-     ① 回到哪一刻（具体时间，不是"N 份"）② 那次之后的改动会没有
-     ③ 为什么还要再输一次密码（只是确认是你本人）。
+     ① 回到哪一刻（具体时间 + 那是哪一步的备份，不是"N 份"）
+     ② 那次之后的改动会没有
+     ③ 要输哪个密码。
+     `needs_old_password` 为真时第 ③ 条是**另一套说法**：那不是"确认是你本人"，
+     而是另一把钥匙——而退回去之后主密码也会跟着变回那一把。用错句子等于在
+     最需要准确的一刻给了句安慰话。
      不写「回滚点」三个字：这个词在界面上已经换掉了，改用"备份"。 -->
 <Modal
   open={restorePointOpen}
@@ -1709,6 +1753,7 @@
   onclose={() => {
     if (!restorePointBusy) {
       restorePointOpen = false;
+      restorePointTarget = null;
       restorePointPwd = '';
     }
   }}
@@ -1716,13 +1761,29 @@
   <p class="pms-alert is-danger">
     <Icon name="alert" size={16} />
     <span>
-      {ui.t('settings.restore_point_restore_body', {
-        time: formatDateTime(backupStatus?.latest_point_ms ?? 0, ui.locale),
-        size: formatBytes(backupStatus?.latest_point_bytes ?? 0),
-      })}
+      {ui.t(
+        restorePointTarget?.needs_old_password
+          ? 'settings.restore_point_restore_body_old_pwd'
+          : 'settings.restore_point_restore_body',
+        {
+          time: formatDateTime(restorePointTarget?.at_ms ?? 0, ui.locale),
+          size: formatBytes(restorePointTarget?.bytes ?? 0),
+        },
+      )}
     </span>
   </p>
-  <label class="pms-label" for="rp-pwd">{ui.t('settings.restore_point_restore_pwd')}</label>
+  {#if restorePointTarget !== null}
+    <p class="pms-hint">
+      {ui.t(restorePointKindKey(restorePointTarget.kind))}
+    </p>
+  {/if}
+  <label class="pms-label" for="rp-pwd">
+    {ui.t(
+      restorePointTarget?.needs_old_password
+        ? 'settings.restore_point_restore_pwd_old'
+        : 'settings.restore_point_restore_pwd',
+    )}
+  </label>
   <input
     id="rp-pwd"
     class="pms-input"
@@ -1738,6 +1799,7 @@
       disabled={restorePointBusy}
       onclick={() => {
         restorePointOpen = false;
+        restorePointTarget = null;
         restorePointPwd = '';
       }}
     >
@@ -1842,6 +1904,25 @@
   }
   .set-name {
     font-size: 0.88rem;
+  }
+  /* 「退回去」清单的一行：左边"什么时候 + 是哪一步（+ 要不要旧密码）"，右边一个按钮。
+     左格必须是列方向：三行信息挤在一行里，窄屏上先被挤没的就是"要用旧密码"那句
+     —— 而它恰恰是用户最需要看见的一句（试错成本最高）。 */
+  .set-list-row.is-point {
+    align-items: flex-start;
+  }
+  .set-point {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+  .set-point-when {
+    font-size: 0.88rem;
+    color: var(--pms-fg);
+    /* 等宽数字：一列时间上下对齐，扫一眼就知道哪份更近。 */
+    font-variant-numeric: tabular-nums;
   }
   .set-danger {
     color: var(--pms-danger);

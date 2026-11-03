@@ -74,19 +74,52 @@ export interface BackupStatusDto {
   /** `never` / `unknown` / `fresh` / `stale`。 */
   staleness: string;
   /**
-   * 最近一份 `pre-restore` 快照的时刻（毫秒）。**`0` = 没有可退回去的**。
+   * 能拿去覆盖当前库的**全部**整库副本（新的在前）。
    *
-   * 只给时刻、不给路径：路径由后端自己挑。前端要是能传路径，就等于给 WebView
-   * 一个"指定任意文件覆盖库"的入口，而这个入口没有任何界面需要。
+   * **为什么是一张清单而不是"最近的那一刻"**（D-178）：1.5.30 只给最近一份
+   * `pre-restore`，而那个文件只有在用户**已经做过一次恢复**之后才存在 ——
+   * 于是那个按钮几乎永不出现（真机：盘上 3 份完整可用副本，按钮一次没亮）。
    *
-   * ⚠️ `0` 时那个动作按钮**必须不渲染**。留着它，用户点下去只会拿到一个错误码，
-   * 而按钮本身已经先承诺了"能退回去"——承诺一件可能不存在的事，与断言它不存在
-   * 是同一个错的两种方向（1.5.29 整轮在清这个）。
+   * 空数组时界面**一个按钮都不渲染**；非空时每一行都能点。
    */
-  latest_point_ms: number;
-  /** 那份快照有多大（`0` 同上）。只用于确认框里显示体积，不参与任何判断。 */
-  latest_point_bytes: number;
+  points: BackupPointDto[];
 }
+
+/**
+ * 一份能拿去覆盖当前库的整库副本（`points` 的一项）。
+ *
+ * 回传的是 `token` 而不是路径：后端拿它只会去**重新枚举出来的**清单里找同名项。
+ * 前端**不许**解析 token（它是文件名，解析文件名是后端的知识）。
+ */
+export interface BackupPointDto {
+  /** 不透明标识，原样回传给 `backups.restoreFromPoint`。 */
+  token: string;
+  /** `restore_before` / `password_before` / `password_after` / `compact_before` /
+   *  `import_before` / `daily` / `last_write`。 */
+  kind: BackupPointKind;
+  /** 时刻（毫秒），列表就按它倒序。 */
+  at_ms: number;
+  bytes: number;
+  /** 认得出的批次时刻（`null` = 当前这一代）；只用于显示。 */
+  batch_ms: number | null;
+  /**
+   * 打开这一份要用**改密码之前**那一把密码。
+   *
+   * 标错方向比不标更糟：用户会拿现在的密码去试一份旧密码的备份，而试错的那一次
+   * 往往就是最后一次。所以界面上每一行都要说出来，确认框的密码说明也要跟着换。
+   */
+  needs_old_password: boolean;
+}
+
+/** 「这份备份是哪一步的」——界面按它选文案，见 `lib/backup-hints.ts` 的映射表。 */
+export type BackupPointKind =
+  | 'restore_before'
+  | 'password_before'
+  | 'password_after'
+  | 'compact_before'
+  | 'import_before'
+  | 'daily'
+  | 'last_write';
 
 /** 换主密码的回执（B-03：旧代归档结果）。 */
 export interface ChangeMasterPasswordDto {
