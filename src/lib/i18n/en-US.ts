@@ -60,8 +60,18 @@ export const enUS: Messages = {
     restore_confirm_title: 'Restore from backup',
     restore_confirm_body: 'The selected backup will replace the local vault. Continue?',
     restore_no_retreat_title: 'This restore has no automatic restore point',
-    restore_no_retreat_body: 'The "before restoring" snapshot could not be saved (disk space or permissions). This restore has no automatic restore point: once you confirm, the current vault is overwritten and cannot be recovered. If you want a safety net, cancel first, copy the backup you want to restore somewhere else, then come back.',
-    restore_no_retreat_short: 'The previous step did not change your vault file. This restore has no automatic restore point.',
+    // P0: this is the last confirmation before an irreversible action, so the user treats
+    // it as the only evidence they get. Two rules (full reasoning on the zh-CN counterpart):
+    // (1) no cause — the usual trigger is our own backup quota (QUOTA_MULTIPLIER = 12), not
+    // a full disk, and a wrong cause sends people to delete files on a disk that is fine;
+    // (2) neither promise a `.bak` nor deny one — it is written next to the vault, outside
+    // the backups/ quota, so it often succeeds exactly when the snapshot failed. Claiming
+    // "cannot be recovered" is false in that case, and a user who later finds the `.bak`
+    // concludes the app lies — a conclusion that spreads to every other message.
+    restore_no_retreat_body: 'The "before restoring" snapshot could not be saved, so this restore has no automatic restore point. Once you confirm, the current vault is overwritten. If you want a safety net, cancel first, copy the backup you want to restore somewhere else, then come back.',
+    // Only shown when the confirmation dialog should have appeared but did not — its one job
+    // is to report that bug, so it must say it plainly and offer an action.
+    restore_no_retreat_short: 'This restore did not run: the app could not show the confirmation dialog. Your vault file is unchanged — please reopen the app and try again.',
     restore_password_required: 'Enter the master password first (the one the backup was created with); it will be used to unlock automatically after restoring.',
     // P0: the backup is verified against this password before anything is replaced.
     restore_password_cannot_open: 'That password cannot open the file you selected. Your current vault has not been changed at all. Check the password, or choose another backup.',
@@ -470,7 +480,7 @@ export const enUS: Messages = {
     restore_point_cleared_partial: 'Deleted {count} file(s), but {remaining} could not be removed and are still there.',
     restore_point_cleared_none: 'Nothing could be deleted; {remaining} file(s) are still there. Please try again shortly.',
     restore_point_cleared_gone: 'That restore point is no longer on disk, so there was nothing to delete.',
-    restore_point_old_unrecognized: '{count} old-batch folder name(s) cannot be recognised and cannot be deleted here; they still take up disk space.',
+    restore_point_old_unreadable: '{count} old-batch folder(s) could not be identified or read and cannot be deleted here; they still take up disk space and must be handled manually.',
     restore_point_failed: 'Delete failed: the restore points are still on this device. Please try again later.',
     restore_point_load_failed: 'Could not read the restore point status (your entries are not affected).',
     change_password_note_lock_only: 'Changing the master password replaces the lock, not the key inside the vault. If the old password or an old copy may have leaked, changing the password is not enough to stop someone from reading future data.',

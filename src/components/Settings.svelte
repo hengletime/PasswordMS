@@ -233,8 +233,12 @@
           : await api.backups.clearOldBatch(target.dirName);
       backupClearTarget = null;
       // 「删了几份」不足以说出真相：删除是逐份尝试的，任何一份删不掉都会留下。
-      // 四格必须分开说，尤其 `deleted === 0 && remaining === 0` 不能报成成功——
-      // 那是"你传来的批次不存在"，用户会以为删掉了。
+      // 四格必须分开说。
+      //
+      // `{0, 0}` 只剩**一个来源**：批次名合法、目录也在枚举里，但清点下来一份都没有
+      // ——也就是"别人已经删掉了，你这次是重试"。非法名早在 core 就被 `Err` 挡下了
+      // （`valid_batch_name`），走不到这里。所以这一格是**目标已达成**，不是失败：
+      // 给红条会让用户以为出了问题，去反复点第二次。
       if (out.remaining === 0 && out.deleted > 0) {
         ui.toast('success', 'settings.restore_point_cleared', { count: out.deleted });
       } else if (out.deleted > 0) {
@@ -245,7 +249,8 @@
       } else if (out.remaining > 0) {
         ui.toast('error', 'settings.restore_point_cleared_none', { remaining: out.remaining });
       } else {
-        ui.toast('error', 'settings.restore_point_cleared_gone');
+        // 文案本身是陈述句（"已经不在磁盘上了"），语气交给我们这里定。
+        ui.toast('success', 'settings.restore_point_cleared_gone');
       }
     } catch (err) {
       // 失败**不改**列表：回滚点还在盘上，界面不能先把它划掉。
@@ -1302,13 +1307,14 @@
           {/each}
         </ul>
       {/if}
-      {#if backupStatus.unrecognized_batches > 0}
-        <!-- 盘上有、界面删不了。不说出来就是"假装没有"；也不能给它的名字编一个
-             `to_string_lossy` 的版本——那个假名字永远匹配不上，用户删的时候会被告知
-             "不存在"，而它明明在。 -->
+      {#if backupStatus.unreadable_batches > 0}
+        <!-- 盘上有、界面删不了（名字认不出，或目录读不出）。不说出来就是"假装没有"；
+             也不能给它的名字编一个 `to_string_lossy` 的版本——那个假名字永远匹配不上，
+             用户删的时候会被告知"不存在"，而它明明在。
+             两类原因**故意合成一句**：用户要做的完全一样（去文件夹里手动处理）。 -->
         <p class="pms-hint is-danger">
-          {ui.t('settings.restore_point_old_unrecognized', {
-            count: backupStatus.unrecognized_batches,
+          {ui.t('settings.restore_point_old_unreadable', {
+            count: backupStatus.unreadable_batches,
           })}
         </p>
       {/if}

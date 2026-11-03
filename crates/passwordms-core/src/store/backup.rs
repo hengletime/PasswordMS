@@ -869,6 +869,10 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
             .map(|s| s.to_string());
         // 解析出的毫秒只用于显示；解析不出就是 `None`，**不回落成 0**。
         let batch_ms = batch_dir.as_deref().and_then(|s| s.parse::<i64>().ok());
+        // 读不出来的批次目录只能 `continue`：本函数返回 `Vec<BackupFile>`，没有错误通道，
+        // 硬塞一个假条目会让调用方以为里面有一份名为 `""` 的备份。
+        // 代价是整批从界面上消失——所以 [`unreadable_batch_dirs`] 必须把这一批数进去，
+        // 否则"界面显示没有旧代、盘上却躺着一批旧密码能开的文件"就又成立了。
         let Ok(items) = fs::read_dir(&batch_path) else {
             continue;
         };
@@ -930,23 +934,47 @@ pub struct OldKeyBatch {
     pub bytes: u64,
 }
 
-/// 目录名不是合法 UTF-8 的旧代批次个数。
+/// `old-key/` 下**进不了 [`old_key_batches`]、也没法按名字删**的批次个数。
 ///
-/// 这些批次**不进** [`old_key_batches`]：`file_name().to_str()` 为 `None`，没有可回传的
-/// 身份字符串，用户也就没法按名字删它。但它们确实躺在盘上、`old_key_usage` 也算进了
-/// 它们——所以必须单独报一个数。
+/// 两类原因合成一个数，是刻意的：
+/// ① **认不出**——目录名不是合法 UTF-8，`file_name().to_str()` 为 `None`，没有可回传的
+///    身份字符串，用户没法按名字删它；
+/// ② **读不出**——[`old_key_inventory`] 里 `read_dir` 失败只能 `continue`，于是整批从
+///    界面上消失，而里面可能是满的、旧密码能打开。
+///
+/// **两类必须合成一个数**：用户能做的完全一样（去文件夹里手动处理），拆成两格只是让
+/// 下一个人以为其中一类不用管。分不清的两种原因合成一个可行动的数字，好过两个精确但
+/// 都被忽略的数字。
 ///
 /// **不许用 `to_string_lossy()` 硬凑一个名字**：非法字节会变成 `U+FFFD`，用户拿着这个
 /// 假名字回来删时永远匹配不上，界面会说"批次不存在"——而它明明在盘上。
-/// 报错要报对原因，宁可说"这个目录名认不出"，不要说"没有这个东西"。
-pub fn unrecognized_batch_dirs(vault_path: &Path) -> usize {
-    let Ok(entries) = fs::read_dir(old_key_dir(vault_path)) else {
-        return 0;
+///
+/// `old-key/` 本身读不出来时返回 1 而不是 0：`NotFound` 是"还没有旧代"，返回 0 是对的；
+/// 其余错误下 0 会被界面读成"一切正常"。返回 1 是**下界**——目的是让提示出现，不是
+/// 报准确个数。宁可说"这里有问题，你自己看一眼"，不要说"没有这个东西"。
+pub fn unreadable_batch_dirs(vault_path: &Path) -> usize {
+    let entries = match fs::read_dir(old_key_dir(vault_path)) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
+        Err(_) => return 1,
     };
-    entries
-        .flatten()
-        .filter(|e| e.path().is_dir() && e.file_name().to_str().is_none())
-        .count()
+    let mut count = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name_ok = entry.file_name().to_str().is_some();
+        // "读得出目录、但读到某一项就失败"也算读不出：那一批列不全，界面同样会漏东西。
+        let read_ok = match fs::read_dir(&path) {
+            Ok(items) => items.into_iter().all(|item| item.is_ok()),
+            Err(_) => false,
+        };
+        if !name_ok || !read_ok {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// 按批次汇总旧代（批内时刻升序）。
@@ -2709,6 +2737,61 @@ mod tests {
             !is_busy(snapshot_before_write(&vault, base + 10_000_003).skipped),
             "两层都释放后不该再报占用"
         );
+    }
+
+    /// 一个**不是合法 UTF-8**、但文件系统肯接受的名字。
+    ///
+    /// 用来构造"名字认不出"的批次目录：`to_str()` 必为 `None`，而 `create_dir` 能建出来。
+    /// Windows 用未配对的代理项 `0xD800`（NTFS 允许），其它平台用 `0xFF 0xFE` 两个字节。
+    #[cfg(windows)]
+    fn non_utf8_dir_name() -> std::ffi::OsString {
+        use std::os::windows::ffi::OsStringExt;
+        std::ffi::OsString::from_wide(&[0xD800])
+    }
+
+    #[cfg(not(windows))]
+    fn non_utf8_dir_name() -> std::ffi::OsString {
+        use std::os::unix::ffi::OsStringExt;
+        std::ffi::OsString::from_vec(vec![0xFF, 0xFE])
+    }
+
+    #[test]
+    fn 认不出或读不出的旧代目录要计数而不是从界面消失() {
+        let (_root, vault) = temp_vault("unreadable-batch");
+        // 1) 还没有 `old-key/`：0。这是"还没有旧代"，不是"读不出来"。
+        assert_eq!(unreadable_batch_dirs(&vault), 0);
+
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
+        // 2) 正常的数字目录名不该被计数。
+        assert_eq!(unreadable_batch_dirs(&vault), 0, "能识别的批次不算这一格");
+
+        // 3) 手工塞一个名字不是合法 UTF-8 的批次目录，里面放一份备份。
+        let odd = old_key_dir(&vault).join(non_utf8_dir_name());
+        fs::create_dir_all(&odd).unwrap();
+        fs::write(odd.join("daily.20260101"), vec![9u8; 64]).unwrap();
+
+        assert_eq!(
+            unreadable_batch_dirs(&vault),
+            1,
+            "认不出的批次必须被数进去——否则界面在它明明占着磁盘时说'没有旧代'"
+        );
+        // 它进不了可选列表（没有可回传的身份字符串），所以那个计数是界面唯一的信息来源。
+        assert_eq!(old_key_batches(&vault).len(), 1, "只认得出那一批数字名的");
+        assert_eq!(
+            old_key_usage(&vault).1,
+            9,
+            "它仍然算进占用：8 份 + 这 1 份"
+        );
+
+        // 4) 按批删除只动得了有名字的那一批；认不出的那份仍在盘上，计数也必须还在。
+        let removed =
+            clear_old_key_batch(&vault, &(base + 460_000_001).to_string()).expect("按批删除应成功");
+        assert_eq!(removed.deleted, 8);
+        assert_eq!(unreadable_batch_dirs(&vault), 1, "删完能删的，这一格仍然要说");
+        assert!(odd.exists(), "认不出的批次不该被误删");
     }
 
     #[test]

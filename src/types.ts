@@ -51,12 +51,15 @@ export interface BackupStatusDto {
   old_files: number;
   old_batches: BackupBatchDto[];
   /**
-   * 目录名不是合法 UTF-8、因而**无法按名字删除**的旧代批次个数。
+   * **认不出或读不出**、因而进不了 `old_batches` 也删不掉的旧代批次个数。
    *
-   * 它们确实占着磁盘（算在 `old_bytes` 里）。界面必须说出来，否则就是
-   * "盘上有东西、界面假装没有"。
+   * 两类原因合并计数：目录名不是合法 UTF-8（没有可回传的身份字符串），或目录读不出
+   * （整批被跳过）。它们确实占着磁盘（算在 `old_bytes` 里）。界面必须说出来，否则
+   * 就是"盘上有东西、界面假装没有"。
+   *
+   * `old-key/` 本身读不出时是 **1（下界）**，不是真实个数。
    */
-  unrecognized_batches: number;
+  unreadable_batches: number;
   /** 上次成功刷新 `last.bak` 的时刻（0 = 从未）。 */
   last_ms: number;
   last_error_ms: number;

@@ -87,7 +87,7 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         old_bytes,
         old_files,
         old_batches: batches,
-        unrecognized_batches: backup::unrecognized_batch_dirs(&path),
+        unreadable_batches: backup::unreadable_batch_dirs(&path),
         last_ms: st.last_ms,
         last_error_ms: st.last_error_ms,
         last_error_kind: st.last_error_kind,

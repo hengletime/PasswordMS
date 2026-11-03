@@ -58,11 +58,14 @@ pub struct BackupStatusDto {
     pub old_bytes: u64,
     pub old_files: usize,
     pub old_batches: Vec<BackupBatchDto>,
-    /// 目录名不是合法 UTF-8、因而**无法按名字删除**的旧代批次个数。
+    /// **认不出或读不出**、因而进不了 `old_batches` 也删不掉的旧代批次个数。
     ///
-    /// 它们确实占着磁盘（算在 `old_bytes` 里），但没有可回传的身份字符串。
-    /// 界面必须单独说一句，否则就是"磁盘上有东西而界面假装没有"。
-    pub unrecognized_batches: usize,
+    /// 两类原因合并计数：目录名不是合法 UTF-8（没有可回传的身份字符串），或目录读不出
+    /// （整批被跳过）。它们确实占着磁盘（算在 `old_bytes` 里），而界面上看不到——
+    /// 不单独说一句就是"磁盘上有东西而界面假装没有"。
+    ///
+    /// `old-key/` 本身读不出时这个数是 **1（下界）**，不是真实个数：目的是让提示出现。
+    pub unreadable_batches: usize,
     /// 上次成功刷新 `last.bak` 的时刻（0 = `.state` 里没有）。
     pub last_ms: i64,
     /// 最近一次备份失败的留痕（粘性：成功不清除，只由用户"知道了"清除）。

@@ -57,8 +57,13 @@ export const zhTW = {
     restore_confirm_title: '從備份還原',
     restore_confirm_body: '將使用所選備份取代本機目前保險庫。確認繼續？',
     restore_no_retreat_title: '這次還原沒有自動回滾點',
-    restore_no_retreat_body: '剛才那份「還原前」的快照沒能存成（磁碟空間或權限問題）。這次還原沒有自動回滾點：確認之後，目前的保險庫會被覆蓋，而且拿不回來。如果還想留一手，請先取消，把你要還原的那份備份複製到別的位置，再回來還原。',
-    restore_no_retreat_short: '剛才那一步沒有改動你的庫檔案。這次還原沒有自動回滾點。',
+    // P0：不可逆動作前的最後一次確認，用戶會拿它當唯一憑據。兩條禁令見 zh-CN 同位置
+    // 的長註釋，這裡只留結論：① 不寫原因（多半是應用自己的備份配額，不是磁碟）；② 既
+    // 不承諾 `.bak`，也不斷言它不存在（`.bak` 寫在庫目錄，不經過配額，因配額失敗時多半
+    // 寫得成）。只說保證得了的兩件事。
+    restore_no_retreat_body: '剛才那份「還原前」的快照沒能存成，這次還原沒有自動回滾點。確認之後，目前的保險庫會被覆蓋。如果還想留一手，請先取消，把你要還原的那份備份複製到別的位置，再回來還原。',
+    // 只在「本該彈確認框卻沒彈」時出現，職責是把那個 bug 說破：講清還原沒執行、給一個動作。
+    restore_no_retreat_short: '這次還原沒有執行：應用程式沒能顯示確認框。你的庫檔案沒有任何改動，請重新開啟應用程式後再試。',
     restore_password_required: '請先輸入主密碼（備份建立時的主密碼），還原後將用它自動解鎖。',
     // P0：還原前先用它驗證備份，密碼不符則一個位元組都不動。
     restore_password_cannot_open: '這個密碼打不開你選的那份檔案。原庫沒有任何改動。請核對密碼，或換一份備份。',
@@ -438,7 +443,7 @@ export const zhTW = {
     restore_point_cleared_partial: '已刪除 {count} 份，但還有 {remaining} 份沒能刪除，仍在原處。',
     restore_point_cleared_none: '一份都沒能刪除，還有 {remaining} 份在原處，請稍後重試。',
     restore_point_cleared_gone: '這份回滾點已經不在磁碟上了，沒有可刪除的內容。',
-    restore_point_old_unrecognized: '還有 {count} 個舊代目錄名稱無法辨識，不能在這裡刪除；它們仍然佔用磁碟空間。',
+    restore_point_old_unreadable: '還有 {count} 個舊代目錄無法辨識或讀取，不能在這裡刪除；它們仍然佔用磁碟空間，需要手動處理。',
     restore_point_failed: '刪除失敗：回滾點仍在本機，請稍後重試。',
     restore_point_load_failed: '讀取失敗：未能取得回滾點狀態（條目本身不受影響）。',
     change_password_note_lock_only: '改主密碼會換掉鎖，但不會換掉保險庫裡的鑰匙。若舊密碼或舊副本可能已洩漏，改密不足以阻止對方讀取今後的資料。',

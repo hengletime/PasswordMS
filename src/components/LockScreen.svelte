@@ -86,8 +86,10 @@
     if (!sourcePath) {
       return;
     }
-    // 2. 主密码为空先提示：恢复后要用密码框的值解锁（unlock_check 校验的是备份
-    //    创建时的主密码），不发无谓的 IPC。
+    // 2. 主密码为空先提示：这个密码的**主要用途是后端拿它预检所选的这份文件**
+    //    （`verify_backup_password`：先验结构、再验凭据，验不过原库一个字节都不动），
+    //    恢复成功后才顺带用它解锁（`unlock_check` 校验的是备份创建时的主密码）。
+    //    别把预检删成"只留解锁"——那样密码不对时，用户要等到覆盖之后才知道。
     if (password.length === 0) {
       ui.toast('error', 'lock.restore_password_required');
       return;
@@ -110,8 +112,11 @@
           throw appErr;
         }
         // 走到这里说明**原库一个字节都没动**：后端在覆盖之前就停下了。
-        // 确认框说的只是"这次没有自动回滚点"，不能说成"数据会丢失"——
-        // 随后还会写一份 passwordms.vault.bak-<ms>，原库不会丢。
+        // 确认框说的只是"这次没有自动回滚点"，不能说成"数据会丢失"。
+        //
+        // **别拿 `.bak` 当理由**：它随后**可能**写一份 `passwordms.vault.bak-<ms>`，但那是
+        // best-effort，而且界面里没有任何入口指向它——所以正文既不承诺它、也不否认它。
+        // 谁按"反正有 .bak"去改文案，就等于把这一轮刚删掉的那张空头支票写回去。
         const ok = await ui.confirm(
           'lock.restore_no_retreat_title',
           'lock.restore_no_retreat_body',
