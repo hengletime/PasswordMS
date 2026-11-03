@@ -92,5 +92,9 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Security_Credentials_UI",
+    # D-183：`GetUserDefaultUILanguage` / `LCIDToLocaleName` —— 首启语言用系统
+    # UI 语言兜底。WebView2 的 `navigator.language` 在档案瞬时不可用时可能报
+    # en-US（2026-11-03 实例），只开特性、不引入新包。
+    "Win32_Globalization",
 ] }
 windows-future = "0.3"

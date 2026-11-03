@@ -329,8 +329,12 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     // D-180（同日，主人：「旧备份可以人为增加钉住」「再增加定期清空的功能」）：
     //   +2（backup_set_pinned / backup_set_retention），属性 81 → 83、命令名 77 → 79。
     //   两条都只收 token / 布尔，不收路径——前端拿不到任何"指哪删哪"的能力。
-    expect(total).toBe(83);
-    expect(withAttr).toBe(83);
+    // D-183（同日，首启英文）：+1（system_locale），属性 83 → 84、命令名 79 → 80。
+    //   不做平台分立：非 Windows 也要有这个命令名并返回 `None`，否则前端首启校正
+    //   在移动端会变成 `command not found` 的异常分支（虽然它会被 try 吞掉，
+    //   但"每天启动都失败一次"不该成为常态）。
+    expect(total).toBe(84);
+    expect(withAttr).toBe(84);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
@@ -339,8 +343,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(83);
-    expect(new Set(names).size).toBe(79);
+    expect(names.length).toBe(84);
+    expect(new Set(names).size).toBe(80);
   });
 });
 

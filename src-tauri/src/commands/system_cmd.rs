@@ -386,3 +386,53 @@ pub async fn compact_vault(app: tauri::AppHandle) -> IpcResult<CompactionResultD
     }
     result
 }
+
+/// 系统 UI 语言的 BCP-47 标签（如 `zh-CN`）；取不到返回 `None`。
+///
+/// 【D-183】为什么不用 `navigator.language`：全新安装（localStorage 里还没有
+/// 语言记录）时前端只能现场检测，而 WebView2 的 `navigator.language` 在
+/// 档案瞬时不可用 / 首次启动的瞬间可能报 `en-US`（2026-11-03 实例：首启界面
+/// 全英文，重启后自愈）。这里直接问 Win32，不经过 WebView 的任何状态。
+///
+/// 刻意**只给语言、不给地区习惯**：调用方要的是"用哪种字典"，`LCIDToLocaleName`
+/// 出来的 `zh-CN` / `en-US` / `th-TH` 交给前端 `mapSystemLanguage` 归一。
+///
+/// 返回 `Option` 而不是错误：这是"尽力而为"的兜底来源，取不到时前端保持
+/// `navigator.language` 的结果即可，不该让启动流程多一个失败分支。
+#[tauri::command(rename_all = "snake_case")]
+pub fn system_locale() -> Option<String> {
+    platform_ui_locale()
+}
+
+/// [`system_locale`] 的平台实现（Windows：问 Win32；其它平台：没有这个 API）。
+///
+/// 单独拆出来是为了让命令本体只剩一行：`cfg` 块里写 `return` 会被
+/// `clippy::needless_return` 抓住，而不写在块里又拿不到"块外还有另一平台实现"
+/// 的语义——拆函数是同时满足两边的写法。
+#[cfg(windows)]
+fn platform_ui_locale() -> Option<String> {
+    use windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
+    // `LOCALE_NAME_MAX_LENGTH` 在 `Win32_System_SystemServices` 里，为它多开一个
+    // 特性不值得：85 是 Win32 的固定上限，缓冲区给足即可。
+    const LOCALE_NAME_MAX_LENGTH: usize = 85;
+    // SAFETY: 两个调用都不接受指针、不保留任何缓冲区，只读系统设置；
+    // 缓冲区是本栈数组，生命周期覆盖整个调用。
+    let langid = unsafe { GetUserDefaultUILanguage() };
+    // LANGID 的排序序位为 SORT_DEFAULT(0)，此时 MAKELCID 就是 LANGID 本身。
+    let mut buf = [0u16; LOCALE_NAME_MAX_LENGTH];
+    let written = unsafe { LCIDToLocaleName(u32::from(langid), Some(&mut buf), 0) };
+    if written <= 1 {
+        return None;
+    }
+    // 返回值含结尾 NUL，按 -1 截断。
+    let len = usize::try_from(written - 1).ok()?;
+    let text = String::from_utf16_lossy(&buf[..len.min(buf.len())]);
+    (!text.is_empty()).then_some(text)
+}
+
+/// 非 Windows（Android / 开发机）没有这个 API：那边前端本来就跑在能正确报语言的
+/// WebView 里，返回 `None` 让调用方保持自己的检测结果。
+#[cfg(not(windows))]
+fn platform_ui_locale() -> Option<String> {
+    None
+}

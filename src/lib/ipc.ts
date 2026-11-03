@@ -67,6 +67,10 @@ export const system = {
     invoke<CompactionStatsDto>('vault_compaction_stats'),
   compactVault: (): Promise<CompactionResultDto> =>
     invoke<CompactionResultDto>('compact_vault'),
+  // D-183：系统 UI 语言的 BCP-47 标签（如 `zh-CN`），取不到返回 `null`。
+  // 只用于**首启**（localStorage 里还没有语言记录）时校正 `navigator.language`：
+  // WebView2 在档案瞬时不可用的瞬间可能报 en-US，Win32 侧不会。
+  systemLocale: (): Promise<string | null> => invoke<string | null>('system_locale'),
 };
 
 /** 保险库类。 */

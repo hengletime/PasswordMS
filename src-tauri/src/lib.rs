@@ -230,6 +230,8 @@ pub fn run() {
             commands::system_cmd::vault_file_info,
             commands::system_cmd::vault_compaction_stats,
             commands::system_cmd::compact_vault,
+            // D-183：首启语言兜底（系统 UI 语言，不依赖 WebView 自报）
+            commands::system_cmd::system_locale,
             // perm（D-149：Android 17 局域网访问权限——未授予时配对/同步静默超时）
             commands::perm_cmd::lan_permission_status,
             commands::perm_cmd::lan_permission_request,

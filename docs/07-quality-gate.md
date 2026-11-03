@@ -238,6 +238,51 @@ D-174 的第一版让 `remove_folder_direct` 在删壳的同一次操作里把�
   -newer <裸 exe>` 排除 `target/` 与 `src-tauri/gen/` 后**输出为空**——没有源文件或文档
   晚于 exe，说明树在构建前就冻结了。
 
+### 1.2m 最近一次完整实跑（2026-11-03 22:37 起 · v1.5.34 · D-182/D-183）
+
+> 口径：`bash scripts/gate-all.sh`，整轮墙钟 **9 分 15 秒**（22:37:25 起 / 22:46:40 止，
+> 任务计时实测）。总判定 **PASS（通过 9 门 / 跳过 1 门 / 失败 0）**；
+> 跳过的 1 门是 Android 体积门（门禁跑在出包之前，出包后**单独补跑**，见下）。
+> 锚：HEAD `ce6df11` + 本轮未提交改动（版本号 + 代码 + 文档）。
+
+| # | 门 | 本次实测（v1.5.34） | 判定 |
+|---|----|------|------|
+| 0 | **版本同步门** | 四处一致 `1.5.34`（含 Cargo.lock） | ✅ 2s |
+| 1 | 前端单测 | **86 文件 825/825**（819 → 825：+6 首启语言守门，D-183） | ✅ 6s |
+| 2 | 前端类型检查 | 0 / 0 | ✅ 6s |
+| 3 | CSS 层叠契约 | 0 FAIL / 6 WARN（既有项） | ✅ 1s |
+| 4 | fmt | 0 处差异 | ✅ 1s |
+| 5 | Rust 全量 | **414 通过 / 0 失败 / 1 ignored / 47 二进制**（412 → 414：+2 校验值判据用例，D-182） | ✅ 522s |
+| 6 | clippy | 0 error / 0 warning | ✅ 10s |
+| 7 | 体积门-桌面（出包后补跑） | NSIS 2.02 MB / MSI 2.85 MB ≤ 10 MB | ✅ |
+| 8 | 体积门-Android（出包后补跑） | APK 7.53 MB ≤ 12 MB | ✅ |
+
+**出包（同日 22:47–22:53 实测）**：桌面 **2 分 34 秒**、Android **3 分 20 秒**。
+
+| 产物 | 字节 | sha256 前缀 |
+|---|---|---|
+| `PasswordMS_1.5.34_x64-setup.exe`（NSIS） | 2,114,174 | `22266a138808c12b` |
+| `PasswordMS_1.5.34_x64_en-US.msi` | 2,985,984 | `3907ef2ca17a5d96` |
+| `PasswordMS-1.5.34-portable-x64.zip`（4 条目） | 2,493,013 | `3b9804239896b327` |
+| `PasswordMS-1.5.34-arm64.apk`（V3 签名） | 7,893,419 | `c6b81377686ee28e` |
+| 裸 exe | 5,129,216 | `ae330086855ce54d` |
+
+- **双端同源**：`assets/index-Dp1HcU7R.js` 在 dist、裸 exe、APK 的 `.so`（`lib/arm64-v8a/libpasswordms_lib.so`）
+  三处一致。注意 APK 里前端资源是**编进 .so** 的，`unzip -l` 看不到 `assets/index-*.js`，
+  要 `unzip -p ... lib.so | grep -a` 才查得到（别据此判"没进包"）。
+- **portable zip**：条目在 `PasswordMS-Portable/` 前缀下，取 exe 哈希要带前缀
+  （`unzip -p <zip> PasswordMS-Portable/passwordms.exe`），哈希与裸 exe 相等 `ae330086855ce54d`。
+- **NSIS 静默安装**：`Start-Process -Wait '/S', "/D=<dir>"` → exit=0，产出 `passwordms.exe`
+  5,129,216 B、`FileVersion=1.5.34`。
+- **产物新鲜度**：`find src src-tauri/src crates scripts docs package.json Cargo.toml -newer <APK>` 为空。
+- **D-182 变异自证（实测，非推算）**：把 `needs_old_password` 里"比 `verify_mac`"那一级
+  整段删掉（只剩 `f.needs_old_password()` 目录判据），重跑备份模块 →
+  `旧备份没有世代号时按校验值判_恢复之后同样摆正` **FAILED**，世代那条也 FAILED
+  （整段回落目录判据），57 → 55 通过 / 2 失败；还原后 57 全绿。
+- **D-183 变异自证（实测）**：把 `ui.setLocale(mapSystemLanguage(tag))` 改成
+  `ui.locale = mapSystemLanguage(tag)`（只改内存、不写回），重跑
+  `d183-first-run-locale.test.ts` → 「校正结果必须写回」**红**（6 → 5 通过）；还原后 6 全绿。
+
 ### 1.2l 最近一次完整实跑（2026-11-03 20:14 起 · v1.5.33 · D-181）
 
 > 口径：`bash scripts/gate-all.sh`，整轮墙钟 **9 分 02 秒**（20:14:41 起 / 20:23:43 止）。

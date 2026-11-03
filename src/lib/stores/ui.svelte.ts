@@ -32,7 +32,7 @@ export type RouteName = 'lock' | 'create' | 'main';
 export type MainSection = 'items' | 'health' | 'trash' | 'settings' | 'sync';
 
 /** 语言持久化键名。 */
-const LOCALE_STORAGE_KEY = 'passwordms.locale';
+export const LOCALE_STORAGE_KEY = 'passwordms.locale';
 
 // ===== D-58a：Toast 时长策略（错误文案长，固定 4s 看不完就关）=====
 /** success：短确认，无需久留。 */

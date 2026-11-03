@@ -45,6 +45,7 @@ use std::sync::{Mutex, OnceLock};
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{CONTAINER_PREFIX_LEN, VAULT_MAGIC};
+use crate::crypto::verify::constant_time_eq;
 use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 use crate::model::vault::Vault;
@@ -951,17 +952,33 @@ fn point_kind_from_name(name: &str) -> Option<BackupPointKind> {
     })
 }
 
-/// 读一个容器**头部里的密钥世代号**；任何一步不成立都返回 `None`。
+/// 从一个容器**头部**读到的判据材料（D-181 世代号 + D-182 密码校验值）。
+#[derive(Debug, Clone, Default)]
+struct HeaderHint {
+    /// 密钥世代号；`None` = 1.5.32 之前拍的、头部根本没这个字段。
+    generation: Option<u32>,
+    /// 密码校验值 `verify_mac = HMAC-SHA256(KDF(密码, 盐), AAD_VERIFY)`。
+    ///
+    /// **相等 ⟺ 同一把密码**：它是派生密钥的确定性函数，同一段密码配同一个盐
+    /// 必然算出同一个值；换过密码（哪怕换回原样）盐就变了，值也随之变。
+    /// 所以拿它跟**当前库**的 `verify_mac` 比，就能判出"现在这把密码打不打得开
+    /// 这一份"——哪怕这一份老得没有世代号。空值/读不出记为 `None`，
+    /// 调用方继续回落到目录位置判据。
+    verify_mac: Option<Vec<u8>>,
+}
+
+/// 读一个容器**头部里的判据材料**；整个头部读不出时返回 `None`。
 ///
 /// 为什么宽容：这个函数只服务**贴标签**，不服务打开。magic 不对、头长为 0、
-/// JSON 坏了、字段不存在（1.5.32 之前的旧文件）——任何一种都说明"世代判据用不上"，
-/// 调用方回落到目录位置判据即可，不该把整个清单拖垮。它**刻意不做**
-/// `format_version` 校验： newer 版本的备份 JSON 大概率照样能解析，能读到世代号
-/// 就比"猜"强。
+/// JSON 坏了——这三种说明"连头部都读不出"，返回 `None`；字段缺失则只是对应
+/// 那一项为 `None`（1.5.32 之前的旧文件没有 `key_generation`，但照样有
+/// `verify_mac`，D-182 就是靠后者把旧备份也判对）。调用方逐级回落，不该把
+/// 整个清单拖垮。它**刻意不做** `format_version` 校验：新版本的备份 JSON
+/// 大概率照样能解析，能读到判据就比"猜"强。
 ///
 /// 成本：只读前 16 字节前缀 + 头部（≤64KB），**不碰记录区**——清单里十几份备份
 /// 每次刷新各读一次头部，总量几十 KB，可忽略。
-fn read_header_generation(path: &Path) -> Option<u32> {
+fn read_header_hint(path: &Path) -> Option<HeaderHint> {
     let mut file = fs::File::open(path).ok()?;
     let mut prefix = [0u8; CONTAINER_PREFIX_LEN];
     file.read_exact(&mut prefix).ok()?;
@@ -975,7 +992,39 @@ fn read_header_generation(path: &Path) -> Option<u32> {
     let mut header_bytes = vec![0u8; header_len];
     file.read_exact(&mut header_bytes).ok()?;
     let header: Vault = serde_json::from_slice(&header_bytes).ok()?;
-    header.key_generation
+    Some(HeaderHint {
+        generation: header.key_generation,
+        // 空向量当成"没有"：与其拿两个空串互比得出"相等"，不如老实回落。
+        verify_mac: (!header.verify_mac.is_empty()).then_some(header.verify_mac),
+    })
+}
+
+/// 判这一份备份「要不要用保存时的那把密码」——三级判据，严格按可信度降序。
+///
+/// ① **世代号**（D-181，最准）：两边都读得到 `key_generation` 就直接比。
+/// ② **`verify_mac` 校验值**（D-182，为旧备份补的）：它是派生密钥的确定性函数，
+///    相等就说明现在这把密码能算出同一个值、进而解得开这一份的封装密钥。
+///    这一级救的是 1.5.32 之前拍的备份——那时候头部还没有世代号，
+///    而目录位置判据偏偏在「改密码→恢复」之后必然全反。
+///    比的是**当前库**与**备份**的校验值，不是密码本身：谁也没多存一份密码。
+/// ③ **目录位置**（初版行为，兜底）：`old-key/` 里或 `pre-rekey` 就算旧密码。
+///    只在头部读不出时才会走到这里——它本来就是"猜"，能不用就不用。
+fn needs_old_password(f: &BackupFile, current: Option<&HeaderHint>) -> bool {
+    let hint = read_header_hint(&f.path);
+    if let (Some(hint), Some(cur)) = (hint.as_ref(), current) {
+        match (hint.generation, cur.generation) {
+            (Some(gen), Some(cur_gen)) => return gen != cur_gen,
+            _ => {
+                if let (Some(a), Some(b)) = (hint.verify_mac.as_deref(), cur.verify_mac.as_deref())
+                {
+                    // 常量时间比较：这一级比的是密钥派生物的相等性，没必要给
+                    // 侧信道留任何口子（虽然两边都是用户自己磁盘上的文件）。
+                    return !constant_time_eq(a, b);
+                }
+            }
+        }
+    }
+    f.needs_old_password()
 }
 
 /// 列出**全部**能拿去覆盖当前库的整库副本（新的在前）。
@@ -993,11 +1042,17 @@ fn read_header_generation(path: &Path) -> Option<u32> {
 ///    （主人 2026-11-03 验收当场踩中：三张标签全反）；
 /// ③ 覆盖之前先拍一份 `pre-restore`——**退回去本身可再退回来**。
 ///
+/// 判据是**三级**的（D-182 补第二级）：世代号能读就按世代判；世代读不出但
+/// 两边 `verify_mac` 都读得到，就比校验值（相等 = 现在这把密码能打开）；
+/// 两者都不成立才回落到目录位置判据。第二级是为**1.5.32 之前拍的旧备份**加的
+/// ——它们头部没有世代号，而主人 11-03 那次「改密码→恢复」之后目录位置判据
+/// 恰好三张全反，旧备份总不能永远判错。
+///
 /// 认不出名字的文件（用户自己丢进来的东西、`old-key/` 里的杂物）一律不列：
 /// 拿一个来历不明的文件去覆盖库，比什么都不做糟得多。
 pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
     let pins = pinned_tokens(vault_path);
-    let current_generation = read_header_generation(vault_path);
+    let current = read_header_hint(vault_path);
     let mut files = inventory(vault_path);
     files.extend(old_key_inventory(vault_path));
     let mut out: Vec<BackupPoint> = files
@@ -1007,13 +1062,7 @@ pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
             let kind = point_kind_from_name(name)?;
             let token = f.restore_token()?;
             let pinned = pins.contains(&token);
-            // 世代判据优先；世代读不出（旧文件 / 头损坏）回落目录位置判据。
-            // 回落方向与 1.5.32 之前一致：宁可保持旧行为，也不假装能判。
-            let generation = read_header_generation(&f.path);
-            let needs_old_password = match (generation, current_generation) {
-                (Some(gen), Some(cur)) => gen != cur,
-                _ => f.needs_old_password(),
-            };
+            let needs_old_password = needs_old_password(&f, current.as_ref());
             Some(BackupPoint {
                 token,
                 kind,
@@ -2527,8 +2576,10 @@ mod tests {
     use crate::store::container::Container;
     use std::io::Write as _;
 
-    /// 造一个**真的能被读出头部**的容器文件（记录区为空没关系——世代号在头部）。
-    fn write_container(path: &Path, generation: u32) {
+    /// 造一个**真的能被读出头部**的容器文件（记录区为空没关系——判据全在头部）。
+    ///
+    /// `mac` 是 `verify_mac` 的填充字节：同一把"密码"用同一个值，换过密码就换一个值。
+    fn write_container(path: &Path, generation: u32, mac: u8) {
         let header = Vault::new(
             "test".to_string(),
             vec![1u8; 8],
@@ -2536,7 +2587,7 @@ mod tests {
                 nonce: vec![1u8; 24],
                 ct: vec![2u8; 32],
             },
-            vec![3u8; 8],
+            vec![mac; 8],
             0,
         );
         let mut header = header;
@@ -2548,7 +2599,10 @@ mod tests {
     }
 
     /// 造一个**没有 `key_generation` 字段**的容器（= 1.5.32 之前的老备份）。
-    fn write_container_without_generation(path: &Path) {
+    ///
+    /// `mac` 为**空**表示连 `verify_mac` 都没有（更老的格式）——那是第三级回落
+    /// 目录位置判据的入口。
+    fn write_container_without_generation(path: &Path, mac: Vec<u8>) {
         let header = Vault::new(
             "test".to_string(),
             vec![1u8; 8],
@@ -2556,7 +2610,7 @@ mod tests {
                 nonce: vec![1u8; 24],
                 ct: vec![2u8; 32],
             },
-            vec![3u8; 8],
+            mac,
             0,
         );
         let mut value = serde_json::to_value(&header).unwrap();
@@ -2583,11 +2637,13 @@ mod tests {
         // A 世代的备份反倒用现在的密码。目录位置判据在这个瞬间**三张标签全反**，
         // 世代判据自动摆正。
         let (root, vault) = temp_vault("gen-labels");
-        write_container(&vault, 0); // 当前库：恢复之后 = 世代 0
+        // 三份的 verify_mac 刻意写成同一个值：证明**世代判据优先于校验值判据**
+        // ——同 mac 但不同世代的两份，仍然必须被判成"要那一世的密码"。
+        write_container(&vault, 0, 3); // 当前库：恢复之后 = 世代 0
         let dir = backup_dir(&vault);
         fs::create_dir_all(&dir).unwrap();
-        write_container(&dir.join("pre-restore.2000"), 1); // 恢复之前拍的 = 世代 1
-        write_container(&dir.join("bak.20260101"), 0); // 与当前库同世代
+        write_container(&dir.join("pre-restore.2000"), 1, 3); // 恢复之前拍的 = 世代 1
+        write_container(&dir.join("bak.20260101"), 0, 3); // 与当前库同世代
 
         let points = restore_points(&vault);
         let by = |t: &str| {
@@ -2602,23 +2658,70 @@ mod tests {
         );
         assert!(
             by("pre-restore.2000").needs_old_password,
-            "不同世代的备份 = 要用那一世的密码"
+            "不同世代的备份 = 要用那一世的密码（世代优先于校验值）"
         );
 
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn 没有世代字段的旧备份回落目录位置判据() {
-        // 1.5.32 之前的备份文件没有 `key_generation`。世代读不出时不许装能判——
-        // 回落到旧的目录位置判据（old-key 里 = 要旧密码），与升级前行为一致。
-        let (root, vault) = temp_vault("gen-fallback");
-        write_container(&vault, 0);
+    fn 旧备份没有世代号时按校验值判_恢复之后同样摆正() {
+        // D-182：主人 2026-11-03 现场的那三份备份全是 1.5.32 之前拍的，头部没有
+        // 世代号 → 世代判据用不上 → 旧实现回落目录位置判据 → **三张标签全反**。
+        //
+        // 这个用例复刻那一刻：当前库是「改密码之前的备份」恢复回来的（无世代号，
+        // mac=7），另外两份是改密码之后拍的（无世代号，mac=9）。校验值判据应当：
+        //   * 「改密码之前的备份」（在 old-key/ 里、目录判据会说"要旧密码"）→
+        //     与当前库同 mac → **现在的密码就能开**；
+        //   * 另外两份（在当前代目录里、目录判据会说"不要旧密码"）→
+        //     与当前库 mac 不同 → **要用保存时的那把**。
+        // 也就是说：这一级判据必须**盖过**目录位置，否则这个场景永远判反。
+        let (root, vault) = temp_vault("mac-labels");
+        write_container_without_generation(&vault, vec![7u8; 8]);
         let dir = backup_dir(&vault);
         let batch = old_key_dir(&vault).join("1000");
+        fs::create_dir_all(&dir).unwrap();
         fs::create_dir_all(&batch).unwrap();
-        write_container_without_generation(&dir.join("pre-restore.1000"));
-        write_container_without_generation(&batch.join("bak.20260101"));
+        write_container_without_generation(&dir.join("pre-restore.2000"), vec![9u8; 8]);
+        write_container_without_generation(&dir.join("post-rekey.1000"), vec![9u8; 8]);
+        write_container_without_generation(&batch.join("pre-rekey.1000"), vec![7u8; 8]);
+
+        let points = restore_points(&vault);
+        let by = |t: &str| {
+            points
+                .iter()
+                .find(|p| p.token == t)
+                .unwrap_or_else(|| panic!("清单里必须有三边：{t}"))
+        };
+        assert!(
+            !by("1000/pre-rekey.1000").needs_old_password,
+            "改密码之前的备份恢复了 → 它自己跟当前库同 mac → 现在的密码能开"
+        );
+        assert!(
+            by("pre-restore.2000").needs_old_password,
+            "改密码之后拍的 → mac 不同于当前库 → 要用保存时那把"
+        );
+        assert!(
+            by("post-rekey.1000").needs_old_password,
+            "改完密码之后拍的 → mac 不同于当前库 → 要用保存时那把"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 校验值也读不出才回落目录位置判据() {
+        // 更老的备份连 verify_mac 都没有（空向量）。两级判据都拿不到材料时，
+        // 不许装能判——回落到旧的目录位置判据（old-key 里 = 要旧密码），
+        // 与升级前行为一致。
+        let (root, vault) = temp_vault("gen-fallback");
+        write_container_without_generation(&vault, Vec::new());
+        let dir = backup_dir(&vault);
+        let batch = old_key_dir(&vault).join("1000");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&batch).unwrap();
+        write_container_without_generation(&dir.join("pre-restore.1000"), vec![9u8; 8]);
+        write_container_without_generation(&batch.join("bak.20260101"), vec![9u8; 8]);
 
         let points = restore_points(&vault);
         let by = |t: &str| {
@@ -2629,12 +2732,37 @@ mod tests {
         };
         assert!(
             !by("pre-restore.1000").needs_old_password,
-            "当前代 + 世代未知 = 沿用旧判据（不要旧密码）"
+            "当前代 + 判据全缺 = 沿用旧判据（不要旧密码）"
         );
         assert!(
             by("1000/bak.20260101").needs_old_password,
-            "old-key 里 + 世代未知 = 沿用旧判据（要旧密码）"
+            "old-key 里 + 判据全缺 = 沿用旧判据（要旧密码）"
         );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 当前库头部读不出时不装能判_回落目录位置判据() {
+        // 极端兜底：当前库文件根本读不出头部（比如正在被别的进程覆写）。
+        // 这时连"跟谁比"都没有，必须整列回落目录位置判据，而不是全判成同一个值。
+        let (root, vault) = temp_vault("no-current-header");
+        let dir = backup_dir(&vault);
+        let batch = old_key_dir(&vault).join("1000");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&batch).unwrap();
+        write_container_without_generation(&dir.join("pre-restore.1000"), vec![9u8; 8]);
+        write_container_without_generation(&batch.join("bak.20260101"), vec![9u8; 8]);
+
+        let points = restore_points(&vault);
+        let by = |t: &str| {
+            points
+                .iter()
+                .find(|p| p.token == t)
+                .unwrap_or_else(|| panic!("清单里必须有两边：{t}"))
+        };
+        assert!(!by("pre-restore.1000").needs_old_password);
+        assert!(by("1000/bak.20260101").needs_old_password);
 
         let _ = fs::remove_dir_all(&root);
     }
