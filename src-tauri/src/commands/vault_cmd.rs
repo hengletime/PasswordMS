@@ -5,6 +5,7 @@ use std::path::Path;
 use passwordms_core::error::CoreError;
 use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
+use passwordms_core::store::backup;
 use passwordms_core::store::container::restore_backup_from;
 
 use crate::dto::{ChangeMasterPasswordDto, StatusDto};
@@ -232,6 +233,18 @@ pub fn restore_backup(
         return Err(CoreError::Validation("vault_is_unlocked".to_string()).into());
     }
     let dest = vault_path(&app)?;
+    // 恢复前的快照必须拍在 [`backup::RestoreGuard`] **之前**：
+    // 守卫一旦生效，备份目录整体暂停写入，那时再拍会被直接跳过。
+    let pre = backup::snapshot_event(&dest, backup::EventTag::PreRestore, now_ms());
+    if let Some(kind) = pre.error_kind {
+        // 不阻断（恢复是用户此刻唯一的出路），但必须留痕。
+        eprintln!(
+            "[backup] pre-restore 快照失败 kind={kind:?} stage={:?}",
+            pre.error_stage
+        );
+    }
+    // 守卫挡住恢复期间的一切轮转：正在被读的那一份不能被 prune 删掉。
+    let _restore_guard = backup::RestoreGuard::new(&dest);
     // 覆盖保护：原库先留 .bak 后路（unix_ms 时间戳避免同名覆盖）。
     if dest.exists() {
         let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));

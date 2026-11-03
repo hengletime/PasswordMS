@@ -29,6 +29,7 @@ use passwordms_core::attachment_name::filename_from_source;
 #[cfg(target_os = "android")]
 use crate::content_uri;
 
+use crate::commands::backup_cmd;
 use crate::dto::ItemDto;
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
@@ -78,6 +79,7 @@ pub fn remove_attachment(
     attachment_id: String,
 ) -> IpcResult<ItemDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     Ok(repo.remove_attachment(&item_id, &attachment_id)?)
 }

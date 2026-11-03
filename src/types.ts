@@ -10,6 +10,54 @@ export interface StatusDto {
 }
 
 /**
+ * 一批「改造前回滚点」（一次换主密码产生的一批）。
+ *
+ * `batch_ms` 同时是删除入参。批次身份来自磁盘上的目录名
+ * （`backups/old-key/<epoch-ms>/`），**不是**从文件内容或时间戳推断的。
+ */
+export interface BackupBatchDto {
+  batch_ms: number;
+  files: number;
+  bytes: number;
+}
+
+/**
+ * 自动回滚点状态（设置页常驻区）。
+ *
+ * 当前代（`current_*`）与旧代（`old_*`）**必须分两栏显示**：合并会让用户在
+ * 删完当前代之后看到"归零"，而磁盘上还躺着一整份能用**旧主密码**打开的库。
+ *
+ * `last_error_kind` 是**粘性**的：成功后不清除，只有用户明确"知道了"才清——
+ * 否则"第一帧失败、后面又成功"的备份故障会在界面上完全看不见。
+ */
+export interface BackupStatusDto {
+  current_bytes: number;
+  current_files: number;
+  old_bytes: number;
+  old_files: number;
+  old_batches: BackupBatchDto[];
+  /** 上次成功刷新 `last.bak` 的时刻（0 = 从未）。 */
+  last_ms: number;
+  last_error_ms: number;
+  /** `no_space` / `readonly` / `permission` / `device_gone` / `quota_exceeded` / `io` / `other`。 */
+  last_error_kind: string | null;
+  /** `never` / `unknown` / `fresh` / `stale`。 */
+  staleness: string;
+}
+
+/** 换主密码的回执（B-03：旧代归档结果）。 */
+export interface ChangeMasterPasswordDto {
+  /** 被归档进 `old-key/` 的份数（0 = 本来就没有旧回滚点）。 */
+  isolated_backups: number;
+  /** **没能归档**的份数：它们留在原处，标签会错，必须说出来。 */
+  isolate_failed: number;
+  /** 整个归档动作没做成（连批次目录都没建起来）。 */
+  isolate_error: boolean;
+  /** 换密前那一份是否存下。`false` **不等于**"没有退路"——已归档的旧代同样是退路。 */
+  pre_rekey_saved: boolean;
+}
+
+/**
  * 生物识别快速解锁状态（`docs/08-biometric-unlock.md` §10 / §23）。
  *
  * 只带状态、不带密钥材料：`availability` 决定按钮显不显示/置不置灰，

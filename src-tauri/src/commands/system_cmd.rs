@@ -369,6 +369,11 @@ pub async fn compact_vault(app: tauri::AppHandle) -> IpcResult<CompactionResultD
     let result = tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let mut session = state.lock_session().map_err(lock_err)?;
+        // 压缩会整体重写容器，是整库级破坏性操作 → 事件快照（不受日备份节流影响）。
+        crate::commands::backup_cmd::snapshot_event(
+            &session,
+            passwordms_core::store::backup::EventTag::PreCompact,
+        );
         let repo = session.repo_mut()?;
         let outcome = repo.compact().map_err(IpcError::from)?;
         Ok(CompactionResultDto::from(outcome))

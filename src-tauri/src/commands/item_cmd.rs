@@ -2,6 +2,7 @@
 
 use passwordms_core::store::repository::ItemDraft;
 
+use crate::commands::backup_cmd;
 use crate::dto::{ItemCountsDto, ItemDraftDto, ItemDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
@@ -57,6 +58,7 @@ pub fn get_item(state: tauri::State<'_, AppState>, item_id: String) -> IpcResult
 #[tauri::command(rename_all = "snake_case")]
 pub fn create_item(state: tauri::State<'_, AppState>, draft: ItemDraftDto) -> IpcResult<ItemDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     Ok(repo.create_item(to_draft(draft))?)
 }
@@ -69,6 +71,7 @@ pub fn update_item(
     draft: ItemDraftDto,
 ) -> IpcResult<ItemDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     Ok(repo.update_item(&item_id, to_draft(draft))?)
 }
@@ -81,6 +84,7 @@ pub fn delete_item(
     permanent: bool,
 ) -> IpcResult<()> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     repo.delete_item(&item_id, permanent)?;
     Ok(())

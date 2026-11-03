@@ -1,5 +1,6 @@
 //! 回收站命令（架构文档 §5.2、F-15）。
 
+use crate::commands::backup_cmd;
 use crate::dto::{ItemDto, TrashDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
@@ -16,6 +17,7 @@ pub fn list_trash(state: tauri::State<'_, AppState>) -> IpcResult<Vec<TrashDto>>
 #[tauri::command(rename_all = "snake_case")]
 pub fn restore_item(state: tauri::State<'_, AppState>, trash_id: String) -> IpcResult<ItemDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     Ok(repo.restore_item(&trash_id)?)
 }
@@ -24,6 +26,7 @@ pub fn restore_item(state: tauri::State<'_, AppState>, trash_id: String) -> IpcR
 #[tauri::command(rename_all = "snake_case")]
 pub fn purge_item(state: tauri::State<'_, AppState>, trash_id: String) -> IpcResult<()> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     repo.purge_item(&trash_id)?;
     Ok(())
@@ -33,6 +36,7 @@ pub fn purge_item(state: tauri::State<'_, AppState>, trash_id: String) -> IpcRes
 #[tauri::command(rename_all = "snake_case")]
 pub fn empty_trash(state: tauri::State<'_, AppState>) -> IpcResult<()> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     repo.empty_trash()?;
     Ok(())

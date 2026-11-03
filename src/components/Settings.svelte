@@ -60,7 +60,13 @@
   } from '../lib/update-check';
   import { runVaultExport } from '../lib/vault-export';
   import { isSafeUrl } from '../lib/url-safety';
-  import type { CompactionStatsDto, PrefsDto, VaultFileInfoDto, VaultSettings } from '../types';
+  import type {
+    BackupStatusDto,
+    CompactionStatsDto,
+    PrefsDto,
+    VaultFileInfoDto,
+    VaultSettings,
+  } from '../types';
 
   /** D-63：项目主页（「关于」分组打开外链，走与详情页相同的安全校验 + IPC 链路）。 */
   const HOMEPAGE_URL = 'https://github.com/hengletime/PasswordMS';
@@ -156,6 +162,84 @@
   // 「还没返回」与「读取失败」—— 两者在界面上必须长得不一样（D-73 的教训）。
   let compactionStats = $state<CompactionStatsDto | null>(null);
   let compactionStatsFailed = $state(false);
+
+  // ===== B-03（1.5.29）：自动回滚点状态 =====
+  //
+  // 与上面 `lastBackupRecord`（用户**导出**的记录，存 localStorage）是两件事：
+  // 导出的是能带走、换机可用的文件；回滚点只在本机，卸载即消失。
+  // 分开存、分开显示，且文案必须各自带边界——同名不同物是本项目踩过的坑。
+  let backupStatus = $state<BackupStatusDto | null>(null);
+  let backupLoadFailed = $state(false);
+  /** 待确认的删除目标（`null` = 弹窗关闭）。 */
+  let backupClearTarget = $state<
+    | { kind: 'current'; count: number; bytes: number }
+    | { kind: 'batch'; batchMs: number; count: number; bytes: number }
+    | null
+  >(null);
+  let backupClearing = $state(false);
+  /** 换密回执里关于回滚点的部分（`null` = 这次没有可说的）。 */
+  let pwdBackupDetail = $state<{
+    count: number;
+    failed: number;
+    saved: boolean;
+  } | null>(null);
+
+  /** 只刷回滚点状态。换密成功后调用——**不要**用 `reloadSideData()`：
+   *  它会把 `draft` 从 store 重置一遍，冲掉用户在别的卡片上还没保存的编辑。 */
+  async function refreshBackupStatus(): Promise<void> {
+    try {
+      backupStatus = await api.backups.status();
+      backupLoadFailed = false;
+    } catch {
+      backupStatus = null;
+      backupLoadFailed = true;
+    }
+  }
+
+  /**
+   * 删除回滚点（当前代 / 某一批旧代）。
+   *
+   * 两个方向相反的单向门，用同一个确认弹窗但**两句不同的话**：
+   * 删当前代要说「旧代不会被删除」，删旧代要说「这是那把密码在本机的唯一副本」。
+   * 不互指的话，用户点完一个就以为清干净了，而两个按钮各自只清一半。
+   */
+  async function runBackupClear(): Promise<void> {
+    const target = backupClearTarget;
+    if (target === null || backupClearing) {
+      return;
+    }
+    backupClearing = true;
+    try {
+      const removed =
+        target.kind === 'current'
+          ? await api.backups.clearCurrent()
+          : await api.backups.clearOldBatch(target.batchMs);
+      backupClearTarget = null;
+      ui.toast('success', 'settings.restore_point_cleared', { count: removed });
+      await refreshBackupStatus();
+    } catch {
+      // 失败**不改**列表：回滚点还在盘上，界面不能先把它划掉。
+      ui.toast('error', 'settings.restore_point_failed');
+    } finally {
+      backupClearing = false;
+    }
+  }
+
+  /** 把后端枚举翻成一句话。认不出的按"读写出错"——不显示原始 token。 */
+  function backupReason(kind: string | null): string {
+    switch (kind) {
+      case 'no_space':
+      case 'quota_exceeded':
+        return ui.t('settings.restore_point_reason_space');
+      case 'readonly':
+      case 'permission':
+        return ui.t('settings.restore_point_reason_permission');
+      case 'device_gone':
+        return ui.t('settings.restore_point_reason_device');
+      default:
+        return ui.t('settings.restore_point_reason_other');
+    }
+  }
   /** 压缩自身进行中（重写 200MB 级容器可能几秒，必须有忙碌态）。 */
   let compacting = $state(false);
   /** 二次确认块是否打开（`ui.confirm()` 只支持「标题 + 一句正文」，装不下四个数字 + 三条提示）。 */
@@ -437,6 +521,10 @@
     void session.refreshBiometric();
     // v1.4.10：系统集成配置（应用级，与上面四块互相独立）。
     void loadPrefs();
+    // B-03：回滚点状态。**失败只影响这一块**——它读不到不该让库文件信息/版本号一起空白。
+    // 不并进 `loadSettingsPageSide` 的失败隔离矩阵：那是「四块」的契约，加第五块会改它的
+    // 单元测试语义，而这里一行 try/catch 就够。
+    await refreshBackupStatus();
   }
 
   $effect((): void => {
@@ -591,10 +679,20 @@
     const bioWasOn = bioEnabled;
     pwdErrorKey = '';
     try {
-      await api.vault.changeMasterPassword(oldPassword, newPassword);
+      // B-03：回执必须读回来。`isolated_backups` / `isolate_failed` / `pre_rekey_saved`
+      // 三个数不读，界面就只能说一句"改密成功"——而用户不知道旧钥匙还开着，
+      // 也不知道那几份有没有被归档到正确的地方。
+      const result = await api.vault.changeMasterPassword(oldPassword, newPassword);
+      pwdBackupDetail = {
+        count: result.isolated_backups,
+        failed: result.isolate_failed,
+        saved: result.pre_rekey_saved,
+      };
       oldPassword = '';
       newPassword = '';
       newPassword2 = '';
+      // 归档之后旧代那一栏才有内容，刷一次状态（不整页重载，免得冲掉其它卡片未保存的编辑）。
+      await refreshBackupStatus();
       // 重查而不是本地改值：封印是否真被删除以后端为准（前端不维护第二份真相）。
       await session.refreshBiometric();
       pwdChanged = bioWasOn ? 'bio_off' : 'plain';
@@ -606,6 +704,7 @@
     } catch (err) {
       // 失败时清掉上一次的成功回执：否则「已修改」会和「修改失败」同时在屏幕上。
       pwdChanged = 'none';
+      pwdBackupDetail = null;
       // D-115：失败回执同样**留在原地**。同一张卡片上「成功常驻、失败只闪 3 秒」
       // 是自相矛盾的；而「旧密码输错」正是这条流程最常见的失败。
       // 错误码由 core 的 `WrongMasterPassword` 给出，文案不再借用「解锁失败」。
@@ -617,6 +716,7 @@
   function clearPwdReceipt(): void {
     pwdChanged = 'none';
     pwdErrorKey = '';
+    pwdBackupDetail = null;
   }
 
   /**
@@ -1057,6 +1157,106 @@
     {/if}
   </div>
 
+  <!-- B-03（1.5.29）：自动回滚点。**与上面「导出保险库」是两件事**：
+       导出的是能带走、换机可用的加密副本；回滚点只在本机，卸载 / 换机 / 清空数据目录
+       会一起没。所以「只在本机」这句必须与状态**同屏**，不做 tooltip、不做跳转链接——
+       用户看到"回滚点正常"就不再导出，而换机照样丢，那是产品主动制造的更糟处境。 -->
+  <div class="pms-card set-card">
+    <h3>{ui.t('settings.restore_point')}</h3>
+    <p class="pms-meta">{ui.t('settings.restore_point_hint')}</p>
+    <p class="pms-alert is-warning">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('settings.restore_point_local_only')}</span>
+    </p>
+
+    {#if backupLoadFailed}
+      <p class="pms-hint is-danger">{ui.t('settings.restore_point_load_failed')}</p>
+    {:else if backupStatus === null}
+      <p class="pms-meta">{ui.t('common.loading')}</p>
+    {:else}
+      {#if backupStatus.staleness === 'never'}
+        <p class="pms-meta">{ui.t('settings.restore_point_never')}</p>
+      {:else}
+        <div class="set-row is-info">
+          <span class="pms-meta">
+            {ui.t('settings.restore_point_current', {
+              count: backupStatus.current_files,
+              size: formatBytes(backupStatus.current_bytes),
+            })}
+          </span>
+        </div>
+      {/if}
+      {#if backupStatus.last_ms > 0}
+        <div class="set-row is-info">
+          <span class="pms-meta">
+            {ui.t('settings.restore_point_last_ok', {
+              time: formatDateTime(backupStatus.last_ms, ui.locale),
+            })}
+          </span>
+        </div>
+      {/if}
+      <!-- 两行制：只有 `last_error_ms != 0` 才有第二行。这条不是装饰——
+           日备份被配额挡了一周、而 last.bak 每天成功时，只有一行"上次成功"会让界面
+           天天显示"今天"，用户以为备份链一直是好的。 -->
+      {#if backupStatus.last_error_ms > 0}
+        <div class="set-row is-info">
+          <span class="pms-hint is-danger">
+            {ui.t('settings.restore_point_error', {
+              reason: backupReason(backupStatus.last_error_kind),
+              time: formatDateTime(backupStatus.last_error_ms, ui.locale),
+            })}
+          </span>
+        </div>
+      {/if}
+
+      {#if backupStatus.current_files > 0}
+        <button
+          class="pms-btn is-ghost"
+          type="button"
+          onclick={() =>
+            (backupClearTarget = {
+              kind: 'current',
+              count: backupStatus?.current_files ?? 0,
+              bytes: backupStatus?.current_bytes ?? 0,
+            })}
+        >
+          {ui.t('settings.restore_point_clear_current')}
+        </button>
+      {/if}
+
+      {#if backupStatus.old_files > 0}
+        <h4>{ui.t('settings.restore_point_old_title')}</h4>
+        <p class="pms-hint">{ui.t('settings.restore_point_old_note')}</p>
+        <ul class="set-list">
+          {#each backupStatus.old_batches as batch (batch.batch_ms)}
+            <li class="set-list-row">
+              <span class="pms-meta">
+                {ui.t('settings.restore_point_old_batch', {
+                  time: formatDateTime(batch.batch_ms, ui.locale),
+                  count: batch.files,
+                  size: formatBytes(batch.bytes),
+                })}
+              </span>
+              <button
+                class="pms-btn is-ghost"
+                type="button"
+                onclick={() =>
+                  (backupClearTarget = {
+                    kind: 'batch',
+                    batchMs: batch.batch_ms,
+                    count: batch.files,
+                    bytes: batch.bytes,
+                  })}
+              >
+                {ui.t('settings.restore_point_clear_batch')}
+              </button>
+            </li>
+          {/each}
+        </ul>
+      {/if}
+    {/if}
+  </div>
+
   <div class="pms-card set-card">
     <h3>{ui.t('sync.devices')}</h3>
     {#if sync.devices.length === 0}
@@ -1112,6 +1312,28 @@
         <Icon name="check" size={16} />
         <span>{ui.t(pwdChanged === 'bio_off' ? `settings.password_changed_bio_off${bioSuffix}` : 'settings.password_changed')}</span>
       </p>
+      {#if pwdBackupDetail !== null}
+        {#if pwdBackupDetail.failed > 0}
+          <!-- 没能归档的那几份会留在当前代、被标成"当前主密码可开"，实际要用旧密码。
+               用户忘记新密码时按这个标签去试，那是他最后一次尝试——必须说出来。 -->
+          <p class="pms-alert is-danger pwd-result" role="alert">
+            <Icon name="alert" size={16} />
+            <span>{ui.t('settings.password_changed_isolate_failed', { count: pwdBackupDetail.failed })}</span>
+          </p>
+        {:else if pwdBackupDetail.count > 0}
+          <p class="pms-meta">{ui.t('settings.password_changed_detail', { count: pwdBackupDetail.count })}</p>
+        {:else if !pwdBackupDetail.saved}
+          <p class="pms-hint is-danger">{ui.t('settings.password_changed_no_backup')}</p>
+        {/if}
+      {/if}
+      <!-- B-03 三层，缺一不可：
+           ① 这一步只换「锁」不换「钥匙」——它在承认能力边界；
+           ② 旧代只防顺手牵羊，不防懂行的人——它说清"删旧代"这个动作的效力范围；
+           ③ 真作废的出口——没有它，前两句只是让人绝望，而路其实存在。
+           三层合成一句，就等于用能执行的动作担保一件它担保不了的事。 -->
+      <p class="pms-hint">{ui.t('settings.change_password_note_lock_only')}</p>
+      <p class="pms-hint">{ui.t('settings.change_password_note_old')}</p>
+      <p class="pms-hint">{ui.t('settings.change_password_note_escape')}</p>
     {/if}
   </div>
 
@@ -1286,6 +1508,48 @@
     </button>
     <button class="pms-btn is-primary" type="button" onclick={() => void runCompaction()}>
       {ui.t('settings.compact_start')}
+    </button>
+  {/snippet}
+</Modal>
+
+<!-- B-03：回滚点删除确认。两个方向相反的单向门用同一个弹窗、两句不同的话——
+     删当前代要说"旧代不会被删除"，删旧代要说"这是那把密码在本机的唯一副本"。
+     不互指的话，用户点完一个就以为清干净了。 -->
+<Modal
+  open={backupClearTarget !== null}
+  titleKey={backupClearTarget?.kind === 'batch'
+    ? 'settings.restore_point_clear_batch'
+    : 'settings.restore_point_clear_current'}
+  onclose={() => (backupClearTarget = null)}
+>
+  <p class="pms-alert is-danger">
+    <Icon name="alert" size={16} />
+    <span>
+      {#if backupClearTarget?.kind === 'batch'}
+        {ui.t('settings.restore_point_clear_batch_confirm', {
+          time: formatDateTime(backupClearTarget.batchMs, ui.locale),
+          count: backupClearTarget.count,
+          size: formatBytes(backupClearTarget.bytes),
+        })}
+      {:else}
+        {ui.t('settings.restore_point_clear_current_confirm', {
+          count: backupClearTarget?.count ?? 0,
+          size: formatBytes(backupClearTarget?.bytes ?? 0),
+        })}
+      {/if}
+    </span>
+  </p>
+  {#snippet footer()}
+    <button class="pms-btn is-ghost" type="button" onclick={() => (backupClearTarget = null)}>
+      {ui.t('common.cancel')}
+    </button>
+    <button
+      class="pms-btn is-primary"
+      type="button"
+      disabled={backupClearing}
+      onclick={() => void runBackupClear()}
+    >
+      {ui.t('common.delete')}
     </button>
   {/snippet}
 </Modal>

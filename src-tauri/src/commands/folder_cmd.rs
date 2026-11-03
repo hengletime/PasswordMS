@@ -2,6 +2,7 @@
 
 use passwordms_core::store::repository::FolderDeleteStrategy;
 
+use crate::commands::backup_cmd;
 use crate::dto::FolderDto;
 use crate::error::{lock_err, IpcError, IpcResult};
 use crate::state::AppState;
@@ -31,6 +32,7 @@ pub fn create_folder(
     color: Option<String>,
 ) -> IpcResult<FolderDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     let folder = repo.create_folder(name, icon, color)?;
     // 新分组还没有条目，聚合值必然是默认值；仍走 folder_usage 保证口径统一。
@@ -52,6 +54,7 @@ pub fn update_folder(
     color: Option<String>,
 ) -> IpcResult<FolderDto> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     let folder = repo.update_folder(&folder_id, name, icon, color)?;
     let usage = repo
@@ -79,6 +82,7 @@ pub fn delete_folder(
         }
     };
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     repo.delete_folder(&folder_id, parsed)?;
     Ok(())

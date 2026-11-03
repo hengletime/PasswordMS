@@ -5,6 +5,7 @@
 //! 「使用」= 仅复制动作（前端在复制成功后调 `record_item_usage` 埋点），60s 节流；
 //! 收藏（favorite）只是标记，不参与排序。
 
+use crate::commands::backup_cmd;
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
 
@@ -75,6 +76,7 @@ pub fn move_item_to_folder(
     folder_id: Option<String>,
 ) -> IpcResult<()> {
     let mut session = state.lock_session().map_err(lock_err)?;
+    backup_cmd::snapshot_before(&session);
     let repo = session.repo_mut()?;
     repo.move_item_to_folder(&item_id, folder_id)?;
     Ok(())

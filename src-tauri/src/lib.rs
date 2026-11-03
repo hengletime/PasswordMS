@@ -242,6 +242,11 @@ pub fn run() {
             commands::vault_cmd::restore_backup,
             commands::vault_cmd::get_auto_lock,
             commands::vault_cmd::set_auto_lock,
+            // backup（1.5.29 / B-03：自动回滚点——**不是**用户导出的"备份"，见 backup_cmd 文档）
+            commands::backup_cmd::backup_status,
+            commands::backup_cmd::backup_clear_current,
+            commands::backup_cmd::backup_clear_old_batch,
+            commands::backup_cmd::backup_clear_old_all,
             // biometric（D-113 / docs/08 P2）
             commands::biometric_cmd::biometric_status,
             commands::biometric_cmd::biometric_enable,

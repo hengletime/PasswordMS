@@ -6,7 +6,9 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  BackupStatusDto,
   BiometricStatusDto,
+  ChangeMasterPasswordDto,
   CompactionResultDto,
   CompactionStatsDto,
   ConflictChoice,
@@ -92,8 +94,15 @@ export const vault = {
   // D-114：打开系统「登录选项」。**不带参数**——目标 URI 在 Rust 里是常量，
   // 前端拿不到「打开任意系统协议」的能力（`open_url` 的白名单只放行 http/https）。
   openBiometricSettings: (): Promise<void> => invoke<void>('open_biometric_settings'),
-  changeMasterPassword: (oldPassword: string, newPassword: string): Promise<void> =>
-    invoke<void>('change_master_password', {
+  // B-03：换密**不会**让旧主密码失效（旧回滚点仍能用旧密码打开）。回执必须带回
+  // 归档结果——`isolate_failed > 0` 意味着那几份留在了原处、界面会贴错标签；
+  // `pre_rekey_saved === false` 且 `isolated_backups === 0` 才是"真的什么都没有"。
+  // 这三个数不读，界面就只能说一句"改密成功"，而用户不知道旧钥匙还开着。
+  changeMasterPassword: (
+    oldPassword: string,
+    newPassword: string,
+  ): Promise<ChangeMasterPasswordDto> =>
+    invoke<ChangeMasterPasswordDto>('change_master_password', {
       old_password: oldPassword,
       new_password: newPassword,
     }),
@@ -104,6 +113,25 @@ export const vault = {
   // D-55 从备份恢复：source_path 必须是 PasswordMS 导出的 .vault 备份（后端校验 magic）。
   restoreBackup: (sourcePath: string): Promise<void> =>
     invoke<void>('restore_backup', { source_path: sourcePath }),
+};
+
+/**
+ * 自动回滚点（`backups/`）。
+ *
+ * ⚠️ **不是「备份」**：本产品里「备份」指用户主动导出、能带走、换机可用的 `.vault`
+ * 文件（`vault.exportVault`）。这里的回滚点由应用自动维护、与库同目录、
+ * **卸载或换机一样会一起没**。两件事同名会让用户以为「有回滚点就不用导出了」——
+ * 那正好抵消掉唯一能救换机的提示。
+ */
+export const backups = {
+  status: (): Promise<BackupStatusDto> => invoke<BackupStatusDto>('backup_status'),
+  /** 删除**当前代**回滚点，返回删除份数。`old-key/` 一份不动。 */
+  clearCurrent: (): Promise<number> => invoke<number>('backup_clear_current'),
+  /** 删除**某一批**旧代回滚点（`batch_ms` 来自 `status().old_batches`）。 */
+  clearOldBatch: (batchMs: number): Promise<number> =>
+    invoke<number>('backup_clear_old_batch', { batch_ms: batchMs }),
+  /** 删除**全部**旧代回滚点。单向门：那几批密码在本机的唯一副本。 */
+  clearOldAll: (): Promise<number> => invoke<number>('backup_clear_old_all'),
 };
 
 /** 条目类。 */
@@ -306,4 +334,4 @@ export const prefs = {
 };
 
 /** 全部命令的聚合入口。 */
-export const api = { system, vault, items, folders, keydocs, tools, importer, trash, health, sync, settings, prefs };
+export const api = { system, vault, backups, items, folders, keydocs, tools, importer, trash, health, sync, settings, prefs };

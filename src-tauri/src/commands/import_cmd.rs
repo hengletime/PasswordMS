@@ -2,6 +2,7 @@
 
 use passwordms_core::import::{self, ImportFormat};
 
+use crate::commands::backup_cmd;
 use crate::dto::{ImportPreviewDto, ImportResultDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
@@ -86,6 +87,12 @@ pub fn import_apply(
 
     // 锁先于取预览：这一句的顺序就是 F-08 的全部修法。
     let mut session = state.lock_session().map_err(lock_err)?;
+    // 导入是整库级破坏性操作：走事件快照，**不受日备份去重与节流影响**。
+    // 快照拍在锁内、apply 之前——apply 一旦开始就在写帧，那时再拍就晚了。
+    backup_cmd::snapshot_event(
+        &session,
+        passwordms_core::store::backup::EventTag::PreImport,
+    );
     let repo = session.repo_mut()?;
 
     let preview = state

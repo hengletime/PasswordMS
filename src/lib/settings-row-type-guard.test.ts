@@ -91,7 +91,7 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(block ?? '').toContain('flex-direction: column');
   });
 
-  it('纯信息行共 6 条 is-info（关于组 3 + 压缩体积 2 + 快速解锁状态 1）、按钮行 2 条 is-actions', () => {
+  it('纯信息行共 9 条 is-info（关于组 3 + 压缩体积 2 + 快速解锁 1 + 回滚点 3）、按钮行 2 条 is-actions', () => {
     // 标记在 markup 里是空格分隔的 class 串（`class="set-row is-info"`），与 CSS 的 `.set-row.is-info` 不同形。
     //
     // 计数从 3 改成 5 是 **D-76 的有意变更**（不是为了让测试变绿而放宽）：
@@ -102,9 +102,13 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     //
     // 5 → 6 是 **D-113 P2 的有意变更**：快速解锁卡片的「Windows Hello 快速解锁 / 已开启（日期）」
     // 是纯信息行（右侧状态文字要能自然换行），窄屏不能拆成两行。
+    // 6 → 9 是 **B-03（v1.5.29 自动回滚点）的有意变更**：回滚点卡片的三行
+    // （当前代份数与体积 / 上次回滚点时刻 / 最近一次未成功）都是**纯信息行**——
+    // 窄屏若按控件行堆叠，「当前主密码下：3 份，共 12.0 MB」会被拆成两行，
+    // 上半句没有数字、下半句没有主语，读起来像两条无关信息（D-73 症状⑤ 同型）。
     const infoRows = SRC.match(/class="set-row is-info"/g) ?? [];
     const actionRows = SRC.match(/class="set-row is-actions"/g) ?? [];
-    expect(infoRows).toHaveLength(6);
+    expect(infoRows).toHaveLength(9);
     // 计数 1 → 2 是 **D-107 的有意变更**：「关于」卡片新增更新检查区块，
     // 「前往下载」按钮行同样是按钮行，窄屏必须横向排布（避开窄屏堆叠）。
     expect(actionRows).toHaveLength(2);
@@ -133,11 +137,12 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     // （6 is-info + 2 is-actions + 2 is-check）。
     // 这里不写死裸行具体条数（将来加控件行会合法变动），只断言「裸行是多数、且标记行
     // 共 10 条」。
+    // **B-03（v1.5.29）**：标记行 10 → 13（9 is-info + 2 is-actions + 2 is-check）。
     expect(plainRows.length).toBeGreaterThanOrEqual(8);
-    expect(plainRows.length + 10).toBe(totalRows.length);
+    expect(plainRows.length + 13).toBe(totalRows.length);
     // 白色名单外不许出现别的 `is-*` 变体（例如 `is-buttons` 这种手滑写法）。
     const anyVariant = SRC.match(/class="set-row is-[a-z-]+"/g) ?? [];
-    expect(anyVariant).toHaveLength(10);
+    expect(anyVariant).toHaveLength(13);
   });
 
   it('覆盖规则在同一个移动端媒体块内，且都在一刀切 `.set-row` 之后（层叠顺序）', () => {

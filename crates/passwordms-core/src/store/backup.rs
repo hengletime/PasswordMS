@@ -42,7 +42,7 @@ use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::CoreResult;
+use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
 
 /// 日备份保留份数。
@@ -389,6 +389,16 @@ pub struct BackupFile {
     pub created_ms: i64,
     /// 文件系统 mtime。仅展示兜底，**不用于任何判断**。
     pub modified_ms: i64,
+    /// 这一份属于**哪一次换密**归档的批次（`old-key/<epoch-ms>/` 的目录名）。
+    ///
+    /// 当前代恒为 `None`。这个字段存在的唯一理由是：换两次密码就有两批旧代，
+    /// **两批要用两把不同的密码开**。只有扁平列表时界面只能说"用旧主密码打开"，
+    /// 而第二次换密之后这句话指哪一把就不确定了——用户按它去试，试错的那一次
+    /// 往往就是最后一次。
+    ///
+    /// **不推断"哪批配哪把密码"**：应用只在换密那一刻见过旧密码，不存它。
+    /// 所以界面只能写事实——「{日期} 改密前的回滚点」，日期来自批次目录名。
+    pub batch_ms: Option<i64>,
 }
 
 /// 从文件名解析创建时刻；认不出返回 `None`。
@@ -729,6 +739,7 @@ pub fn inventory(vault_path: &Path) -> Vec<BackupFile> {
                         size_bytes,
                         created_ms,
                         modified_ms,
+                        batch_ms: None,
                     });
                     continue;
                 }
@@ -742,6 +753,7 @@ pub fn inventory(vault_path: &Path) -> Vec<BackupFile> {
             size_bytes,
             created_ms,
             modified_ms,
+            batch_ms: None,
         });
     }
     out.sort_by_key(|f| f.created_ms);
@@ -795,6 +807,12 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
         if !batch_path.is_dir() {
             continue;
         }
+        // 批次身份只从目录名取：目录名就是 `isolate` 那一刻的 `now_ms`，
+        // **是应用自己写下的**，不是从文件 mtime 或内容推断的。
+        let batch_ms = batch_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|s| s.parse::<i64>().ok());
         let Ok(items) = fs::read_dir(&batch_path) else {
             continue;
         };
@@ -824,11 +842,91 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
                 size_bytes: entry.metadata().map(|m| m.len()).unwrap_or(0),
                 created_ms,
                 modified_ms: mtime_ms(&path).unwrap_or(0),
+                batch_ms,
             });
         }
     }
-    out.sort_by_key(|f| f.created_ms);
+    out.sort_by_key(|f| (f.batch_ms.unwrap_or(0), f.created_ms));
     out
+}
+
+/// 一批旧代备份（一次换密产生的一整批）。
+///
+/// 为什么要有它而不是让界面自己按 `batch_ms` 分组：批次数、每批的份数与体积，
+/// 是「我要不要删这一批」的**判断依据**，不该由渲染层现算。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OldKeyBatch {
+    /// 批次标识（`old-key/<epoch-ms>/` 的目录名），也是删除时的入参。
+    pub batch_ms: i64,
+    /// 这一批的份数。
+    pub files: usize,
+    /// 这一批的字节数。
+    pub bytes: u64,
+}
+
+/// 按批次汇总旧代（批内时刻升序）。
+pub fn old_key_batches(vault_path: &Path) -> Vec<OldKeyBatch> {
+    let mut out: Vec<OldKeyBatch> = Vec::new();
+    for f in old_key_inventory(vault_path) {
+        // 目录名解析不出时刻的批次仍要能看见、能删，归到 `0` 这一批并保留。
+        // 丢掉它 = 磁盘上有东西而界面说没有。
+        let key = f.batch_ms.unwrap_or(0);
+        match out.iter_mut().find(|b| b.batch_ms == key) {
+            Some(b) => {
+                b.files += 1;
+                b.bytes += f.size_bytes;
+            }
+            None => out.push(OldKeyBatch {
+                batch_ms: key,
+                files: 1,
+                bytes: f.size_bytes,
+            }),
+        }
+    }
+    out.sort_by_key(|b| b.batch_ms);
+    out
+}
+
+/// 删除**某一批**旧代备份，返回删除的文件数。
+///
+/// ## 为什么按批，而不是只有"全删"
+///
+/// 旧代是**单向门**，而"我怕旧密码还能开"这个需求往往只针对**其中一批**——
+/// 最原始那把密码可能早已忘了，那一批对用户是死的；而最近一次改密前的副本正是
+/// 他最想要的退路。整体清空把一个小需求绑成一个大动作，代价不对称。
+///
+/// 批次目录不存在时返回 `Ok(0)` 而不是报错：可能刚被另一处删掉，重试不该失败。
+pub fn clear_old_key_batch(vault_path: &Path, batch_ms: i64) -> CoreResult<usize> {
+    let batch_path = old_key_dir(vault_path).join(batch_ms.to_string());
+    if !batch_path.is_dir() {
+        return Ok(0);
+    }
+    let mut removed = 0;
+    if let Ok(items) = fs::read_dir(&batch_path) {
+        for entry in items.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if fs::remove_file(&path).is_ok() {
+                // `.state` / `.tmp` 也计数：它们确实被删掉了，但**不该算进"备份份数"**。
+                // 所以计数只认 `old_key_inventory` 认得的名字。
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name != STATE_FILE
+                    && !std::path::Path::new(name)
+                        .extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("tmp"))
+                {
+                    removed += 1;
+                }
+            }
+        }
+    }
+    // 删不干净就报错，不要假装成功：批次目录还在意味着空间没释放，
+    // 而界面已经把它从列表里划掉了。
+    fs::remove_dir(&batch_path)
+        .map_err(|e| CoreError::Io(format!("old-key batch 未能删除: {e}")))?;
+    Ok(removed)
 }
 
 /// 换主密码后隔离旧备份的结果。
@@ -2280,6 +2378,57 @@ mod tests {
         assert_eq!(post.skipped, None, "守卫没在 isolate 结束时释放");
         assert_eq!(post.created.len(), 1);
         assert_eq!(usage(&vault).1, 1);
+    }
+
+    #[test]
+    fn 两批旧代各自带批次身份且按批删除只动那一批() {
+        let (_root, vault) = temp_vault("old-batch");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
+        // 新一代长回日备份 + last.bak，才有东西可给第二次换密搬。
+        snapshot_before_write(&vault, base + 10_000_001);
+
+        let before2 = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 920_000_001, &before2);
+
+        let batches = old_key_batches(&vault);
+        assert_eq!(batches.len(), 2, "两次换密 = 两批，不能压成一批");
+        assert_eq!(batches[0].batch_ms, base + 460_000_001);
+        assert_eq!(batches[1].batch_ms, base + 920_000_001);
+        assert_eq!(batches[0].files, 8);
+        assert_eq!(batches[1].files, 2, "第二批只有新一代的日备份 + last.bak");
+
+        // 批次身份必须落到每一份上，否则界面只能给出一句"用旧主密码打开"——
+        // 而两次换密之后，那句话指哪一把密码就不确定了。
+        assert!(
+            old_key_inventory(&vault)
+                .iter()
+                .all(|f| f.batch_ms.is_some()),
+            "旧代每一份都必须带批次身份"
+        );
+        assert!(
+            inventory(&vault).iter().all(|f| f.batch_ms.is_none()),
+            "当前代不属于任何批次"
+        );
+
+        let removed = clear_old_key_batch(&vault, base + 920_000_001).expect("按批删除应成功");
+        assert_eq!(removed, 2);
+        assert_eq!(old_key_batches(&vault).len(), 1, "第一批必须留着");
+        assert_eq!(old_key_usage(&vault).1, 8, "只删了这一批");
+
+        // 删第二批不影响第一批仍可被单独删。批次不存在时返回 0 而不是报错。
+        assert_eq!(
+            clear_old_key_batch(&vault, 1).expect("不存在的批次不该报错"),
+            0
+        );
+        assert_eq!(
+            clear_old_key_batch(&vault, base + 460_000_001).expect("删第一批应成功"),
+            8
+        );
+        assert!(old_key_batches(&vault).is_empty());
     }
 
     #[test]

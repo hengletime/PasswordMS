@@ -13,7 +13,47 @@ use passwordms_core::model::item::{Item, ItemKind};
 use passwordms_core::model::sync_state::PairedDevice;
 use passwordms_core::model::trash::TrashEntry;
 use passwordms_core::model::vault::{GeneratorOptions, HealthConfig, VaultSettings};
+use passwordms_core::store::backup::{BackupErrorKind, Staleness};
 use passwordms_core::totp::TotpCode;
+
+/// 一批旧代回滚点（一次换密产生的一批）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupBatchDto {
+    /// 批次标识（同时是删除入参）。
+    pub batch_ms: i64,
+    pub files: usize,
+    pub bytes: u64,
+}
+
+/// 自动回滚点状态（设置页常驻区）。
+///
+/// ## 为什么当前代与旧代必须分两栏
+///
+/// 合并成一个"占用"数字，用户删了当前代之后会看到归零——而磁盘上还躺着一整份
+/// 能用**旧主密码**打开的库。对一个因为怀疑泄露才来删备份的人，这是安全层面的
+/// 假信念，不是一个显示精度问题。
+///
+/// 同理 `old_batches` 不能压成一个计数：换两次密码就有两批，**两批要用两把不同的
+/// 密码开**，而"哪批配哪把"应用不知道（它不存密码历史）。界面只能写事实：
+/// 「{日期} 改密前的回滚点」，日期来自批次目录名。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupStatusDto {
+    pub current_bytes: u64,
+    pub current_files: usize,
+    pub old_bytes: u64,
+    pub old_files: usize,
+    pub old_batches: Vec<BackupBatchDto>,
+    /// 上次成功刷新 `last.bak` 的时刻（0 = `.state` 里没有）。
+    pub last_ms: i64,
+    /// 最近一次备份失败的留痕（粘性：成功不清除，只由用户"知道了"清除）。
+    pub last_error_ms: i64,
+    pub last_error_kind: Option<BackupErrorKind>,
+    /// 新鲜度判定（`never` / `unknown` / `fresh` / `stale`）。
+    ///
+    /// 由后端算而不是前端算：判据依赖库文件 mtime 与"磁盘上到底有没有备份"，
+    /// 前端两样都拿不到。
+    pub staleness: Staleness,
+}
 
 /// 启动 / 解锁状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
