@@ -944,24 +944,29 @@ pub struct OldKeyBatch {
 ///
 /// **两类必须合成一个数**：用户能做的完全一样（去文件夹里手动处理），拆成两格只是让
 /// 下一个人以为其中一类不用管。分不清的两种原因合成一个可行动的数字，好过两个精确但
-/// 都被忽略的数字。
+/// 都被忽略的数。
 ///
 /// **不许用 `to_string_lossy()` 硬凑一个名字**：非法字节会变成 `U+FFFD`，用户拿着这个
 /// 假名字回来删时永远匹配不上，界面会说"批次不存在"——而它明明在盘上。
 ///
-/// `old-key/` 本身读不出来时返回 1 而不是 0：`NotFound` 是"还没有旧代"，返回 0 是对的；
-/// 其余错误下 0 会被界面读成"一切正常"。返回 1 是**下界**——目的是让提示出现，不是
-/// 报准确个数。宁可说"这里有问题，你自己看一眼"，不要说"没有这个东西"。
+/// ## 为什么返回 `Option<usize>` 而不是"下界整数"
 ///
-/// **所以调用方只能把它写成"至少 N 个"**：正常路径下它是精确值，而 `old-key/` 整体
-/// 读不出时它只是下界（1，实际可能有 7 批）——「至少 N」在两种情况下都是真的，
-/// 写成「有 N 个」则在第二种情况下骗人。**在 doc 里承认是下界、却让具体数字走到
-/// 用户眼前，是 doc 与文案分家**，只是这次方向无害。
-pub fn unreadable_batch_dirs(vault_path: &Path) -> usize {
+/// `Some(n)` = 数出来的，`n` 可以当**量词**用（「N 个目录……」）。
+/// `None` = **数不清**：`old-key/` 本身读不出来，且错误不是 `NotFound`。
+///
+/// 早先这里返回 `usize`，用 `1` 表示数不清，然后在文案里写「**至少** N 个」来兜住——
+/// 那等于把「这个值可能是下界」这条不变量**存在四份翻译字符串里**，靠四次同步维持。
+/// 少改一份、或者多一门语言，用户读到的就是一句看起来精确的假话。
+/// **一个值只回答一个问题**：能不能数、数出来是多少，是两个问题，就得是两个形状。
+/// `None` 让"不知道"在类型上不可被当成数字使用，调用方想错都错不了。
+///
+/// `NotFound` 例外：那是"还没有旧代"，是**数得出来的 0**，不是数不清。
+pub fn unreadable_batch_dirs(vault_path: &Path) -> Option<usize> {
     let entries = match fs::read_dir(old_key_dir(vault_path)) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return 0,
-        Err(_) => return 1,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(0),
+        // 数不清就是数不清：返回一个具体数字（哪怕 1）会让调用方有"当量词用"的机会。
+        Err(_) => return None,
     };
     let mut count = 0usize;
     for entry in entries.flatten() {
@@ -976,21 +981,29 @@ pub fn unreadable_batch_dirs(vault_path: &Path) -> usize {
         // inventory 正是把读失败吞成 `continue` 的那一层，复用它的产出等于拿被污染的
         // 证据自证清白。
         //
-        // 这一支**没有测试覆盖**：Windows 上要改 ACL 才能构造出读不出的目录，本机造不
-        // 出来。不拿 `#[cfg(unix)]` 的用例充数——永不在本机跑的测试不是覆盖率，是
-        // "我们有测试"这句话的赝品，真实成本是让人停止寻找真的测法。
-        // 为什么可以不覆盖：**失效方向是多报，不是漏报**。这一支只可能多显示一句
-        // "去文件夹手动看看"（代价是白看一眼），不会漏掉一批（代价是用户以为删干净了，
-        // 而旧密码仍能打开里面的文件）。漏报才是 B-03 要治的病。
+        // 这一支**有测试覆盖**（`读不出的旧代批次既从清点里消失也被计数说出来`），
+        // 构造手段：用 `share_mode(0)` + `FILE_FLAG_BACKUP_SEMANTICS` 持有批次目录句柄，
+        // 后续 `read_dir` 即得 `ERROR_SHARING_VIOLATION`。曾经这里写的是"Windows 上要改
+        // ACL、本机造不出来"——**那是错的，而且是最贵的一行**：它上一段自己还在说
+        // "永不在本机跑的测试是赝品"，下一行就把"我们没找"写成了"造不出"。
+        // 留着它会阻止下一个人补测，而这正是它自己反对的事。
+        //
+        // 覆盖不到的那一格也写清楚：**空的批次目录不进这个计数**（`all()` 对空迭代器
+        // 返回 `true`）。危害为零（里面没有文件，旧密码打不开任何东西），但它和本函数
+        // doc 说的"里面可能是满的"不是同一类——写在这里，免得下一个人以为计数漏了。
         let read_ok = match fs::read_dir(&path) {
             Ok(items) => items.into_iter().all(|item| item.is_ok()),
+            // 与 [`clear_old_key_batch`] 对齐：`NotFound` = 目录在两次枚举之间没了，那是
+            // "已经不存在"，不是"读不出"。**同一个观测，相邻两个函数必须同一种解释**——
+            // 否则外部删掉一批之后，界面会多报一条"读不出"，而它其实已经干净了。
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
             Err(_) => false,
         };
         if !name_ok || !read_ok {
             count += 1;
         }
     }
-    count
+    Some(count)
 }
 
 /// 按批次汇总旧代（批内时刻升序）。
@@ -2775,14 +2788,14 @@ mod tests {
     fn 认不出或读不出的旧代目录要计数而不是从界面消失() {
         let (_root, vault) = temp_vault("unreadable-batch");
         // 1) 还没有 `old-key/`：0。这是"还没有旧代"，不是"读不出来"。
-        assert_eq!(unreadable_batch_dirs(&vault), 0);
+        assert_eq!(unreadable_batch_dirs(&vault), Some(0));
 
         let base = 1_793_491_200_000;
         fill_slots(&vault, 4096, base);
         let before = paths_now(&vault);
         isolate_old_key_backups(&vault, base + 460_000_001, &before);
         // 2) 正常的数字目录名不该被计数。
-        assert_eq!(unreadable_batch_dirs(&vault), 0, "能识别的批次不算这一格");
+        assert_eq!(unreadable_batch_dirs(&vault), Some(0), "能识别的批次不算这一格");
 
         // 3) 手工塞一个名字不是合法 UTF-8 的批次目录，里面放一份备份。
         let odd = old_key_dir(&vault).join(non_utf8_dir_name());
@@ -2791,7 +2804,7 @@ mod tests {
 
         assert_eq!(
             unreadable_batch_dirs(&vault),
-            1,
+            Some(1),
             "认不出的批次必须被数进去——否则界面在它明明占着磁盘时说'没有旧代'"
         );
         // 它进不了可选列表（没有可回传的身份字符串），所以那个计数是界面唯一的信息来源。
@@ -2806,13 +2819,53 @@ mod tests {
         let removed =
             clear_old_key_batch(&vault, &(base + 460_000_001).to_string()).expect("按批删除应成功");
         assert_eq!(removed.deleted, 8);
-        assert_eq!(unreadable_batch_dirs(&vault), 1, "删完能删的，这一格仍然要说");
+        assert_eq!(unreadable_batch_dirs(&vault), Some(1), "删完能删的，这一格仍然要说");
         assert!(odd.exists(), "认不出的批次不该被误删");
     }
 
+    /// 「读不出」那一支的覆盖：**在 Windows 上不用改 ACL 也能构造**。
+    ///
+    /// 手段：`share_mode(0)` 表示"不共享"，之后任何进程对同一目录的再次打开都会拿到
+    /// `ERROR_SHARING_VIOLATION`（raw 32）；`FILE_FLAG_BACKUP_SEMANTICS`（`0x0200_0000`）
+    /// 是让 `OpenOptions` 能开**目录**句柄的必需标志，不加会直接 `NotFound`。
+    ///
+    /// 断言三个数、而不是只断言计数器 == 1：只断言第二个数，测的是计数器；断言
+    /// "清点少了一整批 + 计数器把它说出来了 + 释放后回 0"，测的才是这个函数存在的理由
+    /// ——B-03 的病是"旧密码能开的文件在界面上不存在"。
+    #[cfg(windows)]
     #[test]
-    fn 两批旧代各自带批次身份且按批删除只动那一批() {
-        let (_root, vault) = temp_vault("old-batch");
+    fn 读不出的旧代批次既从清点里消失也被计数说出来() {
+        use std::os::windows::fs::OpenOptionsExt;
+
+        let (_root, vault) = temp_vault("unreadable-holds");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
+        assert_eq!(old_key_usage(&vault).1, 8, "前提：这一批有 8 份");
+        assert_eq!(unreadable_batch_dirs(&vault), Some(0));
+
+        let batch = old_key_dir(&vault).join((base + 460_000_001).to_string());
+        let holder = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .custom_flags(0x0200_0000)
+            .open(&batch)
+            .expect("持有批次目录句柄应成功");
+
+        // 这一格才是 B-03 的病：旧密码能打开的 8 份，在两处清点里同时消失。
+        assert_eq!(old_key_usage(&vault).1, 0, "整批从清点里消失");
+        assert!(old_key_batches(&vault).is_empty(), "界面上整批不见了");
+        // 而这一格必须把它说出来，否则"盘上有、界面假装没有"就成立了。
+        assert_eq!(unreadable_batch_dirs(&vault), Some(1), "计数器必须把这一批数进去");
+
+        drop(holder);
+        assert_eq!(unreadable_batch_dirs(&vault), Some(0), "读得出就不该多报");
+        assert_eq!(old_key_usage(&vault).1, 8, "释放后清点恢复");
+    }
+
+    #[test]
+    fn 两批旧代各自带批次身份且按批删除只动那一批() {        let (_root, vault) = temp_vault("old-batch");
         let base = 1_793_491_200_000;
         fill_slots(&vault, 4096, base);
 

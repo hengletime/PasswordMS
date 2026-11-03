@@ -57,9 +57,11 @@ export interface BackupStatusDto {
    * （整批被跳过）。它们确实占着磁盘（算在 `old_bytes` 里）。界面必须说出来，否则
    * 就是"盘上有东西、界面假装没有"。
    *
-   * `old-key/` 本身读不出时是 **1（下界）**，不是真实个数。
+   * ⚠️ **`null` = 数不清**（`old-key/` 本身读不出，且错误不是"不存在"）。此时**不许
+   * 显示任何数字**——它没有"下界"这个中间态，只有"数出来了"和"没数出来"。
+   * 这个区分由类型承载，不靠文案写「至少」：文案是要翻译四份的东西，类型只写一次。
    */
-  unreadable_batches: number;
+  unreadable_batches: number | null;
   /** 上次成功刷新 `last.bak` 的时刻（0 = 从未）。 */
   last_ms: number;
   last_error_ms: number;

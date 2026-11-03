@@ -1307,11 +1307,18 @@
           {/each}
         </ul>
       {/if}
-      {#if backupStatus.unreadable_batches > 0}
-        <!-- 盘上有、界面删不了（名字认不出，或目录读不出）。不说出来就是"假装没有"；
-             也不能给它的名字编一个 `to_string_lossy` 的版本——那个假名字永远匹配不上，
-             用户删的时候会被告知"不存在"，而它明明在。
-             两类原因**故意合成一句**：用户要做的完全一样（去文件夹里手动处理）。 -->
+      <!-- 盘上有、界面删不了（名字认不出，或目录读不出）。不说出来就是"假装没有"；
+           也不能给它的名字编一个 `to_string_lossy` 的版本——那个假名字永远匹配不上，
+           用户删的时候会被告知"不存在"，而它明明在。
+           两类原因**故意合成一句**：用户要做的完全一样（去文件夹里手动处理）。
+           `null` = 后端数不清：那一格**不许出现数字**，所以说的是"个数无法统计"。
+           两格都写在这一层（而不是嵌进上面 `old_files > 0` 里面）：全部批次都读不出时
+           `old_files` 恰好是 0，嵌进去就永远不会显示——正好漏掉最坏的情形。 -->
+      {#if backupStatus.unreadable_batches === null}
+        <p class="pms-hint is-danger">
+          {ui.t('settings.restore_point_old_unreadable_uncounted')}
+        </p>
+      {:else if backupStatus.unreadable_batches > 0}
         <p class="pms-hint is-danger">
           {ui.t('settings.restore_point_old_unreadable', {
             count: backupStatus.unreadable_batches,
