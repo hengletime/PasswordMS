@@ -89,37 +89,55 @@ fn seed(session: &mut Session) -> String {
 }
 
 #[test]
-fn 同步删分组必须把其下条目移出未分组() {
+fn 删壳本身不许动条目_收口交给批末扫描() {
+    // 这条用例钉的是一个**反直觉的**设计决定：删壳时**不要**顺手把条目迁出。
+    //
+    // 听起来"顺手迁出"更彻底，实测会制造假冲突：条目 `rev` 一推进，对端同一批发来的
+    // 「删除该条目」墓碑（`tombstone()` 只翻标志位、沿用删除时的 rev）就会被读成
+    // 「本端改过、对端删了」→ 进冲突箱、条目留在活跃表。
+    // `sync_deletion.rs::case4` 就是这么红的（分组 ToTrash 删除时，级联的条目该进
+    // 回收站，结果停在活跃表）。所以这里断言的是**不动**：
     let path = temp_vault("direct");
     let mut session = Session::create(&path, PWD, true).unwrap();
     let folder_id = seed(&mut session);
 
     let repo = session.repo_mut().unwrap();
-    let before = repo.list_items(None, false, None);
-    let in_folder: Vec<String> = before
-        .iter()
+    let before: Vec<_> = repo
+        .list_items(None, false, None)
+        .into_iter()
         .filter(|i| i.folder_id.as_deref() == Some(folder_id.as_str()))
-        .map(|i| i.item_id.clone())
+        .map(|i| (i.item_id, i.rev))
         .collect();
-    assert_eq!(in_folder.len(), 2, "夹具应有两条目在这组里");
+    assert_eq!(before.len(), 2, "夹具应有两条目在这组里");
 
-    // 这就是 merge 收到「对端删分组」时走的那个函数。
     repo.remove_folder_direct(&folder_id).unwrap();
 
-    for item_id in &in_folder {
+    for (item_id, rev_before) in &before {
         let item = repo.get_item(item_id).unwrap();
+        assert_eq!(
+            item.rev, *rev_before,
+            "删壳不许推进条目 rev —— 一批变更共享同一批 rev 基准，             中途抬任何一条都会让同批里针对它的删除判定失真"
+        );
         assert!(
-            item.folder_id.is_none(),
-            "分组已删，条目 {} 仍指向它 → 界面上会显示「未知分组」",
-            title_of(&item)
+            item.folder_id.is_some(),
+            "此刻条目仍挂着已删分组的引用（这是设计的中间态，由批末收口处理）"
         );
     }
-    // 被移出的条目必须留在库里（不是被顺手删掉）。
-    assert_eq!(
-        repo.list_items(None, false, None).len(),
-        3,
-        "删分组不该连带删条目"
-    );
+
+    // 批末收口：一条命令把整库的悬空引用清干净。
+    let fixed = repo.repair_dangling_folder_refs().unwrap();
+    assert_eq!(fixed, 2, "两条悬空引用都该被修");
+    for (item_id, rev_before) in &before {
+        let item = repo.get_item(item_id).unwrap();
+        assert!(item.folder_id.is_none(), "收口之后必须落到未分组");
+        assert_eq!(
+            item.rev,
+            rev_before + 1,
+            "收口要推进 rev（否则修正发不出去）"
+        );
+    }
+    // 删分组不该连带删条目。
+    assert_eq!(repo.list_items(None, false, None).len(), 3);
     // D-153 恒等式：侧栏读数 == 未分组视图里的条数。
     let counts = repo.item_counts();
     assert_eq!(

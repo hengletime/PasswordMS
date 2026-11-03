@@ -7,6 +7,8 @@
 #   「cargo: command not found」。脚本第 60 行附近统一 export，勿删。
 #
 # 门清单（顺序即执行顺序，逐段汇报 + 计时）：
+#   0. 版本同步门   bash scripts/check-version.sh（D-177：四处版本一致 + 锁文件可用）
+#                   （秒级，放最前面：版本对不上的话后面所有数字都不属于"要发的那一版"）
 #   1. 前端三门     npm run test / npm run check / npm run check:css
 #   2. Rust 格式    cargo fmt --all -- --check
 #                   （Q-2，2026-10-22 起纳入。秒级开销，**0 处差异才通过**；
@@ -18,11 +20,19 @@
 #   4. Rust 静态    cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnullvm
 #                   （0 error 阻塞；warning 数如实汇报不阻塞，基线 0——#530 清零后
 #                     任何 warning 都视为新引入，见 docs/07-quality-gate.md §1.4）
-#   5. 体积门       bash scripts/check-size.sh desktop --allow-missing
+#   5. 体积门       bash scripts/check-size.sh desktop|android --allow-missing
 #                   （日常门语义：本机未出包时跳过不判负；出包门在 build-android.sh
 #                    与显式构建流程内，见 docs/07-quality-gate.md §2）
-#                   Android：target/PasswordMS-*-arm64.apk 存在则逐个核验 ≤12MB，
-#                   不存在提示「未出包，跳过」不算失败。
+#                   **只核验当前版本的交付物**（D-176）：构建目录里躺着历代产物，
+#                   全扫一遍等于拿旧包凑数。Android 交付物 =
+#                   target/PasswordMS-<ver>-arm64.apk（src-tauri/gen 下的 unsigned
+#                   APK 是中间产物，不算出了包）。
+#
+# 另外两件贯穿全轮的事：
+#   · **锚自检**：开头快照 HEAD + 工作区，结束再快照一次。期间有改动 → 本轮数字
+#     不可引用（这是安全评审 2026-11-03 自己踩的坑：前端三门跑完才改 i18n，
+#     报出来的"三门全绿"锚在当天那份文件上，但引用时写的是提交号）。
+#     它检不出"跑之前就是脏的"——那种情形改为在报告里如实标注。
 #   末尾汇总 PASS/FAIL + 各门耗时；任一门 FAIL → exit 1。
 #   可选参数 --keep-going：某门失败后仍跑完剩余门再汇总（默认 fail-fast）。
 #
@@ -50,6 +60,21 @@ pass() { printf '\033[1;32m[ OK ]\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m[FAIL]\033[0m %s\n' "$*"; }
 info() { printf '\033[1;34m[gate]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[fatal]\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ===== 锚：本轮所有数字的前提 =====
+#
+# 粒度是「门 × 输入文件」，不是「提交 × 全部数字」（安全评审 2026-11-03 自我更正）：
+# 他报"前端三门全绿"时，vitest 是最后跑的，而四份 i18n 在它之前已经被改过——
+# 那三门锚的是当时的工作区，却被当成某个提交号的结论引用。
+#
+# 这里能自动检出的只有一种：**门跑期间文件又变了**。检出不了的另一种（跑之前就脏）
+# 不装作能检：改为在报告开头如实打印，让引用数字的人知道它对应的是"工作区"而非提交。
+anchor_snapshot() {
+  local head dirty
+  head=$(git rev-parse HEAD 2>/dev/null || echo "no-git")
+  dirty=$(git status --porcelain 2>/dev/null | LC_ALL=C sort)
+  printf 'HEAD %s\n%s\n' "$head" "$dirty"
+}
 
 # 门登记表：名称 → 结果(PASS/FAIL/SKIP) + 耗时秒。汇总段逐行打印。
 RESULTS=()
@@ -150,49 +175,67 @@ clippy_gate() {
 }
 
 # ===== 5. 体积门 =====
+# ===== 0. 版本同步门（D-177）=====
+#
+# 为什么排在最前：版本对不上的话，后面每一门跑出来的数字都不属于"要发的那一版"，
+# 先花 6 分钟跑完再报错，等于让人白等一轮。这一门是秒级的。
+version_gate() {
+  run_gate "版本同步门(check-version.sh)" bash scripts/check-version.sh
+}
+
 size_gate() {
-  local rc=0 apk f bytes mb t0 t1
+  local rc=0 apk_name app_version t0 t1
   run_gate "体积门-桌面(check-size.sh desktop)" \
     bash scripts/check-size.sh desktop --allow-missing || rc=1
   if [ "$rc" -eq 1 ] && [ "$KEEP_GOING" -eq 0 ]; then return 1; fi
 
-  # Android：signed APK 落在 target/PasswordMS-*-arm64.apk（build-android.sh 产物）。
-  # check-size.sh android 只扫 src-tauri/gen 与 gen，不含 target/，故这里单独核验。
-  local apks=()
-  while IFS= read -r -d '' f; do apks+=("$f"); done < <(
-    find target -maxdepth 1 -type f -name 'PasswordMS-*-arm64.apk' -print0 2>/dev/null
-  )
-  if [ "${#apks[@]}" -eq 0 ]; then
-    info "体积门-Android：未出包（target/ 下无 PasswordMS-*-arm64.apk），跳过不算失败"
+  # Android：交付物 = target/PasswordMS-<当前版本>-arm64.apk（build-android.sh 签好名的包）。
+  #
+  # D-176：这段原来内联着体积计算，因为 check-size.sh 的 android 分支只扫
+  # `src-tauri/gen` 与 `gen` —— 那儿只有 **unsigned 的构建中间产物**。两个后果：
+  # 真正的交付包不在扫描范围（超标看不见），而中间产物在盘上就算"发现产物"，
+  # 于是**用错了文件也报绿**。现在判据收归 check-size.sh 一处，这里只留
+  # "没出包就记 SKIP"这一句（不重复任何体积逻辑，也不重复任何文件名规则）。
+  app_version="$(node -p "require('./src-tauri/tauri.conf.json').version" 2>/dev/null || true)"
+  apk_name="target/PasswordMS-${app_version}-arm64.apk"
+  if [ -z "$app_version" ] || [ ! -f "$apk_name" ]; then
+    info "体积门-Android：未出包（无 ${apk_name:-未知版本的 APK}），跳过不算失败"
     record "体积门-Android" SKIP "-" "未出包"
     return "$rc"
   fi
   t0=$(date +%s)
-  for f in "${apks[@]}"; do
-    bytes=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
-    mb=$(awk "BEGIN { printf \"%.2f\", $bytes/1048576 }")
-    if awk "BEGIN { exit !($mb <= 12) }"; then
-      pass "体积门-Android APK 体积达标：$f（${mb} MB ≤ 12 MB）"
-    else
-      fail "体积门-Android APK 体积超标：$f（${mb} MB > 12 MB）"
-      rc=1
-    fi
-  done
+  run_gate "体积门-Android(check-size.sh android)" \
+    bash scripts/check-size.sh android || rc=1
   t1=$(date +%s)
-  # ⚠ 结果必须跟着 rc 走：以前这里写死 PASS，APK 超标时上面已 fail 却仍在汇总里
-  # 记一行「PASS」，汇总与真实判定互相矛盾（总判定靠返回值仍是对的，但汇总行在骗人）。
+  # ⚠ 汇总行必须跟着 rc 走：以前这里写死 PASS，超标时上面已 fail 却仍记一行「PASS」。
   if [ "$rc" -eq 0 ]; then
-    record "体积门-Android" PASS "$((t1 - t0))" "${#apks[@]} 个产物"
+    record "体积门-Android" PASS "$((t1 - t0))" "$apk_name"
   else
-    record "体积门-Android" FAIL "$((t1 - t0))" "APK 超 12MB"
+    record "体积门-Android" FAIL "$((t1 - t0))" "$apk_name"
   fi
   return "$rc"
 }
 
 # ===== 主流程 =====
 info "════ PasswordMS 一键质量总门 ════"
+
+# 锚：先记下这一轮跑在什么上面。脏工作区不拦——开发中天天是脏的，
+# 拦了就没人跑门——但必须**说出来**，否则下一个人会把这里的数字当成某个提交的结论。
+ANCHOR_BEFORE="$(anchor_snapshot)"
+ANCHOR_HEAD="$(printf '%s\n' "$ANCHOR_BEFORE" | head -1 | sed 's/^HEAD //')"
+ANCHOR_DIRTY="$(printf '%s\n' "$ANCHOR_BEFORE" | tail -n +2 | grep -c . || true)"
+if [ "${ANCHOR_DIRTY:-0}" -eq 0 ]; then
+  info "锚：HEAD ${ANCHOR_HEAD}（工作区干净）"
+else
+  info "锚：HEAD ${ANCHOR_HEAD} + 工作区 ${ANCHOR_DIRTY} 项未提交改动"
+  info "    ⇒ 本轮数字对应的是**当前工作区**，不是提交 ${ANCHOR_HEAD} 的结论。"
+fi
+
 FAILED=0
-frontend_gate  || FAILED=1
+version_gate   || FAILED=1
+if [ "$FAILED" -eq 0 ] || [ "$KEEP_GOING" -eq 1 ]; then
+  frontend_gate  || FAILED=1
+fi
 if [ "$FAILED" -eq 0 ] || [ "$KEEP_GOING" -eq 1 ]; then
   fmt_gate      || FAILED=1
 fi
@@ -204,6 +247,21 @@ if [ "$FAILED" -eq 0 ] || [ "$KEEP_GOING" -eq 1 ]; then
 fi
 if [ "$FAILED" -eq 0 ] || [ "$KEEP_GOING" -eq 1 ]; then
   size_gate     || FAILED=1
+fi
+
+# ===== 锚自检：门跑期间文件变过没有 =====
+# 这一条只能检出"门跑期间被改"。跑之前就脏的情形已在开头打印，不在这里假装能检。
+ANCHOR_AFTER="$(anchor_snapshot)"
+if [ "$ANCHOR_BEFORE" = "$ANCHOR_AFTER" ]; then
+  pass "锚自检通过：整轮门禁期间 HEAD 与工作区未变（数字可引用）"
+  record "锚自检" PASS "-" "HEAD ${ANCHOR_HEAD}"
+else
+  fail "锚自检失败：门跑期间 HEAD 或工作区发生了变化 —— 本轮数字**不可**整轮引用"
+  printf '%s\n' "$ANCHOR_BEFORE" > /tmp/pms-anchor-before.txt
+  printf '%s\n' "$ANCHOR_AFTER"  > /tmp/pms-anchor-after.txt
+  diff -u /tmp/pms-anchor-before.txt /tmp/pms-anchor-after.txt || true
+  record "锚自检" FAIL "-" "门跑期间目录被改"
+  FAILED=1
 fi
 
 # ===== 汇总 =====

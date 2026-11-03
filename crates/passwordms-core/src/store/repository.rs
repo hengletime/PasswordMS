@@ -2180,6 +2180,10 @@ impl Repository {
             ConflictChoice::TakeRemote => {
                 if entry.remote_deleted {
                     self.remove_folder_direct(&entry.folder_id)?;
+                    // D-174：这条路不在同步批次里（用户在冲突箱里点的），没有批末收口，
+                    // 所以删完壳必须**当场**把其下条目的悬空引用修掉——否则要等到下一次
+                    // 开库或下一轮同步才干净，中间这段时间界面上就挂着「未知分组」。
+                    self.repair_dangling_folder_refs()?;
                 } else {
                     let snapshot = entry.remote_snapshot.clone();
                     let landed_rev = snapshot.rev;
@@ -2405,24 +2409,25 @@ impl Repository {
 
     /// 远端删除分组（直接墓碑）。
     ///
-    /// **D-174：删壳必须同时通知其下条目**。旧实现只 `tombstone` + `folders.remove`，
-    /// 条目原样留着已不存在的 `folder_id`，界面据此显示「未知分组」（主人 2026-11-03
-    /// 验收 1.5.29 时第一个问题）。本地删除走 [`Self::delete_folder`] 时条目会被逐条
-    /// 迁出，**只有同步这条路径漏了这一步** —— 而它恰是最容易产生悬空引用的一条：
-    /// 对端「条目移出分组」的 live 变更 rev 不一定压过本端，LWW 判负之后本端条目就
-    /// 永久停在悬空状态（对端已经认为它在未分组里，不会再发第二次）。
+    /// **只删壳，不动其下条目**（D-174 修订，2026-11-03）。悬空引用由
+    /// [`Self::repair_dangling_folder_refs`] 在**整批同步应用完之后**统一收口。
+    ///
+    /// 一开始的写法是「删壳的同一次操作里顺手把条目迁出」，听起来更彻底，实际会
+    /// 制造**假冲突**：条目 `rev` 一推进，对端同一批发来的「删除该条目」墓碑
+    /// （`tombstone()` 只翻标志位、**沿用删除时的 rev**）就会被
+    /// [`crate::sync::merge`] 的删除分支读成「本端改过、对端删了」→ 进冲突箱、
+    /// 条目留在活跃表。`sync_deletion.rs` 的 case4 当场逮住：分组按 ToTrash 删除时
+    /// 级联的条目应该进回收站，结果停在活跃表。
+    ///
+    /// 判据不是「顺手做更多」而是**「有没有在批次中途改变记录的版本」**：
+    /// 批次内的变更共享同一批 `rev` 基准，中途抬任何一条的 `rev`，同批里针对它
+    /// 的判定就全部失真。所以删除操作只做删除该做的事，修引用留给批末。
+    ///
+    /// 同步外的直接调用（目前只有 [`Self::resolve_folder_conflict`] 的「采用远端」）
+    /// 不在批次里，那条路必须**自己**在删完之后调一次收口。
     pub fn remove_folder_direct(&mut self, folder_id: &str) -> CoreResult<()> {
         self.tombstone(RECORD_TYPE_FOLDER, folder_id)?;
         self.folders.remove(folder_id);
-        let orphans: Vec<String> = self
-            .items
-            .values()
-            .filter(|item| item.folder_id.as_deref() == Some(folder_id))
-            .map(|item| item.item_id.clone())
-            .collect();
-        for item_id in &orphans {
-            self.detach_item_to_ungrouped(item_id)?;
-        }
         Ok(())
     }
 
@@ -2438,7 +2443,12 @@ impl Repository {
     /// 三处守卫只能拦住「从界面来的」引用，拦不住「从对端来的」——所以这里补一次
     /// 收口扫描，让不变量对整库成立，而不是对某几条入口成立。
     ///
-    /// 两处调用：打开库时（治存量损坏的库）、每批同步应用完之后（防新增）。
+    /// 三处调用：打开库时（治存量损坏的库）、每批同步应用完之后（防新增）、
+    /// 分组冲突「采用远端」删完壳之后（那条路不在批次里，没有批末可等）。
+    ///
+    /// **不许在删壳的同一次操作里就地迁出**：批次内的变更共享同一批 `rev` 基准，
+    /// 中途抬任何一条的 `rev`，同批里针对它的删除判定就会误读成「本端改过」
+    /// （见 [`Self::remove_folder_direct`] 的 D-174 修订说明）。
     ///
     /// 回收站快照**不在本函数范围内**：它是「删除时是什么样」的凭据，还原时由
     /// [`Self::restore_item`] 的守卫逐条修正；改快照等于篡改历史。

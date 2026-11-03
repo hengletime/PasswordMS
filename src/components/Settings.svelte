@@ -22,6 +22,7 @@
     formatDateTime,
   } from '../lib/constants';
   import { clampClipboardTtl, clampHealthSettings } from '../lib/settings-clamp';
+  import { backupHints } from '../lib/backup-hints';
   import {
     BACKUP_STALE_DAYS,
     recordBackup,
@@ -1373,19 +1374,20 @@
            用户删的时候会被告知"不存在"，而它明明在。
            两类原因**故意合成一句**：用户要做的完全一样（去文件夹里手动处理）。
            `null` = 后端数不清：那一格**不许出现数字**，所以说的是"个数无法统计"。
-           两格都写在这一层（而不是嵌进上面 `old_files > 0` 里面）：全部批次都读不出时
-           `old_files` 恰好是 0，嵌进去就永远不会显示——正好漏掉最坏的情形。 -->
-      {#if backupStatus.unreadable_batches === null}
+
+           D-175：该显示哪几条由 `backupHints()` 决定，不在这里写 `{#if}`。
+           原来两格靠**兄弟关系**保证"最坏情形也说出口"，而兄弟关系是布局不是逻辑——
+           被顺手并进上面 `old_files > 0` 那一块，改完测试全绿、这一格静默消失，
+           而全部批次读不出时 `old_files` 恰好是 0，正好把该开口的一刻吞掉。 -->
+      {#each backupHints(backupStatus) as hint (hint.id)}
         <p class="pms-hint is-danger">
-          {ui.t('settings.restore_point_old_unreadable_uncounted')}
+          {#if hint.count === null}
+            {ui.t('settings.restore_point_old_unreadable_uncounted')}
+          {:else}
+            {ui.t('settings.restore_point_old_unreadable', { count: hint.count })}
+          {/if}
         </p>
-      {:else if backupStatus.unreadable_batches > 0}
-        <p class="pms-hint is-danger">
-          {ui.t('settings.restore_point_old_unreadable', {
-            count: backupStatus.unreadable_batches,
-          })}
-        </p>
-      {/if}
+      {/each}
     {/if}
   </div>
 
