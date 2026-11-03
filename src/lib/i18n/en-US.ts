@@ -694,6 +694,8 @@ export const enUS: Messages = {
     fingerprint: 'Fingerprint verification failed; sync aborted.',
     sync_aborted: 'Sync was aborted.',
     sync_busy: 'A sync is already in progress; please try again shortly.',
+    backup_busy:
+      'A restore or master-password change is in progress. Restore points cannot be deleted until it finishes.',
     load_partial: 'Some data failed to load. Please retry, or lock and unlock again.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',

@@ -37,7 +37,7 @@
     bioTextSuffix,
     localizeBioMessageKey,
   } from '../lib/bio-platform';
-  import { toAppError } from '../lib/errors';
+  import { ErrorCode, toAppError } from '../lib/errors';
   import { comboFromEvent, formatHotkey } from '../lib/hotkey-combo';
   import { LOCALES, type Locale } from '../lib/i18n/index';
   import { api } from '../lib/ipc';
@@ -217,9 +217,16 @@
       backupClearTarget = null;
       ui.toast('success', 'settings.restore_point_cleared', { count: removed });
       await refreshBackupStatus();
-    } catch {
+    } catch (err) {
       // 失败**不改**列表：回滚点还在盘上，界面不能先把它划掉。
-      ui.toast('error', 'settings.restore_point_failed');
+      //
+      // 「占用中」要说清原因（恢复或换密还在跑，等它结束就行），这是用户唯一
+      // 能自己解决的一类失败；其余失败给通用句，不把原始 token 摆出来。
+      const appErr = toAppError(err);
+      ui.toast(
+        'error',
+        appErr.code === ErrorCode.ERR_BACKUP_BUSY ? appErr.messageKey : 'settings.restore_point_failed',
+      );
     } finally {
       backupClearing = false;
     }

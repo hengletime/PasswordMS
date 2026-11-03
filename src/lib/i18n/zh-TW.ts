@@ -631,6 +631,7 @@ export const zhTW = {
     fingerprint: '裝置指紋驗證失敗，已中止同步。',
     sync_aborted: '同步已中止。',
     sync_busy: '已有同步進行中，請稍後再試。',
+    backup_busy: '正在還原或更換主密碼，這段時間不能刪除回滾點，請等它結束。',
     load_partial: '部分資料載入失敗，請重試或重新鎖定後再試。',
     conflict: '存在未處理的衝突。',
     vk_adopt_requires_empty: '本機保險庫非空，無法直接採用對方的金鑰。',

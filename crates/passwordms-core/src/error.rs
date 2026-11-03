@@ -35,6 +35,10 @@ pub mod codes {
     pub const ERR_SYNC_ABORTED: &str = "ERR_SYNC_ABORTED";
     /// 【D-108 新增】同步互斥（豆包审查 3.4-7：原由 sync_cmd 硬编码构造）。
     pub const ERR_SYNC_BUSY: &str = "ERR_SYNC_BUSY";
+    /// 【B-03 新增】备份目录被占用中（正在恢复 / 正在换主密码），此时**不允许删除回滚点**。
+    ///
+    /// 不能借用 `ERR_SYNC_BUSY`：同步根本没在跑，用户会看到「同步正在进行」。
+    pub const ERR_BACKUP_BUSY: &str = "ERR_BACKUP_BUSY";
     pub const ERR_CONFLICT_EXISTS: &str = "ERR_CONFLICT_EXISTS";
     /// 【D-53 新增】附件条目存在但本地无密文 blob（未同步）。
     pub const ERR_BLOB_MISSING: &str = "ERR_BLOB_MISSING";
@@ -128,6 +132,12 @@ pub enum CoreError {
     /// 硬编码构造 `ERR_SYNC_BUSY`（豆包审查 3.4-7：缺少编译期约束、手工同步点）。
     #[error("another sync is already in flight")]
     SyncBusy,
+    /// 【B-03 新增】备份目录被占用中（恢复 / 换密），拒绝删除回滚点。
+    ///
+    /// 与 [`Self::SyncBusy`] **分工明确**：那条说的是"同步在跑"，这条说的是
+    /// "备份目录正在被另一个操作使用"。混用会让没在同步的用户看到"同步进行中"。
+    #[error("backup directory is in use by another operation")]
+    BackupBusy,
     #[error("unresolved conflict exists")]
     ConflictExists,
     /// 【D-53】附件条目存在但本地无密文 blob（未同步），导出/查看时触发。
@@ -208,6 +218,7 @@ impl CoreError {
             CoreError::FingerprintMismatch => codes::ERR_FINGERPRINT_MISMATCH,
             CoreError::SyncAborted => codes::ERR_SYNC_ABORTED,
             CoreError::SyncBusy => codes::ERR_SYNC_BUSY,
+            CoreError::BackupBusy => codes::ERR_BACKUP_BUSY,
             CoreError::ConflictExists => codes::ERR_CONFLICT_EXISTS,
             CoreError::BlobMissing => codes::ERR_BLOB_MISSING,
             CoreError::BlobIncomplete => codes::ERR_BLOB_INCOMPLETE,
@@ -252,6 +263,7 @@ impl CoreError {
             CoreError::FingerprintMismatch => "err.fingerprint",
             CoreError::SyncAborted => "err.sync_aborted",
             CoreError::SyncBusy => "err.sync_busy",
+            CoreError::BackupBusy => "err.backup_busy",
             CoreError::ConflictExists => "err.conflict",
             CoreError::BlobMissing => "err.blob_missing",
             CoreError::BlobIncomplete => "err.blob_incomplete",

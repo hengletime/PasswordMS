@@ -487,6 +487,23 @@ fn busy_reason(vault_path: &Path) -> Option<SkipReason> {
     })
 }
 
+/// 删除类操作的统一闸门：备份目录被占用（恢复 / 换密）时一律拒绝。
+///
+/// 占用守卫原本只挡**写入**，因为写入会污染世代判定。但**删除比写入更狠**：
+/// - 恢复正在读的那份 `.bak` 被用户删掉 → 恢复中途失败，或最坏情况下部分应用；
+/// - 换密刚拍下的 `pre-rekey` 被删掉 → 「忘了新密码」这条唯一退路当场消失，
+///   而用户此刻的心理活动大概率正是"这些旧东西占地方，清一清"。
+///
+/// 所以"这段时间一个字节都不许写进备份目录"这条不变量，对删除同样成立——
+/// 删除是写入的极端形式。**不能只靠界面挡住**：界面同时开着恢复进度与设置卡片，
+/// 谁先被禁用取决于实现顺序，而这里是一条结构性约束。
+fn ensure_not_busy(vault_path: &Path) -> CoreResult<()> {
+    match busy_reason(vault_path) {
+        Some(_) => Err(CoreError::BackupBusy),
+        None => Ok(()),
+    }
+}
+
 /// 占用守卫。`drop` 时释放**一次**占用。
 ///
 /// 允许重复入栈、逐个弹出，而不是"已存在就跳过"：后者在嵌套路径上，
@@ -897,6 +914,7 @@ pub fn old_key_batches(vault_path: &Path) -> Vec<OldKeyBatch> {
 ///
 /// 批次目录不存在时返回 `Ok(0)` 而不是报错：可能刚被另一处删掉，重试不该失败。
 pub fn clear_old_key_batch(vault_path: &Path, batch_ms: i64) -> CoreResult<usize> {
+    ensure_not_busy(vault_path)?;
     let batch_path = old_key_dir(vault_path).join(batch_ms.to_string());
     if !batch_path.is_dir() {
         return Ok(0);
@@ -1121,6 +1139,7 @@ pub struct RekeyOutcome {
 /// 为什么不合并：旧代可能是用户唯一还记得的那把密码的退路。把它并进「清空备份」，
 /// 用户点一次就永久失去那一代——单向门，不能藏在同一个按钮里。
 pub fn clear_old_key(vault_path: &Path) -> CoreResult<usize> {
+    ensure_not_busy(vault_path)?;
     let mut removed = 0;
     for f in old_key_inventory(vault_path) {
         if fs::remove_file(&f.path).is_ok() {
@@ -1706,6 +1725,7 @@ pub fn snapshot_event(vault_path: &Path, tag: EventTag, now_ms: i64) -> BackupOu
 /// 仍然显示"上次备份：昨天 21:14"，用户以为还有东西可恢复。删掉后 [`staleness`] 回到
 /// `Never`，文案自然变成「当前没有备份」。
 pub fn clear_all(vault_path: &Path) -> CoreResult<usize> {
+    ensure_not_busy(vault_path)?;
     let files = inventory(vault_path);
     let mut removed = 0;
     for f in files {
@@ -2378,6 +2398,56 @@ mod tests {
         assert_eq!(post.skipped, None, "守卫没在 isolate 结束时释放");
         assert_eq!(post.created.len(), 1);
         assert_eq!(usage(&vault).1, 1);
+    }
+
+    #[test]
+    fn 占用期间三个删除入口都被拒且释放后恢复() {
+        let (_root, vault) = temp_vault("busy-clear");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
+        // 新一代长回一份，才有东西可被"当前代"删。
+        snapshot_before_write(&vault, base + 10_000_001);
+
+        let cur_files = inventory(&vault).len();
+        let old_files = old_key_usage(&vault).1;
+        assert!(cur_files > 0 && old_files > 0, "两侧都得有东西才测得出来");
+
+        let window = RekeyWindow::open(&vault);
+
+        // 三个删除入口必须**全部**被拒。只挡一个等于没挡——恢复读的是当前代的 `.bak`，
+        // 换密的退路是当前代的 `pre-rekey`，而旧代的批次目录会在 `isolate` 里被
+        // `create_dir_all` 之后当场写入。三条路对应三处，漏一条就是一个洞。
+        assert!(
+            matches!(clear_all(&vault), Err(CoreError::BackupBusy)),
+            "换密窗口内删当前代必须被拒"
+        );
+        assert!(
+            matches!(clear_old_key(&vault), Err(CoreError::BackupBusy)),
+            "换密窗口内清空旧代必须被拒"
+        );
+        assert!(
+            matches!(
+                clear_old_key_batch(&vault, base + 460_000_001),
+                Err(CoreError::BackupBusy)
+            ),
+            "换密窗口内按批删除必须被拒"
+        );
+
+        // 拒绝必须是**真的没删**：报错但悄悄删掉几份，比不报错更坏。
+        assert_eq!(inventory(&vault).len(), cur_files, "当前代被删动了");
+        assert_eq!(old_key_usage(&vault).1, old_files, "旧代被删动了");
+
+        // 释放后必须立刻恢复可用：守卫漏释放会把"删除回滚点"永久锁死，
+        // 而用户在界面上只会看到一个说不清的错误。
+        drop(window);
+        assert_eq!(
+            clear_all(&vault).expect("释放后应可删除"),
+            cur_files,
+            "释放后应删掉当前代全部"
+        );
+        assert_eq!(inventory(&vault).len(), 0);
     }
 
     #[test]
