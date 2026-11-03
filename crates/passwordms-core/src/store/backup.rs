@@ -38,13 +38,16 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde::{Deserialize, Serialize};
 
+use crate::constants::{CONTAINER_PREFIX_LEN, VAULT_MAGIC};
 use crate::error::{CoreError, CoreResult};
 use crate::model::now_ms;
+use crate::model::vault::Vault;
 
 /// 日备份保留份数。
 pub const DAILY_KEEP: usize = 5;
@@ -948,6 +951,33 @@ fn point_kind_from_name(name: &str) -> Option<BackupPointKind> {
     })
 }
 
+/// 读一个容器**头部里的密钥世代号**；任何一步不成立都返回 `None`。
+///
+/// 为什么宽容：这个函数只服务**贴标签**，不服务打开。magic 不对、头长为 0、
+/// JSON 坏了、字段不存在（1.5.32 之前的旧文件）——任何一种都说明"世代判据用不上"，
+/// 调用方回落到目录位置判据即可，不该把整个清单拖垮。它**刻意不做**
+/// `format_version` 校验： newer 版本的备份 JSON 大概率照样能解析，能读到世代号
+/// 就比"猜"强。
+///
+/// 成本：只读前 16 字节前缀 + 头部（≤64KB），**不碰记录区**——清单里十几份备份
+/// 每次刷新各读一次头部，总量几十 KB，可忽略。
+fn read_header_generation(path: &Path) -> Option<u32> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut prefix = [0u8; CONTAINER_PREFIX_LEN];
+    file.read_exact(&mut prefix).ok()?;
+    if &prefix[0..8] != VAULT_MAGIC {
+        return None;
+    }
+    let header_len = u16::from_le_bytes([prefix[10], prefix[11]]) as usize;
+    if header_len == 0 {
+        return None;
+    }
+    let mut header_bytes = vec![0u8; header_len];
+    file.read_exact(&mut header_bytes).ok()?;
+    let header: Vault = serde_json::from_slice(&header_bytes).ok()?;
+    header.key_generation
+}
+
 /// 列出**全部**能拿去覆盖当前库的整库副本（新的在前）。
 ///
 /// 范围刻意放开：日备份、`last.bak`、五种事件快照、`old-key/` 里的每一份，
@@ -957,13 +987,17 @@ fn point_kind_from_name(name: &str) -> Option<BackupPointKind> {
 ///
 /// 风险不靠缩小候选集来控，靠三件事：
 /// ① 每一行都写明"这是哪一步的备份"，用户看得见自己选的是什么；
-/// ② [`BackupFile::needs_old_password`] 明说该用哪把密码；
+/// ② 「要不要旧密码」按**密钥世代**判（D-181）：备份头部带拍它那一刻的
+///    `key_generation`，`≠ 当前库的世代` 就是要用"那一世的密码"。恢复会把
+///    "哪把是现在的密码"整体翻转，目录位置判据在那一刻必然全反
+///    （主人 2026-11-03 验收当场踩中：三张标签全反）；
 /// ③ 覆盖之前先拍一份 `pre-restore`——**退回去本身可再退回来**。
 ///
 /// 认不出名字的文件（用户自己丢进来的东西、`old-key/` 里的杂物）一律不列：
 /// 拿一个来历不明的文件去覆盖库，比什么都不做糟得多。
 pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
     let pins = pinned_tokens(vault_path);
+    let current_generation = read_header_generation(vault_path);
     let mut files = inventory(vault_path);
     files.extend(old_key_inventory(vault_path));
     let mut out: Vec<BackupPoint> = files
@@ -973,13 +1007,20 @@ pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
             let kind = point_kind_from_name(name)?;
             let token = f.restore_token()?;
             let pinned = pins.contains(&token);
+            // 世代判据优先；世代读不出（旧文件 / 头损坏）回落目录位置判据。
+            // 回落方向与 1.5.32 之前一致：宁可保持旧行为，也不假装能判。
+            let generation = read_header_generation(&f.path);
+            let needs_old_password = match (generation, current_generation) {
+                (Some(gen), Some(cur)) => gen != cur,
+                _ => f.needs_old_password(),
+            };
             Some(BackupPoint {
                 token,
                 kind,
                 created_ms: f.created_ms,
                 size_bytes: f.size_bytes,
                 batch_ms: f.batch_ms,
-                needs_old_password: f.needs_old_password(),
+                needs_old_password,
                 pinned,
             })
         })
@@ -2481,6 +2522,122 @@ pub fn detect_cloud_sync_dir(vault_path: &Path) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::FORMAT_VERSION;
+    use crate::model::vault::WrappedKey;
+    use crate::store::container::Container;
+    use std::io::Write as _;
+
+    /// 造一个**真的能被读出头部**的容器文件（记录区为空没关系——世代号在头部）。
+    fn write_container(path: &Path, generation: u32) {
+        let header = Vault::new(
+            "test".to_string(),
+            vec![1u8; 8],
+            WrappedKey {
+                nonce: vec![1u8; 24],
+                ct: vec![2u8; 32],
+            },
+            vec![3u8; 8],
+            0,
+        );
+        let mut header = header;
+        header.key_generation = Some(generation);
+        if path.exists() {
+            fs::remove_file(path).unwrap();
+        }
+        Container::create(path, header).unwrap();
+    }
+
+    /// 造一个**没有 `key_generation` 字段**的容器（= 1.5.32 之前的老备份）。
+    fn write_container_without_generation(path: &Path) {
+        let header = Vault::new(
+            "test".to_string(),
+            vec![1u8; 8],
+            WrappedKey {
+                nonce: vec![1u8; 24],
+                ct: vec![2u8; 32],
+            },
+            vec![3u8; 8],
+            0,
+        );
+        let mut value = serde_json::to_value(&header).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("key_generation")
+            .expect("字段刚加的，序列化输出里必然有");
+        let json = serde_json::to_vec(&value).unwrap();
+        let mut prefix = [0u8; CONTAINER_PREFIX_LEN];
+        prefix[0..8].copy_from_slice(VAULT_MAGIC);
+        prefix[8..10].copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+        prefix[10..12].copy_from_slice(&(json.len() as u16).to_le_bytes());
+        // 12..16 是保留字节，写零即可（`check_prefix` 不看它们）。
+        let mut file = fs::File::create(path).unwrap();
+        file.write_all(&prefix).unwrap();
+        file.write_all(&json).unwrap();
+    }
+
+    #[test]
+    fn 要不要旧密码按世代判_恢复之后标签自动摆正() {
+        // 主人 2026-11-03 验收场景（D-181）：12:22 改密码 A→B，19:46 用 A 世代的备份
+        // 恢复 → 库回到 A 世代。此刻：B 世代的备份要用 B（不是"现在的密码"），
+        // A 世代的备份反倒用现在的密码。目录位置判据在这个瞬间**三张标签全反**，
+        // 世代判据自动摆正。
+        let (root, vault) = temp_vault("gen-labels");
+        write_container(&vault, 0); // 当前库：恢复之后 = 世代 0
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        write_container(&dir.join("pre-restore.2000"), 1); // 恢复之前拍的 = 世代 1
+        write_container(&dir.join("bak.20260101"), 0); // 与当前库同世代
+
+        let points = restore_points(&vault);
+        let by = |t: &str| {
+            points
+                .iter()
+                .find(|p| p.token == t)
+                .unwrap_or_else(|| panic!("清单里必须有两边：{t}"))
+        };
+        assert!(
+            !by("bak.20260101").needs_old_password,
+            "与当前库同世代的备份 = 用现在的密码"
+        );
+        assert!(
+            by("pre-restore.2000").needs_old_password,
+            "不同世代的备份 = 要用那一世的密码"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 没有世代字段的旧备份回落目录位置判据() {
+        // 1.5.32 之前的备份文件没有 `key_generation`。世代读不出时不许装能判——
+        // 回落到旧的目录位置判据（old-key 里 = 要旧密码），与升级前行为一致。
+        let (root, vault) = temp_vault("gen-fallback");
+        write_container(&vault, 0);
+        let dir = backup_dir(&vault);
+        let batch = old_key_dir(&vault).join("1000");
+        fs::create_dir_all(&batch).unwrap();
+        write_container_without_generation(&dir.join("pre-restore.1000"));
+        write_container_without_generation(&batch.join("bak.20260101"));
+
+        let points = restore_points(&vault);
+        let by = |t: &str| {
+            points
+                .iter()
+                .find(|p| p.token == t)
+                .unwrap_or_else(|| panic!("清单里必须有两边：{t}"))
+        };
+        assert!(
+            !by("pre-restore.1000").needs_old_password,
+            "当前代 + 世代未知 = 沿用旧判据（不要旧密码）"
+        );
+        assert!(
+            by("1000/bak.20260101").needs_old_password,
+            "old-key 里 + 世代未知 = 沿用旧判据（要旧密码）"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
 
     fn temp_vault(name: &str) -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("pms-backup-test-{name}"));

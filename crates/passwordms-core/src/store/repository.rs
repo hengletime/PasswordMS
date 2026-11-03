@@ -661,14 +661,26 @@ impl Repository {
     }
 
     /// 更新密钥材料（改主密码时仅重包裹 VK，不动任何条目密文）。
+    ///
+    /// `bump_generation`：是否把头部 [`Vault::key_generation`] 推进一格。
+    /// **只有真正的换主密码才传 `true`**（[`Session::change_master_password`]）；
+    /// `adopt_vault_key`（配对加入、本地库为空、本地主密码不变）传 `false`——
+    /// 世代号的语义是"主密码的第几世"，本地密码没换就不许动它，否则配对之后
+    /// 备份标签会凭空多出一批"要用别的密码"。
     pub fn update_key_material(
         &mut self,
         wrapped_vault_key: WrappedKey,
         verify_mac: Vec<u8>,
+        bump_generation: bool,
     ) -> CoreResult<()> {
         let mut header = self.container.header().clone();
         header.wrapped_vault_key = wrapped_vault_key;
         header.verify_mac = verify_mac;
+        if bump_generation {
+            // 改密是用户主动的低频操作，u32 不可能溢出；用 wrapping 免得溢出 panic。
+            // 旧库（升级前建的，`None`）当作世代 0 起算。
+            header.key_generation = Some(header.key_generation.unwrap_or(0).wrapping_add(1));
+        }
         header.updated_at = now_ms();
         let rewrote = self.container.update_header(header)?;
         if rewrote {

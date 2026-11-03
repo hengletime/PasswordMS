@@ -385,7 +385,11 @@ impl Session {
 
         let verify_mac = verify::compute_verify_mac(&verify_new)?;
         let wrapped = keys::wrap_vault_key(&kek_new, &unlocked.repo.vault_key()[..])?;
-        unlocked.repo.update_key_material(wrapped, verify_mac)?;
+        // 世代号 +1（D-181）：备份标签的判据是"世代 ≠ 当前世代"，这一格不推进的话
+        // 换密之后的备份会继续和旧世代同号，标签立刻错。
+        unlocked
+            .repo
+            .update_key_material(wrapped, verify_mac, true)?;
         unlocked.kek = Some(kek_new);
 
         // 3) 隔离旧代：清单里的一切都搬走，窗口内新写的留下（正常一份都不该有）。
@@ -428,7 +432,8 @@ impl Session {
         let wrapped = keys::wrap_vault_key(kek, host_vk)?;
         unlocked
             .repo
-            .update_key_material(wrapped, header.verify_mac.clone())?;
+            // bump=false：本地主密码没换，世代号不许动（见 `update_key_material` 文档）。
+            .update_key_material(wrapped, header.verify_mac.clone(), false)?;
         unlocked.repo.replace_vault_key(Zeroizing::new(*host_vk));
         Ok(())
     }

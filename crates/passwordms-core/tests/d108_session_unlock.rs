@@ -127,7 +127,19 @@ fn change_master_password_flow() {
     );
 
     // 正确改密 → 锁定后旧密码必败、新密码必成。
+    // D-181：失败的那次**不许**推进世代号，成功的那次必须 +1——备份标签的判据是
+    // "世代 ≠ 当前世代"，这一格不推进，换密之后的备份会继续和旧世代同号，标签立刻错。
+    assert_eq!(
+        session.repo().unwrap().header().key_generation,
+        Some(0),
+        "失败的改密尝试不许动世代号"
+    );
     session.change_master_password(PWD, PWD2).unwrap();
+    assert_eq!(
+        session.repo().unwrap().header().key_generation,
+        Some(1),
+        "改密成功世代号必须 +1"
+    );
     session.lock();
     assert!(matches!(unlock_err(&path, PWD), CoreError::UnlockFailed));
     let reopened = Session::unlock(&path, PWD2);

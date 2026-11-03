@@ -165,6 +165,22 @@ pub struct Vault {
     pub auto_lock_minutes: u16,
     #[serde(default)]
     pub settings: VaultSettings,
+    /// **密钥世代号**：0 = 第一把主密码，每成功改一次主密码 +1。
+    ///
+    /// 明文进头部（它只是个计数器，不是凭据）。**它存在的唯一理由是给备份贴对标签**：
+    /// 1.5.32 之前「这份备份要不要旧密码」按文件在哪个目录算（`old-key/` 里 = 要旧密码），
+    /// 而「从备份恢复」会把"哪把是现在的密码"整体翻转——目录位置没变、事实全变了，
+    /// 三张标签能同时全反（D-181，主人 2026-11-03 验收当场踩中）。
+    /// 备份是整库复制，天然带着拍它那一刻的世代号；列出备份时读一下头部，
+    /// `世代 ≠ 当前世代` 就是要用"那一世的密码"。恢复之后当前世代跟着备份走，
+    /// 判据自动摆正，恢复多少次都不会再乱。
+    ///
+    /// `Option` 而不是裸数字是**迁移的需要**：`#[serde(default)]` 只能区分
+    /// "没有字段"和"有字段"，区分不了"没有"和"0"。裸 `u32` 会把 1.5.32 之前的
+    /// 旧备份读成世代 0——恰是"第一把密码"，标签照样错。`None` = 世代判据用不上，
+    /// 调用方回落目录位置判据（与升级前行为一致）。
+    #[serde(default)]
+    pub key_generation: Option<u32>,
 }
 
 impl Vault {
@@ -190,6 +206,7 @@ impl Vault {
             updated_at: now,
             auto_lock_minutes: AUTO_LOCK_MINUTES,
             settings: VaultSettings::default(),
+            key_generation: Some(0),
         }
     }
 }
