@@ -58,8 +58,13 @@ export const enUS: Messages = {
     // D-55 "Restore from backup" on the lock screen: entry button, overwrite warning, empty-password hint.
     restore_button: 'Restore from backup',
     restore_confirm_title: 'Restore from backup',
-    restore_confirm_body: 'The selected backup will replace the local vault; the current vault file is backed up as a .bak file automatically. Continue?',
+    restore_confirm_body: 'The selected backup will replace the local vault. Continue?',
+    restore_no_retreat_title: 'This restore has no automatic restore point',
+    restore_no_retreat_body: 'The "before restoring" snapshot could not be saved (disk space or permissions). This restore has no automatic restore point: once you confirm, the current vault is overwritten and cannot be recovered. If you want a safety net, cancel first, copy the backup you want to restore somewhere else, then come back.',
+    restore_no_retreat_short: 'The previous step did not change your vault file. This restore has no automatic restore point.',
     restore_password_required: 'Enter the master password first (the one the backup was created with); it will be used to unlock automatically after restoring.',
+    // P0: the backup is verified against this password before anything is replaced.
+    restore_password_cannot_open: 'That password cannot open the file you selected. Your current vault has not been changed at all. Check the password, or choose another backup.',
     biometric_unlock: 'Unlock with Windows Hello',
     biometric_waiting: 'Waiting for Windows Hello…',
     // §23: the lock-screen button also takes its wording from the platform.
@@ -441,7 +446,8 @@ export const enUS: Messages = {
     // B-03（1.5.29）：自动回滚点。**不是**上面那个「导出备份」——那一个能带走、
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
     restore_point: 'Automatic restore points',
-    restore_point_hint: 'A copy is saved on this device before every change, so a mistake can be rolled back.',
+    // P1: no "every change" — daily dedupe and large-vault throttling share one copy.
+    restore_point_hint: 'A copy is kept on this device before changes, so a mistake can be rolled back.',
     restore_point_local_only: 'Restore points live only on this device. Uninstalling, switching devices, or clearing the data folder removes them too — export the vault regularly.',
     restore_point_current: 'Under the current master password: {count} file(s), {size} in total.',
     restore_point_never: 'No restore point exists under the current master password yet.',
@@ -452,7 +458,8 @@ export const enUS: Messages = {
     restore_point_reason_permission: 'no permission to write',
     restore_point_reason_device: 'the storage device was disconnected',
     restore_point_reason_other: 'read or write error',
-    restore_point_old_title: 'Restore points from before a password change (open with the previous master password)',
+    // P1: title states facts only; the password rule lives in `restore_point_old_note`.
+    restore_point_old_title: 'Restore points from before a password change',
     restore_point_old_batch: 'Before the change on {time}: {count} file(s), {size} in total.',
     restore_point_old_note: 'Each batch opens with the master password in effect when it was archived. The oldest batch needs your original password.',
     restore_point_clear_current: 'Delete current restore points',
@@ -460,13 +467,21 @@ export const enUS: Messages = {
     restore_point_clear_batch: 'Delete this batch',
     restore_point_clear_batch_confirm: 'The restore points from before the change on {time} ({count} file(s), {size}) will be permanently deleted. They are the only copy on this device that opens with that password.',
     restore_point_cleared: 'Deleted {count} file(s).',
+    restore_point_cleared_partial: 'Deleted {count} file(s), but {remaining} could not be removed and are still there.',
+    restore_point_cleared_none: 'Nothing could be deleted; {remaining} file(s) are still there. Please try again shortly.',
+    restore_point_cleared_gone: 'That restore point is no longer on disk, so there was nothing to delete.',
+    restore_point_old_unrecognized: '{count} old-batch folder name(s) cannot be recognised and cannot be deleted here; they still take up disk space.',
     restore_point_failed: 'Delete failed: the restore points are still on this device. Please try again later.',
     restore_point_load_failed: 'Could not read the restore point status (your entries are not affected).',
     change_password_note_lock_only: 'Changing the master password replaces the lock, not the key inside the vault. If the old password or an old copy may have leaked, changing the password is not enough to stop someone from reading future data.',
-    change_password_note_old: 'Archived restore points still open with the master password from before the change. Deleting them only affects whoever gets this device later; copies already taken are not affected.',
-    change_password_note_escape: 'If you suspect a leak: create a new vault, import everything into it, then delete the old vault and the old restore points. That replaces the key inside the vault.',
+    change_password_note_old: 'Archived restore points still open with the master password they were archived under. Deleting them only affects whoever gets this device later; copies already taken are not affected.',
+    // P0: the "new vault + import" exit does not exist — export is an encrypted .vault only,
+    // and import accepts Bitwarden JSON/CSV only, dropping attachments.
+    change_password_note_no_rekey: 'This version cannot re-key the vault. If you have paired other devices to this vault, it is worse: there is currently no way to make those devices lose access.',
     password_changed_detail: 'Master password changed. {count} old restore point(s) archived (open with the previous password).',
-    password_changed_no_backup: 'Master password changed, but the copy from before the change could not be saved.',
+    password_changed_no_backup: 'Master password changed, but the copy from before the change could not be saved. Check the current list under "Automatic restore points" and export the vault now.',
+    // P0: when `isolate` fails as a whole, moved and failed are both 0 and no branch fires.
+    password_changed_isolate_error: 'Master password changed, but the old restore points could not be archived — they stay where they are and will be shown as opening with the current password, while they actually need the old one. Check the list under "Automatic restore points".',
     password_changed_isolate_failed: 'Master password changed, but {count} old restore point(s) could not be archived — they stay where they are and will be shown as opening with the current password, while they actually need the old one.',
     vault_file: 'Vault file',
     size: 'Size',

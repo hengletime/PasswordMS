@@ -521,6 +521,17 @@ pub fn verify_frame_stream(bytes: &[u8]) -> CoreResult<()> {
 /// （[`verify_header_usable`]）。这里**只读**、不建任何状态——任何一项不过，调用方
 /// 都不得触碰目标库。
 fn verify_backup_container(bytes: &[u8]) -> CoreResult<()> {
+    parse_backup_header(bytes)?;
+    verify_frame_stream(bytes)
+}
+
+/// 只解析并校验备份的**头部**（magic / 版本 / 头部 JSON / 可打开的最低条件）。
+///
+/// 与 [`verify_backup_container`] 分开，是因为「这个密码能不能开这份备份」只需要
+/// 头部里那几样东西（`kdf_salt` / `kdf` / `verify_mac` / `wrapped_vault_key`），
+/// **不需要**把整库帧流解一遍。恢复前的密码预检每按一次按钮就要跑一次，大库上
+/// 全量解码纯属浪费。
+fn parse_backup_header(bytes: &[u8]) -> CoreResult<Vault> {
     let not_vault = || CoreError::Validation("not_a_vault_backup".to_string());
     let corrupt = || CoreError::Validation("corrupt_vault_backup".to_string());
     if bytes.len() < CONTAINER_PREFIX_LEN {
@@ -543,7 +554,37 @@ fn verify_backup_container(bytes: &[u8]) -> CoreResult<()> {
     let header: Vault = serde_json::from_slice(&bytes[CONTAINER_PREFIX_LEN..record_start])
         .map_err(|_| corrupt())?;
     verify_header_usable(&header)?;
-    verify_frame_stream(bytes)
+    Ok(header)
+}
+
+/// 用密码校验一份备份：**只回答"这个密码能不能开这份备份"，绝不碰目标库**。
+///
+/// 为什么必须有这一步：恢复是**整容器覆盖**（[`restore_backup_from`] 把源文件
+/// `rename` 到目标），覆盖发生之后才发现密码不对就已经太晚——原库被换掉，用户被
+/// 挡在门外，只能靠同目录那份 `passwordms.vault.bak-<ms>` 手救，而界面上没有任何
+/// 入口指向它。所以恢复流程必须**先**问这一句，答"不"时一个字节都不动。
+///
+/// 与 [`verify_backup_container`] 的分工：那条验结构（是不是本产品的备份、帧流完整
+/// 不完整），这条验**密码**。两条都要过才能安全覆盖。
+pub fn verify_backup_password(src: &Path, master_password: &str) -> CoreResult<()> {
+    let bytes = fs::read(src)?;
+    let header = parse_backup_header(&bytes)?;
+    // 帧流也要验：一份密码能开、帧却坏掉的备份，恢复过去就是一份坏库。
+    verify_frame_stream(&bytes)?;
+    let mk = crate::crypto::kdf::derive_master_key(master_password, &header.kdf_salt, &header.kdf)?;
+    let kek = crate::crypto::kdf::derive_kek(&mk[..])?;
+    let verify_key = crate::crypto::kdf::derive_verify_key(&mk[..])?;
+    // 失败一律 `WrongMasterPassword`：调用方是已解锁/已认证的本地界面（锁屏页），
+    // 且用户手里本来就有这个文件——这里不存在 A-05 那种"未认证调用者可区分解锁失败"
+    // 的侧信道问题，含糊其辞只会让人不知道是自己密码打错还是文件坏了。
+    crate::crypto::verify::unlock_check(
+        &kek,
+        &verify_key,
+        &header.verify_mac,
+        &header.wrapped_vault_key,
+    )
+    .map_err(|_| CoreError::WrongMasterPassword)?;
+    Ok(())
 }
 
 /// 候选文件的回读复核（F-03）：长度 + 逐块字节相等。

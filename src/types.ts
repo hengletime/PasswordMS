@@ -15,8 +15,22 @@ export interface StatusDto {
  * `batch_ms` 同时是删除入参。批次身份来自磁盘上的目录名
  * （`backups/old-key/<epoch-ms>/`），**不是**从文件内容或时间戳推断的。
  */
+/** 删除回滚点的回执：删掉几份、还剩几份（`remaining > 0` 表示没删干净）。 */
+export interface BackupClearDto {
+  deleted: number;
+  remaining: number;
+}
+
 export interface BackupBatchDto {
-  batch_ms: number;
+  /**
+   * 批次**身份** = `old-key/<dir>/` 的目录名，也是删除入参。
+   *
+   * 不要用 `batch_ms` 当 key：它是解析产物，解析不出就是 `null`，
+   * 两个认不出的批次会撞成同一个 key。
+   */
+  dir_name: string;
+  /** 目录名解析出的毫秒时刻，**仅供显示**；`null` 表示认不出（显示目录名原文）。 */
+  batch_ms: number | null;
   files: number;
   bytes: number;
 }
@@ -36,6 +50,13 @@ export interface BackupStatusDto {
   old_bytes: number;
   old_files: number;
   old_batches: BackupBatchDto[];
+  /**
+   * 目录名不是合法 UTF-8、因而**无法按名字删除**的旧代批次个数。
+   *
+   * 它们确实占着磁盘（算在 `old_bytes` 里）。界面必须说出来，否则就是
+   * "盘上有东西、界面假装没有"。
+   */
+  unrecognized_batches: number;
   /** 上次成功刷新 `last.bak` 的时刻（0 = 从未）。 */
   last_ms: number;
   last_error_ms: number;

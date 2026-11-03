@@ -16,11 +16,26 @@ use passwordms_core::model::vault::{GeneratorOptions, HealthConfig, VaultSetting
 use passwordms_core::store::backup::{BackupErrorKind, Staleness};
 use passwordms_core::totp::TotpCode;
 
+/// 删除回滚点的回执。
+///
+/// 为什么不只回一个数字：删除是逐份尝试的，任何一份删不掉都会留下，而界面已经照着
+/// 返回值把列表改掉了。`remaining > 0` 是唯一能说"没删干净"的通道。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupClearDto {
+    pub deleted: usize,
+    pub remaining: usize,
+}
+
 /// 一批旧代回滚点（一次换密产生的一批）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BackupBatchDto {
-    /// 批次标识（同时是删除入参）。
-    pub batch_ms: i64,
+    /// 批次**身份**：`old-key/<dir>/` 的目录名，也是删除入参。
+    ///
+    /// 用目录名字符串而不是解析后的毫秒：解析不出的批次会被压成 `0`，
+    /// 于是"界面显示有一批、删除却报 0 份而文件没动"。
+    pub dir_name: String,
+    /// 目录名解析出的毫秒时刻，**仅供显示**；解析不出为 `null`（界面显示目录名原文）。
+    pub batch_ms: Option<i64>,
     pub files: usize,
     pub bytes: u64,
 }
@@ -43,6 +58,11 @@ pub struct BackupStatusDto {
     pub old_bytes: u64,
     pub old_files: usize,
     pub old_batches: Vec<BackupBatchDto>,
+    /// 目录名不是合法 UTF-8、因而**无法按名字删除**的旧代批次个数。
+    ///
+    /// 它们确实占着磁盘（算在 `old_bytes` 里），但没有可回传的身份字符串。
+    /// 界面必须单独说一句，否则就是"磁盘上有东西而界面假装没有"。
+    pub unrecognized_batches: usize,
     /// 上次成功刷新 `last.bak` 的时刻（0 = `.state` 里没有）。
     pub last_ms: i64,
     /// 最近一次备份失败的留痕（粘性：成功不清除，只由用户"知道了"清除）。

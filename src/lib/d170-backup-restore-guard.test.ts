@@ -76,11 +76,28 @@ describe('F-02 恢复的接受条件必须与打开容器一致', () => {
   });
 
   it('备份预检覆盖零头长 / 头部 JSON / 可打开性三项', () => {
+    // B-03 把结构校验拆成了 `parse_backup_header`（头部三项）+ 帧流两步：
+    // 恢复前的**密码预检**只需要头部，不必把整库帧流解一遍。
+    // 拆开之后守卫要钉的是"三段都还在"，而不是"都在同一个函数里"——
+    // 否则这次重构就会把一条真守卫变成一条红测试，下一个人只会去改测试。
+    const header = fnBody(container, 'fn parse_backup_header(bytes: &[u8])');
+    expect(header).toContain('check_prefix(&bytes[..CONTAINER_PREFIX_LEN])');
+    expect(header).toContain('serde_json::from_slice(&bytes[CONTAINER_PREFIX_LEN..record_start])');
+    expect(header).toContain('verify_header_usable(&header)');
+
     const verify = fnBody(container, 'fn verify_backup_container(bytes: &[u8])');
-    expect(verify).toContain('check_prefix(&bytes[..CONTAINER_PREFIX_LEN])');
-    expect(verify).toContain('serde_json::from_slice(&bytes[CONTAINER_PREFIX_LEN..record_start])');
-    expect(verify).toContain('verify_header_usable(&header)');
+    expect(verify).toContain('parse_backup_header(bytes)');
     expect(verify).toContain('verify_frame_stream(bytes)');
+
+    // 新增的密码预检**不能**只验密码：结构不过关就谈不上"这个密码能不能开"，
+    // 顺序也必须是先结构后凭据（否则拿着 .txt 的用户会被告知"密码不对"）。
+    const pwd = fnBody(container, 'pub fn verify_backup_password(');
+    const parseAt = pwd.indexOf('parse_backup_header(&bytes)');
+    const frameAt = pwd.indexOf('verify_frame_stream(&bytes)');
+    const pwdAt = pwd.indexOf('unlock_check(');
+    expect(parseAt).toBeGreaterThan(-1);
+    expect(frameAt).toBeGreaterThan(parseAt);
+    expect(pwdAt).toBeGreaterThan(frameAt);
   });
 
   it('「可打开性」检查算法名与必要密文，缺一即拒', () => {

@@ -8,7 +8,7 @@
   import WindowControls from './common/WindowControls.svelte';
   import Spinner from './common/Spinner.svelte';
   import ThemeToggle from './common/ThemeToggle.svelte';
-  import { toAppError } from '../lib/errors';
+  import { ErrorCode, toAppError } from '../lib/errors';
   import { api } from '../lib/ipc';
   import { session } from '../lib/stores/session.svelte';
   import { bioPlatformOf, bioTextSuffix } from '../lib/bio-platform';
@@ -33,6 +33,12 @@
   /** §23：按钮文案按平台取词（「Windows Hello」/「指纹 · 人脸」）。 */
   const bioSuffix = $derived(bioTextSuffix(bioPlatformOf(session.biometric)));
 
+  /**
+   * 恢复失败的提示**留在页面上**，不用 toast：toast 三秒就消失，而这条要说明
+   * "原库没有任何改动"——用户必须读到它才敢重试。空串表示没有错误。
+   */
+  let restoreErrorKey = $state('');
+
   onMount(() => {
     // 锁定态可查（后端只读头部 + 旁路文件）；查不到时 store 会置 null，按钮自然不出现。
     void session.refreshBiometric();
@@ -54,6 +60,7 @@
     if (session.busy || restoring || password.length === 0) {
       return;
     }
+    restoreErrorKey = '';
     const ok = await session.unlock(password);
     password = '';
     if (ok) {
@@ -85,17 +92,39 @@
       ui.toast('error', 'lock.restore_password_required');
       return;
     }
-    // 3. 警告确认：备份将替换本机当前库（原库自动留 .bak 后路）。
+    // 3. 警告确认：备份将替换本机当前库。**不承诺有 .bak**——它是 best-effort，
+    //    用户可见文案里不再提它（提了就等于给一张可能兑现不了的支票）。
     const ok = await ui.confirm('lock.restore_confirm_title', 'lock.restore_confirm_body');
     if (!ok) {
       return;
     }
     restoring = true;
+    restoreErrorKey = '';
     try {
-      await api.vault.restoreBackup(sourcePath);
+      try {
+        // 密码一起送：后端先拿它验这份备份，验不过原库一个字节都不动。
+        await api.vault.restoreBackup(sourcePath, password, false);
+      } catch (err) {
+        const appErr = toAppError(err);
+        if (appErr.code !== ErrorCode.ERR_RESTORE_NO_RETREAT) {
+          throw appErr;
+        }
+        // 走到这里说明**原库一个字节都没动**：后端在覆盖之前就停下了。
+        // 确认框说的只是"这次没有自动回滚点"，不能说成"数据会丢失"——
+        // 随后还会写一份 passwordms.vault.bak-<ms>，原库不会丢。
+        const ok = await ui.confirm(
+          'lock.restore_no_retreat_title',
+          'lock.restore_no_retreat_body',
+        );
+        if (!ok) {
+          restoring = false;
+          return;
+        }
+        await api.vault.restoreBackup(sourcePath, password, true);
+      }
     } catch (err) {
       restoring = false;
-      ui.toast('error', toAppError(err).messageKey);
+      restoreErrorKey = toAppError(err).messageKey;
       return;
     }
     restoring = false;
@@ -144,7 +173,10 @@
             <Icon name={showPassword ? 'eye' : 'eye_off'} />
           </button>
         </div>
-        {#if session.unlockError}
+        {#if restoreErrorKey}
+          <!-- 恢复失败留在原地：它说清了"原库没有任何改动"，用户要读到才敢重试。 -->
+          <p class="pms-hint is-danger" role="alert">{ui.t(restoreErrorKey)}</p>
+        {:else if session.unlockError}
           <p class="pms-hint is-danger" role="alert">{ui.t('lock.error')}</p>
         {/if}
       </div>

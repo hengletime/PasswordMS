@@ -35,9 +35,21 @@ pub mod codes {
     pub const ERR_SYNC_ABORTED: &str = "ERR_SYNC_ABORTED";
     /// 【D-108 新增】同步互斥（豆包审查 3.4-7：原由 sync_cmd 硬编码构造）。
     pub const ERR_SYNC_BUSY: &str = "ERR_SYNC_BUSY";
+    /// 【B-03 新增】恢复前那份自动回滚点没拍成：必须先问用户一句再覆盖。
+    ///
+    /// 它**不表示**"数据会丢失"——命令层随后还会写一份 `.bak`。它只表示
+    /// "这次没有自动回滚点"，所以文案只许说这一句。
+    pub const ERR_RESTORE_NO_RETREAT: &str = "ERR_RESTORE_NO_RETREAT";
     /// 【B-03 新增】备份目录被占用中（正在恢复 / 正在换主密码），此时**不允许删除回滚点**。
     ///
     /// 不能借用 `ERR_SYNC_BUSY`：同步根本没在跑，用户会看到「同步正在进行」。
+    ///
+    /// **这是核心层的不变量，不是靠界面挡的**：任何拿到 core 的调用方（未来的命令、
+    /// 测试、脚本）都过得了这道闸。反过来说，现状下它在 IPC 层**打不到**——四个
+    /// 备份命令与恢复/换密命令都要先 `state.lock_session()`，同一时刻只有一个能跑
+    /// （B-03 安全复查 F-03）。所以「界面显示这条文案」今天做不到，代码里留着它是因为
+    /// 不变量本身要成立，而不是因为现在有路径能触发它。若哪天命令改成细粒度锁，
+    /// 这条路就变宽了 —— 那时不用改 core，它已经在挡。
     pub const ERR_BACKUP_BUSY: &str = "ERR_BACKUP_BUSY";
     pub const ERR_CONFLICT_EXISTS: &str = "ERR_CONFLICT_EXISTS";
     /// 【D-53 新增】附件条目存在但本地无密文 blob（未同步）。
@@ -132,6 +144,9 @@ pub enum CoreError {
     /// 硬编码构造 `ERR_SYNC_BUSY`（豆包审查 3.4-7：缺少编译期约束、手工同步点）。
     #[error("another sync is already in flight")]
     SyncBusy,
+    /// 【B-03 新增】恢复前没拍成自动回滚点，需要用户确认（见 `restore_safety`）。
+    #[error("restore has no automatic restore point")]
+    RestoreNoRetreat,
     /// 【B-03 新增】备份目录被占用中（恢复 / 换密），拒绝删除回滚点。
     ///
     /// 与 [`Self::SyncBusy`] **分工明确**：那条说的是"同步在跑"，这条说的是
@@ -218,6 +233,7 @@ impl CoreError {
             CoreError::FingerprintMismatch => codes::ERR_FINGERPRINT_MISMATCH,
             CoreError::SyncAborted => codes::ERR_SYNC_ABORTED,
             CoreError::SyncBusy => codes::ERR_SYNC_BUSY,
+            CoreError::RestoreNoRetreat => codes::ERR_RESTORE_NO_RETREAT,
             CoreError::BackupBusy => codes::ERR_BACKUP_BUSY,
             CoreError::ConflictExists => codes::ERR_CONFLICT_EXISTS,
             CoreError::BlobMissing => codes::ERR_BLOB_MISSING,
@@ -263,6 +279,7 @@ impl CoreError {
             CoreError::FingerprintMismatch => "err.fingerprint",
             CoreError::SyncAborted => "err.sync_aborted",
             CoreError::SyncBusy => "err.sync_busy",
+            CoreError::RestoreNoRetreat => "lock.restore_no_retreat_body",
             CoreError::BackupBusy => "err.backup_busy",
             CoreError::ConflictExists => "err.conflict",
             CoreError::BlobMissing => "err.blob_missing",

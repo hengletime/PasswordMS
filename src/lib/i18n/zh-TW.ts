@@ -55,8 +55,13 @@ export const zhTW = {
     hide_password: '隱藏密碼',
     restore_button: '從備份還原',
     restore_confirm_title: '從備份還原',
-    restore_confirm_body: '將使用所選備份取代本機目前保險庫，原庫會自動備份為 .bak 檔案。確認繼續？',
+    restore_confirm_body: '將使用所選備份取代本機目前保險庫。確認繼續？',
+    restore_no_retreat_title: '這次還原沒有自動回滾點',
+    restore_no_retreat_body: '剛才那份「還原前」的快照沒能存成（磁碟空間或權限問題）。這次還原沒有自動回滾點：確認之後，目前的保險庫會被覆蓋，而且拿不回來。如果還想留一手，請先取消，把你要還原的那份備份複製到別的位置，再回來還原。',
+    restore_no_retreat_short: '剛才那一步沒有改動你的庫檔案。這次還原沒有自動回滾點。',
     restore_password_required: '請先輸入主密碼（備份建立時的主密碼），還原後將用它自動解鎖。',
+    // P0：還原前先用它驗證備份，密碼不符則一個位元組都不動。
+    restore_password_cannot_open: '這個密碼打不開你選的那份檔案。原庫沒有任何改動。請核對密碼，或換一份備份。',
     biometric_unlock: '使用 Windows Hello 解鎖',
     biometric_waiting: '等待 Windows Hello…',
     // §23：鎖屏按鈕同樣依平台取詞。
@@ -409,7 +414,8 @@ export const zhTW = {
     // B-03（1.5.29）：自动回滚点。**不是**上面那个「导出备份」——那一个能带走、
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
     restore_point: '自動回滾點',
-    restore_point_hint: '每次改動前自動在本機存一份，改壞了能退回來。',
+    // P1：不能寫「每次」——日備份去重與大庫節流會讓同一時段多次改動共用一份。
+    restore_point_hint: '改動前會自動在本機留一份，改壞了能退回來。',
     restore_point_local_only: '回滾點只在本機。解除安裝、換機、清空資料目錄都會一起失去——請定期匯出保險庫。',
     restore_point_current: '目前主密碼下：{count} 份，共 {size}。',
     restore_point_never: '目前主密碼下還沒有回滾點。',
@@ -420,7 +426,8 @@ export const zhTW = {
     restore_point_reason_permission: '沒有寫入權限',
     restore_point_reason_device: '儲存裝置已中斷',
     restore_point_reason_other: '讀寫出錯',
-    restore_point_old_title: '改密前的回滾點（用改密前那把主密碼開啟）',
+    // P1：標題只寫事實，密碼規則只留在 `restore_point_old_note` 說一次。
+    restore_point_old_title: '改密前的回滾點',
     restore_point_old_batch: '{time} 改密前：{count} 份，共 {size}。',
     restore_point_old_note: '每批要用它被歸檔時那把主密碼開啟。最早那批要用你最原始的密碼。',
     restore_point_clear_current: '刪除目前回滾點',
@@ -428,13 +435,20 @@ export const zhTW = {
     restore_point_clear_batch: '刪除這一批',
     restore_point_clear_batch_confirm: '{time} 改密前的這批回滾點（{count} 份，共 {size}）將被永久刪除。它們是那把密碼在本機的唯一副本。',
     restore_point_cleared: '已刪除 {count} 份。',
+    restore_point_cleared_partial: '已刪除 {count} 份，但還有 {remaining} 份沒能刪除，仍在原處。',
+    restore_point_cleared_none: '一份都沒能刪除，還有 {remaining} 份在原處，請稍後重試。',
+    restore_point_cleared_gone: '這份回滾點已經不在磁碟上了，沒有可刪除的內容。',
+    restore_point_old_unrecognized: '還有 {count} 個舊代目錄名稱無法辨識，不能在這裡刪除；它們仍然佔用磁碟空間。',
     restore_point_failed: '刪除失敗：回滾點仍在本機，請稍後重試。',
     restore_point_load_failed: '讀取失敗：未能取得回滾點狀態（條目本身不受影響）。',
     change_password_note_lock_only: '改主密碼會換掉鎖，但不會換掉保險庫裡的鑰匙。若舊密碼或舊副本可能已洩漏，改密不足以阻止對方讀取今後的資料。',
-    change_password_note_old: '已歸檔的舊代回滾點仍能用改密前那把主密碼開啟；刪除它們只對之後拿到這台裝置的人有效，已經被複製走的副本不受影響。',
-    change_password_note_escape: '如果懷疑已經洩漏：新建一個保險庫並把資料匯入進去，然後刪除舊庫和舊回滾點。這樣會換掉保險庫內部的鑰匙。',
+    change_password_note_old: '已歸檔的舊代回滾點仍能用歸檔時那把主密碼開啟；刪除它們只對之後拿到這台裝置的人有效，已經被複製走的副本不受影響。',
+    // P0：「新建庫 + 匯入」出口是假的——匯出只有加密的 .vault，匯入只認 Bitwarden JSON/CSV 且會丟附件。
+    change_password_note_no_rekey: '本版本不支援更換保險庫內部的鑰匙。如果你在其它裝置上配對過本保險庫，情況會更複雜——目前沒有讓已配對裝置失去存取的方法。',
     password_changed_detail: '主密碼已修改。已歸檔 {count} 份舊回滾點（用改密前的密碼開啟）。',
-    password_changed_no_backup: '主密碼已修改。但換密前的那份回滾點沒有存成。',
+    password_changed_no_backup: '主密碼已修改。但換密前的那份回滾點沒有存成。請到「自動回滾點」查看目前清單，並立刻匯出一份保險庫。',
+    // P0：`isolate` 整體沒做成時 `moved` 與 `failed` 雙雙為 0，上面分支一個都不進。
+    password_changed_isolate_error: '主密碼已修改，但舊回滾點沒能歸檔——它們仍在原處，會被顯示成「目前主密碼可開」，實際要用舊密碼。請到「自動回滾點」查看清單。',
     password_changed_isolate_failed: '主密碼已修改，但有 {count} 份舊回滾點沒能歸檔——它們留在原處，會被顯示成「目前主密碼可開」，實際要用舊密碼。',
     vault_file: '保險庫檔案',
     size: '大小',
@@ -631,7 +645,7 @@ export const zhTW = {
     fingerprint: '裝置指紋驗證失敗，已中止同步。',
     sync_aborted: '同步已中止。',
     sync_busy: '已有同步進行中，請稍後再試。',
-    backup_busy: '正在還原或更換主密碼，這段時間不能刪除回滾點，請等它結束。',
+    backup_busy: '正在還原或更換主密碼，這段時間不能刪除回滾點。一份都沒有刪除，等它結束後就能刪。',
     load_partial: '部分資料載入失敗，請重試或重新鎖定後再試。',
     conflict: '存在未處理的衝突。',
     vk_adopt_requires_empty: '本機保險庫非空，無法直接採用對方的金鑰。',

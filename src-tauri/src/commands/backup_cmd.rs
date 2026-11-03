@@ -19,7 +19,7 @@ use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
 use passwordms_core::store::backup;
 
-use crate::dto::{BackupBatchDto, BackupStatusDto};
+use crate::dto::{BackupBatchDto, BackupClearDto, BackupStatusDto};
 use crate::error::{lock_err, IpcResult};
 use crate::state::AppState;
 
@@ -73,6 +73,7 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
     let batches = backup::old_key_batches(&path)
         .into_iter()
         .map(|b| BackupBatchDto {
+            dir_name: b.dir_name,
             batch_ms: b.batch_ms,
             files: b.files,
             bytes: b.bytes,
@@ -86,6 +87,7 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         old_bytes,
         old_files,
         old_batches: batches,
+        unrecognized_batches: backup::unrecognized_batch_dirs(&path),
         last_ms: st.last_ms,
         last_error_ms: st.last_error_ms,
         last_error_kind: st.last_error_kind,
@@ -93,35 +95,36 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
     })
 }
 
-/// 删除**当前代**回滚点（`backups/` 顶层），返回删除份数。
+/// 删除**当前代**回滚点（`backups/` 顶层），返回删除份数与残留份数。
 ///
 /// `old-key/` 一份不动——那是另一把密码的退路，走 [`backup_clear_old_batch`]。
 /// 回执与界面文案必须说清这个边界，否则用户会以为"删干净了"。
 #[tauri::command(rename_all = "snake_case")]
-pub fn backup_clear_current(state: tauri::State<'_, AppState>) -> IpcResult<usize> {
+pub fn backup_clear_current(state: tauri::State<'_, AppState>) -> IpcResult<BackupClearDto> {
     let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
-    Ok(backup::clear_all(&repo.path())?)
+    let out = backup::clear_all(&repo.path())?;
+    Ok(BackupClearDto {
+        deleted: out.deleted,
+        remaining: out.remaining,
+    })
 }
 
-/// 删除**某一批**旧代回滚点，返回删除份数。
+/// 删除**某一批**旧代回滚点，返回删除份数与残留份数。
 ///
 /// 按批而不是只有"全删"：旧代是单向门，而"我怕旧密码还能开"这个需求往往只针对
 /// 其中一批（最原始那把可能早忘了）。整体清空把一个小需求绑成一个大动作。
 #[tauri::command(rename_all = "snake_case")]
 pub fn backup_clear_old_batch(
     state: tauri::State<'_, AppState>,
-    batch_ms: i64,
-) -> IpcResult<usize> {
+    dir_name: String,
+) -> IpcResult<BackupClearDto> {
     let session = state.lock_session().map_err(lock_err)?;
     let repo = session.repo()?;
-    Ok(backup::clear_old_key_batch(&repo.path(), batch_ms)?)
+    let out = backup::clear_old_key_batch(&repo.path(), &dir_name)?;
+    Ok(BackupClearDto {
+        deleted: out.deleted,
+        remaining: out.remaining,
+    })
 }
 
-/// 删除**全部**旧代回滚点，返回删除份数。
-#[tauri::command(rename_all = "snake_case")]
-pub fn backup_clear_old_all(state: tauri::State<'_, AppState>) -> IpcResult<usize> {
-    let session = state.lock_session().map_err(lock_err)?;
-    let repo = session.repo()?;
-    Ok(backup::clear_old_key(&repo.path())?)
-}

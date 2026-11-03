@@ -159,9 +159,12 @@ pub enum SkipReason {
     Rekeying,
     /// 源文件不存在（首次创建库时）。
     ///
-    /// **必须保留**：它决定恢复入口要不要放行，见 [`restore_safety`] 与
-    /// [`RestoreSafety::NothingToLose`]。`last.bak` 暂时丢了可以用那份独占的备份恢复；
-    /// 库文件整个不见了就**没有"当前状态"可失去**——那正是最需要恢复的时刻。
+    /// **必须保留**：它**不**决定恢复入口是否放行——那是 [`restore_safety`] 的事，
+    /// 而那条判据**根本不读 `skipped`**，只读"库文件在不在"与"有没有真的产出一份"。
+    ///
+    /// 它服务的是另一件事：调用方据此知道"这次没备份，是因为源文件不存在"（首次建库），
+    /// 而不是"写失败了"。两者要上报的东西完全不同——前者什么都不用做，
+    /// 后者要进常驻警告。混成一类会让新建的库一出生就带一条假故障。
     NoSource,
 }
 
@@ -398,7 +401,17 @@ pub struct BackupFile {
     ///
     /// **不推断"哪批配哪把密码"**：应用只在换密那一刻见过旧密码，不存它。
     /// 所以界面只能写事实——「{日期} 改密前的回滚点」，日期来自批次目录名。
+    ///
+    /// **只用于显示与排序，绝不用于定位**：它是对目录名做 `parse::<i64>()` 的产物，
+    /// 解析失败就是 `None`。拿它当批次身份会把所有解析不出的批次压成同一批。
     pub batch_ms: Option<i64>,
+    /// 批次目录名（`old-key/<dir>/` 的 `dir`）——**批次唯一的身份**。
+    ///
+    /// 删除、分组一律按它，因为它是目录系统里真实存在的字符串。用解析后的毫秒数
+    /// 当身份会出两种错：解析不出的批次被压成 `0`（与真的 0 混作一批），
+    /// 以及"删不掉却报成功"——按 `0` 拼出的路径根本不存在，`clear` 返回 0，
+    /// 界面于是说"已删除 0 份"而文件一份没动。
+    pub batch_dir: Option<String>,
 }
 
 /// 从文件名解析创建时刻；认不出返回 `None`。
@@ -478,6 +491,12 @@ fn busy_registry() -> &'static Mutex<Vec<(PathBuf, BusyKind)>> {
 /// 给 A 换密会让 B 的备份静默停摆——而"停摆"没有任何界面症状，只有 [`staleness`]
 /// 事后才看得见。既然两个入口（`snapshot_before_write` / `snapshot_event`）都拿得到
 /// `vault_path`，就没有理由再退化成全局。
+///
+/// **只返回第一条匹配**（同一路径上恢复与换密可以同时挂着）。这是刻意的，有两个前提：
+/// ① `SkipReason` 只服务诊断读数与日志，**不参与任何决策**——两条占用对行为的后果
+/// 完全一致（一律不写）；② 它不是"原因的全部"，只是一句提示。若将来有人要用它做
+/// 判断（比如"恢复中才允许 X"），**必须先把这个函数改成返回集合**，
+/// 否则就是在拿一条随顺序变化的标签当事实。
 fn busy_reason(vault_path: &Path) -> Option<SkipReason> {
     let key = canonical_key(vault_path);
     busy_registry().lock().ok().and_then(|g| {
@@ -485,6 +504,22 @@ fn busy_reason(vault_path: &Path) -> Option<SkipReason> {
             .find(|(p, _)| p == &key)
             .map(|(_, k)| k.skip_reason())
     })
+}
+
+/// 批次目录名是否合法（删除入参的唯一防线之一）。
+///
+/// 只允许单层、常见字符、有限长度，且不许是 `.` / `..`。上限 64 是保守值：
+/// 应用自己写下的目录名是毫秒时间戳（13 位），留足余量给将来可能的时间戳格式。
+///
+/// **它不是唯一防线**：名字合法但目录本身是软链接时，字符检查拦不住。
+/// 真正的兜底在 [`clear_old_key_batch`] 里的 `canonicalize` 比对。
+fn valid_batch_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-')
 }
 
 /// 删除类操作的统一闸门：备份目录被占用（恢复 / 换密）时一律拒绝。
@@ -757,6 +792,7 @@ pub fn inventory(vault_path: &Path) -> Vec<BackupFile> {
                         created_ms,
                         modified_ms,
                         batch_ms: None,
+                        batch_dir: None,
                     });
                     continue;
                 }
@@ -771,6 +807,7 @@ pub fn inventory(vault_path: &Path) -> Vec<BackupFile> {
             created_ms,
             modified_ms,
             batch_ms: None,
+            batch_dir: None,
         });
     }
     out.sort_by_key(|f| f.created_ms);
@@ -826,10 +863,12 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
         }
         // 批次身份只从目录名取：目录名就是 `isolate` 那一刻的 `now_ms`，
         // **是应用自己写下的**，不是从文件 mtime 或内容推断的。
-        let batch_ms = batch_path
+        let batch_dir = batch_path
             .file_name()
             .and_then(|n| n.to_str())
-            .and_then(|s| s.parse::<i64>().ok());
+            .map(|s| s.to_string());
+        // 解析出的毫秒只用于显示；解析不出就是 `None`，**不回落成 0**。
+        let batch_ms = batch_dir.as_deref().and_then(|s| s.parse::<i64>().ok());
         let Ok(items) = fs::read_dir(&batch_path) else {
             continue;
         };
@@ -860,10 +899,18 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
                 created_ms,
                 modified_ms: mtime_ms(&path).unwrap_or(0),
                 batch_ms,
+                batch_dir: batch_dir.clone(),
             });
         }
     }
-    out.sort_by_key(|f| (f.batch_ms.unwrap_or(0), f.created_ms));
+    // 认得出时刻的批次排前面（按时间），认不出的排最后（按目录名稳定排序）。
+    out.sort_by_key(|f| {
+        (
+            f.batch_ms.unwrap_or(i64::MAX),
+            f.batch_dir.clone().unwrap_or_default(),
+            f.created_ms,
+        )
+    });
     out
 }
 
@@ -873,34 +920,64 @@ pub fn old_key_inventory(vault_path: &Path) -> Vec<BackupFile> {
 /// 是「我要不要删这一批」的**判断依据**，不该由渲染层现算。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OldKeyBatch {
-    /// 批次标识（`old-key/<epoch-ms>/` 的目录名），也是删除时的入参。
-    pub batch_ms: i64,
+    /// 批次**身份** = `old-key/<dir>/` 的目录名，也是删除时的入参。
+    pub dir_name: String,
+    /// 目录名解析出的毫秒时刻，**仅供显示**；解析不出为 `None`。
+    pub batch_ms: Option<i64>,
     /// 这一批的份数。
     pub files: usize,
     /// 这一批的字节数。
     pub bytes: u64,
 }
 
+/// 目录名不是合法 UTF-8 的旧代批次个数。
+///
+/// 这些批次**不进** [`old_key_batches`]：`file_name().to_str()` 为 `None`，没有可回传的
+/// 身份字符串，用户也就没法按名字删它。但它们确实躺在盘上、`old_key_usage` 也算进了
+/// 它们——所以必须单独报一个数。
+///
+/// **不许用 `to_string_lossy()` 硬凑一个名字**：非法字节会变成 `U+FFFD`，用户拿着这个
+/// 假名字回来删时永远匹配不上，界面会说"批次不存在"——而它明明在盘上。
+/// 报错要报对原因，宁可说"这个目录名认不出"，不要说"没有这个东西"。
+pub fn unrecognized_batch_dirs(vault_path: &Path) -> usize {
+    let Ok(entries) = fs::read_dir(old_key_dir(vault_path)) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().is_dir() && e.file_name().to_str().is_none())
+        .count()
+}
+
 /// 按批次汇总旧代（批内时刻升序）。
 pub fn old_key_batches(vault_path: &Path) -> Vec<OldKeyBatch> {
     let mut out: Vec<OldKeyBatch> = Vec::new();
     for f in old_key_inventory(vault_path) {
-        // 目录名解析不出时刻的批次仍要能看见、能删，归到 `0` 这一批并保留。
-        // 丢掉它 = 磁盘上有东西而界面说没有。
-        let key = f.batch_ms.unwrap_or(0);
-        match out.iter_mut().find(|b| b.batch_ms == key) {
+        // 按**目录名**分组，不按解析出的毫秒数：解析不出的批次也要能看见、能删。
+        // 归到 `0` 的写法会把它和真的 0 混成一批，而删除用 `0` 拼出的路径不存在，
+        // 结果是"界面显示有一批、点了删除却说删了 0 份、文件一份没动"。
+        let Some(dir) = f.batch_dir.clone() else {
+            continue;
+        };
+        match out.iter_mut().find(|b| b.dir_name == dir) {
             Some(b) => {
                 b.files += 1;
                 b.bytes += f.size_bytes;
             }
             None => out.push(OldKeyBatch {
-                batch_ms: key,
+                dir_name: dir,
+                batch_ms: f.batch_ms,
                 files: 1,
                 bytes: f.size_bytes,
             }),
         }
     }
-    out.sort_by_key(|b| b.batch_ms);
+    out.sort_by(|a, b| {
+        a.batch_ms
+            .unwrap_or(i64::MAX)
+            .cmp(&b.batch_ms.unwrap_or(i64::MAX))
+            .then_with(|| a.dir_name.cmp(&b.dir_name))
+    });
     out
 }
 
@@ -913,14 +990,83 @@ pub fn old_key_batches(vault_path: &Path) -> Vec<OldKeyBatch> {
 /// 他最想要的退路。整体清空把一个小需求绑成一个大动作，代价不对称。
 ///
 /// 批次目录不存在时返回 `Ok(0)` 而不是报错：可能刚被另一处删掉，重试不该失败。
-pub fn clear_old_key_batch(vault_path: &Path, batch_ms: i64) -> CoreResult<usize> {
+pub fn clear_old_key_batch(vault_path: &Path, dir_name: &str) -> CoreResult<ClearOutcome> {
     ensure_not_busy(vault_path)?;
-    let batch_path = old_key_dir(vault_path).join(batch_ms.to_string());
-    if !batch_path.is_dir() {
-        return Ok(0);
+    // 入参是**目录名本身**，不是解析出来的毫秒：调用方从 `old_key_batches()` 原样拿回
+    // 什么就传什么，中间不再有一次 parse。这样"界面看到的批次"与"能删的批次"是同一个
+    // 字符串，不存在"显示得出、删不掉"。
+    //
+    // ⚠️ **代价**：`i64` 天生做不了路径穿越，`&str` 可以。这条参数从整数换成字符串
+    // 等于把一条**类型级**保证换成了**验证级**保证，强度不同，必须在这里补回来：
+    // 下面的循环会对目标目录里所有普通文件逐个 `remove_file`，一旦能跳出 `old-key/`，
+    // 它就是在删别人的文件。
+    if !valid_batch_name(dir_name) {
+        // 名字不合法 = 一次错误的调用，**必须报错**，不能用 `Ok(0)` 伪装成"已经删干净"。
+        return Err(CoreError::Validation("bad_old_key_batch".to_string()));
     }
-    let mut removed = 0;
-    if let Ok(items) = fs::read_dir(&batch_path) {
+    // **路径只从 `read_dir` 来，绝不从字符串拼**。
+    //
+    // `old_key_dir(vault).join(user_input)` 是把一条路径交给调用方去写：`"../.."` 能
+    // 把 `join` 抬出 `old-key/`，而下面的循环会对目录里**每一个普通文件** `remove_file`。
+    // 改成"枚举真实条目 → 只拿名字去比对"之后，穿越在结构上不可能——它压根没有构造
+    // 路径的机会，而不是"我们记得检查了"。这是比白名单更强的保证：白名单将来会先失效
+    // （目录名换成带 `:` 的 ISO 时间戳完全有可能），这条不会。
+    let root = old_key_dir(vault_path);
+    // 这里**不能**把任何 `read_dir` 失败都当"没有批次"：权限被拒、句柄耗尽、I/O 错误
+    // 都会走到这里，而 `{0,0}` 会让界面说"已删除 0 份"——用户以为清空了。
+    // 只有"目录不存在"才等于"没有可删的东西"，其余一律报上去。
+    let entries = match fs::read_dir(&root) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ClearOutcome::default());
+        }
+        Err(e) => return Err(CoreError::Io(format!("old-key dir: {e}"))),
+    };
+    let mut batch_path = None;
+    for entry in entries.flatten() {
+        // 这里的 `==` **故意严于文件系统**：Windows 上 `Alpha` 与 `alpha` 是同一个目录，
+        // 但字符串不等。放宽成 `eq_ignore_ascii_case` 就回到"两个名字映射同一身份"的
+        // 老坑——那正是这套改造要消灭的东西。宁可因为大小写不匹配拒绝一次（用户重试
+        // 会拿到新清单），也不要让两个批次共用一条删除路径。
+        if entry.file_name().to_str() == Some(dir_name) {
+            batch_path = Some(entry.path());
+            break;
+        }
+    }
+    let Some(batch_path) = batch_path else {
+        // 没匹配到 = 这个批次已经不存在了。**重试幂等**正是原注释要的行为：
+        // 双击、界面没刷、用户再点一次，第二次不该报错。
+        return Ok(ClearOutcome::default());
+    };
+    if !batch_path.is_dir() {
+        return Ok(ClearOutcome::default());
+    }
+    // 第三道闸：名字合法、条目真实，但它可能是个**软链接**——`read_dir` 会跟进去，
+    // 循环就在链接目标里删文件。白名单拦不住这个，`canonicalize` 能。
+    let Ok(canon_root) = fs::canonicalize(&root) else {
+        return Ok(ClearOutcome::default());
+    };
+    let Ok(canon_batch) = fs::canonicalize(&batch_path) else {
+        return Ok(ClearOutcome::default());
+    };
+    if canon_batch == canon_root || !canon_batch.starts_with(&canon_root) {
+        return Err(CoreError::Validation("bad_old_key_batch".to_string()));
+    }
+    let mut deleted = 0;
+    // 内层这一处曾经漏了：外层已按 `ErrorKind` 区分，内层还是 `if let Ok(..)`。
+    // 批次目录读不出来（权限 / 句柄耗尽）→ 循环不执行 → `deleted=0`；而
+    // `old_key_inventory` 同样读不到 → `remaining=0` → `{0,0}`，界面会说
+    // 「已经没有可删的东西」。那个目录**可能是满的**。
+    // 同一个反模式修了外层、内层留着，比两处都错更难发现——diff 看起来是"已修"。
+    let items = match fs::read_dir(&batch_path) {
+        Ok(items) => items,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // 目录在我们枚举之后消失了：属于重试幂等，继续走剩下的清理与计数。
+            return Ok(ClearOutcome::default());
+        }
+        Err(e) => return Err(CoreError::Io(format!("old-key batch: {e}"))),
+    };
+    {
         for entry in items.flatten() {
             let path = entry.path();
             if !path.is_file() {
@@ -935,16 +1081,43 @@ pub fn clear_old_key_batch(vault_path: &Path, batch_ms: i64) -> CoreResult<usize
                         .extension()
                         .is_some_and(|e| e.eq_ignore_ascii_case("tmp"))
                 {
-                    removed += 1;
+                    deleted += 1;
                 }
             }
         }
     }
-    // 删不干净就报错，不要假装成功：批次目录还在意味着空间没释放，
-    // 而界面已经把它从列表里划掉了。
-    fs::remove_dir(&batch_path)
-        .map_err(|e| CoreError::Io(format!("old-key batch 未能删除: {e}")))?;
-    Ok(removed)
+    // 目录空了才删得掉；删不掉就是还有残留，那**不是错误**——`remaining` 会说出来。
+    // 旧实现这里 `?` 报错，等于把"删掉 8 份、剩 1 份"报成一次彻底的失败。
+    let _ = fs::remove_dir(&batch_path);
+    let remaining = old_key_inventory(vault_path)
+        .iter()
+        .filter(|f| f.batch_dir.as_deref() == Some(dir_name))
+        .count();
+    Ok(ClearOutcome { deleted, remaining })
+}
+
+/// 删除类操作的回执：删掉几份、还剩几份。
+///
+/// 为什么不能只返回"删了几份"：删除是逐份尝试的，任何一份失败（被占用、杀软锁、
+/// 只读）都会留下，而**界面已经把列表按返回值划掉了**。`remaining > 0` 是唯一能让
+/// 用户知道"没删干净"的通道——它不说，用户就以为清空了，而那几份旧代仍能被旧密码开。
+///
+/// 也不返回 `Err`：删了一半是"成功但有残留"，报错会让界面说"删除失败"，而实际删掉了
+/// 大部分。两件事必须分开：`Err` = 连枚举都做不到，`remaining > 0` = 做了但没做全。
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct ClearOutcome {
+    /// 成功删除的份数。
+    pub deleted: usize,
+    /// 操作结束后**仍然存在**的份数（重新枚举得出，不是推算）。
+    ///
+    /// 三格语义，界面必须分开说：
+    /// - `Err(unknown batch)`：名字不合法（真故障，不该被 `0/0` 吞掉）；
+    /// - `{0, 0}`：那里已经没有可删的东西（重试幂等，**合法**）；
+    /// - `{0, N}`：一份都没删掉，N 份还在（这才是要紧的那格）。
+    ///
+    /// 不另加 `target_existed` 之类的标注字段：**消除歧义优于标注歧义**——
+    /// `{0,0}` 的歧义来自"身份靠字符串拼路径"，那条修掉之后，它只剩一个含义。
+    pub remaining: usize,
 }
 
 /// 换主密码后隔离旧备份的结果。
@@ -1138,12 +1311,12 @@ pub struct RekeyOutcome {
 ///
 /// 为什么不合并：旧代可能是用户唯一还记得的那把密码的退路。把它并进「清空备份」，
 /// 用户点一次就永久失去那一代——单向门，不能藏在同一个按钮里。
-pub fn clear_old_key(vault_path: &Path) -> CoreResult<usize> {
+pub fn clear_old_key(vault_path: &Path) -> CoreResult<ClearOutcome> {
     ensure_not_busy(vault_path)?;
-    let mut removed = 0;
+    let mut deleted = 0;
     for f in old_key_inventory(vault_path) {
         if fs::remove_file(&f.path).is_ok() {
-            removed += 1;
+            deleted += 1;
         }
     }
     // 顺手清掉空批次目录，别在设置页留一堆空文件夹（非空会失败，忽略即可）。
@@ -1159,7 +1332,10 @@ pub fn clear_old_key(vault_path: &Path) -> CoreResult<usize> {
         }
     }
     let _ = fs::remove_dir(old_key_dir(vault_path));
-    Ok(removed)
+    Ok(ClearOutcome {
+        deleted,
+        remaining: old_key_inventory(vault_path).len(),
+    })
 }
 
 /// 轮转：日备份留 [`DAILY_KEEP`] 份；`pre-restore` 留 [`PRE_RESTORE_KEEP`] 份、
@@ -1529,10 +1705,16 @@ pub fn restore_safety(vault_path: &Path, outcome: &BackupOutcome) -> RestoreSafe
     if !vault_path.is_file() {
         return RestoreSafety::NothingToLose;
     }
-    match outcome.error_kind {
-        Some(kind) => RestoreSafety::Blocked(kind),
-        None => RestoreSafety::Clear,
+    // **判据是"有没有真的产出一份"，不是"有没有报错"**。
+    //
+    // 只看 `error_kind` 会漏掉一整格：恢复期 `snapshot_event` 会因为
+    // `busy_reason` 早退并置 `skipped`，配额早退也是 `skipped`——两种情况下
+    // `error_kind` 都是 `None`，却**一份退路都没留下**。按老写法这会被判成
+    // `Clear` 直接放行，正好是"没有退路但界面说有"的情形。
+    if !outcome.created.is_empty() {
+        return RestoreSafety::Clear;
     }
+    RestoreSafety::Blocked(outcome.error_kind.unwrap_or(BackupErrorKind::Other))
 }
 
 /// 写入前的常规备份（日备份 + `last.bak`）。
@@ -1724,13 +1906,13 @@ pub fn snapshot_event(vault_path: &Path, tag: EventTag, now_ms: i64) -> BackupOu
 /// `.state` 一并删掉：它是**这次**备份历史的一部分。留着会让界面在"已删除全部备份"之后
 /// 仍然显示"上次备份：昨天 21:14"，用户以为还有东西可恢复。删掉后 [`staleness`] 回到
 /// `Never`，文案自然变成「当前没有备份」。
-pub fn clear_all(vault_path: &Path) -> CoreResult<usize> {
+pub fn clear_all(vault_path: &Path) -> CoreResult<ClearOutcome> {
     ensure_not_busy(vault_path)?;
     let files = inventory(vault_path);
-    let mut removed = 0;
+    let mut deleted = 0;
     for f in files {
         if fs::remove_file(&f.path).is_ok() {
-            removed += 1;
+            deleted += 1;
         }
     }
     let dir = backup_dir(vault_path);
@@ -1738,7 +1920,12 @@ pub fn clear_all(vault_path: &Path) -> CoreResult<usize> {
     // 原子写的临时文件一起清：留一份 `.state.tmp` 会让目录"看起来还有东西"，
     // 也会被用户当成残留文件。
     let _ = fs::remove_file(dir.join(format!("{STATE_FILE}.tmp")));
-    Ok(removed)
+    // 重新枚举，不推算：`deleted` 是"尝试成功"的次数，`remaining` 是"现在还看得见
+    // 的份数"。只有后者能回答用户真正关心的问题——清干净了没有。
+    Ok(ClearOutcome {
+        deleted,
+        remaining: inventory(vault_path).len(),
+    })
 }
 
 /// 清除粘性错误记录（用户显式确认"我知道了"）。
@@ -2001,7 +2188,8 @@ mod tests {
         snapshot_event(&vault, EventTag::PostRekey, now);
         assert!(usage(&vault).1 >= 2);
         let removed = clear_all(&vault).expect("删除应成功");
-        assert_eq!(removed, 3, "日备份 + last.bak + 事件快照");
+        assert_eq!(removed.deleted, 3, "日备份 + last.bak + 事件快照");
+        assert_eq!(removed.remaining, 0, "整体删除不该留残留");
         assert_eq!(usage(&vault).1, 0);
         // 源库不受影响
         assert!(vault.is_file());
@@ -2255,7 +2443,8 @@ mod tests {
         assert_eq!(usage(&vault).1, 2, "新一代应有日备份 + last.bak");
 
         let removed = clear_all(&vault).expect("删除应成功");
-        assert_eq!(removed, 2, "只清当前代");
+        assert_eq!(removed.deleted, 2, "只清当前代");
+        assert_eq!(removed.remaining, 0, "当前代必须清空");
         assert_eq!(usage(&vault).1, 0);
         assert_eq!(
             old_key_usage(&vault).1,
@@ -2264,7 +2453,8 @@ mod tests {
         );
 
         let removed_old = clear_old_key(&vault).expect("删除旧代应成功");
-        assert_eq!(removed_old, 8);
+        assert_eq!(removed_old.deleted, 8);
+        assert_eq!(removed_old.remaining, 0);
         assert_eq!(old_key_usage(&vault).1, 0);
         assert!(!old_key_dir(&vault).exists(), "空批次目录应被清掉");
     }
@@ -2332,6 +2522,13 @@ mod tests {
         assert_eq!(out.kept, 1, "换密之后的快照必须留在当前代");
         assert_eq!(out.failed, 0);
         assert_eq!(out.moved, 8, "更早的 8 份应全部进旧代");
+        // `kept > 0` 是异常信号，**不是**"整体没做成"。命令层据此置 `isolate_error`
+        // （回执会声称"旧备份没能归档"），而这里其实全都归档了、只是多留了一份。
+        // 两件事必须分开：`error` 只表示动作没做成。
+        assert!(
+            out.error.is_none(),
+            "kept > 0 不许污染 error——那会让回执说一句假话"
+        );
 
         let files = inventory(&vault);
         assert_eq!(files.len(), 1);
@@ -2429,7 +2626,7 @@ mod tests {
         );
         assert!(
             matches!(
-                clear_old_key_batch(&vault, base + 460_000_001),
+                clear_old_key_batch(&vault, &(base + 460_000_001).to_string()),
                 Err(CoreError::BackupBusy)
             ),
             "换密窗口内按批删除必须被拒"
@@ -2442,12 +2639,76 @@ mod tests {
         // 释放后必须立刻恢复可用：守卫漏释放会把"删除回滚点"永久锁死，
         // 而用户在界面上只会看到一个说不清的错误。
         drop(window);
-        assert_eq!(
-            clear_all(&vault).expect("释放后应可删除"),
-            cur_files,
-            "释放后应删掉当前代全部"
-        );
+        let after = clear_all(&vault).expect("释放后应可删除");
+        assert_eq!(after.deleted, cur_files, "释放后应删掉当前代全部");
+        assert_eq!(after.remaining, 0);
         assert_eq!(inventory(&vault).len(), 0);
+    }
+
+    #[test]
+    fn 批次名不合法被拒而不是静默成功() {
+        let (_root, vault) = temp_vault("bad-batch");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+        let before = paths_now(&vault);
+        isolate_old_key_backups(&vault, base + 460_000_001, &before);
+
+        let vault_before = fs::read(&vault).expect("库文件应可读");
+        let long_name = "x".repeat(65);
+        let mut bad = vec!["", ".", "..", "../..", "a/b", "a\\b", long_name.as_str()];
+        // 多一层兜底：这个路径真的存在，但它不在 `old-key/` 里。
+        bad.push("../passwordms.vault");
+
+        for name in bad {
+            match clear_old_key_batch(&vault, name) {
+                Err(CoreError::Validation(code)) => {
+                    assert_eq!(code, "bad_old_key_batch", "名字 {name:?} 应报 bad_old_key_batch");
+                }
+                other => panic!("名字 {name:?} 必须被拒，实得 {other:?}"),
+            }
+        }
+
+        // 最关键的一条：拒绝之后库文件必须原样还在——穿越若生效，它正是会被删掉的那个。
+        assert_eq!(
+            fs::read(&vault).expect("库文件不该消失"),
+            vault_before,
+            "路径穿越删到了 old-key/ 之外"
+        );
+    }
+
+    #[test]
+    fn 同一条库上两种占用叠加时逐个释放仍然全程禁止写入() {
+        let (_root, vault) = temp_vault("busy-nested");
+        let base = 1_793_491_200_000;
+        fill_slots(&vault, 4096, base);
+
+        let is_busy = |r: Option<SkipReason>| {
+            matches!(r, Some(SkipReason::Restoring) | Some(SkipReason::Rekeying))
+        };
+
+        // 恢复与换密同时挂在同一条库上（嵌套调用或并发命令）。
+        let outer = RestoreGuard::new(&vault);
+        let inner = RekeyWindow::open(&vault);
+
+        // 只返回一条 reason，但"不写"这件事两条都在保证。
+        assert!(
+            is_busy(snapshot_before_write(&vault, base + 10_000_001).skipped),
+            "两层占用时写入必须被拒"
+        );
+
+        // 这一格是"已存在就跳过"那种实现会漏掉的：内层释放把外层一起清掉，
+        // 外层还开着、备份已经开始轮转。所以必须逐个弹出。
+        drop(inner);
+        assert!(
+            is_busy(snapshot_before_write(&vault, base + 10_000_002).skipped),
+            "内层释放后外层仍在，写入仍须被拒"
+        );
+
+        drop(outer);
+        assert!(
+            !is_busy(snapshot_before_write(&vault, base + 10_000_003).skipped),
+            "两层都释放后不该再报占用"
+        );
     }
 
     #[test]
@@ -2466,8 +2727,8 @@ mod tests {
 
         let batches = old_key_batches(&vault);
         assert_eq!(batches.len(), 2, "两次换密 = 两批，不能压成一批");
-        assert_eq!(batches[0].batch_ms, base + 460_000_001);
-        assert_eq!(batches[1].batch_ms, base + 920_000_001);
+        assert_eq!(batches[0].batch_ms, Some(base + 460_000_001));
+        assert_eq!(batches[1].batch_ms, Some(base + 920_000_001));
         assert_eq!(batches[0].files, 8);
         assert_eq!(batches[1].files, 2, "第二批只有新一代的日备份 + last.bak");
 
@@ -2484,20 +2745,21 @@ mod tests {
             "当前代不属于任何批次"
         );
 
-        let removed = clear_old_key_batch(&vault, base + 920_000_001).expect("按批删除应成功");
-        assert_eq!(removed, 2);
+        let removed =
+            clear_old_key_batch(&vault, &(base + 920_000_001).to_string()).expect("按批删除应成功");
+        assert_eq!(removed.deleted, 2);
+        assert_eq!(removed.remaining, 0, "按批删除要把这一批清干净");
         assert_eq!(old_key_batches(&vault).len(), 1, "第一批必须留着");
         assert_eq!(old_key_usage(&vault).1, 8, "只删了这一批");
 
         // 删第二批不影响第一批仍可被单独删。批次不存在时返回 0 而不是报错。
-        assert_eq!(
-            clear_old_key_batch(&vault, 1).expect("不存在的批次不该报错"),
-            0
-        );
-        assert_eq!(
-            clear_old_key_batch(&vault, base + 460_000_001).expect("删第一批应成功"),
-            8
-        );
+        let missing = clear_old_key_batch(&vault, "1").expect("不存在的批次不该报错");
+        assert_eq!(missing.deleted, 0);
+        assert_eq!(missing.remaining, 0);
+        let first =
+            clear_old_key_batch(&vault, &(base + 460_000_001).to_string()).expect("删第一批应成功");
+        assert_eq!(first.deleted, 8);
+        assert_eq!(first.remaining, 0);
         assert!(old_key_batches(&vault).is_empty());
     }
 
@@ -2606,6 +2868,18 @@ mod tests {
         let ok = snapshot_event(&vault, EventTag::PreRestore, base);
         assert!(ok.error_kind.is_none(), "{:?}", ok.error_kind);
         assert_eq!(restore_safety(&vault, &ok), RestoreSafety::Clear);
+
+        // 2b) **被跳过 ≠ 安全**。恢复期里 `snapshot_event` 会因为占用守卫早退并置
+        //     `skipped`，此时 `error_kind` 是 `None`——只按 `error_kind` 判就会把它
+        //     算成 `Clear` 放行，而那份"退路"根本没写出来。判据必须是"真的产出了一份"。
+        let skipped = BackupOutcome {
+            skipped: Some(SkipReason::Restoring),
+            ..Default::default()
+        };
+        assert!(
+            matches!(restore_safety(&vault, &skipped), RestoreSafety::Blocked(_)),
+            "被跳过的快照不许判成 Clear"
+        );
 
         // 3) 配额挡住快照 → 拦住，且要能说出原因（前端据此给不同动作）。
         let root2 = std::env::temp_dir().join("pms-backup-test-restore-safety-block");

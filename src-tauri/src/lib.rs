@@ -246,7 +246,9 @@ pub fn run() {
             commands::backup_cmd::backup_status,
             commands::backup_cmd::backup_clear_current,
             commands::backup_cmd::backup_clear_old_batch,
-            commands::backup_cmd::backup_clear_old_all,
+            // 刻意**不**注册「清空全部旧代」：按批删是最小不可逆动作，一次抹掉全部是
+            // 我们要避免的动作。没有界面的入口仍是入口——任何能 invoke 的路径
+            // （脚本、被妥协的 WebView、未来的 bug）都能走它。等「更换钥匙」落地再连它一起加。
             // biometric（D-113 / docs/08 P2）
             commands::biometric_cmd::biometric_status,
             commands::biometric_cmd::biometric_enable,

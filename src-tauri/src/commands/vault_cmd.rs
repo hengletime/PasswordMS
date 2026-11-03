@@ -6,7 +6,7 @@ use passwordms_core::error::CoreError;
 use passwordms_core::model::now_ms;
 use passwordms_core::session::Session;
 use passwordms_core::store::backup;
-use passwordms_core::store::container::restore_backup_from;
+use passwordms_core::store::container::{restore_backup_from, verify_backup_password};
 
 use crate::dto::{ChangeMasterPasswordDto, StatusDto};
 use crate::error::{lock_err, IpcError, IpcResult};
@@ -220,52 +220,151 @@ fn backup_reject(path: &Path, err: CoreError) -> IpcError {
 ///   与导出语义一致）；不合法的备份文件返回 `ERR_VALIDATION`，不触碰目标文件。
 /// - **D-94**：Android 上 `source_path` 可能是 `content://…`（SAF 选择器），经
 ///   [`crate::content_uri::copy_to_file`] 流式落临时文件再走同一套校验落位。
-/// - 恢复后**不自动解锁**：`unlock_check` 校验的是备份创建时的主密码，解锁与失败
-///   提示由前端用既有 `unlock` 流程完成。
+/// - **先问不需要凭据的问题，再问需要凭据的问题**：是不是本产品的备份、版本认不认识、
+///   帧流完整不完整，这些都先判；密码最后判。这是一条**设计决定**，不是实现顺序的副产品
+///   ——顺序对了却没人写下理由，下一个人会为了"先排除坏文件"把凭据校验挪到前面，
+///   于是手里拿着一个 `.txt` 的用户会被告知"密码不对"，去试一个根本不存在的密码。
+/// - 恢复**先校验再覆盖**：`verify_backup_password` 不过则原库一个字节都不动。
+/// - 恢复后**不自动解锁**：解锁与失败提示由前端用既有 `unlock` 流程完成。
 #[tauri::command(rename_all = "snake_case")]
 pub fn restore_backup(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     source_path: String,
+    master_password: String,
+    // 用户已在二次确认里明确接受"这次恢复没有自动回滚点"。
+    proceed_without_retreat: bool,
 ) -> IpcResult<()> {
     let session = state.lock_session().map_err(lock_err)?;
     if session.is_unlocked() {
         return Err(CoreError::Validation("vault_is_unlocked".to_string()).into());
     }
     let dest = vault_path(&app)?;
-    // 恢复前的快照必须拍在 [`backup::RestoreGuard`] **之前**：
-    // 守卫一旦生效，备份目录整体暂停写入，那时再拍会被直接跳过。
-    let pre = backup::snapshot_event(&dest, backup::EventTag::PreRestore, now_ms());
-    if let Some(kind) = pre.error_kind {
-        // 不阻断（恢复是用户此刻唯一的出路），但必须留痕。
-        eprintln!(
-            "[backup] pre-restore 快照失败 kind={kind:?} stage={:?}",
-            pre.error_stage
-        );
-    }
-    // 守卫挡住恢复期间的一切轮转：正在被读的那一份不能被 prune 删掉。
-    let _restore_guard = backup::RestoreGuard::new(&dest);
-    // 覆盖保护：原库先留 .bak 后路（unix_ms 时间戳避免同名覆盖）。
-    if dest.exists() {
-        let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));
-        std::fs::copy(&dest, &bak)?;
-    }
+
     // D-94：Android 上 SAF 选择器返回 `content://…`（ContentProvider URI 没有内核
     // 路径），直接 `Path::new` 交给 std::fs 必失败 →「文件读写错误」。经 provider fd
-    // 流式拷到 vault 同目录临时文件（无内存尖峰、无大小上限），再走既有
-    // restore_backup_from 的尺寸/magic/整库帧流全套校验落位，成败都删临时文件。
-    // 桌面该分支恒假（open() 返回真实路径），行为零变化。
-    if source_path.starts_with("content://") {
-        let tmp = dest.with_file_name(format!("passwordms.restore-{}.tmp", now_ms()));
-        let outcome = crate::content_uri::copy_to_file(&app, &source_path, &tmp)
-            .and_then(|()| restore_backup_from(&tmp, &dest).map_err(|e| backup_reject(&tmp, e)));
+    // 流式拷到 vault 同目录临时文件（无内存尖峰、无大小上限），后续**校验与落位都
+    // 走这一份**。桌面该分支恒假（open() 返回真实路径），行为零变化。
+    // **无条件**先落一份暂存副本，后面的校验与落位都只用它。三条理由指向同一个动作：
+    //
+    // ① D-94：Android SAF 的 `content://` 没有内核路径，本来就必须先落盘；
+    // ② 【F-02】源文件若**就在备份目录里**，`pre-restore` 快照结尾的 `prune()` 会按
+    //    "保留最近 N 份"把最旧的那份删掉——用户选中的往往正是它，等于快照亲手删掉
+    //    他要救的东西，紧接着 `restore_backup_from` 拿到 NotFound；
+    // ③ 【F-06】校验读一次源文件、`restore_backup_from` 再读一次，两次之间若源被换掉
+    //    （同步工具、另一个进程、用户手滑动了文件），就是"验的是 A、装的是 B"的
+    //    TOCTOU 窗口。校验的全部意义就是不装错东西，那就必须让两次读的是同一份字节。
+    //
+    // 不用"只在需要时拷贝"的分支：分支少一条，将来漏的就少一处；而代价只是一次
+    // 本地文件复制，比"验的和装的不是一份"便宜得多。
+    let tmp = dest.with_file_name(format!("passwordms.restore-{}.tmp", now_ms()));
+    let staged_copy = if source_path.starts_with("content://") {
+        crate::content_uri::copy_to_file(&app, &source_path, &tmp)
+    } else {
+        std::fs::copy(&source_path, &tmp)
+            .map(|_| ())
+            .map_err(|e| e.into())
+    };
+    if let Err(e) = staged_copy {
         let _ = std::fs::remove_file(&tmp);
-        outcome?;
-        return Ok(());
+        return Err(e);
     }
-    restore_backup_from(Path::new(&source_path), &dest)
-        .map_err(|e| backup_reject(Path::new(&source_path), e))?;
-    Ok(())
+    let src = tmp;
+
+    let outcome = (|| -> IpcResult<()> {
+        // 【P0】先用密码校验这份备份，**顺序不能挪到覆盖之后**：恢复是整容器覆盖，
+        // 覆盖完才发现密码不对，原库已经被换掉，用户被挡在门外，而唯一能救他的
+        // 是同目录那份 `.bak-<ms>`——界面上没有任何入口指向它。
+        // 也刻意排在 `pre-restore` 快照**之前**：这次恢复注定失败，不该为它复制整库。
+        verify_backup_password(&src, &master_password)
+            .map_err(|e| backup_pwd_reject(&src, e))?;
+        // 恢复前的快照必须拍在 [`backup::RestoreGuard`] **之前**：
+        // 守卫一旦生效，备份目录整体暂停写入，那时再拍会被直接跳过。
+        let pre = backup::snapshot_event(&dest, backup::EventTag::PreRestore, now_ms());
+        if let Some(kind) = pre.error_kind {
+            // 不阻断（恢复是用户此刻唯一的出路）。留痕由 `.state` 承担——
+            // `snapshot_event` 在配额与复制两条失败路径上都写了 `last_error_ms` /
+            // `last_error_kind`，设置页「最近一次回滚点没有存成」会显示出来；
+            // 这里只补一条 stderr 方便 Android logcat 定位。
+            eprintln!(
+                "[backup] pre-restore 快照失败 kind={kind:?} stage={:?}",
+                pre.error_stage
+            );
+        }
+        // `restore_safety` 此前**一个调用点都没有**——判据写好摆着没人用，等于没有。
+        // 这里用它决定要不要**问一句**（不是拦死）：`Blocked` = 那份自动回滚点没拍成。
+        //
+        // 措辞边界（重要）：`Blocked` **不等于**"完全没退路"。下面还会把原库整份复制成
+        // `passwordms.vault.bak-<ms>`，原库一个字节都不会丢。所以确认文案只许说
+        // "这次没有自动回滚点"，**不许**说"数据会丢失"——那是假的，而假警报和假保险
+        // 一样，会让人下次不信真话。
+        if let backup::RestoreSafety::Blocked(kind) = backup::restore_safety(&dest, &pre) {
+            if !proceed_without_retreat {
+                return Err(IpcError {
+                    code: CoreError::RestoreNoRetreat.code().to_string(),
+                    message_key: CoreError::RestoreNoRetreat.message_key().to_string(),
+                    record_count: None,
+                });
+            }
+            eprintln!("[backup] restore 在没有自动回滚点的情况下由用户确认继续 kind={kind:?}");
+        }
+
+        // 守卫挡住恢复期间的一切轮转：正在被读的那一份不能被 prune 删掉。
+        let _restore_guard = backup::RestoreGuard::new(&dest);
+        // 覆盖保护：原库先留 .bak 后路（unix_ms 时间戳避免同名覆盖）。
+        //
+        // 【F-07】**必须 sync 并核对长度**：`fs::copy` 返回 `Ok` 不等于字节已经落盘，
+        // 而紧接着 `restore_backup_from` 就会覆盖 `dest`。若这时掉电，`.bak` 可能停在
+        // "名字有了、内容还在 page cache"的半份状态——它本来就是"最后一条人工退路"，
+        // 半份的退路比没有更坏（用户以为能用，试的时候才发现不对）。
+        // 长度核对挡住"写了半截"，`sync_all` 挡住"没刷盘"。
+        // 不做逐字节回读：`restore_backup_from` 对**它自己**的候选文件做逐字节复核，
+        // 是因为那份要直接顶替当前库；这里多读一整遍只是把 IO 翻倍，
+        // 而它要防的失败模式（页缓存未刷）已经被 `sync_all` 覆盖。
+        // **失败只降级，不中止**：`pre-restore` 快照挂了已经让用户确认过"没有自动
+        // 回滚点"，这里再失败也只是同一件事更糟一点——此时用户正在救一个打不开的库，
+        // 中止等于把他锁在门外，而他手里那份备份本来是好的。
+        // 半成品要当场删掉：留着它，将来会被当成一份可用退路。
+        if dest.exists() {
+            let bak = dest.with_file_name(format!("passwordms.vault.bak-{}", now_ms()));
+            let ok = std::fs::copy(&dest, &bak).is_ok()
+                && std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&bak)
+                    .and_then(|f| f.sync_all())
+                    .is_ok()
+                && std::fs::metadata(&dest).map(|m| m.len()).ok()
+                    == std::fs::metadata(&bak).map(|m| m.len()).ok();
+            if !ok {
+                let _ = std::fs::remove_file(&bak);
+                eprintln!("[backup] restore: 覆盖保护副本写失败，本次恢复没有 .bak 退路");
+            }
+        }
+        restore_backup_from(&src, &dest).map_err(|e| backup_reject(&src, e))?;
+        Ok(())
+    })();
+
+    // 成败都删临时文件：留在库目录旁边会被人当成备份，而它随时可能是一份半成品。
+    let _ = std::fs::remove_file(&src);
+    outcome
+}
+
+/// 恢复前的密码预检失败 → 用恢复场景自己的文案，而不是通用的「解锁失败」。
+///
+/// 「解锁失败，请重试」在恢复卡片里会让用户以为自己被锁在外面——他明明还没进门，
+/// 真正的问题是手里这份备份不是这个密码加密的。码仍用 `ERR_WRONG_MASTER_PASSWORD`
+/// （语义确实是"密码不对"），只换文案 key。
+fn backup_pwd_reject(path: &Path, err: CoreError) -> IpcError {
+    match err {
+        CoreError::WrongMasterPassword => IpcError {
+            code: CoreError::WrongMasterPassword.code().to_string(),
+            message_key: "lock.restore_password_cannot_open".to_string(),
+            record_count: None,
+        },
+        // 结构性问题（不是备份 / 版本不认识 / 损坏）**必须**走原有分流：那三类各有
+        // 各的文案，一律折成"密码不对"等于告诉用户换个密码试试——而他该换的是文件。
+        other => backup_reject(path, other),
+    }
 }
 
 /// D-61 读取自动锁定档位（分钟；`Vault.auto_lock_minutes` 明文头部字段）。

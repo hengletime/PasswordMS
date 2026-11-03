@@ -6,6 +6,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type {
+  BackupClearDto,
   BackupStatusDto,
   BiometricStatusDto,
   ChangeMasterPasswordDto,
@@ -15,8 +16,8 @@ import type {
   ConflictDto,
   DeviceDto,
   FolderDto,
-  GeneratorOptions,
   GeneratedPasswordDto,
+  GeneratorOptions,
   HealthConfig,
   HealthReport,
   ImportPreviewDto,
@@ -25,8 +26,8 @@ import type {
   ItemDraftDto,
   ItemDto,
   LanPermissionDto,
-  PairingDto,
   PairResultDto,
+  PairingDto,
   PrefsDto,
   StatusDto,
   SyncNetInfoDto,
@@ -111,8 +112,26 @@ export const vault = {
   exportVault: (destPath: string, masterPassword: string): Promise<number> =>
     invoke<number>('export_vault', { dest_path: destPath, master_password: masterPassword }),
   // D-55 从备份恢复：source_path 必须是 PasswordMS 导出的 .vault 备份（后端校验 magic）。
-  restoreBackup: (sourcePath: string): Promise<void> =>
-    invoke<void>('restore_backup', { source_path: sourcePath }),
+  //
+  // `masterPassword` **不是**可选的：后端拿它先把备份校验一遍，密码不符则原库
+  // 一个字节都不动。少了它，覆盖式恢复会先换掉库再让用户"解锁失败"——
+  // 那时原库已经没了，而能救他的 `.bak` 文件在界面上没有任何入口。
+  /**
+   * `proceedWithoutRetreat` 只在二次确认之后传 `true`：后端会先在**覆盖之前**判定
+   * 这次有没有自动回滚点，没有则回 `ERR_RESTORE_NO_RETREAT` 且原库一个字节不动。
+   *
+   * ⚠️ 没有默认值：默认值会让新调用方"忘了传也能过"，等于把知情同意变成可选。
+   */
+  restoreBackup: (
+    sourcePath: string,
+    masterPassword: string,
+    proceedWithoutRetreat: boolean,
+  ): Promise<void> =>
+    invoke<void>('restore_backup', {
+      source_path: sourcePath,
+      master_password: masterPassword,
+      proceed_without_retreat: proceedWithoutRetreat,
+    }),
 };
 
 /**
@@ -125,13 +144,19 @@ export const vault = {
  */
 export const backups = {
   status: (): Promise<BackupStatusDto> => invoke<BackupStatusDto>('backup_status'),
-  /** 删除**当前代**回滚点，返回删除份数。`old-key/` 一份不动。 */
-  clearCurrent: (): Promise<number> => invoke<number>('backup_clear_current'),
+  /**
+   * 删除**当前代**回滚点。`old-key/` 一份不动。
+   *
+   * 返回 `{ deleted, remaining }`：删除是逐份尝试的，任何一份删不掉都会留下，
+   * 而列表已经按返回值改掉了——`remaining > 0` 是唯一能说"没删干净"的通道。
+   */
+  clearCurrent: (): Promise<BackupClearDto> =>
+    invoke<BackupClearDto>('backup_clear_current'),
   /** 删除**某一批**旧代回滚点（`batch_ms` 来自 `status().old_batches`）。 */
-  clearOldBatch: (batchMs: number): Promise<number> =>
-    invoke<number>('backup_clear_old_batch', { batch_ms: batchMs }),
-  /** 删除**全部**旧代回滚点。单向门：那几批密码在本机的唯一副本。 */
-  clearOldAll: (): Promise<number> => invoke<number>('backup_clear_old_all'),
+  clearOldBatch: (dirName: string): Promise<BackupClearDto> =>
+    invoke<BackupClearDto>('backup_clear_old_batch', { dir_name: dirName }),
+  // 刻意**没有** clearOldAll：按批删是最小不可逆动作。没有界面的入口仍是入口，
+  // 任何能 invoke 的路径都能一次抹掉全部旧代。等「更换钥匙」落地再连它一起加。
 };
 
 /** 条目类。 */

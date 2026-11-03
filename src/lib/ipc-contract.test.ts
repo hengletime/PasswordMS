@@ -305,11 +305,14 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   留着不用的命令比删掉更糟：下一个人会以为它还有用。
     //   仍然**不做平台分立**：非 Windows 返回 `ERR_NOT_SUPPORTED`，因为「这个平台不能
     //   直接抓屏」本身就是正确回答（与 D-149 同一取舍）。
-    // B-03（v1.5.29 自动回滚点）：+4（backup_status / backup_clear_current /
-    //   backup_clear_old_batch / backup_clear_old_all），属性 76 → 80、命令名 72 → 76。
+    // B-03（v1.5.29 自动回滚点）：+3（backup_status / backup_clear_current /
+    //   backup_clear_old_batch），属性 76 → 79、命令名 72 → 75。
     //   仍然不做平台分立：备份目录在桌面与 Android 上都是应用数据目录内的普通路径。
-    expect(total).toBe(80);
-    expect(withAttr).toBe(80);
+    //   曾经还有第 4 条 backup_clear_old_all（一次清空全部旧代），已**刻意删除**：
+    //   没有界面的入口仍然是入口，任何能 invoke 的路径都能一次抹掉所有旧代，
+    //   而按批删才是最小不可逆动作。等「更换钥匙」落地再连它一起加回来。
+    expect(total).toBe(79);
+    expect(withAttr).toBe(79);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
@@ -318,8 +321,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(80);
-    expect(new Set(names).size).toBe(76);
+    expect(names.length).toBe(79);
+    expect(new Set(names).size).toBe(75);
   });
 });
 

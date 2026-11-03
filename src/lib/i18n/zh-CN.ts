@@ -56,8 +56,18 @@ export const zhCN = {
     // D-55 锁屏页「从备份恢复」：入口按钮、覆盖警告、空密码提示。
     restore_button: '从备份恢复',
     restore_confirm_title: '从备份恢复',
-    restore_confirm_body: '将使用所选备份替换本机当前保险库，原库会自动备份为 .bak 文件。确认继续？',
+    restore_confirm_body: '将使用所选备份替换本机当前保险库。确认继续？',
+    restore_no_retreat_title: '这次恢复没有自动回滚点',
+    // P0：**不许在这里承诺那份 .bak**。它和快照失败是同一个根因（磁盘/权限），
+    // 承诺它等于在不可逆动作前给一张兑现不了的空头支票。
+    restore_no_retreat_body: '刚才那份“恢复前”的快照没能存成（磁盘空间或权限问题）。这次恢复没有自动回滚点：确认之后，当前的保险库会被覆盖，而且拿不回来。如果还想留一手，请先取消，把你要恢复的那份备份复制到别的位置，再回来恢复。',
+    // 同一封里的时态 bug：这句话位于两次点击之间，第一次调用已经停下，
+    // 所以“没改动”是**已发生的事实**，不是将来不发生。
+    restore_no_retreat_short: '刚才那一步没有改动你的库文件。这次恢复没有自动回滚点。',
     restore_password_required: '请先输入主密码（备份创建时的主密码），恢复后将用它自动解锁。',
+    // P0：恢复前先用它校验备份，密码不符则一个字节都不动。
+    // 恢复前用这个密码校验备份，不符则原库一个字节都不动（所以这句话可以承诺）。
+    restore_password_cannot_open: '这个密码打不开你选的那份文件。原库没有任何改动。请核对密码，或换一份备份。',
     // D-113 P2：快速解锁按钮（仅本机已开启且平台可用时出现）。
     biometric_unlock: '使用 Windows Hello 解锁',
     biometric_waiting: '等待 Windows Hello…',
@@ -453,7 +463,8 @@ export const zhCN = {
     // B-03（1.5.29）：自动回滚点。**不是**上面那个「导出备份」——那一个能带走、
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
     restore_point: '自动回滚点',
-    restore_point_hint: '每次改动前自动在本机存一份，改坏了能退回来。',
+    // P1：不能写「每次」——日备份去重与大库节流会让同一时段的多次改动共用一份。
+    restore_point_hint: '改动前会自动在本机留一份，改坏了能退回来。',
     restore_point_local_only: '回滚点只在本机。卸载、换机、清空数据目录都会一起失去——请定期导出保险库。',
     restore_point_current: '当前主密码下：{count} 份，共 {size}。',
     restore_point_never: '当前主密码下还没有回滚点。',
@@ -464,7 +475,9 @@ export const zhCN = {
     restore_point_reason_permission: '没有写入权限',
     restore_point_reason_device: '存储设备已断开',
     restore_point_reason_other: '读写出错',
-    restore_point_old_title: '改密前的回滚点（用改密前那把主密码打开）',
+    // P1：标题只写事实。两批以上时「改密前那把」指不清哪一把，密码规则只留在
+    // `restore_point_old_note` 里说一次。
+    restore_point_old_title: '改密前的回滚点',
     restore_point_old_batch: '{time} 改密前：{count} 份，共 {size}。',
     restore_point_old_note: '每批要用它被归档时那把主密码打开。最早那批要用你最原始的密码。',
     restore_point_clear_current: '删除当前回滚点',
@@ -472,14 +485,24 @@ export const zhCN = {
     restore_point_clear_batch: '删除这一批',
     restore_point_clear_batch_confirm: '{time} 改密前的这批回滚点（{count} 份，共 {size}）将被永久删除。它们是那把密码在本机的唯一副本。',
     restore_point_cleared: '已删除 {count} 份。',
+    restore_point_cleared_partial: '已删除 {count} 份，但还有 {remaining} 份没能删除，仍在原处。',
+    restore_point_cleared_none: '一份都没能删除，还有 {remaining} 份在原处，请稍后重试。',
+    restore_point_cleared_gone: '这份回滚点已经不在磁盘上了，没有可删除的内容。',
+    restore_point_old_unrecognized: '还有 {count} 个旧代目录名无法识别，不能在这里删除；它们仍然占用磁盘空间。',
     restore_point_failed: '删除失败：回滚点仍在本机，请稍后重试。',
     restore_point_load_failed: '读取失败：未能取得回滚点状态（条目本身不受影响）。',
     change_password_note_lock_only: '改主密码会换掉锁，但不会换掉保险库里的钥匙。若旧密码或旧副本可能已泄露，改密不足以阻止对方读取今后的数据。',
-    change_password_note_old: '已归档的旧代回滚点仍能用改密前那把主密码打开；删除它们只对之后拿到这台设备的人有效，已经被复制走的副本不受影响。',
-    change_password_note_escape: '如果怀疑已经泄露：新建一个保险库并把数据导入进去，然后删除旧库和旧回滚点。这样会换掉保险库内部的钥匙。',
+    change_password_note_old: '已归档的旧代回滚点仍能用归档时那把主密码打开；删除它们只对之后拿到这台设备的人有效，已经被复制走的副本不受影响。',
+    // P0：原来的「新建库 + 导入」出口是**假的**——导出只有加密的 .vault，而导入只认
+    // Bitwarden JSON/CSV，且导入会丢附件。留着它等于用一句做不到的话安慰人。
+    change_password_note_no_rekey: '本版本不支持更换保险库内部的钥匙。如果你在其它设备上配对过本保险库，情况会更复杂——目前没有让已配对设备失去访问的方法。',
     password_changed_detail: '主密码已修改。已归档 {count} 份旧回滚点（用改密前的密码打开）。',
-    password_changed_no_backup: '主密码已修改。但换密前的那份回滚点没有存成。',
+    password_changed_no_backup: '主密码已修改。但换密前的那份回滚点没有存成。请到「自动回滚点」查看当前清单，并立刻导出一份保险库。',
     password_changed_isolate_failed: '主密码已修改，但有 {count} 份旧回滚点没能归档——它们留在原处，会被显示成“当前主密码可开”，实际要用旧密码。',
+    // P0：`isolate` 整体没做成（批次目录都没建起来）时 `moved` 与 `failed` 双双为 0，
+    // 上面两个分支一个都不进 → 回执只剩「主密码已修改」。而旧备份全都没归档、还留在
+    // 当前代贴着错标签。这份不知道份数，所以不能说数字。
+    password_changed_isolate_error: '主密码已修改，但旧回滚点没能归档——它们仍在原处，会被显示成“当前主密码可开”，实际要用旧密码。请到「自动回滚点」查看清单。',
     vault_file: '保险库文件',
     size: '大小',
     // D-73：标题必须自带解释。主人原话「保险库文件是什么作用？没有看到文件啊？」——
@@ -711,7 +734,7 @@ export const zhCN = {
     sync_aborted: '同步已中止。',
     sync_busy: '已有同步在进行中，请稍后再试。',
     // B-03：备份目录被占用（恢复中 / 换密中）。**不借用** sync_busy——同步根本没在跑。
-    backup_busy: '正在恢复或更换主密码，这段时间不能删除回滚点，请等它结束。',
+    backup_busy: '正在恢复或更换主密码，这段时间不能删除回滚点。一份都没有删除，等它结束后就能删。',
     // D-108（豆包审查 3.5-10）：解锁后五路加载失败的合并提示（重试一次后仍失败才弹）。
     load_partial: '部分数据加载失败，请重试或重新锁定后再试。',
     conflict: '存在未处理的冲突。',

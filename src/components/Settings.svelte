@@ -173,7 +173,15 @@
   /** 待确认的删除目标（`null` = 弹窗关闭）。 */
   let backupClearTarget = $state<
     | { kind: 'current'; count: number; bytes: number }
-    | { kind: 'batch'; batchMs: number; count: number; bytes: number }
+    | {
+        kind: 'batch';
+        /** 批次**身份**：目录名。删除入参就是它，不做任何解析/转换。 */
+        dirName: string;
+        /** 给用户看的批次标签（认得出时刻用本地时间，认不出用目录名原文）。 */
+        label: string;
+        count: number;
+        bytes: number;
+      }
     | null
   >(null);
   let backupClearing = $state(false);
@@ -182,6 +190,15 @@
     count: number;
     failed: number;
     saved: boolean;
+    /**
+     * `isolate` **整体**没做成（连批次目录都没建起来）。
+     *
+     * 这一格必须单独存在：那种情况下 `count`（moved）与 `failed` 双双为 0，
+     * 而备份其实**一份都没归档、全留在当前代**并贴着「当前主密码可开」的错标签。
+     * 只看前两个数的分支一个都不会进，回执就只剩「主密码已修改」——最坏的情况
+     * 恰好是唯一不报警的情况。
+     */
+    isolateError: boolean;
   } | null>(null);
 
   /** 只刷回滚点状态。换密成功后调用——**不要**用 `reloadSideData()`：
@@ -210,13 +227,26 @@
     }
     backupClearing = true;
     try {
-      const removed =
+      const out =
         target.kind === 'current'
           ? await api.backups.clearCurrent()
-          : await api.backups.clearOldBatch(target.batchMs);
+          : await api.backups.clearOldBatch(target.dirName);
       backupClearTarget = null;
-      ui.toast('success', 'settings.restore_point_cleared', { count: removed });
-      await refreshBackupStatus();
+      // 「删了几份」不足以说出真相：删除是逐份尝试的，任何一份删不掉都会留下。
+      // 四格必须分开说，尤其 `deleted === 0 && remaining === 0` 不能报成成功——
+      // 那是"你传来的批次不存在"，用户会以为删掉了。
+      if (out.remaining === 0 && out.deleted > 0) {
+        ui.toast('success', 'settings.restore_point_cleared', { count: out.deleted });
+      } else if (out.deleted > 0) {
+        ui.toast('error', 'settings.restore_point_cleared_partial', {
+          count: out.deleted,
+          remaining: out.remaining,
+        });
+      } else if (out.remaining > 0) {
+        ui.toast('error', 'settings.restore_point_cleared_none', { remaining: out.remaining });
+      } else {
+        ui.toast('error', 'settings.restore_point_cleared_gone');
+      }
     } catch (err) {
       // 失败**不改**列表：回滚点还在盘上，界面不能先把它划掉。
       //
@@ -225,10 +255,15 @@
       const appErr = toAppError(err);
       ui.toast(
         'error',
-        appErr.code === ErrorCode.ERR_BACKUP_BUSY ? appErr.messageKey : 'settings.restore_point_failed',
+        appErr.code === ErrorCode.ERR_BACKUP_BUSY
+          ? appErr.messageKey
+          : 'settings.restore_point_failed',
       );
     } finally {
       backupClearing = false;
+      // **成败都要刷**：`Err` 也可能已经删掉了一部分（逐份删除+中途失败），
+      // 不刷新的话界面留着旧清单，用户照着它再点一次只会拿到 {0,0}。
+      await refreshBackupStatus();
     }
   }
 
@@ -694,6 +729,7 @@
         count: result.isolated_backups,
         failed: result.isolate_failed,
         saved: result.pre_rekey_saved,
+        isolateError: result.isolate_error,
       };
       oldPassword = '';
       newPassword = '';
@@ -1235,11 +1271,15 @@
         <h4>{ui.t('settings.restore_point_old_title')}</h4>
         <p class="pms-hint">{ui.t('settings.restore_point_old_note')}</p>
         <ul class="set-list">
-          {#each backupStatus.old_batches as batch (batch.batch_ms)}
+          {#each backupStatus.old_batches as batch (batch.dir_name)}
+            {@const label =
+              batch.batch_ms === null
+                ? batch.dir_name
+                : formatDateTime(batch.batch_ms, ui.locale)}
             <li class="set-list-row">
               <span class="pms-meta">
                 {ui.t('settings.restore_point_old_batch', {
-                  time: formatDateTime(batch.batch_ms, ui.locale),
+                  time: label,
                   count: batch.files,
                   size: formatBytes(batch.bytes),
                 })}
@@ -1250,7 +1290,8 @@
                 onclick={() =>
                   (backupClearTarget = {
                     kind: 'batch',
-                    batchMs: batch.batch_ms,
+                    dirName: batch.dir_name,
+                    label,
                     count: batch.files,
                     bytes: batch.bytes,
                   })}
@@ -1260,6 +1301,16 @@
             </li>
           {/each}
         </ul>
+      {/if}
+      {#if backupStatus.unrecognized_batches > 0}
+        <!-- 盘上有、界面删不了。不说出来就是"假装没有"；也不能给它的名字编一个
+             `to_string_lossy` 的版本——那个假名字永远匹配不上，用户删的时候会被告知
+             "不存在"，而它明明在。 -->
+        <p class="pms-hint is-danger">
+          {ui.t('settings.restore_point_old_unrecognized', {
+            count: backupStatus.unrecognized_batches,
+          })}
+        </p>
       {/if}
     {/if}
   </div>
@@ -1320,7 +1371,14 @@
         <span>{ui.t(pwdChanged === 'bio_off' ? `settings.password_changed_bio_off${bioSuffix}` : 'settings.password_changed')}</span>
       </p>
       {#if pwdBackupDetail !== null}
-        {#if pwdBackupDetail.failed > 0}
+        {#if pwdBackupDetail.isolateError}
+          <!-- 整体没归档：份数未知（不知道有多少），所以这条不能带数字。
+               它必须排在 `failed` 之前——那一格此时恒为 0，永远轮不到它。 -->
+          <p class="pms-alert is-danger pwd-result" role="alert">
+            <Icon name="alert" size={16} />
+            <span>{ui.t('settings.password_changed_isolate_error')}</span>
+          </p>
+        {:else if pwdBackupDetail.failed > 0}
           <!-- 没能归档的那几份会留在当前代、被标成"当前主密码可开"，实际要用旧密码。
                用户忘记新密码时按这个标签去试，那是他最后一次尝试——必须说出来。 -->
           <p class="pms-alert is-danger pwd-result" role="alert">
@@ -1333,14 +1391,18 @@
           <p class="pms-hint is-danger">{ui.t('settings.password_changed_no_backup')}</p>
         {/if}
       {/if}
-      <!-- B-03 三层，缺一不可：
+      <!-- B-03 两层，缺一不可：
            ① 这一步只换「锁」不换「钥匙」——它在承认能力边界；
-           ② 旧代只防顺手牵羊，不防懂行的人——它说清"删旧代"这个动作的效力范围；
-           ③ 真作废的出口——没有它，前两句只是让人绝望，而路其实存在。
-           三层合成一句，就等于用能执行的动作担保一件它担保不了的事。 -->
+           ② 旧代只防顺手牵羊，不防懂行的人——它说清"删旧代"这个动作的效力范围。
+           **没有第三层**：原来这里还有一句「新建库 + 全量导入 = 真正的换钥匙」，
+           那是假的——导出只有加密 `.vault`（整容器字节复制），而导入只认
+           Bitwarden JSON/CSV（`import/mod.rs`），且导入会静默丢附件。
+           路不存在就不能写成出口：用户照着做会发现根本做不成，而"做不到"被
+           包装成"你可以这样做"比直接说"做不到"更伤人。
+           真作废能力要等「更换钥匙」这个功能本身落地，那时再加第三层。 -->
       <p class="pms-hint">{ui.t('settings.change_password_note_lock_only')}</p>
       <p class="pms-hint">{ui.t('settings.change_password_note_old')}</p>
-      <p class="pms-hint">{ui.t('settings.change_password_note_escape')}</p>
+      <p class="pms-hint">{ui.t('settings.change_password_note_no_rekey')}</p>
     {/if}
   </div>
 
@@ -1534,7 +1596,7 @@
     <span>
       {#if backupClearTarget?.kind === 'batch'}
         {ui.t('settings.restore_point_clear_batch_confirm', {
-          time: formatDateTime(backupClearTarget.batchMs, ui.locale),
+          time: backupClearTarget.label,
           count: backupClearTarget.count,
           size: formatBytes(backupClearTarget.bytes),
         })}

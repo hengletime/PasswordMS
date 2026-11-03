@@ -34,6 +34,8 @@ export const ErrorCode = {
    * 与 `ERR_SYNC_BUSY` 分开：同步没在跑时给用户看「同步进行中」是纯粹的谎话。
    */
   ERR_BACKUP_BUSY: 'ERR_BACKUP_BUSY',
+  /** B-03：恢复前没拍成自动回滚点，需要用户确认（原库此刻**没有任何改动**）。 */
+  ERR_RESTORE_NO_RETREAT: 'ERR_RESTORE_NO_RETREAT',
   ERR_CONFLICT_EXISTS: 'ERR_CONFLICT_EXISTS',
   ERR_VK_ADOPT_REQUIRES_EMPTY: 'ERR_VK_ADOPT_REQUIRES_EMPTY',
   /** D-91：回收站还原被拒——同 item_id 已有活跃条目（多设备同步复活了新版本）。 */
@@ -82,6 +84,9 @@ const FALLBACK_MESSAGE_KEY: Record<string, string> = {
   [ErrorCode.ERR_SYNC_ABORTED]: 'err.sync_aborted',
   [ErrorCode.ERR_SYNC_BUSY]: 'err.sync_busy',
   [ErrorCode.ERR_BACKUP_BUSY]: 'err.backup_busy',
+  // 兜底给**陈述句**：dialog 的 key 是一句以「仍要继续？」结尾的问句，
+  // 万一漏到通用 toast 里，用户会收到一个没有按钮的问句。两个键分开。
+  [ErrorCode.ERR_RESTORE_NO_RETREAT]: 'lock.restore_no_retreat_short',
   [ErrorCode.ERR_CONFLICT_EXISTS]: 'err.conflict',
   [ErrorCode.ERR_VK_ADOPT_REQUIRES_EMPTY]: 'err.vk_adopt_requires_empty',
   [ErrorCode.ERR_RESTORE_CONFLICT]: 'err.restore_conflict',
