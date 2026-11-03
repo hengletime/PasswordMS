@@ -56,3 +56,25 @@ export function folderLabelText(label: FolderLabel, t: (key: string) => string):
   }
   return t(label.kind === 'ungrouped' ? 'folder.ungrouped' : 'folder.unknown');
 }
+
+/**
+ * D-174：把一个 `folder_id` 收成**下拉框能显示**的值（不存在的一律落成 `null`）。
+ *
+ * 编辑器的分组下拉只有两类选项：`null`（未分组）与现有分组。若把悬空 id 直接塞进
+ * `bind:value`，浏览器会**显示**第一个选项（未分组）却**绑定**着那个悬空 id ——
+ * 用户看到的是「未分组」，保存时后端 `validate_draft_folder` 却回一句
+ * `folder xxx does not exist`，于是这条条目**改任何字段都存不进去**，
+ * 而错误信息跟用户眼前看到的东西完全对不上。
+ *
+ * 判据复用 `folderLabelOf`（不是再写一遍 `folders.some(...)`）：三态只有一处定义，
+ * 否则「显示」和「保存」迟早各用一套判断。
+ *
+ * @param folderId 待收敛的 id（可能为空、可能悬空）
+ * @param folders 全量分组列表
+ */
+export function resolvableFolderId(
+  folderId: string | null | undefined,
+  folders: readonly FolderDto[],
+): string | null {
+  return folderLabelOf(folderId, folders).kind === 'folder' ? (folderId ?? null) : null;
+}

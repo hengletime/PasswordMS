@@ -2766,7 +2766,10 @@ mod tests {
         for name in bad {
             match clear_old_key_batch(&vault, name) {
                 Err(CoreError::Validation(code)) => {
-                    assert_eq!(code, "bad_old_key_batch", "名字 {name:?} 应报 bad_old_key_batch");
+                    assert_eq!(
+                        code, "bad_old_key_batch",
+                        "名字 {name:?} 应报 bad_old_key_batch"
+                    );
                 }
                 other => panic!("名字 {name:?} 必须被拒，实得 {other:?}"),
             }
@@ -2842,7 +2845,11 @@ mod tests {
         let before = paths_now(&vault);
         isolate_old_key_backups(&vault, base + 460_000_001, &before);
         // 2) 正常的数字目录名不该被计数。
-        assert_eq!(unreadable_batch_dirs(&vault), Some(0), "能识别的批次不算这一格");
+        assert_eq!(
+            unreadable_batch_dirs(&vault),
+            Some(0),
+            "能识别的批次不算这一格"
+        );
 
         // 3) 手工塞一个名字不是合法 UTF-8 的批次目录，里面放一份备份。
         let odd = old_key_dir(&vault).join(non_utf8_dir_name());
@@ -2856,17 +2863,17 @@ mod tests {
         );
         // 它进不了可选列表（没有可回传的身份字符串），所以那个计数是界面唯一的信息来源。
         assert_eq!(old_key_batches(&vault).len(), 1, "只认得出那一批数字名的");
-        assert_eq!(
-            old_key_usage(&vault).1,
-            9,
-            "它仍然算进占用：8 份 + 这 1 份"
-        );
+        assert_eq!(old_key_usage(&vault).1, 9, "它仍然算进占用：8 份 + 这 1 份");
 
         // 4) 按批删除只动得了有名字的那一批；认不出的那份仍在盘上，计数也必须还在。
         let removed =
             clear_old_key_batch(&vault, &(base + 460_000_001).to_string()).expect("按批删除应成功");
         assert_eq!(removed.deleted, 8);
-        assert_eq!(unreadable_batch_dirs(&vault), Some(1), "删完能删的，这一格仍然要说");
+        assert_eq!(
+            unreadable_batch_dirs(&vault),
+            Some(1),
+            "删完能删的，这一格仍然要说"
+        );
         assert!(odd.exists(), "认不出的批次不该被误删");
     }
 
@@ -2904,7 +2911,11 @@ mod tests {
         assert_eq!(old_key_usage(&vault).1, 0, "整批从清点里消失");
         assert!(old_key_batches(&vault).is_empty(), "界面上整批不见了");
         // 而这一格必须把它说出来，否则"盘上有、界面假装没有"就成立了。
-        assert_eq!(unreadable_batch_dirs(&vault), Some(1), "计数器必须把这一批数进去");
+        assert_eq!(
+            unreadable_batch_dirs(&vault),
+            Some(1),
+            "计数器必须把这一批数进去"
+        );
 
         drop(holder);
         assert_eq!(unreadable_batch_dirs(&vault), Some(0), "读得出就不该多报");
@@ -2912,7 +2923,8 @@ mod tests {
     }
 
     #[test]
-    fn 两批旧代各自带批次身份且按批删除只动那一批() {        let (_root, vault) = temp_vault("old-batch");
+    fn 两批旧代各自带批次身份且按批删除只动那一批() {
+        let (_root, vault) = temp_vault("old-batch");
         let base = 1_793_491_200_000;
         fill_slots(&vault, 4096, base);
 

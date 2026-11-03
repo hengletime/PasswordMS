@@ -3,7 +3,7 @@
 // 四类输入（覆盖「未分组」的所有书写方式与悬空引用）+ 一条「非全量 folders 会误判」的边界。
 
 import { describe, expect, it } from 'vitest';
-import { folderLabelOf, folderLabelText } from './folder-label';
+import { folderLabelOf, folderLabelText, resolvableFolderId } from './folder-label';
 import type { FolderDto } from '../types';
 
 function folder(folder_id: string, name: string): FolderDto {
@@ -51,5 +51,26 @@ describe('D-154 folderLabelText', () => {
   it('未分组 / 未知分组各取各的键（不许共用一个兜底文案）', () => {
     expect(folderLabelText({ kind: 'ungrouped' }, t)).toBe('t:folder.ungrouped');
     expect(folderLabelText({ kind: 'unknown' }, t)).toBe('t:folder.unknown');
+  });
+});
+
+describe('D-174 resolvableFolderId', () => {
+  const folders = [folder('f1', '工作')];
+
+  it('能解析的分组原样返回（编辑时不许把它清空）', () => {
+    expect(resolvableFolderId('f1', folders)).toBe('f1');
+  });
+
+  it('悬空 id 收敛成 null —— 下拉框显示未分组，保存也就存成未分组', () => {
+    // 这一条是「改不动的条目」的根：悬空 id 塞进 bind:value 时，下拉框显示第一个选项
+    // （未分组），但绑定的仍是那个 id，保存会被后端 validate_draft_folder 拒绝。
+    expect(resolvableFolderId('gone', folders)).toBeNull();
+    expect(resolvableFolderId('f1', [])).toBeNull();
+  });
+
+  it('空值保持 null（未分组不是错误状态）', () => {
+    for (const v of [null, undefined, '']) {
+      expect(resolvableFolderId(v, folders)).toBeNull();
+    }
   });
 });

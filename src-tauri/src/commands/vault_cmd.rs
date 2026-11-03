@@ -276,8 +276,7 @@ pub fn restore_backup(
         // 覆盖完才发现密码不对，原库已经被换掉，用户被挡在门外，而唯一能救他的
         // 是同目录那份 `.bak-<ms>`——界面上没有任何入口指向它。
         // 也刻意排在 `pre-restore` 快照**之前**：这次恢复注定失败，不该为它复制整库。
-        verify_backup_password(&src, &master_password)
-            .map_err(|e| backup_pwd_reject(&src, e))?;
+        verify_backup_password(&src, &master_password).map_err(|e| backup_pwd_reject(&src, e))?;
         // 恢复前的快照必须拍在 [`backup::RestoreGuard`] **之前**：
         // 守卫一旦生效，备份目录整体暂停写入，那时再拍会被直接跳过。
         let pre = backup::snapshot_event(&dest, backup::EventTag::PreRestore, now_ms());

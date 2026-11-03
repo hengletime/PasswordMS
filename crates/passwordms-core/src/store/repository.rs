@@ -313,6 +313,19 @@ impl Repository {
                 "header_folder_count_mismatch: header={header_folders}, actual={actual_folders}"
             ));
         }
+        // 【D-174】存量库自愈：历史版本在对端删分组时不清理条目引用，那种库一打开
+        // 就会在列表里显示「未知分组」。修在这里而不是修在界面：界面只能如实显示，
+        // 它没有能力判断「这个 folder_id 该不该存在」。修不了只留痕不阻断解锁——
+        // 一个可以正常解开、正常读写的库，不该因为一条脏引用就打不开。
+        match repo.repair_dangling_folder_refs() {
+            Ok(fixed) if fixed > 0 => repo
+                .open_warnings
+                .push(format!("dangling_folder_refs_repaired: {fixed}")),
+            Ok(_) => {}
+            Err(e) => repo
+                .open_warnings
+                .push(format!("dangling_folder_refs_unrepaired: {}", e.code())),
+        }
         Ok(repo)
     }
 
@@ -2264,7 +2277,7 @@ impl Repository {
         Ok(ids.len())
     }
 
-    /// 批量原子写入条目与分组（D-172：导入的唯一落库入口）。
+    /// 批量原子写入条目与分组（D-174：导入的唯一落库入口）。
     ///
     /// 语义是**全成或全无**，这是导入这个操作唯一说得清的口径：
     ///
@@ -2391,9 +2404,83 @@ impl Repository {
     }
 
     /// 远端删除分组（直接墓碑）。
+    ///
+    /// **D-174：删壳必须同时通知其下条目**。旧实现只 `tombstone` + `folders.remove`，
+    /// 条目原样留着已不存在的 `folder_id`，界面据此显示「未知分组」（主人 2026-11-03
+    /// 验收 1.5.29 时第一个问题）。本地删除走 [`Self::delete_folder`] 时条目会被逐条
+    /// 迁出，**只有同步这条路径漏了这一步** —— 而它恰是最容易产生悬空引用的一条：
+    /// 对端「条目移出分组」的 live 变更 rev 不一定压过本端，LWW 判负之后本端条目就
+    /// 永久停在悬空状态（对端已经认为它在未分组里，不会再发第二次）。
     pub fn remove_folder_direct(&mut self, folder_id: &str) -> CoreResult<()> {
         self.tombstone(RECORD_TYPE_FOLDER, folder_id)?;
         self.folders.remove(folder_id);
+        let orphans: Vec<String> = self
+            .items
+            .values()
+            .filter(|item| item.folder_id.as_deref() == Some(folder_id))
+            .map(|item| item.item_id.clone())
+            .collect();
+        for item_id in &orphans {
+            self.detach_item_to_ungrouped(item_id)?;
+        }
+        Ok(())
+    }
+
+    /// 【D-174】把「指向不存在分组」的活条目全数放回未分组，返回修正条数。
+    ///
+    /// 两条来源都不是「用户真的这么填」：
+    /// 1. 对端删分组只删壳不通知条目（见 [`Self::remove_folder_direct`] 的 D-174）；
+    /// 2. 同步批次里条目先于分组壳到达，或分组壳的重建被复活抑制挡下
+    ///    （[`crate::sync::merge`] 的墓碑分支）。
+    ///
+    /// 判据与 [`Self::validate_draft_folder`] / [`Self::move_item_to_folder`] /
+    /// [`Self::restore_item`] 的 D-106 守卫**同口径**：分组不存在 = 未分组。
+    /// 三处守卫只能拦住「从界面来的」引用，拦不住「从对端来的」——所以这里补一次
+    /// 收口扫描，让不变量对整库成立，而不是对某几条入口成立。
+    ///
+    /// 两处调用：打开库时（治存量损坏的库）、每批同步应用完之后（防新增）。
+    ///
+    /// 回收站快照**不在本函数范围内**：它是「删除时是什么样」的凭据，还原时由
+    /// [`Self::restore_item`] 的守卫逐条修正；改快照等于篡改历史。
+    ///
+    /// 没有悬空引用时**不写任何帧**——它每次开库都跑，正常情况下必须是零成本。
+    pub fn repair_dangling_folder_refs(&mut self) -> CoreResult<usize> {
+        let dangling: Vec<String> = self
+            .items
+            .values()
+            .filter(|item| match item.folder_id.as_deref() {
+                Some(folder_id) => !self.folders.contains_key(folder_id),
+                None => false,
+            })
+            .map(|item| item.item_id.clone())
+            .collect();
+        for item_id in &dangling {
+            self.detach_item_to_ungrouped(item_id)?;
+        }
+        Ok(dangling.len())
+    }
+
+    /// 把单条从分组引用中摘出（`folder_id = None`）并推进 `rev` 落盘。
+    ///
+    /// **`rev` 必须推进**：只改内存的话，对端那份「同 rev 异内容」每轮同步都会报冲突，
+    /// 而且我们的修正永远发不出去（rev ≤ 发送水位即免重发）。
+    /// **`updated_at` 不动**：与 [`Self::move_item_to_folder`] 同一裁定——挪位置不是
+    /// 「修改过」，不该让它跳到「最近修改」的最前面。
+    fn detach_item_to_ungrouped(&mut self, item_id: &str) -> CoreResult<()> {
+        let mut item = match self.items.get(item_id).cloned() {
+            Some(item) => item,
+            None => return Ok(()),
+        };
+        item.folder_id = None;
+        item.rev += 1;
+        item.modified_by = self.device_id.clone();
+        self.write_record(
+            RECORD_TYPE_ITEM,
+            &item.item_id,
+            0,
+            &serde_json::to_vec(&item)?,
+        )?;
+        self.items.insert(item.item_id.clone(), item);
         Ok(())
     }
 

@@ -5,6 +5,7 @@
   import PasswordGeneratorModal from './PasswordGeneratorModal.svelte';
   import { MAX_NOTE_BYTES } from '../lib/constants';
   import { isSafeUrl } from '../lib/url-safety';
+  import { resolvableFolderId } from '../lib/folder-label';
   import { toAppError, ErrorCode } from '../lib/errors';
   import { currentTotp, normalizeTotpInput } from '../lib/totp';
   import { parseOtpauth, rejectMessage } from '../lib/otpauth';
@@ -62,9 +63,15 @@
   // D-81：新建时**预填当前选中分组**。原来恒为 null，条目会存进根目录；
   // 若此刻正选中某分组（列表按它过滤），保存后条目立刻「消失」——编辑器关闭、
   // 列表没有、详情区没有，用户以为丢了（实际在根目录）。编辑已有条目路径不变。
-  // 分组下拉的 options 恒为全部分组，预填值必合法。
+  //
+  // D-174：预填值必须先过 `resolvableFolderId`。条目（或当前筛选）指向一个已不存在的
+  // 分组时，把那个 id 直接塞进 `bind:value` 会得到一个**显示未分组、绑定悬空 id** 的
+  // 下拉框：用户什么都没动，保存却被后端 `validate_draft_folder` 拒掉，提示还是
+  // `folder xxx does not exist` —— 一条改不动的条目，报错跟眼前所见完全对不上。
   // svelte-ignore state_referenced_locally
-  let folderId = $state<string | null>(item?.folder_id ?? vault.selectedFolderId);
+  let folderId = $state<string | null>(
+    resolvableFolderId(item?.folder_id ?? vault.selectedFolderId, vault.folders),
+  );
   // svelte-ignore state_referenced_locally
   let favorite = $state(item?.favorite ?? false);
   let fields = $state<CustomField[]>(
