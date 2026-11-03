@@ -18,3 +18,10 @@ keystore.properties
 
 /.tauri
 /tauri.settings.gradle
+
+# Kotlin / Gradle 编译缓存（Gradle 8+ 会在工程根建 `.kotlin/{sessions,errors}`）。
+# 不入库，但**必须显式忽略**，不能指望根 `.gitignore` 的 `*.log` 顺带挡住：
+# `sessions/` 里的文件名由 Kotlin 编译器决定，换个扩展名就会冒到 `git status` 里。
+# 后果不是多一行噪音，是取数门的「PRE/POST 三元组逐字相等」从此永久为红——
+# 永远亮的警告等于没有警告，规则第二次就会被删掉。
+.kotlin
