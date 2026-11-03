@@ -108,7 +108,10 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     // 上半句没有数字、下半句没有主语，读起来像两条无关信息（D-73 症状⑤ 同型）。
     const infoRows = SRC.match(/class="set-row is-info"/g) ?? [];
     const actionRows = SRC.match(/class="set-row is-actions"/g) ?? [];
-    expect(infoRows).toHaveLength(9);
+    // **D-179（v1.5.32）**：9 → 6。本机自动备份那三行信息（当前代份数与体积 /
+    // 上次成功时刻 / 最近一次没存成）随界面表格化改成 `.pms-hint` 段落——
+    // 它们现在是表格上方的说明，不再是"标签 + 右侧值"的两列结构，窄屏堆叠对它们没有意义。
+    expect(infoRows).toHaveLength(6);
     // 计数 1 → 2 是 **D-107 的有意变更**：「关于」卡片新增更新检查区块，
     // 「前往下载」按钮行同样是按钮行，窄屏必须横向排布（避开窄屏堆叠）。
     expect(actionRows).toHaveLength(2);
@@ -122,8 +125,9 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     // **v1.4.16 回退自动同步（D-133）**：4 → 2，「自动同步 / 启动时同步」两个开关
     // 随功能删除。这个数字变小是**有意的**：守卫锁的是实际条数，功能回退就该跟着改，
     // 否则它会变成「一条永远修不掉的假红」。
+    // **D-180（v1.5.32）**：+1（本机自动备份的「自动清理旧备份」开关），2 → 3。
     const checkRows = SRC.match(/class="set-row is-check"/g) ?? [];
-    expect(checkRows).toHaveLength(2);
+    expect(checkRows).toHaveLength(3);
   });
 
   it('别的行一个都不许标 is-*：控件行必须继续走窄屏堆叠', () => {
@@ -138,11 +142,14 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     // 这里不写死裸行具体条数（将来加控件行会合法变动），只断言「裸行是多数、且标记行
     // 共 10 条」。
     // **B-03（v1.5.29）**：标记行 10 → 13（9 is-info + 2 is-actions + 2 is-check）。
+    // **D-179（v1.5.32）**：13 → 11。本机自动备份那三行 is-info 改成 `.pms-hint` 段落。
+    // **D-180（v1.5.32）**：+1（自动清理开关，is-check）。
+    // 净变动 13 → 11 = 6 is-info + 2 is-actions + 3 is-check。
     expect(plainRows.length).toBeGreaterThanOrEqual(8);
-    expect(plainRows.length + 13).toBe(totalRows.length);
+    expect(plainRows.length + 11).toBe(totalRows.length);
     // 白色名单外不许出现别的 `is-*` 变体（例如 `is-buttons` 这种手滑写法）。
     const anyVariant = SRC.match(/class="set-row is-[a-z-]+"/g) ?? [];
-    expect(anyVariant).toHaveLength(13);
+    expect(anyVariant).toHaveLength(11);
   });
 
   it('覆盖规则在同一个移动端媒体块内，且都在一刀切 `.set-row` 之后（层叠顺序）', () => {

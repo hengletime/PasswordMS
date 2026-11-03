@@ -83,6 +83,15 @@ export interface BackupStatusDto {
    * 空数组时界面**一个按钮都不渲染**；非空时每一行都能点。
    */
   points: BackupPointDto[];
+  /**
+   * 「自动清理」开关是否打开（默认开）。
+   *
+   * 与 `points` 同一次返回：开关要显示当前值，单独读一次会让"刚点完还没刷新"
+   * 那一瞬显示成反的。
+   */
+  retention_on: boolean;
+  /** 自动清理保留多少天。**固定值，没有档位**——数字由后端给，前端不再写一份常量。 */
+  retention_days: number;
 }
 
 /**
@@ -109,6 +118,13 @@ export interface BackupPointDto {
    * 往往就是最后一次。所以界面上每一行都要说出来，确认框的密码说明也要跟着换。
    */
   needs_old_password: boolean;
+  /**
+   * 被用户钉住了：**自动清理与轮转都绕开它**，只能手动删。
+   *
+   * 钉住不占保留名额（钉住 3 份不会让更早的更容易被裁掉），否则用户看到的现象
+   * 会是"钉了反而更容易丢"。
+   */
+  pinned: boolean;
 }
 
 /** 「这份备份是哪一步的」——界面按它选文案，见 `lib/backup-hints.ts` 的映射表。 */

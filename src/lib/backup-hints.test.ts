@@ -140,8 +140,13 @@ describe('D-178 组件接线：清单来自后端，不许写死只认一种', (
     expect(source).not.toContain('restoreLatestPoint');
   });
 
-  it('行上必须写"要旧密码"（用户是照着行文字决定点哪一行的）', () => {
-    expect(source).toContain("'settings.restore_point_needs_old_pwd'");
+  it('"要旧密码"这句在组头说明里说，不再逐行重复（表格化之后行里只有时间/哪一步/按钮）', () => {
+    // 1.5.31 是逐行写「要用改密码之前的那个密码」；1.5.32 按主人的要求改成
+    // 「改密前的归一起、改密后的归一起，附一句简短说明」——那句说明就是 `old_note`。
+    // 判据仍然是 `needs_old_password`（后端判的），只是从"行级"提到"组级"。
+    // 组级也不能省：两个表看起来只差一个标题，而"要用旧密码"是它们唯一实质区别。
+    expect(source).toContain("'settings.restore_point_old_note'");
+    expect(source).toContain('splitPoints');
   });
 
   it('确认框的文案与密码说明都按 `needs_old_password` 分叉', () => {
@@ -150,5 +155,38 @@ describe('D-178 组件接线：清单来自后端，不许写死只认一种', (
     expect(source).toContain("'settings.restore_point_restore_body_old_pwd'");
     expect(source).toContain("'settings.restore_point_restore_pwd_old'");
     expect(source).toContain("'settings.restore_point_restored_old_pwd'");
+  });
+});
+
+describe('D-180 钉住与自动清理：开关必须真的接到后端', () => {
+  const raw = import.meta.glob(['../components/Settings.svelte'], {
+    query: '?raw',
+    import: 'default',
+    eager: true,
+  }) as Record<string, string>;
+  const source = (
+    Object.entries(raw).find(([p]) => p.endsWith('/Settings.svelte'))?.[1] ?? ''
+  ).replace(/\r\n/g, '\n');
+
+  it('守卫本身没空跑', () => {
+    expect(source.length).toBeGreaterThan(1000);
+  });
+
+  it('钉住按钮存在且状态来自后端字段 `pinned`（不是前端自己记的）', () => {
+    expect(source).toContain('setPinned');
+    expect(source).toContain('point.pinned');
+    // 钉住必须是**行级**的：整组钉住会把"我只想保住这一份"变成"全保住"。
+    expect(source).not.toContain('setPinnedGroup');
+  });
+
+  it('自动清理只有一个开关，天数由后端给（前端不许写死档位、不许自带第二套上限）', () => {
+    expect(source).toContain('setRetention');
+    expect(source).toContain('retention_on');
+    expect(source).toContain('retention_days');
+    // 档位下拉（0/7/30/90/180）是主人 2026-11-03 明确否掉的做法，不许回流。
+    expect(source).not.toContain('RETENTION_OPTIONS');
+    // 份数由 `prune()` 按类别管（日备份 5 份、事件每类 1 份）。前端再拿一个"总数"
+    // 去说事会跟分类轮转打架——2026-11-03 试过一版，撤销了。
+    expect(source).not.toContain('retention_max');
   });
 });

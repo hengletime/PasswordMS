@@ -156,6 +156,26 @@ export const backups = {
   clearOldBatch: (dirName: string): Promise<BackupClearDto> =>
     invoke<BackupClearDto>('backup_clear_old_batch', { dir_name: dirName }),
   /**
+   * 删除**一份**回滚点（行级删除）。
+   *
+   * 收的是 `pointToken`（来自 `status().points`），**不是路径**——与 `restoreFromPoint`
+   * 同一个标识、同一条安全边界：后端只拿它去重新枚举出来的清单里比对。
+   *
+   * 幂等：那一份已经不在时返回 `{deleted: 0}`，不报错（双击、界面没刷、别处刚删过）。
+   */
+  removePoint: (pointToken: string): Promise<BackupClearDto> =>
+    invoke<BackupClearDto>('backup_remove_point', { point_token: pointToken }),
+  /**
+   * 钉住 / 取消钉住**一份**回滚点。
+   *
+   * 只影响**自动**清理与轮转，不影响手动删除——钉住是"别自动扔"，不是"扔不掉"。
+   * 收的仍是 `pointToken`，不多开一条传路径的口子。
+   */
+  setPinned: (pointToken: string, pinned: boolean): Promise<void> =>
+    invoke<void>('backup_set_pinned', { point_token: pointToken, pinned }),
+  /** 开关「自动清理」（保留天数固定，由 `status().retention_days` 给）。 */
+  setRetention: (on: boolean): Promise<void> => invoke<void>('backup_set_retention', { on }),
+  /**
    * **用本机备份退回去**：把库恢复成用户点的那一份的样子。
    *
    * 收的是 `pointToken`（来自 `status().points` 的不透明标识），**不是路径**：

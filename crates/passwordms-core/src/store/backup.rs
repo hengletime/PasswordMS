@@ -36,6 +36,7 @@
 //! **界面一律按文件 mtime 的本地时间显示**（前端有 `Date`），所以用户看到的日期是对的，
 //! 只有磁盘上的文件名按 UTC 分组。
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -869,6 +870,11 @@ pub struct BackupPoint {
     pub batch_ms: Option<i64>,
     /// 打开它要用**改密码之前**那一把密码。
     pub needs_old_password: bool,
+    /// 被用户钉住了：**自动清理与轮转都绕开它**，只能手动删。
+    ///
+    /// 界面据此把按钮切成"已钉住"并给出取消入口。它是用户的明确表态，
+    /// 任何"为了省空间"的自动逻辑都不许覆盖它——否则那个按钮就是在骗人。
+    pub pinned: bool,
 }
 
 /// 一份整库副本对应的是"哪一步"。
@@ -957,6 +963,7 @@ fn point_kind_from_name(name: &str) -> Option<BackupPointKind> {
 /// 认不出名字的文件（用户自己丢进来的东西、`old-key/` 里的杂物）一律不列：
 /// 拿一个来历不明的文件去覆盖库，比什么都不做糟得多。
 pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
+    let pins = pinned_tokens(vault_path);
     let mut files = inventory(vault_path);
     files.extend(old_key_inventory(vault_path));
     let mut out: Vec<BackupPoint> = files
@@ -965,6 +972,7 @@ pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
             let name = f.path.file_name()?.to_str()?;
             let kind = point_kind_from_name(name)?;
             let token = f.restore_token()?;
+            let pinned = pins.contains(&token);
             Some(BackupPoint {
                 token,
                 kind,
@@ -972,6 +980,7 @@ pub fn restore_points(vault_path: &Path) -> Vec<BackupPoint> {
                 size_bytes: f.size_bytes,
                 batch_ms: f.batch_ms,
                 needs_old_password: f.needs_old_password(),
+                pinned,
             })
         })
         .collect();
@@ -996,6 +1005,67 @@ pub fn find_restore_point(vault_path: &Path, token: &str) -> Option<BackupFile> 
     files
         .into_iter()
         .find(|f| f.restore_token().as_deref() == Some(token))
+}
+
+/// 删掉**一份**「退回去」候选，返回 [`ClearOutcome`]。
+///
+/// ## 为什么需要"删一份"（主人 2026-11-03 的界面要求）
+///
+/// 原来只有两个删除入口：删当前代全部、删旧代某一批。界面因此长成"清单 + 另一个
+/// 批次列表"的双层结构——同一个文件在两张表里各出现一次，用户要点两次才删得掉一份，
+/// 而"我只想删掉这个 3.2 MB 的"根本做不到。**粒度比界面更粗的时候，界面就只能
+/// 用布局去补，而布局补不回来。**
+///
+/// ## 与两条 `clear_*` 的关系
+///
+/// 不替代它们：删全部仍是合法需求（怀疑泄露、要腾空间），而且它是一次枚举，
+/// 比逐份删更快也更容易说清"删了几份、还剩几份"。三条路共用同一个判据——
+/// **标识必须是枚举出来的那一个**，没有一处拿字符串拼路径。
+///
+/// ## 幂等
+///
+/// 找不到就返回 `{0, 0}`，不报错：用户双击、界面没刷、另一台设备刚删过，第二次点击
+/// 不该失败。真正的失败（占用中 / 只读 / 句柄耗尽）走 `Err` 或 `remaining > 0`。
+pub fn remove_point(vault_path: &Path, token: &str) -> CoreResult<ClearOutcome> {
+    // 恢复 / 换密期间一个字节都不许写进备份目录——这条守卫在 `clear_*` 里都有，
+    // 新入口必须同样过一遍，否则"最危险的两个动作进行中"反而成了最安全的删除时机。
+    ensure_not_busy(vault_path)?;
+    // ⚠️ `token` 来自 WebView。下面**只**用它去和枚举出来的清单比对，
+    // 找到的 `PathBuf` 一定来自 `read_dir`——不是 `join(token)`。
+    // 这一点与 `clear_old_key_batch` 里那段"路径只从 read_dir 来"的理由完全相同。
+    let Some(point) = find_restore_point(vault_path, token) else {
+        return Ok(ClearOutcome::default());
+    };
+    // 只删普通文件：候选清单已经保证这一点（`inventory` / `old_key_inventory` 都跳过
+    // 非文件），这里再判一次是因为中间隔了一次重新枚举，而 `remove_file` 对一个
+    // 目录会失败、对一个软链接会删链接本身——两种结果都不是用户以为的那件事。
+    if !point.path.is_file() {
+        return Ok(ClearOutcome::default());
+    }
+    fs::remove_file(&point.path).map_err(|e| CoreError::Io(format!("remove point: {e}")))?;
+    // 删完旧代那一批空了就把目录收走：留着空目录会让界面出现一个"0 份"的分组，
+    // 而分组本身没有可做的事（删不掉、也点不开）。`remove_dir` 只在空目录成功，
+    // 失败说明还有残留（比如 `.state`），那不是错误——`remaining` 会说出来。
+    if let Some(batch) = point.batch_dir.as_deref() {
+        let root = old_key_dir(vault_path);
+        for entry in fs::read_dir(&root).into_iter().flatten().flatten() {
+            if entry.file_name().to_str() == Some(batch) {
+                let _ = fs::remove_dir(entry.path());
+                break;
+            }
+        }
+    }
+    // 手动删完立刻把名字从 `.pinned` 里摘掉。放在这里而不是只靠 `enforce_retention`
+    // 的收尾，是因为后者在"只剩这一份"时根本不跑（它要留至少一份），于是被删掉的
+    // 钉住名字会一直挂着——将来同毫秒再拍一份同名快照，就会莫名其妙地免疫自动清理。
+    gc_pins(vault_path);
+    Ok(ClearOutcome {
+        deleted: 1,
+        // `remaining` 的口径与两条 `clear_*` 一致：**目标位置还剩几份**。
+        // 这里的"目标"就是这一份，删掉了就是 0。返回"全部备份还剩多少"会让界面
+        // 拿这个数字去说"还有 N 份没能删除"——那 N 份本来就不该删。
+        remaining: 0,
+    })
 }
 
 fn parse_event_tag(name: &str) -> Option<EventTag> {
@@ -1559,14 +1629,19 @@ pub fn clear_old_key(vault_path: &Path) -> CoreResult<ClearOutcome> {
 ///
 /// 只删本模块认识的命名（`bak.*` / 事件前缀），**绝不删目录里的其它文件**——
 /// 用户若把别的东西放进 `backups/`，那不是我们的。
+///
+/// **钉住的不参与轮转**（也不占保留名额）：钉住是用户对"这一份我要留着"的明确表态，
+/// 而轮转是我们自己排的秩序。让轮转去删用户点过"留下"的东西，等于那个按钮在骗人。
+/// 名额只算没钉住的——否则钉住 3 份会让剩下的被更早地裁掉，用户看到的是"钉了反而更容易丢"。
 fn prune(vault_path: &Path) -> Vec<PathBuf> {
     let files = inventory(vault_path);
+    let pins = pinned_tokens(vault_path);
     let mut removed = Vec::new();
 
     // incoming 已按 mtime 升序（inventory 排过）→ 删头部（最旧）的那几份。
     let mut daily: Vec<&BackupFile> = files
         .iter()
-        .filter(|f| f.class == BackupClass::Daily)
+        .filter(|f| f.class == BackupClass::Daily && !is_pinned(&pins, f))
         .collect();
     if daily.len() > DAILY_KEEP {
         let cut = daily.len() - DAILY_KEEP;
@@ -1585,7 +1660,10 @@ fn prune(vault_path: &Path) -> Vec<PathBuf> {
         } else {
             EVENT_KEEP_PER_TAG
         };
-        let mut list: Vec<&BackupFile> = files.iter().filter(|f| f.event == Some(tag)).collect();
+        let mut list: Vec<&BackupFile> = files
+            .iter()
+            .filter(|f| f.event == Some(tag) && !is_pinned(&pins, f))
+            .collect();
         if list.len() > keep {
             let cut = list.len() - keep;
             for f in list.drain(..cut) {
@@ -1596,6 +1674,213 @@ fn prune(vault_path: &Path) -> Vec<PathBuf> {
         }
     }
 
+    removed
+}
+
+/// 钉住名单（`backups/.pinned`）：一行一个 [`BackupPoint::token`]。
+///
+/// ## 为什么是侧车文件，不是改名加后缀
+///
+/// 改名（`pre-restore.123` → `pre-restore.123.keep`）看着更"自包含"，但它会把
+/// **文件名当成身份**这件事再往前推一步：`created_ms_from_name` 要重新认后缀、
+/// `prune` 的槽位匹配要重新写、旧代目录里的文件也要跟着改。每加一处解析就多一处
+/// 分歧，而分歧的后果是"钉住的被当成没钉住删掉"——**静默、不可逆、用户以为保住了**。
+///
+/// 侧车文件不动备份本身：备份目录里仍然只有"整库副本 + `.state`"，人眼一看就懂。
+///
+/// ## 为什么条目是 token 而不是路径
+///
+/// 与「退回去」共用同一个标识体系：`<文件名>` 或 `<批次目录>/<文件名>`。
+/// 两处用不同的字符串，就会出现"清单里钉住了、清理时认不得"的错位。
+pub const PIN_FILE: &str = ".pinned";
+/// 自动清理的保留天数配置（`backups/.retention`，一个十进制整数）。
+///
+/// 与 `.state` 分开的理由：`.state` 会在换主密码时被**删掉**（那是当前代的节流/健康
+/// 缓存），而"我要留多少天"是用户偏好，不该因为换了密码就悄悄回默认值。
+pub const RETENTION_FILE: &str = ".retention";
+/// 自动清理保留多久（天）。**固定值，不做档位。**
+///
+/// 主人 2026-11-03 的原话：「所有的功能越简单越好，不要搞复杂化。简单、有效！！！」
+/// 一个下拉框 + 五个档位 = 五条文案 × 四语言 + 一条校验 + 一堆选哪个的犹豫，
+/// 换来的只是"我想留 90 天"。30 天够用：日备份槽位只留 5 份，一周用一次的人五天
+/// 就滚完了，而"上个月那次导入之前"正是他某天想退回去的时刻。
+///
+/// **只有一个开关**：自动清理（开 / 关）。关掉之后一份都不删。
+pub const RETENTION_DAYS: i64 = 30;
+/// 读一份"一行一条"的小文件（忽略空行与 `#` 注释）。
+fn read_lines(path: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .map(str::to_string)
+        .collect()
+}
+
+/// 当前钉住的标识集合。
+///
+/// 读不出来（文件不在 / 权限 / 内容乱）一律当**空集**：空集意味着"没有任何一份被钉住"，
+/// 也就是自动清理照常执行。这个方向是危险的吗？——不是。真正危险的方向是反过来
+/// （读不出来就当"全都钉住"，于是清理永远不执行、磁盘慢慢满掉而界面说一切正常）。
+/// 而且用户的钉住动作每次都会重写这个文件，读失败基本只发生在"从没钉过"。
+pub fn pinned_tokens(vault_path: &Path) -> BTreeSet<String> {
+    read_lines(&backup_dir(vault_path).join(PIN_FILE))
+        .into_iter()
+        .collect()
+}
+
+fn is_pinned(pins: &BTreeSet<String>, f: &BackupFile) -> bool {
+    f.restore_token().is_some_and(|t| pins.contains(&t))
+}
+
+/// 写钉住名单（空集合就把文件删掉，不留一个空文件让人以为"有配置"）。
+fn write_pinned(dir: &Path, pins: &BTreeSet<String>) -> CoreResult<()> {
+    let path = dir.join(PIN_FILE);
+    if pins.is_empty() {
+        let _ = fs::remove_file(&path);
+        return Ok(());
+    }
+    let tmp = dir.join(format!("{PIN_FILE}.{}.tmp", now_ms()));
+    let mut body = String::from("# 钉住的备份不会被自动清理；一行一个。删掉这一行等于取消钉住。\n");
+    for t in pins {
+        body.push_str(t);
+        body.push('\n');
+    }
+    fs::write(&tmp, body).map_err(|e| CoreError::Io(format!("pin write: {e}")))?;
+    fs::rename(&tmp, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        CoreError::Io(format!("pin rename: {e}"))
+    })
+}
+
+/// 钉住 / 取消钉住一份备份。
+///
+/// ## 三条规则
+///
+/// 1. **钉住必须命中现存的那一份**（走 [`find_restore_point`]，不是拿字符串拼路径）：
+///    钉一个不存在的标识等于在 `.pinned` 里攒垃圾，而用户会以为"我已经钉住了"。
+/// 2. **取消钉住是幂等的**：那一份已经被手动删掉时，取消不该报错——用户的目标
+///    已经达成，报错只会让他以为文件还在。
+/// 3. **`last.bak` 不许钉**：它每次写入都被原地替换（连内容都换掉），钉住它等于钉住
+///    "永远最新的那一份"，用户看到的"已钉住"和他实际保住的东西不是一回事。
+///    它本身也只留 1 份、且不参与任何清理，没有钉的必要。
+pub fn set_pinned(vault_path: &Path, token: &str, pinned: bool) -> CoreResult<()> {
+    ensure_not_busy(vault_path)?;
+    if pinned {
+        if token == "last.bak" {
+            return Err(CoreError::Validation("pin_last_bak".to_string()));
+        }
+        if find_restore_point(vault_path, token).is_none() {
+            return Err(CoreError::Validation("restore_point_absent".to_string()));
+        }
+    }
+    let mut pins = pinned_tokens(vault_path);
+    if pinned {
+        pins.insert(token.to_string());
+    } else if !pins.remove(token) {
+        // 本来就没钉着：幂等返回，别把它变成一个错误。
+        return Ok(());
+    }
+    let dir = backup_dir(vault_path);
+    fs::create_dir_all(&dir).map_err(|e| CoreError::Io(format!("backup dir: {e}")))?;
+    write_pinned(&dir, &pins)
+}
+
+/// 自动清理开没开（默认**开**）。
+///
+/// 读不出来 / 内容认不出 → 开。为什么默认是开：主人的需求就是"不然备份将越来越多"，
+/// 而一个要用户先去设置里打开才生效的清理，等于默认仍然会涨。
+/// 关掉之后**一份都不删**（文件里写 `0`），那是用户明确的"我自己管"。
+pub fn retention_enabled(vault_path: &Path) -> bool {
+    let path = backup_dir(vault_path).join(RETENTION_FILE);
+    match fs::read_to_string(path) {
+        Ok(s) => s.trim() != "0",
+        Err(_) => true,
+    }
+}
+
+/// 开关自动清理。
+pub fn set_retention_enabled(vault_path: &Path, on: bool) -> CoreResult<()> {
+    let dir = backup_dir(vault_path);
+    fs::create_dir_all(&dir).map_err(|e| CoreError::Io(format!("backup dir: {e}")))?;
+    let tmp = dir.join(format!("{RETENTION_FILE}.{}.tmp", now_ms()));
+    let body = if on { "1\n" } else { "0\n" };
+    fs::write(&tmp, body).map_err(|e| CoreError::Io(format!("retention: {e}")))?;
+    fs::rename(&tmp, dir.join(RETENTION_FILE))
+        .map_err(|e| CoreError::Io(format!("retention rename: {e}")))
+}
+
+/// 把 `.pinned` 里已经不存在的标识清掉（文件被手动删 / 被清理删之后）。
+fn gc_pins(vault_path: &Path) {
+    let pins = pinned_tokens(vault_path);
+    if pins.is_empty() {
+        return;
+    }
+    let mut live: BTreeSet<String> = inventory(vault_path)
+        .iter()
+        .chain(old_key_inventory(vault_path).iter())
+        .filter_map(|f| f.restore_token())
+        .collect();
+    live.retain(|t| pins.contains(t));
+    if live.len() == pins.len() {
+        return;
+    }
+    let _ = write_pinned(&backup_dir(vault_path), &live);
+}
+
+/// 按天数清掉**当前代**里过期的整库副本，返回被删的路径。
+///
+/// ## 六条判据（写成能检查的话，不是"大致这样"）
+///
+/// 1. 开关关掉 → 一份都不删（用户明确要自己管）。
+/// 2. **钉住的一份都不删**（[`set_pinned`]）。
+/// 3. **`last.bak` 不删**：它是"撤销上一次改动"的唯一入口，只留 1 份、每次写入被覆盖，
+///    本来就不会累积。
+/// 4. **最新的那一份永不删**，哪怕它比保留期还旧。备份目录被清空是本产品里最坏的
+///    状态，而"所有备份都超期了"恰恰是它发生的方式（放着几个月没用的库）。
+/// 5. **旧代（`old-key/`）不参与**：那些是旧密码唯一的退路，自动删等于替用户扔掉
+///    他忘掉的那把钥匙。它们只能手动删（见 `remove_point` / `clear_old_key_batch`）。
+/// 6. 判据看 `created_ms`（文件名解析），**不看 mtime**——`fs::copy` 会把源库的 mtime
+///    一起复制过来，拿 mtime 判新旧会让整批备份同时"过期"或同时"不过期"。
+/// 7. **不另设"总份数上限"**（2026-11-03 明确否掉）：[`prune`] 已经把日备份压到
+///    [`DAILY_KEEP`] 份、事件快照压到"每类各 1 份"，总量本来就有天花板（约 11 份）。
+///    再加一条"总共留 10 份"不会更省，只会**跟分类轮转打架**——它不认识"导入之前"
+///    和"压缩之前"的区别，按数量和日期一刀切就会把某一类唯一的退路切掉。
+///
+/// ## 什么时候跑
+///
+/// 每次拍快照之后（[`snapshot_before_write`] / [`snapshot_event`]）。不做后台定时器：
+/// 备份只在**写入**时产生，不写就不增长，"写入时清一次"与"每天清一次"在磁盘占用上
+/// 等价，而前者不需要一个可能在关机/休眠时错过的调度器。
+pub fn enforce_retention(vault_path: &Path, now_ms: i64) -> Vec<PathBuf> {
+    if !retention_enabled(vault_path) {
+        return Vec::new();
+    }
+    let pins = pinned_tokens(vault_path);
+    let mut candidates: Vec<BackupFile> = inventory(vault_path)
+        .into_iter()
+        .filter(|f| f.class != BackupClass::Last)
+        .collect();
+    // 至少留一份：把最新的一份摘出去，剩下的才参与"过期"判断。
+    candidates.sort_by_key(|f| f.created_ms);
+    let Some(_newest) = candidates.pop() else {
+        return Vec::new();
+    };
+    let cutoff = now_ms - RETENTION_DAYS * 86_400_000;
+    let mut removed = Vec::new();
+    for f in candidates {
+        if is_pinned(&pins, &f) || f.created_ms >= cutoff {
+            continue;
+        }
+        if fs::remove_file(&f.path).is_ok() {
+            removed.push(f.path);
+        }
+    }
+    if !removed.is_empty() {
+        gc_pins(vault_path);
+    }
     removed
 }
 
@@ -2031,6 +2316,9 @@ pub fn snapshot_before_write(vault_path: &Path, now_ms: i64) -> BackupOutcome {
     }
     write_state(&dir, &st);
     out.pruned.extend(prune(vault_path));
+    // 定期清空（D-179）：按天数删掉过期的整库副本，钉住的、`last.bak`、最新一份除外。
+    // 放在轮转之后：轮转先按槽位裁一遍，这一步再把"槽位里也很旧"的按天数送走。
+    out.pruned.extend(enforce_retention(vault_path, now_ms));
     // 不再有"只有全都没写成才报"的守卫：那等于"部分成功就不警告"，而配额挡掉日备份
     // 意味着"几天前"那条退路在悄悄变薄，哪怕 `last.bak` 写成了也必须让用户看见。
     out
@@ -2104,6 +2392,9 @@ pub fn snapshot_event(vault_path: &Path, tag: EventTag, now_ms: i64) -> BackupOu
     }
     // 事件快照生成后才轮转（先保证新备份可用，再删旧的）。
     out.pruned.extend(prune(vault_path));
+    // 与 [`snapshot_before_write`] 同一句：定期清空必须两条快照路径都跑，
+    // 否则"只做危险操作、从不改条目"的库永远不清理（而它恰恰只剩下一堆事件快照）。
+    out.pruned.extend(enforce_retention(vault_path, now_ms));
     out
 }
 
@@ -2338,6 +2629,220 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("hello.txt"), b"x").unwrap();
         assert!(restore_points(&vault).is_empty(), "认不出名字的一律不列");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 删一份只删那一个_别的备份一个不动() {
+        // 行级删除是"最小不可逆动作"：删错一份的代价是那一份没了，删错全部的代价
+        // 是整条退路没了。所以这里钉的是"别的文件字节级不变"。
+        let (root, vault) = temp_vault("remove-one");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("pre-restore.1000"), vec![1u8; 16]).unwrap();
+        fs::write(dir.join("last.bak"), vec![2u8; 32]).unwrap();
+        let old = old_key_dir(&vault).join("9000");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("pre-rekey.8000"), vec![3u8; 48]).unwrap();
+
+        let out = remove_point(&vault, "pre-restore.1000").unwrap();
+        assert_eq!((out.deleted, out.remaining), (1, 0), "目标那一份删掉了");
+        assert_eq!(restore_points(&vault).len(), 2, "别的两份还在清单里");
+        assert!(!dir.join("pre-restore.1000").exists());
+        assert_eq!(fs::read(dir.join("last.bak")).unwrap(), vec![2u8; 32]);
+        assert_eq!(fs::read(old.join("pre-rekey.8000")).unwrap(), vec![3u8; 48]);
+        // 删完之后清单里不该再有它。
+        assert!(find_restore_point(&vault, "pre-restore.1000").is_none());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 删旧代最后一份要把空批次目录一起收走() {
+        // 留着空目录会让界面出现一个"0 份"的分组：删不掉、也点不开，
+        // 而"改密码之前的备份"这个标题本身会让用户以为里面还有东西。
+        let (root, vault) = temp_vault("remove-empty-batch");
+        let old = old_key_dir(&vault).join("9000");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("pre-rekey.8000"), vec![1u8; 48]).unwrap();
+
+        let out = remove_point(&vault, "9000/pre-rekey.8000").unwrap();
+        assert_eq!(out.deleted, 1);
+        assert_eq!(out.remaining, 0);
+        assert!(!old.exists(), "空批次目录必须收走");
+        assert!(old_key_batches(&vault).is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 删一份对不存在的标识是幂等的_且不碰任何文件() {
+        let (root, vault) = temp_vault("remove-idempotent");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("last.bak"), vec![2u8; 32]).unwrap();
+        fs::write(root.join("evil.vault"), vec![9u8; 16]).unwrap();
+
+        for bad in ["", "not-there", "../evil.vault", "9000/../evil.vault"] {
+            let out = remove_point(&vault, bad).unwrap();
+            assert_eq!((out.deleted, out.remaining), (0, 0), "标识 {bad:?}");
+        }
+        assert!(root.join("evil.vault").exists(), "目录外的文件不许被删");
+        assert!(dir.join("last.bak").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 恢复或换密进行中不许删任何一份() {
+        // 守卫在 `clear_*` 里都有，新入口漏掉就等于"最危险的动作进行中恰好最好删"。
+        let (root, vault) = temp_vault("remove-busy");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("last.bak"), vec![2u8; 32]).unwrap();
+
+        let guard = RestoreGuard::new(&vault);
+        let err = remove_point(&vault, "last.bak").unwrap_err();
+        assert!(matches!(err, CoreError::BackupBusy), "{err:?}");
+        assert!(dir.join("last.bak").exists());
+        drop(guard);
+
+        // 守卫放开之后同一条标识必须删得掉——否则上面那条会因为"永远删不掉"而假绿。
+        assert_eq!(remove_point(&vault, "last.bak").unwrap().deleted, 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 钉住的那一份轮转与定期清理都不动它() {
+        // 钉住是用户对"这一份我要留着"的明确表态。任何为了省空间的自动逻辑都不许覆盖它,
+        // 否则那个按钮就是在骗人 —— 而用户发现的时候,东西已经没了。
+        let (root, vault) = temp_vault("pin-keep");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        for d in 1..=6 {
+            fs::write(dir.join(format!("bak.2026100{d}")), vec![1u8; 16]).unwrap();
+        }
+        set_pinned(&vault, "bak.20261001", true).unwrap();
+        assert!(pinned_tokens(&vault).contains("bak.20261001"));
+
+        // ① 轮转：6 份日备份只留 5 份。钉住的是**最旧**那份，正是第一个该被裁的。
+        prune(&vault);
+        assert!(dir.join("bak.20261001").exists(), "钉住的被轮转删掉了");
+        assert!(
+            dir.join("bak.20261002").exists(),
+            "钉住的不占保留名额 —— 否则钉一份反而让更新的那份被提前裁掉"
+        );
+
+        // ② 定期清理：让时间走到 40 天后，全部超期，仍需保住钉住的那一份。
+        let now = days_from_civil(2026, 12, 15) * 86_400_000;
+        enforce_retention(&vault, now);
+        assert!(dir.join("bak.20261001").exists(), "钉住的被定期清理删掉了");
+        assert_eq!(inventory(&vault).len(), 2, "只剩钉住的那份与最新的一份");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 全都超期时也至少留一份() {
+        // 备份目录被清空是本产品里最坏的状态，而"所有备份都超期了"恰恰是它发生的方式
+        // （一个放了几个月没用的库）。所以最新一份无条件留下,哪怕它早就过期。
+        let (root, vault) = temp_vault("retention-last-one");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("bak.20260101"), vec![1u8; 16]).unwrap();
+        fs::write(dir.join("bak.20260102"), vec![2u8; 16]).unwrap();
+
+        let removed = enforce_retention(&vault, days_from_civil(2026, 12, 15) * 86_400_000);
+        assert_eq!(removed.len(), 1, "只该删掉较旧那一份");
+        assert!(dir.join("bak.20260102").exists(), "最新一份必须留下");
+        assert_eq!(inventory(&vault).len(), 1);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 关掉自动清理就一份都不删() {
+        let (root, vault) = temp_vault("retention-off");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        for d in 1..=3 {
+            fs::write(dir.join(format!("bak.2026010{d}")), vec![1u8; 16]).unwrap();
+        }
+        assert!(retention_enabled(&vault), "默认必须是开的");
+        set_retention_enabled(&vault, false).unwrap();
+        assert!(!retention_enabled(&vault));
+
+        let removed = enforce_retention(&vault, days_from_civil(2027, 6, 1) * 86_400_000);
+        assert!(removed.is_empty());
+        assert_eq!(inventory(&vault).len(), 3);
+
+        // 重新打开之后那些超期的才会被清（否则上面那条会因为"永远不清"而假绿）。
+        set_retention_enabled(&vault, true).unwrap();
+        assert_eq!(
+            enforce_retention(&vault, days_from_civil(2027, 6, 1) * 86_400_000).len(),
+            2
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 旧代永远不参与自动清理() {
+        // old-key 里是旧密码唯一的退路。自动删它 = 替用户扔掉他忘掉的那把钥匙,
+        // 而那正是他某天唯一还能进来的路。
+        let (root, vault) = temp_vault("retention-old-key");
+        let old = old_key_dir(&vault).join("9000");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("pre-rekey.1000"), vec![1u8; 16]).unwrap();
+
+        let removed = enforce_retention(&vault, days_from_civil(2027, 6, 1) * 86_400_000);
+        assert!(removed.is_empty());
+        assert!(old.join("pre-rekey.1000").exists());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 钉住last_bak与不存在的标识都被拒() {
+        let (root, vault) = temp_vault("pin-reject");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("last.bak"), vec![1u8; 16]).unwrap();
+        fs::write(dir.join("pre-restore.1000"), vec![2u8; 16]).unwrap();
+
+        // `last.bak` 每次写入被原地替换（连内容都换掉），钉住它等于钉住"永远最新那一份",
+        // 用户看到的"已钉住"与他实际保住的东西不是一回事。
+        assert!(set_pinned(&vault, "last.bak", true).is_err());
+        // 钉一个不存在的标识 = 在 .pinned 里攒垃圾，而用户以为钉住了。
+        assert!(set_pinned(&vault, "pre-restore.9999", true).is_err());
+        assert!(set_pinned(&vault, "../../x", true).is_err());
+        // 取消钉住是幂等的：本来就没钉着，不算错误。
+        assert!(set_pinned(&vault, "pre-restore.1000", false).is_ok());
+        assert!(pinned_tokens(&vault).is_empty());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn 删掉被钉住的那一份之后钉住名单不会留着它的名字() {
+        // 手动删除是用户的最终权力（钉住只挡自动清理）。但名字留在 `.pinned` 里，
+        // 将来同名的文件出现（比如再拍一份同毫秒的快照）就会被莫名其妙地钉住。
+        let (root, vault) = temp_vault("pin-gc");
+        let dir = backup_dir(&vault);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("pre-restore.1000"), vec![1u8; 16]).unwrap();
+        fs::write(dir.join("bak.20260101"), vec![2u8; 16]).unwrap();
+        set_pinned(&vault, "pre-restore.1000", true).unwrap();
+
+        remove_point(&vault, "pre-restore.1000").unwrap();
+        // 删完那一刻就必须干净：不能指望"下一次清理顺手收走"，因为只剩一份时
+        // `enforce_retention` 会直接返回（它要留至少一份），根本没机会收。
+        assert!(
+            pinned_tokens(&vault).is_empty(),
+            "钉住名单里留着已删文件的名字"
+        );
 
         let _ = fs::remove_dir_all(&root);
     }

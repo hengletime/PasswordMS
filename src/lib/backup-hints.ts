@@ -12,7 +12,7 @@
 // 抽成纯函数是为了能对它写**正向**断言（"给定这些输入，必须说一句话"）。原来只能写
 // 黑名单（"这几句里不许出现 X"），黑名单挡不住"整块没渲染出来"。
 
-import type { BackupPointKind, BackupStatusDto } from '../types';
+import type { BackupPointDto, BackupPointKind, BackupStatusDto } from '../types';
 
 /**
  * 提示的身份。
@@ -116,5 +116,44 @@ export function restorePointKindKey(kind: string): string {
     (RESTORE_POINT_KIND_KEY as Record<string, string | undefined>)[kind] ??
     'settings.restore_point_kind_other'
   );
+}
+
+/**
+ * 两张表：**现在的密码能打开** 与 **改密码之前的备份**。
+ *
+ * ## 为什么分组判据就是 `needs_old_password`
+ *
+ * 界面分两组的唯一理由是"要用哪个密码"，而那件事后端已经判过了
+ * （[`BackupPointDto.needs_old_password`]）。前端**不许**再从 `kind` 或文件名
+ * 推一遍——两份判据一有分歧，就会出现"标题说这组能用现在的密码、行里却说要用旧密码"
+ * 这种自相矛盾的卡片，而它比不分组更让人糊涂。
+ *
+ * ## 为什么不是"按批次分"
+ *
+ * 批次是磁盘结构（`old-key/<epoch-ms>/`），用户在意的只是"这个要不要另一个密码"。
+ * 换过两次密码的人会有两批，但两批都归"改密码之前"——界面不必让他先理解批次。
+ *
+ * 组内**保持后端给的顺序**（新的在前）：排序是后端的判据（`created_ms` 来自文件名，
+ * 前端拿不到可信时刻），前端重排会让两张表的顺序对不上。
+ */
+export interface PointGroups {
+  /** 现在的密码就能打开（当前代的事件快照、日备份、`last.bak`）。 */
+  current: BackupPointDto[];
+  /** 要用**改密码之前**那个密码才能打开（旧代整批 + 留在当前代的 `pre-rekey`）。 */
+  older: BackupPointDto[];
+}
+
+export function splitPoints(points: readonly BackupPointDto[]): PointGroups {
+  const current: BackupPointDto[] = [];
+  const older: BackupPointDto[] = [];
+  for (const p of points) {
+    (p.needs_old_password ? older : current).push(p);
+  }
+  return { current, older };
+}
+
+/** 一组备份的字节合计（组标题里那句"N 份，共 X"用）。 */
+export function sumBytes(points: readonly BackupPointDto[]): number {
+  return points.reduce((n, p) => n + (Number.isFinite(p.bytes) ? p.bytes : 0), 0);
 }
 

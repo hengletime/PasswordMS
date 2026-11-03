@@ -100,6 +100,7 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
             bytes: p.size_bytes,
             batch_ms: p.batch_ms,
             needs_old_password: p.needs_old_password,
+            pinned: p.pinned,
         })
         .collect();
 
@@ -115,6 +116,58 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
         last_error_kind: st.last_error_kind,
         staleness: backup::staleness(&path, st.last_ms),
         points,
+        // 开关状态一并回：界面上是同一个开关的两面（读和写），分两次读会让
+        // "刚点完还没刷新"这种瞬间显示成反的。
+        retention_on: backup::retention_enabled(&path),
+        retention_days: backup::RETENTION_DAYS,
+    })
+}
+
+/// 钉住 / 取消钉住**一份**回滚点。
+///
+/// 只影响自动清理（[`backup::enforce_retention`]）与轮转（`prune`），**不影响手动删除**
+/// ——钉住是"别自动扔"，不是"扔不掉"。`last.bak` 不允许钉（它每次写入被原地替换，
+/// 钉住等于钉住"永远最新那一份"，语义是空的），后端直接拒。
+#[tauri::command(rename_all = "snake_case")]
+pub fn backup_set_pinned(
+    state: tauri::State<'_, AppState>,
+    point_token: String,
+    pinned: bool,
+) -> IpcResult<()> {
+    let session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo()?;
+    backup::set_pinned(&repo.path(), &point_token, pinned)?;
+    Ok(())
+}
+
+/// 开关"自动清理"。
+#[tauri::command(rename_all = "snake_case")]
+pub fn backup_set_retention(state: tauri::State<'_, AppState>, on: bool) -> IpcResult<()> {
+    let session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo()?;
+    backup::set_retention_enabled(&repo.path(), on)?;
+    Ok(())
+}
+
+/// 删除**一份**回滚点（行级删除），返回删除份数与残留份数。
+///
+/// 为什么要有它：原来只有"删当前代全部"和"删某一批旧代"两个入口，界面因此必须
+/// 长成"候选清单 + 另一个批次列表"——同一个文件在两张表里各出现一次，而用户想删掉
+/// 其中一份时没有任何按钮可按。**粒度比需求粗，界面就只能用布局去补。**
+///
+/// 收 `point_token`（与 `restore_from_point` 同一个标识），不收路径：后端只拿它去
+/// 重新枚举出来的清单里比对，`../..` 匹配不上。
+#[tauri::command(rename_all = "snake_case")]
+pub fn backup_remove_point(
+    state: tauri::State<'_, AppState>,
+    point_token: String,
+) -> IpcResult<BackupClearDto> {
+    let session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo()?;
+    let out = backup::remove_point(&repo.path(), &point_token)?;
+    Ok(BackupClearDto {
+        deleted: out.deleted,
+        remaining: out.remaining,
     })
 }
 

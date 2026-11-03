@@ -246,6 +246,9 @@ pub fn run() {
             commands::backup_cmd::backup_status,
             commands::backup_cmd::backup_clear_current,
             commands::backup_cmd::backup_clear_old_batch,
+            commands::backup_cmd::backup_remove_point,
+            commands::backup_cmd::backup_set_pinned,
+            commands::backup_cmd::backup_set_retention,
             // 「用本机备份退回去」。放在 vault_cmd 而不是 backup_cmd：它要复用
             // `overwrite_vault_with` 与 `vault_path`，与「从备份恢复」共用同一段落位代码。
             commands::vault_cmd::restore_from_point,

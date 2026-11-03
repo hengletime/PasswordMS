@@ -22,7 +22,12 @@
     formatDateTime,
   } from '../lib/constants';
   import { clampClipboardTtl, clampHealthSettings } from '../lib/settings-clamp';
-  import { backupHints, restorePointKindKey } from '../lib/backup-hints';
+  import {
+    backupHints,
+    restorePointKindKey,
+    splitPoints,
+    sumBytes,
+  } from '../lib/backup-hints';
   import {
     BACKUP_STALE_DAYS,
     recordBackup,
@@ -172,21 +177,120 @@
   // 分开存、分开显示，且文案必须各自带边界——同名不同物是本项目踩过的坑。
   let backupStatus = $state<BackupStatusDto | null>(null);
   let backupLoadFailed = $state(false);
+  /**
+   * 两张表：现在的密码能打开 / 改密码之前。
+   *
+   * 分组判据是 `needs_old_password`（后端判的），**不在这里从 kind 或文件名再推一遍**
+   * ——两份判据一有分歧，卡片就会自相矛盾（标题说这组用现在的密码、行里说要用旧密码）。
+   * 见 `lib/backup-hints.ts` 的 `splitPoints`。
+   */
+  const pointGroups = $derived(splitPoints(backupStatus?.points ?? []));
+
+  /**
+   * 两张表的描述。抽成数据是为了**表格只写一遍**：两组除了标题和说明没有区别，
+   * 抄两遍的话下一次加一列就会只加到一半（而模板没法用测试逼着"两处一致"）。
+   *
+   * `noteKey` 用空串表示"这一组不需要额外说明"，而不是 `null`：
+   * 模板里 `{#if table.noteKey !== ''}` 比 `!== null` 少一次类型收窄。
+   */
+  const pointTables = $derived([
+    {
+      group: 'current' as const,
+      rows: pointGroups.current,
+      titleKey: 'settings.restore_point_group_current',
+      noteKey: '',
+    },
+    {
+      group: 'older' as const,
+      rows: pointGroups.older,
+      titleKey: 'settings.restore_point_group_older',
+      noteKey: 'settings.restore_point_old_note',
+    },
+  ]);
   /** 待确认的删除目标（`null` = 弹窗关闭）。 */
   let backupClearTarget = $state<
-    | { kind: 'current'; count: number; bytes: number }
     | {
-        kind: 'batch';
-        /** 批次**身份**：目录名。删除入参就是它，不做任何解析/转换。 */
-        dirName: string;
-        /** 给用户看的批次标签（认得出时刻用本地时间，认不出用目录名原文）。 */
-        label: string;
+        kind: 'group';
+        /** 哪一组（决定确认文案：删旧代要提醒"那把密码在本机没有别的副本了"）。 */
+        group: 'current' | 'older';
         count: number;
+        bytes: number;
+      }
+    | {
+        kind: 'point';
+        /** 与「退回去」同一个标识；后端只拿它去重新枚举的清单里比对。 */
+        token: string;
+        atMs: number;
         bytes: number;
       }
     | null
   >(null);
   let backupClearing = $state(false);
+  /** 正在切换钉住的那一份（token）；`null` = 空闲。防连点，也让那一行的图钉转灰。 */
+  let pinBusy = $state<string | null>(null);
+  /** 自动清理开关正在写盘。 */
+  let retentionBusy = $state(false);
+
+  /**
+   * 钉住 / 取消钉住一份。
+   *
+   * 钉住**只挡自动清理**，不挡手动删除——这个区别必须让用户看得见，所以：
+   * 钉住的那一行图钉变实心、并给 toast 说清"自动清理不会动它，你可以随时删"。
+   *
+   * 用「上一份状态」推新状态（`!point.pinned`），不读 DOM：读 DOM 会在失败重试时
+   * 把状态翻错一次，而这里翻错的方向恰好是"用户以为钉住了、其实没钉"。
+   */
+  async function togglePin(point: BackupPointDto): Promise<void> {
+    if (pinBusy !== null) {
+      return;
+    }
+    pinBusy = point.token;
+    const next = !point.pinned;
+    try {
+      await api.backups.setPinned(point.token, next);
+      ui.toast(
+        'success',
+        next ? 'settings.restore_point_pinned' : 'settings.restore_point_unpinned',
+      );
+    } catch (err) {
+      // 「那一份已经不在盘上了」不该报红：目标已经达成，用户要的是"别再自动删它"，
+      // 而它已经没了。其余失败照实说。
+      const appErr = toAppError(err);
+      ui.toast(
+        'error',
+        appErr.code === ErrorCode.ERR_BACKUP_BUSY
+          ? appErr.messageKey
+          : 'settings.restore_point_pin_failed',
+      );
+    } finally {
+      pinBusy = null;
+      // 成功要重画（图钉状态来自后端），失败也要重画（可能已经被自动清理删掉了）。
+      await refreshBackupStatus();
+    }
+  }
+
+  /**
+   * 开关「自动清理」。
+   *
+   * 关掉只是"以后不再自动删"，**不会撤销已经删掉的**；打开也只是"下次保存时清一次"，
+   * 不是立刻动手。文案必须说清这一点，否则用户会以为点一下就会腾出空间。
+   */
+  async function toggleRetention(e: Event): Promise<void> {
+    const on = (e.currentTarget as HTMLInputElement).checked;
+    retentionBusy = true;
+    try {
+      await api.backups.setRetention(on);
+      ui.toast(
+        'success',
+        on ? 'settings.restore_point_retention_turned_on' : 'settings.restore_point_retention_turned_off',
+      );
+    } catch {
+      ui.toast('error', 'settings.restore_point_retention_failed');
+    } finally {
+      retentionBusy = false;
+      await refreshBackupStatus();
+    }
+  }
   // 「用这份退回去」的确认弹窗。密码**不是**走过场：后端先用它把那一份验一遍，
   // 验不过一个字节都不动、也不锁屏。所以这个框既是一次确认，也是一次校验。
   //
@@ -226,11 +330,17 @@
   }
 
   /**
-   * 删除回滚点（当前代 / 某一批旧代）。
+   * 删除回滚点（一份 / 一组）。
    *
-   * 两个方向相反的单向门，用同一个确认弹窗但**两句不同的话**：
-   * 删当前代要说「旧代不会被删除」，删旧代要说「这是那把密码在本机的唯一副本」。
-   * 不互指的话，用户点完一个就以为清干净了，而两个按钮各自只清一半。
+   * 三种目标都走这一个函数，因为它们的**回执语言**必须一致：删除是逐份尝试的，
+   * 任何一份删不掉都会留下，而界面已经按返回值划掉了。`{deleted, remaining}`
+   * 四格分开说，是唯一能表达"没删干净"的通道。
+   *
+   * 目标不同、**确认文案不同**：
+   * - 删一份 → 说清"删掉之后不能再退回到那一刻"；
+   * - 删当前这一组 → 说清"改密码之前那些不会被删"；
+   * - 删改密码之前那一组 → 说清"那些旧密码在这台电脑上就没副本了"。
+   * 不互指的话，用户点完一个就以为清干净了，而两个方向各自只清一半。
    */
   async function runBackupClear(): Promise<void> {
     const target = backupClearTarget;
@@ -239,17 +349,29 @@
     }
     backupClearing = true;
     try {
-      const out =
-        target.kind === 'current'
-          ? await api.backups.clearCurrent()
-          : await api.backups.clearOldBatch(target.dirName);
+      const out = await (async () => {
+        if (target.kind === 'point') {
+          return api.backups.removePoint(target.token);
+        }
+        if (target.group === 'current') {
+          return api.backups.clearCurrent();
+        }
+        // 旧代按批存在（一次换密一批）。界面不再显示"批次"，但删除仍要一批一批走：
+        // 后端的删除单位就是批次目录，一次一条，回执才能逐批核对。
+        let deleted = 0;
+        let remaining = 0;
+        for (const batch of backupStatus?.old_batches ?? []) {
+          const one = await api.backups.clearOldBatch(batch.dir_name);
+          deleted += one.deleted;
+          remaining += one.remaining;
+        }
+        return { deleted, remaining };
+      })();
       backupClearTarget = null;
       // 「删了几份」不足以说出真相：删除是逐份尝试的，任何一份删不掉都会留下。
-      // 四格必须分开说。
       //
-      // `{0, 0}` 只剩**一个来源**：批次名合法、目录也在枚举里，但清点下来一份都没有
-      // ——也就是"别人已经删掉了，你这次是重试"。非法名早在 core 就被 `Err` 挡下了
-      // （`valid_batch_name`），走不到这里。所以这一格是**目标已达成**，不是失败：
+      // `{0, 0}` 只剩**一个来源**：目标已经不在了（别人删掉了 / 界面没刷）
+      // ——也就是"你这次是重试"。所以这一格是**目标已达成**，不是失败：
       // 给红条会让用户以为出了问题，去反复点第二次。
       if (out.remaining === 0 && out.deleted > 0) {
         ui.toast('success', 'settings.restore_point_cleared', { count: out.deleted });
@@ -1287,128 +1409,156 @@
     {:else if backupStatus === null}
       <p class="pms-meta">{ui.t('common.loading')}</p>
     {:else}
-      {#if backupStatus.staleness === 'never'}
-        <p class="pms-meta">{ui.t('settings.restore_point_never')}</p>
-      {:else}
-        <div class="set-row is-info">
-          <span class="pms-meta">
-            {ui.t('settings.restore_point_current', {
-              count: backupStatus.current_files,
-              size: formatBytes(backupStatus.current_bytes),
-            })}
-          </span>
-        </div>
-      {/if}
       {#if backupStatus.last_ms > 0}
-        <div class="set-row is-info">
-          <span class="pms-meta">
-            {ui.t('settings.restore_point_last_ok', {
-              time: formatDateTime(backupStatus.last_ms, ui.locale),
-            })}
-          </span>
-        </div>
+        <p class="pms-hint">
+          {ui.t('settings.restore_point_last_ok', {
+            time: formatDateTime(backupStatus.last_ms, ui.locale),
+          })}
+        </p>
       {/if}
       <!-- 两行制：只有 `last_error_ms != 0` 才有第二行。这条不是装饰——
            日备份被配额挡了一周、而 last.bak 每天成功时，只有一行"上次成功"会让界面
            天天显示"今天"，用户以为备份链一直是好的。 -->
       {#if backupStatus.last_error_ms > 0}
-        <div class="set-row is-info">
-          <span class="pms-hint is-danger">
-            {ui.t('settings.restore_point_error', {
-              reason: backupReason(backupStatus.last_error_kind),
-              time: formatDateTime(backupStatus.last_error_ms, ui.locale),
-            })}
-          </span>
-        </div>
+        <p class="pms-hint is-danger">
+          {ui.t('settings.restore_point_error', {
+            reason: backupReason(backupStatus.last_error_kind),
+            time: formatDateTime(backupStatus.last_error_ms, ui.locale),
+          })}
+        </p>
       {/if}
 
-      <!-- 「退回去」的入口：**盘上有几份能退的，就列几行**（D-178）。
-           上一版只认 `pre-restore`，而那个文件只有在用户已经做过一次恢复之后才存在
-           —— 按钮于是几乎永不出现。空清单时不渲染任何按钮：没有可退的东西，
-           按钮留着就是一句做不到的承诺。
+      <!-- D-178 / D-179：盘上有几份能退的，就列几行；**一行一份、行内两个按钮**。
+           上一版是"每份三行文字 + 右侧一个长按钮"，主人的原话是「搞得这么麻烦，
+           看上去也累」。累的根源不是字多，而是**同一件事要在两张表里各看一遍**：
+           一张候选清单、下面又一张旧代批次表，同一个文件在两处各出现一次。
+           现在按"要用哪个密码"只分两张表，表里一行一份，行内只有「退回去」「删除」。
 
-           每行必须说清两件事：**这是哪一步的备份**（回到哪一刻）和**要不要旧密码**。
-           后者不能只写在下面的提示里——用户是照着行文字决定点哪一行的。 -->
-      {#if backupStatus.points.length > 0}
-        <h4>{ui.t('settings.restore_point_pick')}</h4>
-        <ul class="set-list">
-          {#each backupStatus.points as point (point.token)}
-            <li class="set-list-row is-point">
-              <span class="set-point">
-                <span class="set-point-when">{formatDateTime(point.at_ms, ui.locale)}</span>
-                <span class="pms-hint">{ui.t(restorePointKindKey(point.kind))}</span>
-                {#if point.needs_old_password}
-                  <span class="pms-hint is-danger">
-                    {ui.t('settings.restore_point_needs_old_pwd')}
-                  </span>
-                {/if}
-              </span>
-              <button
-                class="pms-btn is-ghost is-sm"
-                type="button"
-                onclick={() => {
-                  restorePointTarget = point;
-                  restorePointPwd = '';
-                  restorePointOpen = true;
-                }}
-              >
-                {ui.t('settings.restore_point_restore')}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-
-      {#if backupStatus.current_files > 0}
-        <button
-          class="pms-btn is-ghost"
-          type="button"
-          onclick={() =>
-            (backupClearTarget = {
-              kind: 'current',
-              count: backupStatus?.current_files ?? 0,
-              bytes: backupStatus?.current_bytes ?? 0,
-            })}
-        >
-          {ui.t('settings.restore_point_clear_current')}
-        </button>
-      {/if}
-
-      {#if backupStatus.old_files > 0}
-        <h4>{ui.t('settings.restore_point_old_title')}</h4>
-        <p class="pms-hint">{ui.t('settings.restore_point_old_note')}</p>
-        <ul class="set-list">
-          {#each backupStatus.old_batches as batch (batch.dir_name)}
-            {@const label =
-              batch.batch_ms === null
-                ? batch.dir_name
-                : formatDateTime(batch.batch_ms, ui.locale)}
-            <li class="set-list-row">
-              <span class="pms-meta">
-                {ui.t('settings.restore_point_old_batch', {
-                  time: label,
-                  count: batch.files,
-                  size: formatBytes(batch.bytes),
+           空清单时一句都不渲染：没有可退的东西，按钮留着就是一句做不到的承诺。 -->
+      {#if backupStatus.points.length === 0}
+        <p class="pms-meta">{ui.t('settings.restore_point_never')}</p>
+      {:else}
+        <p class="pms-hint">{ui.t('settings.restore_point_table_hint')}</p>
+        {#each pointTables as table (table.group)}
+          {#if table.rows.length > 0}
+            <div class="set-group-head">
+              <h4>
+                {ui.t(table.titleKey, {
+                  count: table.rows.length,
+                  size: formatBytes(sumBytes(table.rows)),
                 })}
-              </span>
+              </h4>
               <button
-                class="pms-btn is-ghost"
+                class="pms-btn is-ghost is-sm set-danger"
                 type="button"
                 onclick={() =>
                   (backupClearTarget = {
-                    kind: 'batch',
-                    dirName: batch.dir_name,
-                    label,
-                    count: batch.files,
-                    bytes: batch.bytes,
+                    kind: 'group',
+                    group: table.group,
+                    count: table.rows.length,
+                    bytes: sumBytes(table.rows),
                   })}
               >
-                {ui.t('settings.restore_point_clear_batch')}
+                {ui.t('settings.restore_point_clear_group')}
               </button>
-            </li>
-          {/each}
-        </ul>
+            </div>
+            {#if table.noteKey !== ''}
+              <p class="pms-hint">{ui.t(table.noteKey)}</p>
+            {/if}
+            <table class="set-table">
+              <thead>
+                <tr>
+                  <th scope="col">{ui.t('settings.restore_point_col_time')}</th>
+                  <th scope="col">{ui.t('settings.restore_point_col_what')}</th>
+                  <th scope="col" class="col-actions">
+                    {ui.t('settings.restore_point_col_actions')}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each table.rows as point (point.token)}
+                  <tr>
+                    <td class="col-time">{formatDateTime(point.at_ms, ui.locale)}</td>
+                    <td>{ui.t(restorePointKindKey(point.kind))}</td>
+                    <td class="col-actions">
+                      <button
+                        class="pms-btn is-ghost is-sm"
+                        type="button"
+                        onclick={() => {
+                          restorePointTarget = point;
+                          restorePointPwd = '';
+                          restorePointOpen = true;
+                        }}
+                      >
+                        {ui.t('settings.restore_point_retreat')}
+                      </button>
+                      <!-- 钉住做成图标按钮：它是"别自动删"的一个附加开关，不是主操作。
+                           给文字按钮会和「退回去 / 删除」抢注意力，而主人要的是
+                           「一行一条，有删除按钮/恢复按钮就好了」。 -->
+                      <button
+                        class="pms-icon-btn set-pin"
+                        class:is-pinned={point.pinned}
+                        type="button"
+                        aria-pressed={point.pinned}
+                        aria-label={ui.t(
+                          point.pinned
+                            ? 'settings.restore_point_unpin'
+                            : 'settings.restore_point_pin',
+                        )}
+                        title={ui.t(
+                          point.pinned
+                            ? 'settings.restore_point_unpin'
+                            : 'settings.restore_point_pin',
+                        )}
+                        disabled={pinBusy === point.token}
+                        onclick={() => void togglePin(point)}
+                      >
+                        <Icon name="pin" size={15} />
+                      </button>
+                      <button
+                        class="pms-btn is-ghost is-sm set-danger"
+                        type="button"
+                        onclick={() =>
+                          (backupClearTarget = {
+                            kind: 'point',
+                            token: point.token,
+                            atMs: point.at_ms,
+                            bytes: point.bytes,
+                          })}
+                      >
+                        {ui.t('settings.restore_point_remove')}
+                      </button>
+                    </td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          {/if}
+        {/each}
       {/if}
+
+      <!-- 自动清理：一个开关 + 一句人话。
+           不做档位下拉（主人：「所有的功能越简单越好」），天数与份数由后端给。
+           关掉之后一份都不删——这是"我自己管"的唯一表达方式。 -->
+      <div class="set-retention">
+        <div class="set-row is-check">
+          <span class="set-label">{ui.t('settings.restore_point_retention_on')}</span>
+          <label class="pms-check">
+            <input
+              type="checkbox"
+              checked={backupStatus.retention_on}
+              disabled={retentionBusy}
+              onchange={(e) => void toggleRetention(e)}
+            />
+          </label>
+        </div>
+        <p class="pms-hint">
+          {ui.t('settings.restore_point_retention_note', {
+            days: backupStatus.retention_days,
+          })}
+        </p>
+      </div>
+
       <!-- 盘上有、界面删不了（名字认不出，或目录读不出）。不说出来就是"假装没有"；
            也不能给它的名字编一个 `to_string_lossy` 的版本——那个假名字永远匹配不上，
            用户删的时候会被告知"不存在"，而它明明在。
@@ -1697,27 +1847,30 @@
   {/snippet}
 </Modal>
 
-<!-- B-03：回滚点删除确认。两个方向相反的单向门用同一个弹窗、两句不同的话——
-     删当前代要说"旧代不会被删除"，删旧代要说"这是那把密码在本机的唯一副本"。
-     不互指的话，用户点完一个就以为清干净了。 -->
+<!-- 删除确认。三种目标、三句不同的话，缺一句就会让人点错：
+     删一份要说"删掉之后不能再退回到那一刻"；删当前这一组要说"改密码之前那些不会被删"；
+     删改密码之前那一组要说"那些旧密码在这台电脑上就没有副本了"。
+     不互指的话，用户点完一个就以为清干净了，而每个方向各自只清一半。 -->
 <Modal
   open={backupClearTarget !== null}
-  titleKey={backupClearTarget?.kind === 'batch'
-    ? 'settings.restore_point_clear_batch'
-    : 'settings.restore_point_clear_current'}
+  titleKey="settings.restore_point_clear_title"
   onclose={() => (backupClearTarget = null)}
 >
   <p class="pms-alert is-danger">
     <Icon name="alert" size={16} />
     <span>
-      {#if backupClearTarget?.kind === 'batch'}
-        {ui.t('settings.restore_point_clear_batch_confirm', {
-          time: backupClearTarget.label,
+      {#if backupClearTarget?.kind === 'point'}
+        {ui.t('settings.restore_point_remove_confirm', {
+          time: formatDateTime(backupClearTarget.atMs, ui.locale),
+          size: formatBytes(backupClearTarget.bytes),
+        })}
+      {:else if backupClearTarget?.kind === 'group' && backupClearTarget.group === 'older'}
+        {ui.t('settings.restore_point_clear_group_confirm_older', {
           count: backupClearTarget.count,
           size: formatBytes(backupClearTarget.bytes),
         })}
       {:else}
-        {ui.t('settings.restore_point_clear_current_confirm', {
+        {ui.t('settings.restore_point_clear_group_confirm', {
           count: backupClearTarget?.count ?? 0,
           size: formatBytes(backupClearTarget?.bytes ?? 0),
         })}
@@ -1905,24 +2058,67 @@
   .set-name {
     font-size: 0.88rem;
   }
-  /* 「退回去」清单的一行：左边"什么时候 + 是哪一步（+ 要不要旧密码）"，右边一个按钮。
-     左格必须是列方向：三行信息挤在一行里，窄屏上先被挤没的就是"要用旧密码"那句
-     —— 而它恰恰是用户最需要看见的一句（试错成本最高）。 */
-  .set-list-row.is-point {
-    align-items: flex-start;
-  }
-  .set-point {
+  /* 「能退回去的备份」两张表（D-179：主人要「一行一条，有删除按钮/恢复按钮就好了」）。
+     用表格而不是卡片列表：三列天然上下对齐，扫一眼就能比"哪份更近、哪份是哪一步"。
+     只做排版，字号与配色一律继承 `.pms-meta` / `.pms-hint` 与 CSS 变量。 */
+  .set-group-head {
     display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    gap: 0.1rem;
-    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin: 0.9rem 0 0.2rem;
   }
-  .set-point-when {
-    font-size: 0.88rem;
-    color: var(--pms-fg);
-    /* 等宽数字：一列时间上下对齐，扫一眼就知道哪份更近。 */
+  .set-group-head h4 {
+    margin: 0;
+  }
+  .set-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+    margin: 0.3rem 0 0.6rem;
+  }
+  .set-table th {
+    text-align: left;
+    font-weight: 500;
+    font-size: 0.78rem;
+    color: var(--pms-muted);
+    padding: 0.25rem 0.4rem;
+    border-bottom: 1px solid var(--pms-border);
+  }
+  .set-table td {
+    padding: 0.3rem 0.4rem;
+    border-bottom: 1px solid var(--pms-border);
+    vertical-align: middle;
+  }
+  .set-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+  /* 等宽数字：一列时间上下对齐。 */
+  .set-table .col-time {
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .set-table .col-actions {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .set-table .col-actions > * + * {
+    margin-left: 0.35rem;
+  }
+  /* 钉住的图钉：实心变强调色。颜色是**唯一**能说明"这份不会被自动删"的行内标记，
+     所以不能只靠 `aria-pressed`——屏幕上看不见的东西等于没说。 */
+  .set-pin.is-pinned {
+    color: var(--pms-accent);
+  }
+  .set-pin.is-pinned:hover {
+    color: var(--pms-accent);
+  }
+  .set-pin:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .set-retention {
+    margin-top: 1rem;
   }
   .set-danger {
     color: var(--pms-danger);

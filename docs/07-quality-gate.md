@@ -238,6 +238,75 @@ D-174 的第一版让 `remove_folder_direct` 在删壳的同一次操作里把�
   -newer <裸 exe>` 排除 `target/` 与 `src-tauri/gen/` 后**输出为空**——没有源文件或文档
   晚于 exe，说明树在构建前就冻结了。
 
+### 1.2k 最近一次完整实跑（2026-11-03 17:25 起 · v1.5.32 · D-179/D-180）
+
+> 口径：`bash scripts/gate-all.sh`，整轮墙钟 **8 分 11 秒**（17:25:37 起 / 17:33:48 止，
+> `stat` 实测）。总判定 **PASS（通过 11 门 / 跳过 0 门 / 失败 0）**。
+> **锚：HEAD `4a23f63`，开工时工作区已有未提交改动（版本号 + 本轮代码）。
+> 锚自检比对"整轮期间 HEAD 与工作区文件集合未变"——通过，故读数可引用。**
+
+| # | 门 | 本次实测（v1.5.32） | 判定 |
+|---|----|------|------|
+| 0 | **版本同步门** | 四处一致 `1.5.32` + `cargo metadata --locked --offline` 通过 | ✅ 2s |
+| 1 | 前端单测 | **85 文件 819/819 通过**（1.5.31 是 85/816：+3 例，钉住/自动清理接线） | ✅ 5s |
+| 2 | 前端类型检查 | **0 errors / 0 warnings** | ✅ 6s |
+| 3 | CSS 层叠契约 | **0 FAIL / 6 WARN**（既有浅色按钮对比度，已知项） | ✅ 1s |
+| 4 | fmt | **0 处差异** | ✅ 0s |
+| 5 | Rust 全量 | **410 通过 / 0 失败 / 1 ignored / 47 个测试二进制**（400 → 410：+11 例备份，-1 例撤销的总量上限） | ✅ 455s |
+| 6 | clippy | **0 warning**（`--workspace --all-targets`） | ✅ 10s |
+| 7 | 体积门-桌面 | 只核验 `PasswordMS_1.5.32_*` 两件 | ✅ 5s |
+| 8 | 体积门-Android | **7.52 MB ≤ 12 MB**（本轮先出包再跑门，不再跳过） | ✅ 0s |
+| 9 | 体积门-Android（复跑） | 同上一件，`check-size.sh android` 直跑 | ✅ 1s |
+
+### ⚠️ 这一轮第一次跑是 FAIL 的（必须记下来，否则下次会当成"门禁很严"）
+
+第一次 `gate-all.sh` 跑在 16:41，**Rust 全量 2625s 后失败**：
+
+```
+case1_end_to_end_attachment_blob_sync  panicked: 回环配对握手失败: ERR_PAIR_TOKEN_EXPIRED
+case5_bidirectional_symmetric_sync     panicked: reply_recv|io:unexpected end of file
+test result: FAILED. 10 passed; 2 failed  (sync_blob, 2377s)
+```
+
+单独复跑同一个二进制：**12/12 通过，26.79s**（`cargo test -p passwordms-core --test
+sync_blob --target x86_64-pc-windows-gnullvm`）。
+
+**判定：负载导致的偶发，不是回归。** 依据三条：
+
+1. 该文件在两次运行里**代码零改动**（本轮改动只有 `store/backup.rs` + DTO + 设置页）。
+2. 配对令牌的 TTL 按**真实墙钟**算（`client::pair(&qr, ..., now_ms())`），同一份用例
+   27s 跑完 vs 2377s 跑完，差 88 倍——超时是被机器拖出来的，不是逻辑变了。
+3. 失败的两条都发生在握手/收发阶段，`unexpected end of file` 是对端线程先 panic
+   之后的自然 EOF，属于**同一次卡顿的两个表现**，不是两个独立缺陷。
+
+第二次整轮重跑：**11 门全绿，Rust 455s**。**但这是一次"重跑即绿"，按 §1.4 的纪律
+不能当成"修好了"**——真正的结论是：`sync_blob` 在重负载下可偶发失败，属**已知未修**，
+下次撞见先单跑确认，不要顺手去改同步逻辑。
+
+**出包（同日 16:34–16:41 实测，非推算）**：桌面构建 2 分 46 秒、Android 构建 3 分 27 秒。
+
+| 产物 | 字节 | sha256 前缀 |
+|---|---|---|
+| `PasswordMS_1.5.32_x64-setup.exe`（NSIS） | 2,110,636 | `2cd68bca5f70` |
+| `PasswordMS_1.5.32_x64_en-US.msi` | 2,985,984 | `97622392cb28` |
+| `PasswordMS-1.5.32-portable-x64.zip`（4 条目） | 2,489,778 | `f701a50af87e` |
+| `PasswordMS-1.5.32-arm64.apk`（V3 签名 + zipalign） | 7,889,323 | `fc24737afa18` |
+| 裸 exe | 5,122,560 | `e2677e1d4c8c` |
+
+- **体积门（出包后 `check-size.sh desktop|android` 不加 `--allow-missing`）**：三件逐一达标
+  （NSIS 2.01 MB / MSI 2.85 MB / APK 7.52 MB），且只核验 1.5.32。
+- **zip 内 exe ↔ 裸 exe**：`e2677e1d4c8c…` 两边逐字节相同。
+- **双端同源**：`assets/index-CLEJgpGZ.js` 在 dist、裸 exe、APK 三处一致（字节级搜名字）；
+  两个包里都**只有这一个** `index-*.js`，没有旧资源残留。
+- **NSIS 端到端静默安装**：`/S /D=<tmp>` 退出码 0，落地 exe `FileVersion = 1.5.32`、
+  `ProductVersion = 1.5.32`、5,122,560 B（安装后哈希与裸 exe 不同属正常，NSIS 改写资源段）。
+- **产物新鲜度**：`find src src-tauri/src crates docs scripts package.json Cargo.toml
+  -newer <APK>`（排除 `src-tauri/gen/`）**输出为空**；对裸 exe 同样为空——
+  树在两次构建之前就冻结了。
+  **一处如实登记**：`dist/` 的时间戳晚于桌面 exe 10 秒，原因是 Android 链会**再跑一次**
+  前端构建（`beforeBuildCommand`）。两次产出的资源名同为 `index-CLEJgpGZ.js`，
+  内容一致，不影响判据；但"看 mtime 判新鲜度"时**不要拿 dist 去比 exe**。
+
 ### 1.2b 最近一次完整实跑（2026-10-30 11:40 起 · v1.4.16 · D-133/D-134）
 
 > 口径：`bash scripts/gate-all.sh --keep-going` 一次跑完 8 门，文件树在起跑前已静止（构建产物晚于全部源码）。

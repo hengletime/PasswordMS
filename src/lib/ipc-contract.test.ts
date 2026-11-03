@@ -321,8 +321,16 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   自己认 `pre-restore`——那个文件只有做过一次恢复之后才存在，按钮于是几乎永不出现。
     //   收 token 而不是路径是硬约束：路径进来就等于给 WebView 一个"用任意文件覆盖库"
     //   的入口；token 只能命中**重新枚举出来的**备份清单里的同名项。
-    expect(total).toBe(80);
-    expect(withAttr).toBe(80);
+    // D-179（同一轮界面改表格）：+1（backup_remove_point），属性 80 → 81、命令名 76 → 77。
+    //   行级删除。此前只有"删当前代全部"和"删某一批旧代"两个粒度，于是界面被迫长成
+    //   "候选清单 + 另一个批次列表"——同一个文件出现两次，而"我只想删掉这一份"没按钮可按。
+    //   新的 granularity 只增不减：两条 clear 仍在（一次清空是合法需求，且它一次枚举就
+    //   能说清"删了几份、还剩几份"）。三条路共用同一条判据：标识必须是枚举出来的那一个。
+    // D-180（同日，主人：「旧备份可以人为增加钉住」「再增加定期清空的功能」）：
+    //   +2（backup_set_pinned / backup_set_retention），属性 81 → 83、命令名 77 → 79。
+    //   两条都只收 token / 布尔，不收路径——前端拿不到任何"指哪删哪"的能力。
+    expect(total).toBe(83);
+    expect(withAttr).toBe(83);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
@@ -331,8 +339,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(80);
-    expect(new Set(names).size).toBe(76);
+    expect(names.length).toBe(83);
+    expect(new Set(names).size).toBe(79);
   });
 });
 
