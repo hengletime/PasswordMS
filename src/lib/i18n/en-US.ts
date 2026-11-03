@@ -482,7 +482,7 @@ export const enUS: Messages = {
     restore_point_cleared_gone: 'That restore point is no longer on disk, so there was nothing to delete.',
     // Neither of these may assert what is inside: "still takes up disk space" was a claim
     // about content we never saw. For `None` we could not even list `old-key/`.
-    restore_point_old_unreadable: '{count} old-batch folder(s) could not be identified or read and cannot be deleted here; they may still hold old-key backups and must be handled manually.',
+    restore_point_old_unreadable: '{count} old-batch folder(s) could not be identified or read and cannot be deleted here; they may still hold backups your old master password can open, and must be handled manually.',
     restore_point_old_unreadable_uncounted: 'The old-batch folders could not be read, so the number is unknown; please open the backup folder and handle them manually.',
     restore_point_failed: 'Delete failed: the restore points are still on this device. Please try again later.',
     restore_point_load_failed: 'Could not read the restore point status (your entries are not affected).',
