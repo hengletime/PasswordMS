@@ -480,8 +480,8 @@ export const enUS: Messages = {
     restore_point_cleared_gone: 'That backup is no longer on disk, so there was nothing to delete.',
     // Neither of these may assert what is inside: "still takes up disk space" was a claim
     // about content we never saw. For `None` we could not even list `old-key/`.
-    restore_point_old_unreadable: '{count} backup folder(s) cannot be opened, so they cannot be deleted here. They may hold backups your old password can still open — please handle them manually.',
-    restore_point_old_unreadable_uncounted: 'Some backup folders cannot be opened, so the count is unknown. They may hold backups your old password can still open — please look in the backup folder and handle them manually.',
+    restore_point_old_unreadable: '{count} backup folder(s) cannot be opened, so they cannot be deleted here. They may hold backups your old master password can still open — please handle them manually.',
+    restore_point_old_unreadable_uncounted: 'Some backup folders cannot be opened, so the count is unknown. They may hold backups your old master password can still open — please look in the backup folder and handle them manually.',
     restore_point_failed: 'Delete failed: the backups are still on this device. Please try again later.',
     restore_point_load_failed: 'Could not read the backup status (your entries are not affected).',
     restore_point_restore_title: 'Go back with this backup',

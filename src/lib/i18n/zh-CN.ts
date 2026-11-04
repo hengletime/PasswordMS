@@ -516,11 +516,11 @@ export const zhCN = {
     // 有数字那格也只说"可能有"，`Some(n)` 只保证我们数出了 n 个目录，不保证里面还有备份。
     // 说的是"旧**主密码**能打开的备份"，不说"旧钥匙"：本版本换密码只换锁、不换钥匙，
     // 两种说法混用会让用户以为换密码换了钥匙（en-US 曾写 `old-key backups`，同病）。
-    restore_point_old_unreadable: '{count} 个备份文件夹打不开，没法在这里删除。里面有旧密码还能打开的备份，需要你手动处理。',
+    restore_point_old_unreadable: '{count} 个备份文件夹打不开，没法在这里删除。里面可能有旧主密码还能打开的备份，需要你手动处理。',
     // 数不清的那格**不出现数字**（连有几个都不知道，出现占位符就是"无法统计 null 个"），
     // 但**必须给后果**——只说"读不出"用户没有动机去翻文件夹。后果用"可能"有界：
     // 我们确实没看进去，所以能说"可能有"，不能断言"有"。
-    restore_point_old_unreadable_uncounted: '有备份文件夹打不开，数不清有几个。里面有旧密码还能打开的备份，请到备份文件夹里手动看看。',
+    restore_point_old_unreadable_uncounted: '有备份文件夹打不开，数不清有几个。里面可能有旧主密码还能打开的备份，请到备份文件夹里手动看看。',
     restore_point_failed: '删除失败：备份还在这台电脑上，请稍后重试。',
     restore_point_load_failed: '读取失败：拿不到备份信息（你的条目没有受影响）。',
     restore_point_restore_title: '用这份备份退回去',
