@@ -172,11 +172,31 @@ fn register(app: &AppHandle, main: Option<&str>, autotype: Option<&str>) -> Resu
         gs.on_shortcut(shortcut, |app: &AppHandle, _sc: &Shortcut, event| {
             if event.state() == ShortcutState::Pressed {
                 // 与主热键同一条锁屏分叉：锁着时浮层没有条目可选，用户要做的是输主密码。
-                if unlocked(app) {
-                    capture_autotype_target(app);
+                if !unlocked(app) {
+                    crate::tray::show_main(app);
+                    return;
+                }
+                // 浮层已可见 → 再按一次收起（与快速搜索同一个开关键语义）。
+                // 必须先判可见性：此时前台就是浮层自己（本进程），不判的话下面
+                // 的"排除自身"会把它当成不可输入目标，热键变成只能开不能关。
+                if app
+                    .get_webview_window(crate::autotype::LABEL)
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false)
+                {
+                    crate::autotype::hide(app);
+                    return;
+                }
+                // 记录目标成功才唤浮层：捕获不到 / 前台是本进程自己的窗口（主窗口、
+                // 快速搜索小窗等）时不弹——否则密码会被打进我们自己的条目表单
+                // （M1：用户焦点在主窗口时按热键，整串凭据正好填进正在编辑的输入框）。
+                if capture_autotype_target(app) {
                     crate::autotype::show(app);
                 } else {
-                    crate::tray::show_main(app);
+                    crate::state::append_log(
+                        app,
+                        "[autotype] 前台窗口不可作为输入目标（自身进程或无焦点窗口），本次不唤浮层",
+                    );
                 }
             }
         })
@@ -189,30 +209,67 @@ fn register(app: &AppHandle, main: Option<&str>, autotype: Option<&str>) -> Resu
 /// 把**此刻的前台窗口**记为自动输入目标（仅 Windows；其它桌面平台无事可记，
 /// 注入命令在那些平台上本来就会报 `ERR_NOT_SUPPORTED`）。
 ///
+/// 返回是否记录成功。**本进程自己的窗口一律不记**（M1）：焦点在主窗口 / 快速搜索
+/// 小窗 / 浮层自己时按热键，注入会把凭据打进我们自己的界面（最坏的落点是用户
+/// 正在编辑的条目表单，一按保存就入库）。同时记录窗口所属进程 id，注入前复核。
+///
 /// 必须在唤出浮层**之前**记：浮层 `show + set_focus` 之后前台就是浮层自己了。
 #[cfg(windows)]
-fn capture_autotype_target(app: &AppHandle) {
-    use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+fn capture_autotype_target(app: &AppHandle) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
     let Some(state) = app.try_state::<crate::state::AppState>() else {
-        return;
+        return false;
     };
     // SAFETY: 无参数、无副作用句柄，只读当前前台窗口。
     let hwnd = unsafe { GetForegroundWindow() };
     let raw = hwnd.0 as isize;
-    // 锁的临时值在本语句内结束（借到 state 的 guard 不能活到函数尾，E0597）。
+    if raw == 0 {
+        return store_target(app, &state, None);
+    }
+    // SAFETY: hwnd 是刚刚读到的前台窗口句柄；只读其所属进程 id，不保留任何指针。
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    }
+    if pid == 0 || pid == std::process::id() {
+        // pid == 0：取不到（窗口可能正在销毁），按"无目标"处理；
+        // pid == 自己：M1，绝不把自己记成注入目标。
+        return store_target(app, &state, None);
+    }
+    store_target(
+        app,
+        &state,
+        Some(crate::state::AutotypeTarget { hwnd: raw, pid }),
+    )
+}
+
+/// 写目标记录；锁中毒按"未记录"返回。
+#[cfg(windows)]
+fn store_target(
+    app: &AppHandle,
+    state: &crate::state::AppState,
+    target: Option<crate::state::AutotypeTarget>,
+) -> bool {
+    // 锁的临时值在本语句内结束（借到 state 的 guard 不能活到调用方栈帧，E0597）。
     let stored = state
         .autotype_target
         .lock()
-        .map(|mut guard| *guard = (raw != 0).then_some(raw));
-    if stored.is_err() {
-        crate::state::append_log(app, "[autotype] 状态锁中毒，目标窗口未记录");
+        .map(|mut guard| *guard = target);
+    match stored {
+        Ok(()) => target.is_some(),
+        Err(_) => {
+            crate::state::append_log(app, "[autotype] 状态锁中毒，目标窗口未记录");
+            false
+        }
     }
 }
 
 /// 非 Windows 桌面平台没有前台窗口要记（注入命令会报 `ERR_NOT_SUPPORTED`）。
 #[cfg(not(windows))]
-fn capture_autotype_target(_app: &AppHandle) {}
+fn capture_autotype_target(_app: &AppHandle) -> bool {
+    false
+}
 
 /// 会话是否已解锁。委托给 `AppState::session_unlocked`（锁中毒按未解锁处理）。
 fn unlocked(app: &AppHandle) -> bool {

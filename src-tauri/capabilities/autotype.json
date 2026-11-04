@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "autotype",
-  "description": "自动输入浮层（1.5.39）：只给它「把自己藏起来」这一项窗口能力，加上事件监听。",
+  "description": "自动输入浮层（1.5.39）：只给它「把自己藏起来」这一项窗口能力，加上事件监听。注意：capability 只约束 Tauri 内置命令；本应用自定义的 #[tauri::command]（含 auto_type_fill）不受它约束，浮层窗口的身份校验由命令内部做（见 docs/02 §9 与 autotype_cmd.rs 的 S3 校验）。",
   "windows": ["autotype"],
   "permissions": ["core:default", "core:window:allow-hide"]
 }

@@ -32,8 +32,9 @@ use passwordms_core::model::ItemKind;
 use passwordms_core::securemem::Zeroizing;
 use passwordms_core::CoreError;
 
+use crate::dto::AutotypeCandidateDto;
 use crate::error::{lock_err, shell_codes, IpcError, IpcResult};
-use crate::state::AppState;
+use crate::state::{AppState, AutotypeTarget};
 
 /// 每个字符注入后的间隔（毫秒）。SendInput 是异步进系统队列的，太快会被
 /// 目标应用的输入处理吞掉；6ms 是保守起点，真机再调。
@@ -54,13 +55,23 @@ const FOCUS_SETTLE_MS: u64 = 200;
 #[tauri::command(rename_all = "snake_case")]
 pub async fn auto_type_fill(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     item_id: String,
     action: String,
 ) -> IpcResult<()> {
-    // Android 上没有浮层可藏，`app` 无用武之地；下划线前缀防 unused 警告。
+    // Android 上没有浮层可藏、也没有窗口身份要查；下划线前缀防 unused 警告。
     #[cfg(not(desktop))]
-    let _ = &app;
+    let _ = (&app, &window);
+    // 【S3】只有浮层窗口能调这条命令。Tauri 的自定义命令不受 capability 约束
+    // （docs/02 §9 有记）：任何窗口的 JS 都能 invoke 任意自定义命令，而这是唯一
+    // 会把密钥"打"进任意前台窗口的命令——多一道窗口身份锁，正常路径零成本。
+    #[cfg(desktop)]
+    if window.label() != crate::autotype::LABEL {
+        return Err(IpcError::from(CoreError::Validation(
+            "auto_type_window".to_string(),
+        )));
+    }
     // 入口闸门：未解锁直接拒（错误码与其它会话命令同一张表）。
     if !state.session_unlocked() {
         return Err(IpcError::from(CoreError::NotUnlocked));
@@ -74,43 +85,53 @@ pub async fn auto_type_fill(
         .map_err(|_| IpcError::from(CoreError::Validation("auto_type_action".to_string())))?;
 
     // ── 取明文（与 get_item 同一条解密路径；会话锁只跨解密，不跨注入）──
-    let mut fields = {
+    let fields = {
         let session = state.lock_session().map_err(lock_err)?;
         let mut item = session.repo()?.get_item(&item_id)?;
-        let ItemKind::Login(data) = &item.kind else {
-            return Err(IpcError::from(CoreError::Validation(
-                "auto_type_not_login".to_string(),
-            )));
+        // 【M4】先算字段、**再无条件擦整条条目**：此前的 `let else { return }` 早退
+        // 会跳过擦除，把解密后的条目明文（含附件文件名）整份留在堆上。这里把
+        // 非登录条目折成 `None`，擦除语句在任何分支都得执行到。
+        let fields = match &item.kind {
+            ItemKind::Login(data) => Some(Fields {
+                // 一到手立刻 Zeroizing 包住（照 copy_secret 先例）。URL 与 TOTP 密钥
+                // 同属用户私密（「访问了哪个站点、用了哪个账号」），一并按敏感托管。
+                username: data
+                    .username
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .map(Zeroizing::new),
+                password: data
+                    .password
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .map(Zeroizing::new),
+                url: data
+                    .url
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .map(Zeroizing::new),
+                totp: data
+                    .totp_secret
+                    .clone()
+                    .filter(|s| !s.is_empty())
+                    .map(Zeroizing::new),
+            }),
+            _ => None,
         };
-        // 一到手立刻 Zeroizing 包住（照 copy_secret 先例）。URL 与 TOTP 密钥同属
-        // 用户私密（「访问了哪个站点、用了哪个账号」），一并按敏感字符串托管。
-        let fields = Fields {
-            username: data
-                .username
-                .clone()
-                .filter(|s| !s.is_empty())
-                .map(Zeroizing::new),
-            password: data
-                .password
-                .clone()
-                .filter(|s| !s.is_empty())
-                .map(Zeroizing::new),
-            url: data
-                .url
-                .clone()
-                .filter(|s| !s.is_empty())
-                .map(Zeroizing::new),
-            totp: data
-                .totp_secret
-                .clone()
-                .filter(|s| !s.is_empty())
-                .map(Zeroizing::new),
-        };
-        // 条目其余明文字段（标题/备注/原始字段…）用完即擦，
-        // 不让整份明文条目副本活到注入结束。
-        item.kind.wipe_plaintext();
+        // 整条擦除：kind 内的字段 + 内嵌附件的原始文件名（`Item::wipe_plaintext`）。
+        item.wipe_plaintext();
         fields
     };
+    let Some(mut fields) = fields else {
+        return Err(IpcError::from(CoreError::Validation(
+            "auto_type_not_login".to_string(),
+        )));
+    };
+    // 【S7】非 totp 动作不需要 TOTP 密钥：当场丢掉，不让它进注入层（少一份
+    // 在阻塞线程上存活的秘密副本）。
+    if action_key != "totp" {
+        fields.totp = None;
+    }
 
     // ── 动作级必填校验 ──
     match action_key.as_str() {
@@ -145,14 +166,23 @@ pub async fn auto_type_fill(
     // totp 动作：现算动态码（core 唯一 TOTP 入口；密钥可能是 otpauth URI，由
     // `totp::code_at` 内部抽 secret，见其文档）。算出的 6 位码同样按敏感托管。
     if action_key == "totp" {
-        let secret = fields.totp.as_ref().expect("totp 动作已校验密钥非空");
+        // 上面的动作级校验已经拦过 `None`，但这里**不许 unwrap**：这句话跑在
+        // 持锁之后的注入路径上，一旦校验逻辑将来被改动，panic 会跨过 unwind 边界
+        // 把整个 IPC 线程带走（前端只看到 invoke 永远不 resolve）。取不到就照样
+        // 报同一个错误码——用户看到的话与校验路径完全一致。
+        let Some(secret) = fields.totp.as_ref() else {
+            return Err(IpcError::shell(
+                shell_codes::ERR_AUTOTYPE_NO_TOTP,
+                "err.autotype_no_totp",
+            ));
+        };
         let passwordms_core::totp::TotpCode { code, .. } =
             passwordms_core::totp::now(secret).map_err(IpcError::from)?;
         fields.totp = Some(Zeroizing::new(code));
     }
 
-    // 热键触发时记录的目标窗口原始句柄（0 = 未记录，注入前校验必拒）。
-    let target_raw = state.autotype_target.lock().map_err(lock_err)?.unwrap_or(0);
+    // 热键触发时记录的目标窗口（句柄 + pid；None = 未记录/是自身窗口，注入前必拒）。
+    let target = *state.autotype_target.lock().map_err(lock_err)?;
 
     // 注入前先把浮层藏起来：它此刻是前台窗口，不藏就等于"往自己身上打"。
     // 失焦即收起（lib.rs on_window_event）通常已把它藏了，这里显式再藏一次防竞态。
@@ -170,17 +200,56 @@ pub async fn auto_type_fill(
         .map_err(|_| IpcError::internal("auto_type_template_parse"))?;
 
     // ── 注入（平台对称；会话锁已释放，阻塞注入不占锁，也不阻塞 IPC 线程池）──
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        inject_with_focus(fields, target_raw, &tokens)
-    })
-    .await
-    .map_err(|e| IpcError::internal(&format!("spawn_blocking auto_type_fill: {e}")))?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || inject_with_focus(fields, target, &tokens))
+            .await
+            .map_err(|e| IpcError::internal(&format!("spawn_blocking auto_type_fill: {e}")))?;
 
     if result.is_ok() {
         // 注入成功补一次触点：整段注入期间的用户活动以完成时刻为准。
         state.touch_activity();
     }
     result
+}
+
+/// 浮层条目清单（S2 / M3 的 Rust 半边）：只回**五个字段**，绝不带密码等明文。
+///
+/// 为什么不让浮层继续用 `list_items`：那个接口回的是完整条目 DTO，浮层只需要
+/// 「选中哪条」，多给的每一个字段都是一份可以被打包带走的明文面。这里在 Rust 侧
+/// 直接裁剪成 [`AutotypeCandidateDto`]——注入本身只认 `item_id`，密码由
+/// `auto_type_fill` 内部现取，从不跨 IPC。
+///
+/// 五个字段对应前端 `rankCandidates` 的真实入参（`title`/`username`/`url` 打分、
+/// `use_count` 排序），少一个都会静默退化，详见 DTO 上的注释。
+///
+/// **命令不变量：只回登录条目**。笔记/遗留附件没有可注入的字段，列出来只会让
+/// 「选中之后什么都没发生」变成新的困惑。这条判断在 core 的
+/// [`passwordms_core::autotype_candidates::login_candidates`] 里做（有单测覆盖），
+/// 命令层只剩三件事：闸门 → 取条目 → 擦明文。
+///
+/// **这里不截断条数**：前端的 `quick-search.ts` `RESULT_LIMIT = 40` 是**显示上限**，
+/// 不是传输上限——先截到 40 再排序等于让排序看不到后面的条目（用户搜一个第 41 条的
+/// 站点就永远搜不到）。全量过 IPC 的代价是几条 JSON，而候选行只有五个字段、不含密码。
+#[tauri::command(rename_all = "snake_case")]
+pub fn autotype_candidates(
+    state: tauri::State<'_, AppState>,
+) -> IpcResult<Vec<AutotypeCandidateDto>> {
+    // 与注入同一道闸门：锁着的时候没有条目可列。
+    if !state.session_unlocked() {
+        return Err(IpcError::from(CoreError::NotUnlocked));
+    }
+    state.touch_activity();
+    let session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo()?;
+    let mut items = repo.list_items(None, false, None);
+    // 业务判断下沉 core（只收登录条目 + 裁成五字段），命令层不重复实现。
+    let rows = passwordms_core::autotype_candidates::login_candidates(&items);
+    // 列表副本里带着整份明文（密码/备注/TOTP 密钥/附件文件名）：五字段取完立即
+    // 整条擦除，不留一批明文条目在堆上等自然回收。
+    for item in &mut items {
+        item.wipe_plaintext();
+    }
+    Ok(rows.into_iter().map(AutotypeCandidateDto::from).collect())
 }
 
 /// 注入时按占位符标记取值的一组字段（全部按敏感字符串托管）。
@@ -193,15 +262,19 @@ struct Fields {
 }
 
 /// 解析 Token → 注入。**平台对称函数**：Windows 真实现 / 其它平台报不支持。
-fn inject_with_focus(fields: Fields, target_raw: isize, tokens: &[Token]) -> IpcResult<()> {
+fn inject_with_focus(
+    fields: Fields,
+    target: Option<AutotypeTarget>,
+    tokens: &[Token],
+) -> IpcResult<()> {
     #[cfg(windows)]
     {
-        windows_inject(fields, target_raw, tokens)
+        windows_inject(fields, target, tokens)
     }
     #[cfg(not(windows))]
     {
         // 非 Windows（Android）：运行时可读事实。cfg 块里禁止写 return，用尾表达式。
-        let _ = (fields, target_raw, tokens);
+        let _ = (fields, target, tokens);
         Err(IpcError::shell(
             shell_codes::ERR_NOT_SUPPORTED,
             "err.desktop_only",
@@ -211,38 +284,69 @@ fn inject_with_focus(fields: Fields, target_raw: isize, tokens: &[Token]) -> Ipc
 
 /// Windows 注入本体。
 ///
-/// 前置校验链：保存的句柄 `IsWindow` 有效 → `SetForegroundWindow` → 等
-/// [`FOCUS_SETTLE_MS`] → 前台确实是它。任何一步不过都按「焦点丢失」拒绝——
-/// 宁可让用户手动粘贴，也绝不把密码打进一个没被看见的窗口。
+/// 前置校验链：记录过目标 → 句柄 `IsWindow` 有效 → **句柄仍属于记录的那个进程**
+/// （S6）→ `SetForegroundWindow` → 等 [`FOCUS_SETTLE_MS`] → 前台确实是它。任何一步
+/// 不过都按「焦点丢失」拒绝——宁可让用户手动粘贴，也绝不把密码打进一个没被看见的窗口。
+///
+/// 注入途中 `SendInput` 返回不足（被 UIPI 拦下）时报 [`ERR_AUTOTYPE_BLOCKED`]：
+/// 「系统不让打」与「焦点跑了」是两件事，用户要做的动作也不同（见错误码注释）。
 #[cfg(windows)]
-fn windows_inject(fields: Fields, target_raw: isize, tokens: &[Token]) -> IpcResult<()> {
+fn windows_inject(
+    fields: Fields,
+    target: Option<AutotypeTarget>,
+    tokens: &[Token],
+) -> IpcResult<()> {
     use passwordms_core::securemem;
 
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
-        KEYEVENTF_UNICODE, VK_RETURN, VK_TAB,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_RETURN, VK_TAB,
     };
-    // VIRTUAL_KEY 与事件结构体同在 KeyboardAndMouse；前台/消息类 API 在 WindowsAndMessaging。
-    use windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY;
+    // 前台/消息/窗口归属类 API 在 WindowsAndMessaging。
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetMessageExtraInfo, SetForegroundWindow,
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
     };
 
-    /// KEYBDINPUT.dwExtraInfo 取本线程消息队列的附加值（与系统注入协同的惯例填充）。
-    fn extra_info() -> usize {
-        // SAFETY: 无参数，只读本线程消息队列的附加字段。LPARAM 是 isize 新类型。
-        let lparam = unsafe { GetMessageExtraInfo() };
-        lparam.0 as usize
+    /// 焦点丢失：句柄失效 / 句柄换了主人 / 切回失败 / 注入中途前台变了。
+    fn focus_lost() -> IpcError {
+        IpcError::shell(
+            shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
+            "err.autotype_focus_lost",
+        )
     }
 
+    /// 输入被系统拦下（`SendInput` 返回的事件数不足）。
+    fn blocked() -> IpcError {
+        IpcError::shell(shell_codes::ERR_AUTOTYPE_BLOCKED, "err.autotype_blocked")
+    }
+
+    /// `KEYBDINPUT.dwExtraInfo`。
+    ///
+    /// **显式写 0，不是省掉**：该字段的语义是"本线程消息队列的附加值"，惯例上与
+    /// `GetMessageExtraInfo()` 保持一致，好让目标程序分得清输入来源。但注入跑在
+    /// `spawn_blocking` 的工作线程上，**那个线程没有消息队列**，`GetMessageExtraInfo()`
+    /// 在那里只会返回 0；为读一个恒为 0 的常量去调消息类 API，反而暗示"这里有什么
+    /// 需要读"。写 0 就是事实，也少一次跨模块 unsafe。
+    const EXTRA_INFO: usize = 0;
+
     /// 发一对「按下 + 抬起」的键盘事件。
-    fn send_pair(down: INPUT, up: INPUT) {
+    ///
+    /// **两次的返回值都要检查**（M2）：`SendInput` 返回实际插入系统队列的事件数，
+    /// 被 UIPI 拦下（目标是管理员权限进程）或输入桌面被切换时返回 0，且**不报错**。
+    /// 不检查就等于"用户以为打上了，实际一个字都没进去"——尤其是密码字段，用户
+    /// 大概率会直接按回车提交一个空表单。
+    fn send_pair(down: INPUT, up: INPUT) -> IpcResult<()> {
+        let size = std::mem::size_of::<INPUT>() as i32;
         // SAFETY: 传入的 INPUT 是本函数栈上的完整合法结构；cbsize 用真实大小。
-        unsafe {
-            SendInput(&[down], std::mem::size_of::<INPUT>() as i32);
-            SendInput(&[up], std::mem::size_of::<INPUT>() as i32);
+        if unsafe { SendInput(&[down], size) } != 1 {
+            return Err(blocked());
         }
+        // SAFETY: 同上，抬起事件同样是本栈上的完整结构。
+        if unsafe { SendInput(&[up], size) } != 1 {
+            return Err(blocked());
+        }
+        Ok(())
     }
 
     /// 造一个键盘事件的半件（按下或抬起，flags 决定）。
@@ -255,28 +359,28 @@ fn windows_inject(fields: Fields, target_raw: isize, tokens: &[Token]) -> IpcRes
                     wScan: scan,
                     dwFlags: flags,
                     time: 0,
-                    dwExtraInfo: extra_info(),
+                    dwExtraInfo: EXTRA_INFO,
                 },
             },
         }
     }
 
     /// 用 KEYEVENTF_UNICODE 注入一个 UTF-16 码元（wVk 必须为 0）。
-    fn send_unicode(unit: u16) {
+    fn send_unicode(unit: u16) -> IpcResult<()> {
         let down = key_event(Default::default(), unit, KEYEVENTF_UNICODE);
         let up = key_event(
             Default::default(),
             unit,
             KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
         );
-        send_pair(down, up);
+        send_pair(down, up)
     }
 
     /// 虚拟键注入（Tab / Enter 等控制键：走 VK，不走 UNICODE）。
-    fn send_vk(vk: VIRTUAL_KEY) {
+    fn send_vk(vk: VIRTUAL_KEY) -> IpcResult<()> {
         let down = key_event(vk, 0, Default::default());
         let up = key_event(vk, 0, KEYEVENTF_KEYUP);
-        send_pair(down, up);
+        send_pair(down, up)
     }
 
     /// 前台窗口是否仍是 `raw`。
@@ -293,42 +397,42 @@ fn windows_inject(fields: Fields, target_raw: isize, tokens: &[Token]) -> IpcRes
         }
     }
 
-    // ── 目标句柄：IsWindow 现查（0 / 已销毁 / 假句柄一律拒，与 platform 同判据）──
-    let saved = crate::platform::hwnd_if_valid(target_raw).ok_or_else(|| {
-        IpcError::shell(
-            shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
-            "err.autotype_focus_lost",
-        )
-    })?;
+    // ── 目标：先要有记录（None = 热键那一刻前台是本进程自己的窗口，或被清掉了）──
+    let Some(target) = target else {
+        return Err(focus_lost());
+    };
+    // 句柄 IsWindow 现查（0 / 已销毁 / 假句柄一律拒，与 platform 同判据）。
+    let saved = crate::platform::hwnd_if_valid(target.hwnd).ok_or_else(focus_lost)?;
+
+    // 【S6】`IsWindow` 只证明"这个句柄有人在用"，不证明"还是那个窗口"：窗口句柄
+    // 会被系统回收再分配给别的进程，而记录到点击之间可能隔了几十秒。注入前用
+    // `GetWindowThreadProcessId` 复核归属进程，不一致按焦点丢失拒绝。
+    let mut pid = 0u32;
+    // SAFETY: saved 已通过 IsWindow 校验；pid 是本栈上的合法 out 参数，不保留指针。
+    unsafe { GetWindowThreadProcessId(HWND(saved as *mut core::ffi::c_void), Some(&mut pid)) };
+    if pid == 0 || pid != target.pid {
+        return Err(focus_lost());
+    }
 
     // SAFETY: hwnd 来自 IsWindow 校验通过的句柄值，仅请求前台切换。
     let set_ok = unsafe { SetForegroundWindow(HWND(saved as *mut core::ffi::c_void)) };
     if !set_ok.as_bool() {
-        return Err(IpcError::shell(
-            shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
-            "err.autotype_focus_lost",
-        ));
+        return Err(focus_lost());
     }
     std::thread::sleep(std::time::Duration::from_millis(FOCUS_SETTLE_MS));
     if !foreground_is(saved) {
         // 焦点被别的东西抢走了（用户切走 / 系统弹窗）：中止。
-        return Err(IpcError::shell(
-            shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
-            "err.autotype_focus_lost",
-        ));
+        return Err(focus_lost());
     }
 
     for token in tokens {
         // 每个 Token 边界复查前台：变了立即中止，密码绝不外流。
         if !foreground_is(saved) {
-            return Err(IpcError::shell(
-                shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
-                "err.autotype_focus_lost",
-            ));
+            return Err(focus_lost());
         }
         match token {
-            Token::Tab => send_vk(VK_TAB),
-            Token::Enter => send_vk(VK_RETURN),
+            Token::Tab => send_vk(VK_TAB)?,
+            Token::Enter => send_vk(VK_RETURN)?,
             Token::DelayMs(ms) => {
                 std::thread::sleep(std::time::Duration::from_millis(u64::from(*ms)));
             }
@@ -349,7 +453,7 @@ fn windows_inject(fields: Fields, target_raw: isize, tokens: &[Token]) -> IpcRes
                 // `as_chunks::<2>()`：固定 2 字节一组，比 `chunks_exact(2)` 少一次
                 // 运行期对齐检查（与 `capture_screen` 的 `as_chunks_mut::<4>` 同款写法）。
                 for pair in buf.as_chunks::<2>().0 {
-                    send_unicode(u16::from_le_bytes(*pair));
+                    send_unicode(u16::from_le_bytes(*pair))?;
                     std::thread::sleep(std::time::Duration::from_millis(PER_CHAR_DELAY_MS));
                 }
                 // 明文缓冲用完即擦（安全基线：不依赖作用域回收）。

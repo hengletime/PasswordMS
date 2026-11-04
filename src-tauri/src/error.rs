@@ -72,6 +72,17 @@ pub mod shell_codes {
     pub const ERR_AUTOTYPE_NO_URL: &str = "ERR_AUTOTYPE_NO_URL";
     /// 自动输入（1.5.39 增强）：`totp` 动作要求条目配置了 TOTP 密钥。
     pub const ERR_AUTOTYPE_NO_TOTP: &str = "ERR_AUTOTYPE_NO_TOTP";
+    /// 自动输入（1.5.39 增强 / 安全审查 M2）：**按键被系统拦下**——`SendInput`
+    /// 返回 0（不足请求的事件数）。
+    ///
+    /// 最常见的原因是 UIPI：目标窗口属于**更高完整性级别**的进程（以管理员身份
+    /// 运行的程序），低完整性进程的输入注入会被系统静默丢弃。桌面已锁定/输入桌面
+    /// 被切换时也是这个返回。
+    ///
+    /// 为什么**不复用** [`ERR_AUTOTYPE_FOCUS_LOST`]：两者要用户做的事完全不同——
+    /// 焦点丢了他点回去重试就行；被拦下他得关掉目标程序的管理员权限（或改用复制
+    /// 粘贴）。合成一个码等于给"重试一次"这条错误建议。
+    pub const ERR_AUTOTYPE_BLOCKED: &str = "ERR_AUTOTYPE_BLOCKED";
 }
 
 impl From<CoreError> for IpcError {

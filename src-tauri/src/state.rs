@@ -97,14 +97,26 @@ pub struct AppState {
     /// **不放进保险库**：锁屏态和冷启动时就要用它（详见 `prefs.rs` 模块文档）。
     /// 启动时由 `lib.rs` 从磁盘载入并覆盖这里的默认值。
     pub prefs: Mutex<crate::prefs::AppPrefs>,
-    /// 自动输入（1.5.39）：热键触发那一刻的**目标窗口句柄**（Windows HWND 原始值，
-    /// `isize` 存储——HWND 不是 `Send + Sync`，互斥里只能放原始值，与
-    /// `platform::main_hwnd` 同一取舍）。
+    /// 自动输入（1.5.39）：热键触发那一刻的**目标窗口**（句柄 + 所属进程 id）。
     ///
-    /// 生命周期：热键按下 → `GetForegroundWindow()` 记入；`auto_type_fill` 注入前
-    /// 用 `IsWindow` 现查，无效（0 / 已销毁 / 假句柄）一律报「焦点丢失」。
-    /// 锁定级联把它清回 `None`，防句柄跨锁定会话残留。
-    pub autotype_target: Mutex<Option<isize>>,
+    /// 生命周期：热键按下 → `GetForegroundWindow()` + `GetWindowThreadProcessId()`
+    /// 记入（**本进程自己的窗口不记**，见 hotkey.rs）；`auto_type_fill` 注入前
+    /// 用 `IsWindow` + pid 复核，无效（0 / 已销毁 / 句柄在 200ms 内被复用进别的
+    /// 进程）一律报「焦点丢失」。锁定时清回 `None`。
+    pub autotype_target: Mutex<Option<AutotypeTarget>>,
+}
+
+/// 自动输入的目标窗口记录。
+///
+/// 为什么带 pid：窗口句柄可以被系统回收再分配给别的窗口。热键时刻记下的句柄，
+/// 到用户选中条目（可能几十秒后）时可能已经属于另一个进程——只查 `IsWindow`
+/// 挡不住这种「句柄还活着但已经不是那个窗口」的情况。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutotypeTarget {
+    /// Windows HWND 原始值（`isize`：HWND 不是 `Send + Sync`，互斥里只能放原始值）。
+    pub hwnd: isize,
+    /// 窗口所属进程 id（`GetWindowThreadProcessId`；0 = 取不到，注入前必拒）。
+    pub pid: u32,
 }
 
 impl AppState {

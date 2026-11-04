@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use passwordms_core::autotype_candidates::CandidateRow;
 use passwordms_core::health::HealthReport;
 use passwordms_core::import::{ImportPreview, ImportResult};
 use passwordms_core::model::conflict::ConflictView;
@@ -214,6 +215,46 @@ pub struct ItemDraftDto {
     pub folder_id: Option<String>,
     #[serde(default)]
     pub favorite: bool,
+}
+
+/// 自动输入浮层的候选条目（1.5.39 增强 / 安全审查 S2）。
+///
+/// **只有这五个字段，绝不含 `password` / `notes` / `totp_secret`**：注入本身只认
+/// `item_id`，凭据由 `auto_type_fill` 内部沿解密路径现取，从不跨 IPC。
+///
+/// 五个字段都不是"顺手带上"的——它们是前端 `quick-search.ts` 里 `rankCandidates` 的
+/// **真实入参**：`title` / `username` / `url` 参与 `scoreOf` 打分（`url` 包含虽然只有
+/// 20 分，但它是"按站点名搜"唯一能命中的途径，那正是热键最常见的用法），
+/// `use_count` 是空查询时的排序主轴（少了它"最常用"会静默退化成字母序）。
+/// 两处退化都不会让任何测试变红，所以字段必须齐。
+///
+/// **只回登录条目**是 [`passwordms_core::autotype_candidates::login_candidates`] 的
+/// 不变量（业务判断在 core，有单测；命令层只搬运），笔记/附件没有可注入的字段，
+/// 列出来只会让"选中之后什么都没发生"变成新的困惑。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutotypeCandidateDto {
+    pub item_id: String,
+    pub title: String,
+    /// 无用户名时为 `null`（不用空串：前端统一按 `?? ''` 归一）。
+    pub username: Option<String>,
+    /// 无网址时为 `null`，与 `username` 同一口径。
+    pub url: Option<String>,
+    /// 使用次数（前端在空查询时按它降序，即「最常用」）。
+    pub use_count: u64,
+}
+
+/// 逐字段搬运，**不写通配**：core 的 [`CandidateRow`] 将来加字段时这里必须跟着加，
+/// 否则编译报 E0063（缺字段）——比"运行时静默少传一个字段"好得多。
+impl From<CandidateRow> for AutotypeCandidateDto {
+    fn from(row: CandidateRow) -> Self {
+        Self {
+            item_id: row.item_id,
+            title: row.title,
+            username: row.username,
+            url: row.url,
+            use_count: row.use_count,
+        }
+    }
 }
 
 /// 分组 DTO。

@@ -245,6 +245,8 @@ pub fn run() {
             commands::system_cmd::get_status,
             // autotype（1.5.39：热键 → 浮层选条目 → SendInput 注回原焦点窗口）
             commands::autotype_cmd::auto_type_fill,
+            // 浮层条目清单（安全审查 S2：只回五个字段，绝不回整条条目 DTO）
+            commands::autotype_cmd::autotype_candidates,
             commands::system_cmd::copy_secret,
             commands::system_cmd::clear_secret_if_own,
             commands::system_cmd::open_url,
