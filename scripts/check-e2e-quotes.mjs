@@ -75,6 +75,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
@@ -210,10 +211,15 @@ function extractStringValues(src) {
 }
 
 function loadDictionary() {
-  /** @type {{exact: Set<string>, normalized: string[], files: Record<string, number>, droppedEmpty: number}} */
-  const dict = { exact: new Set(), normalized: [], files: {}, droppedEmpty: 0 };
+  /** @type {{exact: Set<string>, normalized: string[], files: Record<string, number>, droppedEmpty: number, sha: string}} */
+  const dict = { exact: new Set(), normalized: [], files: {}, droppedEmpty: 0, sha: '' };
+  const dh = createHash('sha256');
   for (const rel of LOCALE_PATHS) {
-    const values = extractStringValues(readFileSync(resolve(ROOT, rel), 'utf8'));
+    const raw = readFileSync(resolve(ROOT, rel));
+    // 字典侧同样留指纹：四本字典在工作区里被改过（D-191/D-192 那两批），
+    // 只报走查单哈希时，两个人可能在"同一份走查单 + 不同字典"上得出不同结论。
+    dh.update(raw);
+    const values = extractStringValues(raw.toString('utf8'));
     dict.files[rel] = values.length;
     for (const v of values) {
       if (!v) continue;
@@ -280,18 +286,53 @@ function parseRowId(line) {
   return m2 ? m2[1] : '';
 }
 
+/**
+ * 一行里 `「」`/`『』` 的净深度。0 = 配平。
+ *
+ * 为什么要单独算这个、而不是看扫描器自己的 `depth`：**扫描器看不见"被它丢掉的东西"**。
+ * 一个落单的 `「` 会让 `parseQuotedFragments` 从那里一直吃到行尾仍不闭合，
+ * 于是 `depth === 0` 不成立、整段不 push —— **这一行后半段的所有引文被静默丢掉，且不报任何东西**。
+ * 报告照样打出"查不到 0 条"，因为它压根没去看。
+ *
+ * 这不是假想：qa-lead 的 1.18 末尾少了一个 `」`，`「全删」` 那条引文因此从来没被扫过，
+ * 而我上一版报告的"全绿"里它是瞎的。独立性是这个函数存在的全部理由——
+ * 它与扫描器分别数一遍，配不平就当场指出来，而不是指望扫描器自证清白。
+ */
+function quoteBalance(line) {
+  let d = 0;
+  for (const ch of line) {
+    if (ch === '「' || ch === '『') d += 1;
+    else if (ch === '」' || ch === '』') d -= 1;
+  }
+  return d;
+}
+
 function loadChecklist() {
-  const lines = readFileSync(resolve(ROOT, CHECKLIST_PATH), 'utf8').split(/\r?\n/);
+  // 把输入文件的**内容指纹**一起带出去。理由不是洁癖：这一轮里我和 qa-lead 各自跑出
+  // `347/280` 和 `354/288` 两组数，差 10 条，光看数字没法判断是"口径不同"还是"看的不是
+  // 同一份文件"——最后是靠"差值正好落在命中类"反推出来的。一个 8 位短哈希把这类争论
+  // 一次解决：哈希不同就是两份文件，先对齐文件再谈结论。
+  const raw = readFileSync(resolve(ROOT, CHECKLIST_PATH));
+  const lines = raw.toString('utf8').split(/\r?\n/);
   /** @type {{line: number, row: string, text: string}[]} */
   const items = [];
+  /** @type {{line: number, row: string, balance: number}[]} */
+  const unbalanced = [];
   lines.forEach((line, idx) => {
     if (!line.trimStart().startsWith('|')) return; // 只扫表格行
     const row = parseRowId(line);
+    const balance = quoteBalance(line);
+    if (balance !== 0) unbalanced.push({ line: idx + 1, row, balance });
     for (const text of parseQuotedFragments(line)) {
       items.push({ line: idx + 1, row, text });
     }
   });
-  return items;
+  return {
+    items,
+    unbalanced,
+    sha: createHash('sha256').update(raw).digest('hex').slice(0, 8),
+    lineCount: lines.length,
+  };
 }
 
 // ===== 匹配 =====
@@ -342,8 +383,17 @@ function isHit(fragment, dict) {
 // ===== 跳过规则 =====
 
 /**
- * 每条规则 = { id, reason, test(fragment) }。
+ * 每条规则 = { id, reason, test(fragment, dict) }。
  * 顺序有意义：先跳"根本不是文案"的，再跳"是文案但没法机检"的。
+ *
+ * 关于"跳过的正当性"（产品评审的标准）：跳过率**不由比例保证**，由"每一条跳过都有一句
+ * 能查的理由"保证。所以这里分两种规则：
+ *   - **可判型**（R1/R2/R3a/R3b/R4/R5）：理由就是那条正则/那个集合，逐条成立，能当场复核；
+ *   - **判定型**（R6/R3c）：没有可判形态，只能人写理由，逐条列在 `SKIP_ITEM_REASONS` 里。
+ * 原先 R3 把「设置 → 语言」和「加密副本 + 恢复入口 + mtime 说明」混成一个 23 条的大桶，
+ * 理由是"含拼接符"——那句话对两类都成立，但说服力不同：前者每一段都是字典里真有的标签
+ * （可判、甚至能顺手验），后者是作者对屏幕的概括（只能人写）。混在一个桶里，
+ * 桶涨了就没人分得清是"路径变多了"还是"概括变多了"。拆开后每个桶的理由都是它自己的。
  */
 const SKIP_RULES = [
   {
@@ -357,12 +407,44 @@ const SKIP_RULES = [
     test: (t) => /[/\\<>]|:\/\/|%[A-Z_]+%|--|\.(svg|vault|json|bak|md|exe|apk)\b/.test(t),
   },
   {
-    id: 'R3/composed',
-    reason: '含箭头/中点/加号等拼接符：描述的是"几条文案组合后的样子"，没有单条字典文案可对照',
+    id: 'R3a/nav-path',
+    reason:
+      '导航路径：每一段都是字典里真有的菜单/分区标签，只是被 → 串起来了——屏幕上是两级菜单，不存在这一整句',
+    // 可判型：不但"理由成立"，而且**顺手验了一遍**——每段都得在字典里原样存在。
+    // 哪天某个菜单改名了，这条引文会从"跳过"掉回"查不到"，正是我们要的。
+    test: (t, dict) => {
+      if (!t.includes('→')) return false;
+      const segs = t
+        .replace(/\*\*/g, '')
+        .split('→')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return segs.length >= 2 && segs.every((s) => dict.exact.has(s));
+    },
+  },
+  {
+    id: 'R3b/list-row',
+    reason:
+      '列表行样式：类型标签 + 用户数据（分组名/条数），中间用 · 拼——只有标签那一段在字典里，整行是拼出来的',
+    test: (t, dict) => {
+      if (!/[·｜|]/.test(t) || t.includes('→')) return false;
+      const segs = t
+        .replace(/\*\*/g, '')
+        .split(/[·｜|]/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (segs.length < 2) return false;
+      if (segs.some((s) => cjkCount(s) > 14)) return false; // 长句不是"行样式"
+      return segs.some((s) => dict.exact.has(s));
+    },
+  },
+  {
+    id: 'R3c/composed',
+    reason: '作者对屏幕的概括（"几条文案拼起来的样子"），没有单条字典文案可对照——理由逐条写在下面',
     test: (t) => /[→←·+｜|]/.test(t),
   },
   {
-    id: 'R3b/label-pair',
+    id: 'R3e/label-pair',
     reason: '形如「甲: 乙」的两段短标签（如「分组: 未分组」「导入完成: 3 条」）：由两条文案拼出来，没有单条字典文案可对照',
     test: (t) => {
       const s = t.replace(/\*\*/g, '').replace(/：/g, ':');
@@ -427,7 +509,17 @@ const NOT_COPY = [
   ['拖了没反应', '3.63 的判据是"不许出现「拖了没反应」"——引的是被否定的症状描述'],
   ['截图在剪贴板但没有填充上去', '3.52 引的是**主人报缺陷时的原话**，不是界面文案'],
   ['不是备份文件', '3.77 的判据是"不能报「不是备份文件」"——引的是被否定的错误提示'],
+  ['共 5 份（21.4 MB）· 其中 2 份要用保存时的密码', '1.16 描述摘要行"三件事挤在一行"的样子；份数与体积随数据和单位换算变化，无固定文案可对'],
+  ['· Commander 办公', '3.43 的判据是"**不再出现**「· Commander 办公」"——引的是被否定的旧样式（组名重复），不是界面文案'],
+  ['导入完成: 0 条 · 重复跳过 3 条 · 合并分组 1 个', '3.83 描述结果行的三段拼接；三个数字随文件内容变化，没有单条字典文案'],
+  ['重复跳过 n 条 · 合并同名分组 n 个', '6.3 同一结果行的省略写法（n 是变量），同上'],
 ];
+
+/**
+ * 跳过项的逐条理由（判定型规则必须有，可判型不需要）。
+ * 只从 NOT_COPY 派生，不另建一份——两份清单必然漂移，而漂移的那一份不会有任何告警。
+ */
+const SKIP_ITEM_REASONS = new Map(NOT_COPY);
 
 // ===== 自检（探针） =====
 
@@ -522,6 +614,33 @@ function runProbes(dict) {
     },
   });
 
+  // P7：括号配平检测本身（输入是合成串，故意写坏）。
+  // 这条测的不是"文档没错"，而是"文档错了我会不会发现"。落单括号是我这套实现里
+  // 唯一一个**静默**丢数据的入口：配不上对就整段不 push，报告照样全绿。
+  // 三个用例各代表一种坏法：嵌套（朴素 [^」]* 会截断）、少右括号、多右括号。
+  probes.push({
+    id: 'P7/unbalanced-detected',
+    expect: '三种坏法都能报出来',
+    check: () => {
+      const cases = [
+        { line: '| x | 点「复制截图」再点「粘贴」 |', frags: 2, bal: 0 },
+        // 少一个 」时**整行 0 条**：第一个「 一直吃到行尾仍不闭合，连它前面配好的那半句
+        // 也一起被丢掉。1.18 就是这样瞎的——它的「全删」在落单「 之后。
+        { line: '| x | 旧写法「删除当前回滚点 现在是「全删」 |', frags: 0, bal: 1 },
+        { line: '| x | 多了一个「复制」」 |', frags: 1, bal: -1 },
+      ];
+      const bad = [];
+      for (const c of cases) {
+        const got = parseQuotedFragments(c.line).length;
+        const bal = quoteBalance(c.line);
+        if (got !== c.frags || bal !== c.bal) {
+          bad.push(`「${c.line.slice(6, 26)}…」片段 ${got}/${c.frags} 配平 ${bal}/${c.bal}`);
+        }
+      }
+      return bad.length === 0 ? null : bad.join(' ; ');
+    },
+  });
+
   return probes.map((p) => {
     if (p.check) {
       const err = p.check();
@@ -537,7 +656,7 @@ function runProbes(dict) {
 
 function main() {
   const dict = loadDictionary();
-  const items = loadChecklist();
+  const { items, unbalanced, sha, lineCount } = loadChecklist();
 
   const hits = [];
   const misses = [];
@@ -557,7 +676,7 @@ function main() {
       hits.push({ ...item, kind: hit });
       continue;
     }
-    const rule = SKIP_RULES.find((r) => r.test(item.text));
+    const rule = SKIP_RULES.find((r) => r.test(item.text, dict));
     if (rule) {
       if (!skips.has(rule.id)) skips.set(rule.id, { rule, items: [] });
       skips.get(rule.id).items.push(item);
@@ -569,9 +688,15 @@ function main() {
   const line = '─'.repeat(96);
   const skippedTotal = [...skips.values()].reduce((n, s) => n + s.items.length, 0);
   const kindCount = (kind) => hits.filter((h) => h.kind === kind).length;
+  // 判定型规则（理由必须人写）里还没写理由的条目：跳过本身照旧成立，但必须在**总行**上
+  // 出现——写在桶里的 ⚠️ 太容易被跳过段落本身淹没，而"没写理由的跳过"正是这个工具
+  // 唯一会让盲区悄悄变大的路径。
+  const unreasoned = [...skips.values()]
+    .filter((b) => b.rule.id === 'R3c/composed' || b.rule.id === 'R6/not-copy')
+    .flatMap((b) => b.items.filter((s) => !SKIP_ITEM_REASONS.get(s.text)));
   console.log('');
   console.log('=== E2E 引文校验（只报警，不判负）===');
-  console.log(`走查单：${CHECKLIST_PATH}`);
+  console.log(`走查单：${CHECKLIST_PATH}  [${sha} · ${lineCount} 行]`);
   console.log(
     `字典  ：${LOCALE_PATHS.map((p) => `${p.split('/').pop()} ${dict.files[p]} 条`).join(' · ')}`,
   );
@@ -579,8 +704,23 @@ function main() {
   console.log(
     `引号片段 ${items.length} 条 ｜ 参与检查 ${items.length - skippedTotal} 条 ｜ ` +
       `命中 ${hits.length} 条（原样 ${kindCount('exact')} / 占位符归一 ${kindCount('fuzzy')} / 缩略 ${kindCount('abbrev')}） ｜ ` +
-      `**查不到 ${misses.length} 条** ｜ 跳过 ${skippedTotal} 条（无法判定，规则见下）`,
+      `**查不到 ${misses.length} 条** ｜ 跳过 ${skippedTotal} 条（无法判定，规则见下）` +
+      (unbalanced.length > 0 ? ` ｜ **落单括号 ${unbalanced.length} 行（后半段没被扫）**` : '') +
+      (unreasoned.length > 0 ? ` ｜ **跳过未写理由 ${unreasoned.length} 条**` : ''),
   );
+
+  // ---- 落单括号（先报这个：它会让上面的数字本身失真）----
+  if (unbalanced.length > 0) {
+    console.log('');
+    console.log(`【落单括号】${unbalanced.length} 行（「」/『』没配平，这些行**从这个括号起到行尾都没被扫**）`);
+    for (const u of unbalanced) {
+      const where = u.row ? u.row.padEnd(6) : '      ';
+      const dir = u.balance > 0 ? '少一个 」' : '多一个 」';
+      console.log(`  :${String(u.line).padEnd(4)} ${where}${dir}`);
+    }
+    console.log('  这不是"格式问题"：扫描器配不上对就整段不 push，于是那些引文既不算命中也不算查不到，');
+    console.log('  报告照样是"查不到 0 条"——因为它压根没去看。补上括号再跑，数字会变。');
+  }
 
   // ---- 查不到 ----
   console.log('');
@@ -614,11 +754,25 @@ function main() {
   // ---- 跳过 ----
   console.log('');
   console.log(`【跳过】${skippedTotal} 条（按规则，跳过是判断不是忽略）`);
-  for (const { rule, items: list } of skips.values()) {
-    console.log(`  ${rule.id.padEnd(12)} ${String(list.length).padStart(3)} 条 — ${rule.reason}`);
+  const ruleOrder = new Map(SKIP_RULES.map((r, i) => [r.id, i]));
+  const buckets = [...skips.values()].sort(
+    (a, b) => (ruleOrder.get(a.rule.id) ?? 99) - (ruleOrder.get(b.rule.id) ?? 99),
+  );
+  for (const { rule, items: list } of buckets) {
+    console.log(`  ${rule.id.padEnd(14)} ${String(list.length).padStart(3)} 条 — ${rule.reason}`);
     const sample = VERBOSE ? list : list.slice(0, 3);
-    for (const s of sample) console.log(`      :${String(s.line).padEnd(4)} 「${s.text}」`);
+    for (const s of sample) {
+      const why = SKIP_ITEM_REASONS.get(s.text);
+      console.log(`      :${String(s.line).padEnd(4)} 「${s.text}」${why ? `  ← ${why}` : ''}`);
+    }
     if (!VERBOSE && list.length > 3) console.log(`      …另有 ${list.length - 3} 条（--verbose 看全部）`);
+    // 判定型规则（理由逐条写）必须每条都写全；缺一条就当场说，别让"没写理由"混成"没理由"。
+    if (rule.id === 'R3c/composed' || rule.id === 'R6/not-copy') {
+      const missing = list.filter((s) => !SKIP_ITEM_REASONS.get(s.text));
+      if (missing.length > 0) {
+        console.log(`      ⚠️  这 ${missing.length} 条还没写理由：${missing.map((m) => m.text).join(' , ')}`);
+      }
+    }
   }
 
   // ---- 命中（可选） ----
@@ -660,16 +814,24 @@ function main() {
   if (dict.droppedEmpty > 0) {
     console.log('');
     console.log(
-      `  ⚠️  字典里有 ${dict.droppedEmpty} 条文案归一化后为空（只有标点/省略号），已从语料中剔除。`,
+      `  ⚠️  字典里有 ${dict.droppedEmpty} 条文案归一化后为空（只有标点/省略号，如 \`sep: '…'\`），已从语料中剔除。`,
     );
-    console.log('      留着的后果是 `includes("")` 恒真 → 所有片段都"命中" → 报告显示 0 条查不到。');
+    console.log('      剔掉是为了语料干净（"628 条"里不该混着不是话的条目），**不是**在防误命中：');
+    console.log('      判据是"字典条目.includes(片段)"，空条目让 `\'\'.includes("abc")` 为 false，并不会误命中。');
   }
 
   console.log('');
   console.log(line);
   console.log('退出码恒为 0：本脚本只报警，不判负。是否升级成总门的一门，等基线稳定后由主理人定。');
-  if (process.argv.includes('--strict') && misses.length > 0) {
-    console.log(`[--strict] 有 ${misses.length} 条查不到 → 退出码 1（默认不带 --strict 时恒为 0）。`);
+  // `--strict` 只对**缺陷类**判负：查不到 = 走查单抄了字典里不存在的话；落单括号 = 报告本身
+  // 不可信（那一行后半段根本没扫，"0 条查不到"不是事实）。
+  // 覆盖率类（无法核对 / 规则跳过 / 跳过未写理由）**一律不判负**：给它们设阈值，
+  // 第一个反应一定是把难判的引文改短、改糊、拆碎，而不是改清楚。告警照报，门不开。
+  const fatal = misses.length + (unbalanced.length > 0 ? 1 : 0);
+  if (process.argv.includes('--strict') && fatal > 0) {
+    console.log(
+      `[--strict] 查不到 ${misses.length} 条 + 落单括号 ${unbalanced.length} 行 → 退出码 1（默认不带 --strict 时恒为 0）。`,
+    );
     process.exit(1);
   }
   console.log('');

@@ -233,3 +233,25 @@ describe('D-193 孤儿键 `create.weak_hint` 已删（字典里有字、界面�
     }
   });
 });
+
+describe('D-194 孤儿键 `err.unknown`：登记在册，不许悄悄接上也不许悄悄删掉', () => {
+  // 它和 D-193 是同一类（字典里有字、界面上没有位置），但**处置方式刻意相反**：
+  // 留着不删。理由是它现在有第二种用途——将来写"字典 → 代码"反向扫描时，
+  // 它是唯一一个已知阳性的样本：反扫报出 0 条孤儿时，**得先能报出这一条**，
+  // 那个 0 才算数。删了它，反扫的零就永远无法证明自己不是瞎的。
+  // 所以这里钉的是"两头都不许悄悄变"：接上了（有生产点）要红，删掉了也要红。
+
+  it('键仍在四本字典里', () => {
+    for (const lang of ['zh-CN', 'zh-TW', 'en-US', 'th']) {
+      expect(
+        dictValueOf(modules[`./i18n/${lang}.ts`] ?? '', 'err.unknown'),
+        `${lang} 的 err.unknown 没了——要删它得先有反向扫描，见上面的理由`,
+      ).not.toBeNull();
+    }
+  });
+
+  it('仍然没有任何生产点（一旦有人接上，这条就红，请顺手更新登记）', () => {
+    const users = scannable.filter((path) => /err\.unknown/.test(modules[path] ?? ''));
+    expect(users, `err.unknown 被这些地方引用了：${users.join(', ')}`).toEqual([]);
+  });
+});
