@@ -429,8 +429,8 @@ export const zhTW = {
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
     restore_point: '本機自動備份',
     // P1：不能寫「每次」——日備份去重與大庫節流會讓同一時段多次改動共用一份。
-    restore_point_hint: '做危險操作前，先把整個庫複製一份放在這台電腦上；改壞了可以用它退回來。',
-    restore_point_local_only: '這些備份只在這一台電腦上。解除安裝、換電腦、清空資料目錄都會一起不見——請定期匯出備份。',
+    restore_point_hint: '做危險操作前，先把整個庫複製一份存在本機；改壞了可以用它退回來。',
+    restore_point_local_only: '這些備份只在本機。解除安裝、換機、清空資料目錄都會一起不見——請定期匯出備份。',
     restore_point_never: '還沒有這樣的備份。',
     restore_point_last_ok: '上次備份：{time}。',
     restore_point_error: '最近一次備份沒有存成（{reason}），時間 {time}。',
@@ -450,7 +450,7 @@ export const zhTW = {
     restore_point_cleared_gone: '這份備份已經不在磁碟上了，沒有可刪的內容。',
     restore_point_old_unreadable: '{count} 個備份資料夾打不開，沒法在這裡刪除。裡面可能有舊主密碼還能開啟的備份，需要你手動處理。',
     restore_point_old_unreadable_uncounted: '有備份資料夾打不開，數不清有幾個。裡面可能有舊主密碼還能開啟的備份，請到備份資料夾裡手動看看。',
-    restore_point_failed: '刪除失敗：備份還在這台電腦上，請稍後重試。',
+    restore_point_failed: '刪除失敗：備份還在本機，請稍後重試。',
     restore_point_load_failed: '讀取失敗：拿不到備份資訊（你的條目沒有受影響）。',
     restore_point_restore_title: '用這份備份退回去',
     restore_point_restore_body: '會把目前的庫換成 {time} 的那一份（共 {size}）。從那之後的改動都會沒有。',
@@ -485,7 +485,7 @@ export const zhTW = {
     restore_point_clear_group: '全刪',
     restore_point_clear_title: '刪除備份',
     restore_point_clear_group_confirm: '會刪掉這一組 {count} 份備份（共 {size}）。改密碼之前那些不會被刪。',
-    restore_point_clear_group_confirm_older: '會刪掉改密碼之前的 {count} 份備份（共 {size}）。它們要用當時的舊密碼才能打開，刪掉之後這台電腦上就沒有那把密碼的副本了。',
+    restore_point_clear_group_confirm_older: '會刪掉改密碼之前的 {count} 份備份（共 {size}）。它們要用當時的舊密碼才能打開，刪掉之後本機上就沒有那把密碼的副本了。',
     restore_point_remove_confirm: '會刪掉 {time} 這一分（共 {size}）。刪掉之後就不能再退回那一刻了。',
     restore_point_pin: '釘住：自動清理不刪它',
     restore_point_unpin: '取消釘住',
@@ -498,7 +498,7 @@ export const zhTW = {
     restore_point_retention_turned_off: '已關掉自動清理。以後一份都不會自動刪除。',
     restore_point_retention_failed: '沒能改這個開關，請重試。',
     change_password_note_lock_only: '改密碼只換了門上那把鎖，沒換櫃子裡的鑰匙。所以舊密碼或舊備份一旦洩漏，光改密碼擋不住對方讀你以後的資料。',
-    change_password_note_old: '改密碼之前留下的備份，仍然能用當時的舊密碼開啟。刪掉它們只對以後拿到這台電腦的人有用；已經被拷走的副本刪了也管不著。',
+    change_password_note_old: '改密碼之前留下的備份，仍然能用當時的舊密碼開啟。刪掉它們只對以後拿到本機的人有用；已經被拷走的副本刪了也管不著。',
     // P0：「新建庫 + 匯入」出口是假的——匯出只有加密的 .vault，匯入只認 Bitwarden JSON/CSV 且會丟附件。
     change_password_note_no_rekey: '這個版本還不能換櫃子裡的鑰匙。如果你在別的裝置上配對過這個庫，情況會更麻煩——現在沒有辦法讓那些裝置失去存取。',
     password_changed_detail: '主密碼已修改。另外存好了 {count} 份改密碼之前的備份（要用舊密碼開啟）。',

@@ -207,3 +207,52 @@ describe('旧代目录提示：可能句必须在场、断言式必须不在场�
     });
   }
 });
+
+/**
+ * D-197：Windows 与 Android 共用**同一套字典**，没有按平台分叉的文案层。
+ * 「这台电脑」在手机上会让用户以为备份存在别的地方——而它其实就在这台手机里，
+ * 卸载即消失（2026-11-04 主人 Android 真机）。分区标题本来就叫「本机自动备份」，
+ * 描述里也必须用同一个中性词。
+ *
+ * 只守中文两套：`en-US` 原文是 `this device`，泰语用的是仪器类中性词，都没有
+ * 这个问题。将来若真需要分平台措辞，走 `bio-platform.ts` 那种 `_android` 变体，
+ * 不要在这里放宽。
+ *
+ * 五条键都是「自动备份 / 改密码后旧备份」这一块会直接显示给手机用户看的句子。
+ * `change_password_note_old` 不在 `restore_point_*` 前缀下，但它是同一屏的文案，
+ * 漏了它等于把"这台电脑"留在同一张卡片里。
+ */
+describe('D-197：本机类文案不许写成「电脑」（Android 共用同一套字典）', () => {
+  const KEYS = [
+    'settings.restore_point_hint',
+    'settings.restore_point_local_only',
+    'settings.restore_point_failed',
+    'settings.restore_point_clear_group_confirm_older',
+    'settings.change_password_note_old',
+  ];
+
+  it('五个键在四种语言里都真的存在（防止下面的"不含"断言空跑）', () => {
+    for (const key of KEYS) {
+      for (const locale of LOCALES) {
+        expect(hasKey(locale, key), `${locale} 缺键 ${key}`).toBe(true);
+        expect(translate(locale, key), `${locale} 的 ${key} 原样返回了键名`).not.toBe(key);
+      }
+    }
+  });
+
+  it('简体与繁体：五句里一个「电脑 / 電腦」都没有', () => {
+    const hits: string[] = [];
+    for (const key of KEYS) {
+      if (translate('zh-CN', key).includes('电脑')) hits.push(`zh-CN ${key}`);
+      if (translate('zh-TW', key).includes('電腦')) hits.push(`zh-TW ${key}`);
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it('正向：分区描述必须明确说「本机」，不能靠删字过关', () => {
+    // 只断言"不含电脑"是可被"整句删空"绕过的，所以钉住正面用词。
+    expect(translate('zh-CN', 'settings.restore_point_hint')).toContain('本机');
+    expect(translate('zh-CN', 'settings.restore_point_local_only')).toContain('本机');
+    expect(translate('zh-TW', 'settings.restore_point_hint')).toContain('本機');
+  });
+});

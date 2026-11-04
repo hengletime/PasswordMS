@@ -2418,5 +2418,52 @@
       justify-content: space-between;
       gap: 0.75rem;
     }
+    /* 备份记录表：三列在手机上挤不下。时间列与操作列都带 `nowrap`（合计约 115px
+       + 150px），中间「做了什么」只剩几十像素 —— 中文被压成一字一行，整张表被撑到
+       半屏高（2026-11-04 主人手机实测「表格被上下撑得很高」）。
+       窄屏改成每条两行：上排「时间 ……… 三个操作」，下排整行宽放描述。
+       **只改 display，不动 DOM**：桌面仍是真表格，读屏的单元格顺序也不变。
+       注意 table / tbody 必须一起 block —— 否则表格布局会把 tr 的 grid 修回
+       表格行（CSS 表格匿名框规则），改了这一堆等于没改。 */
+    .set-table,
+    .set-table tbody {
+      display: block;
+    }
+    .set-table thead {
+      /* 列名在堆叠布局里对不上任何一行，留着只会重复。 */
+      display: none;
+    }
+    .set-table tr {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      grid-template-areas:
+        'time actions'
+        'what what';
+      align-items: center;
+      gap: 0.15rem 0.5rem;
+      padding: 0.45rem 0;
+      border-bottom: 1px solid var(--pms-border);
+    }
+    .set-table td {
+      /* 边框挪到 tr 上，否则一格一条横线。 */
+      display: block;
+      padding: 0;
+      border-bottom: none;
+    }
+    .set-table td.col-time {
+      grid-area: time;
+    }
+    /* 第二列是「发生了什么」：窄屏独占一行、用弱化色，与上一行的时间分开。 */
+    .set-table td:nth-child(2) {
+      grid-area: what;
+      color: var(--pms-muted);
+      font-size: 0.8rem;
+    }
+    .set-table td.col-actions {
+      grid-area: actions;
+    }
+    .set-table tbody tr:last-child {
+      border-bottom: none;
+    }
   }
 </style>

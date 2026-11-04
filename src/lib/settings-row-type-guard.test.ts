@@ -170,14 +170,45 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(checkAt).toBeGreaterThan(plainRuleAt);
   });
 
+/**
+ * 取**某一条规则自己**的声明块（从选择器起点到配对的 `}`，含花括号）。
+ *
+ * 为什么不能用 `block.slice(block.indexOf(选择器))` 切到媒体块末尾：那样后面
+ * **任何**新增规则都会被算进这条断言。D-197 给窄屏补了 `.set-table` 的堆叠布局，
+ * 里面写了 `grid-template-columns`，当场就把「复选框行不许出现 `column`」判红——
+ * 规则改的是另一个元素，属于假红。切片收窄到本条规则，判据强度一点没降。
+ */
+function ruleOf(block: string, selector: string): string {
+  const at = block.indexOf(selector);
+  if (at < 0) {
+    return '';
+  }
+  const open = block.indexOf('{', at);
+  if (open < 0) {
+    return '';
+  }
+  let depth = 0;
+  for (let i = open; i < block.length; i += 1) {
+    if (block[i] === '{') {
+      depth += 1;
+    } else if (block[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return block.slice(at, i + 1);
+      }
+    }
+  }
+  return block.slice(at);
+}
+
   it('信息行：窄屏改回 row + 两端对齐 + 值右对齐可收缩（不是继续堆叠）', () => {
     const block = extractMobileMediaBlock(SRC) ?? '';
-    const infoRule = block.slice(block.indexOf('.set-row.is-info {'), block.indexOf('.set-row.is-info .pms-meta {'));
+    const infoRule = ruleOf(block, '.set-row.is-info {');
     expect(infoRule).toContain('flex-direction: row');
     expect(infoRule).toContain('justify-content: space-between');
     expect(infoRule).toContain('baseline');
 
-    const metaRule = block.slice(block.indexOf('.set-row.is-info .pms-meta {'), block.indexOf('.set-row.is-actions {'));
+    const metaRule = ruleOf(block, '.set-row.is-info .pms-meta {');
     expect(metaRule).toContain('text-align: right');
     // 长文本必须能收缩，否则 390px 下会顶出卡片。
     expect(metaRule).toContain('min-width: 0');
@@ -185,7 +216,7 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
 
   it('按钮行：窄屏横排 + 允许换行（不整宽、不竖排）', () => {
     const block = extractMobileMediaBlock(SRC) ?? '';
-    const actionsRule = block.slice(block.indexOf('.set-row.is-actions {'));
+    const actionsRule = ruleOf(block, '.set-row.is-actions {');
     expect(actionsRule).toContain('flex-direction: row');
     expect(actionsRule).toContain('flex-wrap: wrap');
     expect(actionsRule).toContain('align-items: center');
@@ -195,13 +226,35 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
 
   it('复选框行（D-110）：窄屏改回 row + 两端对齐（文字左 / 复选框右，同桌面）', () => {
     const block = extractMobileMediaBlock(SRC) ?? '';
-    const checkRule = block.slice(block.indexOf('.set-row.is-check {'));
+    const checkRule = ruleOf(block, '.set-row.is-check {');
     expect(checkRule).toContain('flex-direction: row');
     expect(checkRule).toContain('justify-content: space-between');
     expect(checkRule).toContain('align-items: center');
     // 复选框不许被 stretch 拉宽，也不许再被堆叠。
     expect(checkRule).not.toContain('stretch');
     expect(checkRule).not.toContain('column');
+  });
+
+  // D-197：备份记录表三列在手机上挤不下（时间列与操作列都 nowrap），中间
+  // 「这是哪一步」被压成一字一行，整表撑到半屏高。窄屏改成每条两行。
+  // 这条守的是**最容易改了一半就失效**的组合：`table` / `tbody` 不跟着 block，
+  // 浏览器按表格匿名框规则会把 `tr` 的 grid 修回表格行 —— 样式写了，效果为零。
+  it('备份表格（D-197）：窄屏 table/tbody/tr 一起脱离表格布局，表头隐藏', () => {
+    const block = extractMobileMediaBlock(SRC) ?? '';
+
+    const detached = ruleOf(block, '.set-table,');
+    expect(detached).toContain('.set-table tbody');
+    expect(detached).toContain('display: block');
+
+    expect(ruleOf(block, '.set-table thead {')).toContain('display: none');
+
+    const row = ruleOf(block, '.set-table tr {');
+    expect(row).toContain('display: grid');
+    expect(row).toContain("'time actions'");
+    expect(row).toContain("'what what'");
+
+    // 第二列必须跨满两格，否则回到"和时间、按钮抢宽度"的老问题。
+    expect(ruleOf(block, '.set-table td:nth-child(2) {')).toContain('grid-area: what');
   });
 
   it('桌面（≥768px）一个像素都不许变：媒体块外没有任何 is-info / is-actions / is-check 规则', () => {

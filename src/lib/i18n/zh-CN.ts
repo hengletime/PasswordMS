@@ -492,8 +492,11 @@ export const zhCN = {
     // 换机可用；回滚点只在本机，卸载即消失。同名不同物会让用户以为不必再导出。
     restore_point: '本机自动备份',
     // P1：不能写「每次」——日备份去重与大库节流会让同一时段的多次改动共用一份。
-    restore_point_hint: '做危险操作前，先把整个库复制一份放在这台电脑上；改坏了可以用它退回去。',
-    restore_point_local_only: '这些备份只在这台电脑上。卸载、换电脑、清空数据目录都会一起没——请定期导出备份。',
+    // 措辞用「本机」而不是「这台电脑」：Android 上也显示同一套字典，
+    // 手机上读到"这台电脑"会让人以为备份存在别处（2026-11-04 主人真机）。
+    // 分区标题 `restore_point` 本来就是「本机自动备份」，描述跟着用同一个词。
+    restore_point_hint: '做危险操作前，先把整个库复制一份存在本机；改坏了可以用它退回去。',
+    restore_point_local_only: '这些备份只在本机。卸载、换机、清空数据目录都会一起没——请定期导出备份。',
     restore_point_never: '还没有这样的备份。',
     restore_point_last_ok: '上次备份：{time}。',
     restore_point_error: '最近一次备份没存成（{reason}），时间 {time}。',
@@ -532,7 +535,7 @@ export const zhCN = {
     // 但**必须给后果**——只说"读不出"用户没有动机去翻文件夹。后果用"可能"有界：
     // 我们确实没看进去，所以能说"可能有"，不能断言"有"。
     restore_point_old_unreadable_uncounted: '有备份文件夹打不开，数不清有几个。里面可能有旧主密码还能打开的备份，请到备份文件夹里手动看看。',
-    restore_point_failed: '删除失败：备份还在这台电脑上，请稍后重试。',
+    restore_point_failed: '删除失败：备份还在本机，请稍后重试。',
     restore_point_load_failed: '读取失败：拿不到备份信息（你的条目没有受影响）。',
     restore_point_restore_title: '用这份备份退回去',
     restore_point_restore_body: '会把现在的库换成 {time} 的那一份（共 {size}）。从那时之后的改动都会没有。',
@@ -567,7 +570,7 @@ export const zhCN = {
     restore_point_clear_group: '全删',
     restore_point_clear_title: '删除备份',
     restore_point_clear_group_confirm: '会删掉这一组 {count} 份备份（共 {size}）。改密码之前那些不会被删。',
-    restore_point_clear_group_confirm_older: '会删掉改密码之前的 {count} 份备份（共 {size}）。它们要用当时的旧密码才能打开，删掉之后这台电脑上就没有那把密码的副本了。',
+    restore_point_clear_group_confirm_older: '会删掉改密码之前的 {count} 份备份（共 {size}）。它们要用当时的旧密码才能打开，删掉之后本机上就没有那把密码的副本了。',
     restore_point_remove_confirm: '会删掉 {time} 这一份（共 {size}）。删掉之后就不能再退回那一刻了。',
     restore_point_pin: '钉住：自动清理不删它',
     restore_point_unpin: '取消钉住',
@@ -580,7 +583,7 @@ export const zhCN = {
     restore_point_retention_turned_off: '已关掉自动清理。以后一份都不会自动删除。',
     restore_point_retention_failed: '没能改这个开关，请重试。',
     change_password_note_lock_only: '改密码只换了门上那把锁，没换柜子里的钥匙。所以旧密码或旧备份一旦泄露，光改密码挡不住对方读你以后的数据。',
-    change_password_note_old: '改密码之前留下的备份，仍然能用当时的旧密码打开。删掉它们只对以后拿到这台电脑的人有用；已经被拷走的副本删了也管不着。',
+    change_password_note_old: '改密码之前留下的备份，仍然能用当时的旧密码打开。删掉它们只对以后拿到本机的人有用；已经被拷走的副本删了也管不着。',
     // P0：原来的「新建库 + 导入」出口是**假的**——导出只有加密的 .vault，而导入只认
     // Bitwarden JSON/CSV，且导入会丢附件。留着它等于用一句做不到的话安慰人。
     change_password_note_no_rekey: '这个版本还不能换柜子里的钥匙。如果你在别的设备上配对过这个库，情况会更麻烦——现在没有办法让那些设备失去访问。',
