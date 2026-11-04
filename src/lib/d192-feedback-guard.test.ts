@@ -38,16 +38,13 @@ function isScannable(path: string): boolean {
 const OK_LITERAL = /['"]common\.ok['"]/;
 
 /**
- * 成功 toast 的**字面量**键：`toast('success', 'attach.added')`。
+ * 成功 toast 的**实参切片**：从 `toast('success',` 取到右括号（允许跨行）。
  *
- * 常量形态（`toast('success', ATTACHMENT_OK_KEY)`）另外由 `SUCCESS_TOAST_CONST` 收，
- * 靠"全大写常量 → 它的字面量值"这条映射对上，不再靠"常量定义处是字面量所以自然被覆盖"
- * ——那句话只对 `common.ok` 成立，对其余常量不成立。
+ * 取切片而不是取固定形态，是因为形态会长出来：字面量、常量、三元、跨行参数……
+ * 每多一种，预知形态的正则就漏一条，而且**漏得无声无息**（少扫一条仍然全绿）。
+ * 切片 + "掏不出键就红" 把这种事变成可见的失败。
  */
-const SUCCESS_TOAST_KEY = /toast\(\s*['"]success['"]\s*,\s*(['"])([^'"]+)\1/g;
-
-/** `toast('success', SOME_CONST)` 里的常量名（值在下面的映射表里查）。 */
-const SUCCESS_TOAST_CONST = /toast\(\s*['"]success['"]\s*,\s*([A-Z][A-Z0-9_]+)\s*[,)]/g;
+const SUCCESS_TOAST_ARG = /toast\(\s*['"]success['"]\s*,([^)]*)/g;
 
 /** 全大写常量的定义：`export const X_OK_KEY = 'ns.key';`（只收带命名空间的键值）。 */
 const CONST_DEF = /(?:export\s+)?const\s+([A-Z][A-Z0-9_]+)\s*=\s*'([a-z][a-z0-9_]*\.[a-z0-9_]+)'/g;
@@ -126,8 +123,12 @@ describe('D-192 成功提示不得复用 `common.ok`（那是按钮上的「确�
   });
 
   it('所有成功 toast 的键都不是按钮词、值也不等于按钮标签，且键真的存在于字典', () => {
-    // 两种写法都收：字面量 `'attach.added'` 与全大写常量 `ATTACHMENT_OK_KEY`
-    // （常量的值从它的定义处取）。只收字面量会漏掉常量形态——那条路永远不会红。
+    // 口径：**凡是 `toast('success',` 就必须掏出至少一个 key**，掏不出即红。
+    //
+    // 为什么这么写而不预知形态：第三轮评审发现三元
+    // `toast('success', cond ? 'a' : 'b')` 不在任何白名单里，整条路静默漏扫。
+    // 现在改成"取实参那一段切片，再从切片里掏所有字符串字面量与全大写标识符"——
+    // 形态未知也能收，且**掏不出来就报错**，不会再无声无息少扫一条。
     const consts = new Map<string, string>();
     for (const path of scannable) {
       for (const m of (modules[path] ?? '').matchAll(CONST_DEF)) {
@@ -137,25 +138,40 @@ describe('D-192 成功提示不得复用 `common.ok`（那是按钮上的「确�
 
     const found: Array<{ file: string; key: string }> = [];
     const unresolved: string[] = [];
+    let calls = 0;
     for (const path of scannable) {
       const src = modules[path] ?? '';
-      for (const m of src.matchAll(SUCCESS_TOAST_KEY)) {
-        found.push({ file: path, key: m[2] });
-      }
-      for (const m of src.matchAll(SUCCESS_TOAST_CONST)) {
-        const key = consts.get(m[1]);
-        if (key === undefined) {
-          unresolved.push(`${path}→${m[1]}`);
-        } else {
+      for (const m of src.matchAll(SUCCESS_TOAST_ARG)) {
+        calls += 1;
+        const slice = m[1];
+        const keys: string[] = [];
+        // 字面量键（`'attach.added'`）；三元里的两个分支也会各自被收进来。
+        for (const lit of slice.matchAll(/'([^']+)'/g)) {
+          if (/^[a-z][a-z0-9_]*\.[a-z0-9_]+$/.test(lit[1])) {
+            keys.push(lit[1]);
+          }
+        }
+        // 全大写常量（值从定义处取）。
+        for (const id of slice.matchAll(/\b([A-Z][A-Z0-9_]+)\b/g)) {
+          const key = consts.get(id[1]);
+          if (key !== undefined) {
+            keys.push(key);
+          }
+        }
+        if (keys.length === 0) {
+          unresolved.push(`${path}→${slice.trim().slice(0, 40)}`);
+        }
+        for (const key of keys) {
           found.push({ file: path, key });
         }
       }
     }
-    // 常量名解析不到 = 扫描口径断了，先报这个，别让人去猜后面的断言。
-    expect(unresolved, `成功 toast 用了找不到定义的常量：${unresolved.join(', ')}`).toEqual([]);
-    // 下界取实测值（19 条字面量 + 3 条常量 = 22）：少一条就红，逼人回来看一眼是不是漏扫了
-    // （而不是默默少扫）。删掉一条成功提示时，把这个数一起改小——红一次比永远绿好。
-    expect(found.length, '扫到的成功 toast 少于实测值，正则或扫描面出问题了').toBeGreaterThanOrEqual(22);
+    // 掏不出 key 的调用点 = 口径断了，先报这个，别让人去猜后面的断言。
+    expect(unresolved, `这些成功 toast 掏不出文案键：\n${unresolved.join('\n')}`).toEqual([]);
+    // 下界取实测值：少一条就红，逼人回来看一眼是不是漏扫了（而不是默默少扫）。
+    // 删掉一条成功提示时把这个数一起改小——红一次比永远绿好。
+    expect(calls, '扫到的成功 toast 调用点少于实测值，正则或扫描面出问题了').toBeGreaterThanOrEqual(27);
+    expect(found.length, '掏出的键少于调用点，说明有调用点没被解析').toBeGreaterThanOrEqual(calls);
 
     const asButtonKey = found.filter((f) => BUTTON_KEYS.has(f.key));
     expect(
