@@ -83,7 +83,7 @@ export const zhTW = {
     hint: '8 個字元以上，建議混合大小寫、數字與符號',
     mismatch: '兩次輸入的主密碼不一致。',
     too_short: '主密碼至少需要 {n} 個字元。',
-    weak_hint: '主密碼較短，建議使用更長的密碼；繼續請勾選確認。',
+    // D-193：`weak_hint` 已刪——沒有任何元件渲染它。
     acknowledge_prefix: '我已閱讀並同意',
     disclaimer_link: '免責聲明',
     acknowledge_middle: '與',
@@ -257,6 +257,10 @@ export const zhTW = {
     remove_confirm_title: '移除附件',
     remove_confirm_body: '附件「{name}」將從項目移除，其內容會在同步後從所有裝置刪除。此操作無法撤銷。',
     section_title: '附件',
+    // D-192：原先是 `common.ok`（= 按鈕標籤「確定」）。
+    added: '附件已加入。',
+    exported: '附件已匯出到你選的位置。',
+    removed: '附件已移除，內容會在同步後刪除。',
   },
   import: {
     header_read_failed: 'CSV 表頭讀取失敗：欄位對應已留空，預覽時將重新讀取檔案。',
@@ -414,6 +418,8 @@ export const zhTW = {
     uninstall_wipes_vault: '解除安裝應用程式、換機或重新安裝系統都會刪除本機保險庫。請在動手前用下方按鈕匯出一份加密副本，存到自己找得回來的地方。',
     export_ok_size: '備份已儲存：{size}。請確認這個檔案在你選的位置裡，而且大小不是 0 B。',
     export_empty_failed: '匯出沒有寫入任何資料（0 位元組），備份未成功。請換一個儲存位置重試。',
+    // D-192：舊版/替身拿不到位元組數時的備援文案（原先是「確定」）。
+    export_done: '備份已儲存。請確認目標檔案確實存在，且大小不是 0 B。',
     backup_last_ok: '上次成功匯出：{time}（{size}）。',
     backup_stale_hint: '已超過 {days} 天，建議再匯出一份。',
     backup_never: '從未成功匯出過備份。解除安裝或換機將無法還原本機資料。',

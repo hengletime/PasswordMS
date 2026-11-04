@@ -91,7 +91,7 @@ export const enUS: Messages = {
     hint: '8+ characters; mixing upper/lower case, digits and symbols is recommended',
     mismatch: 'The passwords do not match.',
     too_short: 'Master password must be at least {n} characters.',
-    weak_hint: 'The password is short — a longer one is recommended. Select the checkbox to continue.',
+    // D-193: `weak_hint` removed — no component ever rendered it.
     // D-63: the acknowledgement row is split into prefix + disclaimer link + "&" + terms link —
     // both links are siblings of the checkbox label, so clicking them never toggles the checkbox.
     acknowledge_prefix: 'I have read and agree to the',
@@ -273,6 +273,11 @@ export const enUS: Messages = {
     remove_confirm_title: 'Remove attachment',
     remove_confirm_body: '"{name}" will be removed from the item, and its content will be deleted from all devices after sync. This cannot be undone.',
     section_title: 'Attachments',
+    // D-192: all three success toasts used to reuse `common.ok`, which is the button label
+    // "OK" — the screen just flashed "OK". A success message must say what happened.
+    added: 'Attachment added.',
+    exported: 'Attachment exported to the location you chose.',
+    removed: 'Attachment removed; its content will be deleted after sync.',
   },
   import: {
     header_read_failed: 'Failed to read the CSV header: field mapping left empty; preview will re-read the file.',
@@ -451,6 +456,8 @@ export const enUS: Messages = {
     uninstall_wipes_vault: 'Uninstalling the app, switching devices, or reinstalling the OS deletes the vault on this device. Before you do any of that, export an encrypted copy with the button below and keep it where you can find it again.',
     export_ok_size: 'Backup saved: {size}. Make sure the file is where you chose it and that its size is not 0 B.',
     export_empty_failed: 'The export wrote no data (0 bytes), so no backup was made. Choose a different location and try again.',
+    // D-192: fallback when the backend does not report a byte count (used to be "OK").
+    export_done: 'Backup saved. Please confirm the file really exists and its size is not 0 B.',
     backup_last_ok: 'Last successful export: {time} ({size}).',
     backup_stale_hint: 'It has been over {days} days — consider exporting a fresh copy.',
     backup_never: 'No backup has ever been exported from this device. Uninstalling or switching devices will make the data unrecoverable.',

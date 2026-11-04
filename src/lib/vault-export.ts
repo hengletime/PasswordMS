@@ -10,8 +10,14 @@ import { runSaveToDestination } from './save-dialog';
 /** 空密码就地提示的文案 key（D-51 引入）。 */
 export const EXPORT_PASSWORD_REQUIRED_KEY = 'settings.export_password_required';
 
-/** 导出成功后的成功文案 key（后端未回报字节数时的兜底）。 */
-export const EXPORT_OK_KEY = 'common.ok';
+/**
+ * 导出成功但**后端未回报字节数**时的兜底文案 key（旧包 / 测试替身才会走到）。
+ *
+ * ⚠️ D-192：原先是 `common.ok`（= 按钮标签「确定」）。这条分支在配套后端下不可达
+ * （`exportVault` 恒返回 u64），但一旦可达，「确定」既不说明发生了什么事，也正好
+ * 抹掉 D-144 想要的「体积可核对」语义——所以同样换成真话。
+ */
+export const EXPORT_OK_KEY = 'settings.export_done';
 
 /**
  * 导出成功且**确有字节写入**时的文案 key（带 `{size}` 插值，D-144）。
@@ -57,7 +63,8 @@ export interface VaultExportResult {
  * 1. `exportPassword` 为空字符串 → **不发 IPC**，就地 error toast（`EXPORT_PASSWORD_REQUIRED_KEY`）；
  * 2. 用户在确认框/保存对话框取消 → 不发 IPC，且**正常返回**（对话框 reject 也算取消，
  *    归一逻辑见 `save-dialog.ts`；Android 上取消就是 reject）；
- * 3. 导出成功 → success toast（`common.ok`），调用方须清空输入框（`cleared: true`）；
+ * 3. 导出成功 → success toast（`settings.export_ok_size`；后端未回报字节数时
+ *    `settings.export_done`），调用方须清空输入框（`cleared: true`）；
  * 4. 导出失败 → error toast（`toAppError(err).messageKey`），不清空（保留现场供重试）。
  */
 export async function runVaultExport(deps: VaultExportDeps): Promise<VaultExportResult> {

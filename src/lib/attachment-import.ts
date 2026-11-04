@@ -16,8 +16,15 @@
 import { toAppError } from './errors';
 import type { ItemDto } from '../types';
 
-/** 添加成功 toast 文案 key（与导出/改密成功一致，复用既有 common.ok）。 */
-export const ATTACHMENT_OK_KEY = 'common.ok';
+/**
+ * 添加成功 toast 文案 key。
+ *
+ * ⚠️ D-192：这里原先复用 `common.ok`，而 `common.ok` 是**按钮标签「确定」**（`zh-CN.ts`
+ * `ok: '确定'`），于是「附件添加成功」在屏幕上只显示一个绿色「确定」。与 D-114 改密那条
+ * 同型——当时只修了改密，附件这一族（添加 / 导出 / 移除）漏了，D-192 一并补齐。
+ * 成功文案必须**说清发生了什么**，不得借用任何按钮标签。
+ */
+export const ATTACHMENT_OK_KEY = 'attach.added';
 
 /** 附件添加流程所需的外部依赖（组件注入真实实现，测试注入替身）。 */
 export interface AttachmentImportDeps {
@@ -57,7 +64,7 @@ export function attachmentTitleFromPath(sourcePath: string): string {
  *
  * 行为契约（D-59/D-60）：
  * 1. 用户取消选择（null）或路径为空字符串 → **不发 IPC**、无任何 toast（`invoked: false`）；
- * 2. 添加成功 → success toast（`common.ok`），返回父条目（调用方负责刷新详情/列表）；
+ * 2. 添加成功 → success toast（`attach.added`，D-192），返回父条目（调用方负责刷新详情/列表）；
  * 3. IPC 失败（超限 / 附件数上限 / 文件名超长 / 容量）→ error toast
  *    （`toAppError(err).messageKey`），`item: null`。
  */

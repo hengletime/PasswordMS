@@ -94,7 +94,8 @@
         api.keydocs.exportAttachment(item.item_id, att.attachment_id, dest),
     });
     if (outcome.kind === 'saved') {
-      ui.toast('success', 'common.ok');
+      // D-192：原先复用 `common.ok`（= 按钮标签「确定」），等于什么也没说。
+      ui.toast('success', 'attach.exported');
     } else if (outcome.kind === 'failed') {
       ui.toast('error', outcome.messageKey);
     }
@@ -112,7 +113,8 @@
     try {
       await api.keydocs.removeAttachment(item.item_id, att.attachment_id);
       await vault.load();
-      ui.toast('success', 'common.ok');
+      // D-192：同理，不能只弹一个「确定」。
+      ui.toast('success', 'attach.removed');
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
     }
