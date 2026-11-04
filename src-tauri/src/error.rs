@@ -66,6 +66,12 @@ pub mod shell_codes {
     /// 这一个码（统一显示「目标窗口已切换，已停止输入」），不区分失焦发生在
     /// 注入前还是注入中——对用户那是同一句话。
     pub const ERR_AUTOTYPE_FOCUS_LOST: &str = "ERR_AUTOTYPE_FOCUS_LOST";
+    /// 自动输入（1.5.39 增强）：`username` 动作要求条目有非空用户名。
+    pub const ERR_AUTOTYPE_NO_USERNAME: &str = "ERR_AUTOTYPE_NO_USERNAME";
+    /// 自动输入（1.5.39 增强）：`url` 动作要求条目有非空网址。
+    pub const ERR_AUTOTYPE_NO_URL: &str = "ERR_AUTOTYPE_NO_URL";
+    /// 自动输入（1.5.39 增强）：`totp` 动作要求条目配置了 TOTP 密钥。
+    pub const ERR_AUTOTYPE_NO_TOTP: &str = "ERR_AUTOTYPE_NO_TOTP";
 }
 
 impl From<CoreError> for IpcError {

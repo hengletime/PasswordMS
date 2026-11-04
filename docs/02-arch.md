@@ -2648,7 +2648,7 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `generate_password` | `GeneratorOptions` | `{password}` | F-07 |
 | `copy_secret` | `{text,ttl_secs}` | `u64` | F-06（返回**代际号**，到期清理时带回；`ttl_secs=0` = 不安排自动清空，见 §3.25） |
 | `clear_secret_if_own` | `{gen}` | `bool` | A-03 到期清空（**仅清 `gen` 那一代**，且仅当剪贴板仍是本应用写的内容） |
-| `auto_type_fill` | `{item_id}` | `()` | 1.5.39 自动输入（热键 → 浮层选中条目 → Rust 切回原焦点窗口逐键 `SendInput`；只收 `item_id`，明文命令内现取；Android 返回 `ERR_NOT_SUPPORTED`） |
+| `auto_type_fill` | `{item_id,action}` | `()` | 1.5.39 自动输入（热键 → 浮层选中条目按动作注入）。`action` ∈ `default｜username｜password｜url｜totp`；default = 用户名+Tab+密码+回车（无用户名退化为仅密码），其余单字段不带回车。只收 `item_id`，明文/TOTP 命令内现取；Android 返回 `ERR_NOT_SUPPORTED` |
 | `prefs_set_autotype_hotkey` | `{hotkey}` | `PrefsDto` | 1.5.39 改自动输入热键（空串 = 禁用；注册失败旧键位已回滚、配置不动；单实现命令，Android 正常路径到不了——设置卡不渲染） |
 | `open_url` | `{url}` | `()` | F-05（协议白名单） |
 | `totp_now` | `{secret}` | `{code,period,remaining}` | F-11 |
@@ -2980,6 +2980,9 @@ graph TD
 | `ERR_RESTORE_CONFLICT` | 【D-91】回收站还原被拒（同 item_id 已有活跃条目） | `err.restore_conflict` |
 | `ERR_IO` | 文件 IO 错误 | `err.io` |
 | `ERR_AUTOTYPE_FOCUS_LOST` | 【1.5.39】自动输入目标窗口焦点丢失（句柄失效 / `SetForegroundWindow` 失败 / 切回后前台不是目标 / **注入中途前台变了**——立即中止，剩余序列不发）。与前端 `autotype.ts::AUTOTYPE_FAILURE_KEY_BY_CODE` 逐字对齐 | 前端浮层按 code 显式映射 `autotype.failed_focus` |
+| `ERR_AUTOTYPE_NO_USERNAME` | 【1.5.39】`username` 动作要求条目有非空用户名 | `autotype.no_username`（前端显式映射） |
+| `ERR_AUTOTYPE_NO_URL` | 【1.5.39】`url` 动作要求条目有非空网址 | `autotype.no_url`（前端显式映射） |
+| `ERR_AUTOTYPE_NO_TOTP` | 【1.5.39】`totp` 动作要求条目配置了 TOTP 密钥 | `autotype.no_totp`（前端显式映射） |
 | `ERR_CRYPTO` | 密码学操作失败 | `err.crypto` |
 | `ERR_INTERNAL` | 内部错误 | `err.internal` |
 

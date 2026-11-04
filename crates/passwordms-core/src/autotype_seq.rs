@@ -9,6 +9,8 @@
 //! |---|---|
 //! | `{USERNAME}` | 登录用户名（**字段值由调用方解析**，见下） |
 //! | `{PASSWORD}` | 登录密码（同上） |
+//! | `{URL}` | 登录条目网址（同上） |
+//! | `{TOTP}` | 当前 6 位动态码（**由调用方现算**，同上） |
 //! | `{TAB}` | Tab 键 |
 //! | `{ENTER}` | 回车键 |
 //! | `{DELAY n}` | 停顿 n 毫秒（0 ≤ n ≤ 10000） |
@@ -16,14 +18,15 @@
 //! 其余文本原样保留为 [`Token::Text`]；未知占位符、空占位符 `{}`、未闭合的 `{`
 //! 一律报错——宁可拒绝整条序列，也不把用户没料到的字面量打进别的应用。
 //!
-//! ## 为什么 `{USERNAME}` / `{PASSWORD}` 解析成 `Text` 而不是独立变体
+//! ## 为什么 `{USERNAME}` / `{PASSWORD}` / `{URL}` / `{TOTP}` 解析成 `Text` 而不是独立变体
 //!
 //! Token 枚举是**跨端冻结契约**（`Text(String) / Tab / Enter / DelayMs(u32)`）。
-//! 两个字段占位符被解析成**保留其占位符标记**的 `Text`（payload 恒为
-//! `"{USERNAME}"` / `"{PASSWORD}"`，大小写已归一），由调用方按字面值比对后换成
-//! 真实字段值。这样设计的好处是**明文完全不经过解析器**：密码从库里取出后直接进
-//! 调用方的注入缓冲，不进任何 `String` 中间层之外的副本；含 `{` / `}` 的密码也
-//! 不会被解析器误当成占位符（它根本不参与解析）。
+//! 四个字段占位符被解析成**保留其占位符标记**的 `Text`（payload 恒为
+//! `"{USERNAME}"` / `"{PASSWORD}"` / `"{URL}"` / `"{TOTP}"`，大小写已归一），由调用方
+//! 按字面值比对后换成真实内容。这样设计的好处是**明文与动态码完全不经过解析器**：
+//! 密码从库里取出后直接进调用方的注入缓冲，不进任何 `String` 中间层之外的副本；
+//! 含 `{` / `}` 的密码也不会被解析器误当成占位符（它根本不参与解析）；TOTP 也是
+//! 调用方现算现用，解析器见不到。
 //!
 //! `Token::Text` 因此有两种来源：字面文本与字段占位符。调用方区分二者靠
 //! payload 是否恰好等于归一后的占位符标记——模板由外壳层机器拼装（不含用户自由
@@ -32,8 +35,9 @@
 /// 解析产物的一个动作单元。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
-    /// 字面文本，或保留占位符标记的字段占位（`"{USERNAME}"` / `"{PASSWORD}"`，
-    /// 见模块文档）。payload 是**字符**序列（注入时按 UTF-16 码元逐个发）。
+    /// 字面文本，或保留占位符标记的字段占位（`"{USERNAME}"` / `"{PASSWORD}"` /
+    /// `"{URL}"` / `"{TOTP}"`，见模块文档）。payload 是**字符**序列（注入时按
+    /// UTF-16 码元逐个发）。
     Text(String),
     /// Tab 键。
     Tab,
@@ -69,6 +73,45 @@ impl std::error::Error for SeqError {}
 /// `{DELAY n}` 允许的最大毫秒数。
 pub const MAX_DELAY_MS: u32 = 10_000;
 
+/// 自动输入动作用到的序列模板（1.5.39 增强：选择窗可指定"打什么内容"）。
+pub const TEMPLATE_DEFAULT: &str = "{USERNAME}{TAB}{PASSWORD}{ENTER}";
+/// 只打用户名（单字段一律不带回车——用户按完动作后自己决定下一步）。
+pub const TEMPLATE_USERNAME: &str = "{USERNAME}";
+/// 只打密码。
+pub const TEMPLATE_PASSWORD: &str = "{PASSWORD}";
+/// 只打条目网址。
+pub const TEMPLATE_URL: &str = "{URL}";
+/// 只打当前 TOTP 验证码。
+pub const TEMPLATE_TOTP: &str = "{TOTP}";
+
+/// action 取值不认识。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ActionError(pub String);
+
+impl std::fmt::Display for ActionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown autotype action {:?}", self.0)
+    }
+}
+
+impl std::error::Error for ActionError {}
+
+/// action → 序列模板（纯函数，可单测；大小写与首尾空白容忍）。
+///
+/// 合法 action（与前端选择窗的键逐字一致）：
+/// `default` / `username` / `password` / `url` / `totp`。
+/// 其余一律 [`ActionError`]——宁可拒绝，也不猜用户想打什么。
+pub fn template_for(action: &str) -> Result<&'static str, ActionError> {
+    match action.trim().to_ascii_lowercase().as_str() {
+        "default" => Ok(TEMPLATE_DEFAULT),
+        "username" => Ok(TEMPLATE_USERNAME),
+        "password" => Ok(TEMPLATE_PASSWORD),
+        "url" => Ok(TEMPLATE_URL),
+        "totp" => Ok(TEMPLATE_TOTP),
+        other => Err(ActionError(other.to_string())),
+    }
+}
+
 /// 解析自动输入序列。
 ///
 /// 空串 / 全空白返回空表（= 注入一个空序列，调用方自行决定是否视为配置错误）。
@@ -102,9 +145,11 @@ pub fn parse(seq: &str) -> Result<Vec<Token>, SeqError> {
 
         let name = body.trim();
         match name.to_ascii_lowercase().as_str() {
-            // 字段占位符：保留归一后的标记，由调用方解析成真实字段值。
+            // 字段占位符：保留归一后的标记，由调用方解析成真实内容。
             "username" => tokens.push(Token::Text("{USERNAME}".to_string())),
             "password" => tokens.push(Token::Text("{PASSWORD}".to_string())),
+            "url" => tokens.push(Token::Text("{URL}".to_string())),
+            "totp" => tokens.push(Token::Text("{TOTP}".to_string())),
             "tab" => tokens.push(Token::Tab),
             "enter" => tokens.push(Token::Enter),
             "delay" => {
@@ -153,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn all_five_placeholders() {
+    fn classic_placeholders() {
         let toks = parse_ok("{USERNAME}{PASSWORD}{TAB}{ENTER}{DELAY 5000}");
         assert_eq!(
             toks,
@@ -258,6 +303,86 @@ mod tests {
         let toks = parse_ok("{USERNAME}{TAB}{PASSWORD}{ENTER}");
         assert_eq!(toks[0], Token::Text("{USERNAME}".into()));
         assert_eq!(toks[2], Token::Text("{PASSWORD}".into()));
+    }
+
+    #[test]
+    fn url_and_totp_placeholders() {
+        assert_eq!(parse_ok("{URL}"), vec![Token::Text("{URL}".into())]);
+        assert_eq!(parse_ok("{TOTP}"), vec![Token::Text("{TOTP}".into())]);
+        // 大小写同样不敏感。
+        assert_eq!(
+            parse_ok("{url}{Totp}"),
+            vec![Token::Text("{URL}".into()), Token::Text("{TOTP}".into())]
+        );
+    }
+
+    #[test]
+    fn url_and_totp_mixed_with_other_tokens() {
+        let toks = parse_ok("open {URL}{ENTER}{TOTP}{TAB}");
+        assert_eq!(
+            toks,
+            vec![
+                Token::Text("open ".into()),
+                Token::Text("{URL}".into()),
+                Token::Enter,
+                Token::Text("{TOTP}".into()),
+                Token::Tab,
+            ]
+        );
+    }
+
+    #[test]
+    fn template_for_actions() {
+        assert_eq!(template_for("default"), Ok(TEMPLATE_DEFAULT));
+        assert_eq!(template_for("username"), Ok(TEMPLATE_USERNAME));
+        assert_eq!(template_for("password"), Ok(TEMPLATE_PASSWORD));
+        assert_eq!(template_for("url"), Ok(TEMPLATE_URL));
+        assert_eq!(template_for("totp"), Ok(TEMPLATE_TOTP));
+        // 空白与大小写容忍（wire 值由前端常量给出，这里只是防御）。
+        assert_eq!(template_for(" URL "), Ok(TEMPLATE_URL));
+        // 非法值一律拒绝，不猜。
+        assert_eq!(template_for("bogus"), Err(ActionError("bogus".into())));
+        assert_eq!(template_for(""), Err(ActionError(String::new())));
+    }
+
+    #[test]
+    fn every_template_parses_and_only_has_markers() {
+        // 模板与解析器必须自洽：模板串过 parse 不报错，且字段占位符保持标记形态。
+        for template in [
+            TEMPLATE_DEFAULT,
+            TEMPLATE_USERNAME,
+            TEMPLATE_PASSWORD,
+            TEMPLATE_URL,
+            TEMPLATE_TOTP,
+        ] {
+            let toks = parse(template).expect("模板必须可解析");
+            assert!(!toks.is_empty());
+            for tok in toks {
+                if let Token::Text(text) = tok {
+                    assert!(
+                        matches!(
+                            text.as_str(),
+                            "{USERNAME}" | "{PASSWORD}" | "{URL}" | "{TOTP}"
+                        ),
+                        "模板里出现了未知文本 {text:?}"
+                    );
+                }
+            }
+        }
+        // 单字段模板不带回车（产品约定：按完动作由用户自己决定下一步）。
+        for template in [
+            TEMPLATE_USERNAME,
+            TEMPLATE_PASSWORD,
+            TEMPLATE_URL,
+            TEMPLATE_TOTP,
+        ] {
+            assert_eq!(
+                parse(template).unwrap(),
+                vec![Token::Text(template.to_string())]
+            );
+        }
+        // default 模板尾部是回车。
+        assert_eq!(parse(TEMPLATE_DEFAULT).unwrap().last(), Some(&Token::Enter));
     }
 
     #[test]

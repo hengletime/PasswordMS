@@ -43,8 +43,15 @@ pub fn now_at(secret_base32: &str, unix_secs: u64) -> CoreResult<TotpCode> {
 }
 
 /// 计算指定 Unix 秒的 6 位验证码。
+///
+/// **入参容错**：可直接是 Base32 密钥，也可以是 `otpauth://totp/...?secret=XXX`
+/// 整串 URI——后者经 [`secret_from_input`] 抽出 `secret` 参数再解码。理由：
+/// Bitwarden 导入把 `login_totp` **原样入库**（通常是 otpauth URI），前端编辑器
+/// 保存时才归一（`normalizeTotpInput`），导入条目从未走过那道归一。这里是 Rust
+/// 侧唯一入口，放在这一层两个调用方（详情页 `totp_now`、自动输入）同时受益，
+/// 不必各写一份解析。
 pub fn code_at(secret_base32: &str, unix_secs: u64) -> CoreResult<String> {
-    let key = decode_secret(secret_base32)?;
+    let key = decode_secret(secret_from_input(secret_base32))?;
     let counter = unix_secs / TOTP_PERIOD_SECS;
 
     let mut mac = HmacSha1::new_from_slice(&key)
@@ -60,6 +67,30 @@ pub fn code_at(secret_base32: &str, unix_secs: u64) -> CoreResult<String> {
         | (hash[offset + 3] as u32);
     let code = binary % 10u32.pow(TOTP_DIGITS);
     Ok(format!("{:0width$}", code, width = TOTP_DIGITS as usize))
+}
+
+/// 从用户输入取 Base32 密钥：`otpauth://` 整串抽 `secret` 参数，其余原样返回。
+///
+/// 语义与前端 `normalizeTotpInput`（`src/lib/totp.ts`）一致：scheme 大小写不敏感、
+/// 只认 `secret` 查询参数、抽不到就原样返回（交由解码阶段报「格式非法」，
+/// 不在这里静默吞成空串——空串的错误信息是「密钥为空」，会掩盖真正的原因）。
+fn secret_from_input(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    if !trimmed
+        .get(.."otpauth://".len())
+        .is_some_and(|p| p.eq_ignore_ascii_case("otpauth://"))
+    {
+        return trimmed;
+    }
+    let query = trimmed.split_once('?').map(|(_, q)| q).unwrap_or("");
+    for pair in query.split('&') {
+        if let Some((key, value)) = pair.split_once('=') {
+            if key.eq_ignore_ascii_case("secret") {
+                return value.trim();
+            }
+        }
+    }
+    trimmed
 }
 
 /// 解码 Base32 密钥（容错大小写、空格与填充）。
@@ -94,5 +125,21 @@ mod tests {
         assert!(code_at("A", 59).is_err());
         assert!(code_at("AAAAAAAAAAAAAA", 59).is_err()); // 10 字符 ≈ 6 字节
         assert!(code_at("JBSWY3DPEHPK3PXP", 59).is_ok()); // 15 字符 = 9.375B→解码 10B
+    }
+
+    #[test]
+    fn accepts_otpauth_uri_like_frontend_normalization() {
+        // Bitwarden 导入把 login_totp 原样入库（otpauth 整串），Rust 侧唯一入口
+        // 必须与前端 `normalizeTotpInput` 同语义地抽出 secret。
+        let bare = code_at("JBSWY3DPEHPK3PXP", 59).expect("裸密钥可用");
+        let uri = "otpauth://totp/GitHub:user?secret=JBSWY3DPEHPK3PXP&issuer=GitHub";
+        assert_eq!(code_at(uri, 59).unwrap(), bare);
+        // scheme 大小写、参数顺序与多余参数都不影响。
+        assert_eq!(
+            code_at("OTPAUTH://totp/x?issuer=y&secret=JBSWY3DPEHPK3PXP", 59).unwrap(),
+            bare
+        );
+        // 不带 secret 的 URI 不被静默吞成空串：落到解码阶段的「格式非法」。
+        assert!(code_at("otpauth://totp/nosecret?issuer=x", 59).is_err());
     }
 }
