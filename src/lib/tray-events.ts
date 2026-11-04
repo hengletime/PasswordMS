@@ -9,3 +9,6 @@ export const TRAY_HINT_EVENT = 'app://tray-hint';
 
 /** 全局热键被按下 → 把焦点打到搜索框（唤窗动作已由 Rust 完成）。 */
 export const QUICK_SEARCH_EVENT = 'app://quick-search';
+
+/** 自动输入热键被按下 → 浮层重拉数据并聚焦搜索框（唤窗动作已由 Rust 完成）。 */
+export const AUTOTYPE_PICK_EVENT = 'app://auto-type';

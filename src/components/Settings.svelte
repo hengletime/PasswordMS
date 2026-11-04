@@ -141,6 +141,15 @@
   const bioPlatform = $derived(bioPlatformOf(bio));
   const bioSuffix = $derived(bioTextSuffix(bioPlatform));
   const bioNoun = $derived(ui.t(`settings.bio_noun${bioSuffix}`));
+  /**
+   * 自动输入热键设置的平台门控（1.5.39；D-121/D-122 同一口径）：判据独立成派生态，
+   * 不嵌进别的 if——嵌进去的判据会在条件短路时永远走不到。
+   * 平台来源是后端 DTO 的 `platform` 字段（`bioPlatformOf`），**禁止 navigator.userAgent**。
+   * Windows 才渲染改键控件；Android 只渲染纯文案，不渲染 `<button>`——移动端没有
+   * 全局热键这回事，挂一个录不上的按钮等于给不存在的功能做广告。
+   */
+  const autotypeHotkeyEditable = $derived(bioPlatform === 'windows');
+  const autotypeHotkeyTextOnly = $derived(bioPlatform === 'android');
   let oldPassword = $state('');
   // D-51：导出保险库需要单独输入当前主密码（后端 repo.export_vault 会用它做 unlock_check 后再 copy 库文件）。
   // 旧实现误用「修改主密码」卡片的 oldPassword，而导出卡片根本没有输入框 → 空密码必报「解锁失败，请重试。」
@@ -642,6 +651,60 @@
     } catch (err) {
       ui.toast('error', toAppError(err).messageKey);
       void loadPrefs();
+    }
+  }
+
+  // ===== 1.5.39：自动输入热键（prefs.autotype_hotkey，默认 Ctrl+Alt+Space） =====
+  //
+  // 录制机制与上面的快速搜索热键完全同一套（capture 监听 + comboFromEvent +
+  // 后端 canonical 校验/回滚），只是读写的是 prefs 的另一个字段。
+
+  /** 是否正在录制自动输入热键。 */
+  let autotypeHotkeyRecording = $state(false);
+
+  /** 显示文案；未设置时明确写"未设置"而不是留白。 */
+  const autotypeHotkeyDisplay = $derived(
+    prefsDto && prefsDto.autotype_hotkey.length > 0
+      ? formatHotkey(prefsDto.autotype_hotkey)
+      : ui.t('settings.hotkey_none'),
+  );
+
+  function startAutotypeHotkeyRecord(): void {
+    autotypeHotkeyRecording = true;
+  }
+
+  /** 与上面 `hotkeyRecording` 的 $effect 同一形状：capture 接管键盘，组件销毁时注销。 */
+  $effect((): (() => void) | void => {
+    if (!autotypeHotkeyRecording) {
+      return;
+    }
+    const onKeydown = (event: KeyboardEvent): void => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === 'Escape') {
+        autotypeHotkeyRecording = false;
+        return;
+      }
+      const combo = comboFromEvent(event);
+      if (combo === null) {
+        // 还只是按下了修饰键，或者没有主修饰键——继续等，不报错。
+        return;
+      }
+      void saveAutotypeHotkey(combo);
+    };
+    window.addEventListener('keydown', onKeydown, true);
+    return (): void => window.removeEventListener('keydown', onKeydown, true);
+  });
+
+  /** 保存自动输入热键。失败时保持录制态，用户直接再按一个组合即可。 */
+  async function saveAutotypeHotkey(spec: string): Promise<void> {
+    try {
+      prefsDto = await api.prefs.setAutotypeHotkey(spec);
+      autotypeHotkeyRecording = false;
+      ui.toast('success', 'settings.hotkey_saved');
+    } catch (err) {
+      // ERR_HOTKEY_UNAVAILABLE（被占用）/ ERR_HOTKEY_*（键位问题）都由后端给出具体文案。
+      ui.toast('error', toAppError(err).messageKey);
     }
   }
 
@@ -1209,6 +1272,29 @@
         <Icon name="alert" size={16} />
         <span>{ui.t('settings.hotkey_unavailable')}</span>
       </p>
+    {/if}
+    <!-- 1.5.39：自动输入热键（读写 prefs.autotype_hotkey，默认 Ctrl+Alt+Space）。
+         平台门控（D-121/D-122）：判据独立成派生态（autotypeHotkeyEditable /
+         autotypeHotkeyTextOnly），Windows 才渲染改键控件；Android 只渲染纯文案、
+         不渲染 <button>——移动端没有全局热键，挂一个录不上的按钮等于给
+         不存在的功能做广告。录制复用上面那套 capture 键盘监听。 -->
+    {#if autotypeHotkeyEditable}
+      <div class="set-row">
+        <span class="set-label">{ui.t('settings.autotype_hotkey')}</span>
+        <button
+          class="pms-btn is-sm set-ctl"
+          class:is-primary={autotypeHotkeyRecording}
+          type="button"
+          aria-label={ui.t('settings.autotype_hotkey')}
+          onclick={startAutotypeHotkeyRecord}
+        >
+          {autotypeHotkeyRecording ? ui.t('settings.hotkey_recording') : autotypeHotkeyDisplay}
+        </button>
+      </div>
+      <p class="pms-hint">{ui.t('settings.autotype_hotkey_hint')}</p>
+    {:else if autotypeHotkeyTextOnly}
+      <p class="pms-hint">{ui.t('settings.autotype_hotkey')}</p>
+      <p class="pms-hint">{ui.t('settings.autotype_hotkey_hint')}</p>
     {/if}
     <div class="set-row is-check">
       <span class="set-label">{ui.t('settings.autostart')}</span>

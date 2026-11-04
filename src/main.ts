@@ -1,12 +1,14 @@
 import { mount } from 'svelte';
 import './styles/global.css';
+import { isAutotypeWindow } from './lib/autotype';
 import { isQuickWindow } from './lib/quick-search';
 
 // 应用引导入口。
 //
-// 同一个 `index.html` 服务两个窗口（见 `src-tauri/src/quick_search.rs`）：
-//   * 主窗口     → `App.svelte`
+// 同一个 `index.html` 服务三个窗口（见 `src-tauri/src/quick_search.rs` 等）：
+//   * 主窗口       → `App.svelte`
 //   * 快速搜索小窗 → `QuickSearch.svelte`（URL 带 `?w=quick`）
+//   * 自动输入浮层 → `AutotypePicker.svelte`（URL 带 `?w=autotype`）
 //
 // 分流必须发生在 `mount` 之前，而且**必须走动态 import**：小窗只要一块输入框
 // 加一个列表，没理由为了它把主界面那 500KB 全套组件也解析一遍。热键唤出对延迟
@@ -18,6 +20,8 @@ if (!root) {
 }
 
 const quick = isQuickWindow(window.location.search);
+// 两个小窗互斥：URL 只带一个 `w` 值；`!quick` 是防御性写法，防将来有人同时挂两个参数。
+const autotype = !quick && isAutotypeWindow(window.location.search);
 
 /**
  * 【D-183】全新安装（还没有任何语言记录）时，用**系统 UI 语言**校正首启语言，
@@ -60,13 +64,16 @@ async function correctFirstRunLocale(): Promise<void> {
 // 挂载点作为参数传入，而不是在闭包里读模块级变量：`boot` 是会被提升的函数声明，
 // 在它内部引用 `root` 时 TypeScript 不再保留 `if (!root)` 的收窄结果。
 async function boot(target: HTMLElement): Promise<void> {
-  if (!quick) {
-    // 在 mount 之前校正：晚一步就是先画一帧英文再闪成中文。
+  if (!quick && !autotype) {
+    // 小窗不做首启语言校正：读 localStorage 继承即可。主窗口在 mount 之前校正：
+    // 晚一步就是先画一帧英文再闪成中文。
     await correctFirstRunLocale();
   }
   const component = quick
     ? (await import('./components/QuickSearch.svelte')).default
-    : (await import('./App.svelte')).default;
+    : autotype
+      ? (await import('./components/AutotypePicker.svelte')).default
+      : (await import('./App.svelte')).default;
   mount(component, { target });
 }
 

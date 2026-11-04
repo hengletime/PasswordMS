@@ -349,6 +349,8 @@ export const zhTW = {
     hotkey_saved: '熱鍵已更新。',
     hotkey_unavailable: '該組合已被其他程式佔用，熱鍵目前未生效。請換一個組合。',
     prefs_load_failed: '系統整合設定讀取失敗。',
+    autotype_hotkey: '自動輸入快捷鍵',
+    autotype_hotkey_hint: '在任何程式中按下即可把所選項目的帳號與密碼自動填入目標視窗。需包含 Ctrl、Alt 或 Win 之一。',
     autostart: '開機自動啟動',
     autostart_hint: '開機後在背景啟動並常駐系統匣，熱鍵隨時可用。關閉後仍可從開始功能表啟動。',
     autostart_on: '已開啟開機自動啟動。',
@@ -656,6 +658,18 @@ export const zhTW = {
     key_password: '複製密碼',
     key_username: '複製使用者名稱',
     key_close: '關閉',
+  },
+  // 1.5.39：自動輸入浮層。與主視窗是兩個獨立 WebView，語言靠 localStorage 繼承同一個值。
+  // 選定後明文不經過前端：浮層只交 item_id，注入由 Rust 側完成。
+  autotype: {
+    search_placeholder: '搜尋登入項目…',
+    empty: '沒有符合的登入項目',
+    failed: '項目讀取失敗。',
+    failed_focus: '目標視窗已切換，已停止輸入。',
+    failed_not_unlocked: '保險庫已鎖定，請先解鎖。',
+    failed_not_supported: '此裝置不支援自動輸入。',
+    done: '已自動輸入。',
+    foot_hint: 'Enter 自動輸入 · Esc 取消',
   },
   err: {
     hotkey_need_modifier: '熱鍵至少需要一個 Ctrl、Alt 或 Win 鍵（只按 Shift 會與正常輸入衝突）。',

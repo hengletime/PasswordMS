@@ -392,6 +392,8 @@ export const zhCN = {
     hotkey_saved: '热键已更新。',
     hotkey_unavailable: '该组合已被其它程序占用，热键当前未生效。请换一个组合。',
     prefs_load_failed: '系统集成设置读取失败。',
+    autotype_hotkey: '自动输入快捷键',
+    autotype_hotkey_hint: '在任意程序中按下即可把选定条目的账号和密码自动填入目标窗口。需包含 Ctrl、Alt 或 Win 之一。',
     autostart: '开机自动启动',
     autostart_hint: '开机后在后台启动并驻留托盘，热键随时可用。关闭后仍可从开始菜单启动。',
     autostart_on: '已开启开机自启。',
@@ -773,6 +775,18 @@ export const zhCN = {
     key_password: '复制密码',
     key_username: '复制用户名',
     key_close: '关闭',
+  },
+  // 1.5.39：自动输入浮层。与主窗口是两个独立 WebView，语言靠 localStorage 继承同一个值。
+  // 选定后明文不经过前端：浮层只交 item_id，注入由 Rust 侧完成。
+  autotype: {
+    search_placeholder: '搜索登录条目…',
+    empty: '没有匹配的登录条目',
+    failed: '条目读取失败。',
+    failed_focus: '目标窗口已切换，已停止输入。',
+    failed_not_unlocked: '库已锁定，请先解锁。',
+    failed_not_supported: '此设备不支持自动输入。',
+    done: '已自动输入。',
+    foot_hint: 'Enter 自动输入 · Esc 取消',
   },
   err: {
     hotkey_need_modifier: '热键至少需要一个 Ctrl、Alt 或 Win 键（只按 Shift 会和正常输入冲突）。',

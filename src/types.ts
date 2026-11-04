@@ -566,6 +566,11 @@ export interface PrefsDto {
   hotkey: string;
   /** 该热键此刻是否真的注册在系统里。`false` 且 `hotkey` 非空 = 注册失败（被占用）。 */
   hotkey_ok: boolean;
+  /**
+   * 自动输入热键（1.5.39；默认 `Ctrl+Alt+Space`）。**空串 = 用户主动禁用**。
+   * 设置页改键 UI 的数据来源；注册与唤窗全在 Rust 侧。
+   */
+  autotype_hotkey: string;
   /** 开机自启**系统实际状态**（读注册表，不是读我们的配置）。 */
   autostart: boolean;
 }

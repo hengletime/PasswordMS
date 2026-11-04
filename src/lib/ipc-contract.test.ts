@@ -164,6 +164,17 @@ describe('ipc command contract', () => {
       expect(registered, `后端 generate_handler! 缺 ${name}`).toContain(name);
     }
   });
+
+  it('keeps auto_type_fill / prefs_set_autotype_hotkey wired on both sides (1.5.39 自动输入回归锚点)', () => {
+    // 1.5.39：自动输入全链新命令，前端先落、Rust 侧并行注册 —— 后端落地前
+    // `registered` 少这两条是**约定的红**（同 #531 先例，落地后复跑须全绿）。
+    // `auto_type_fill` 只收 item_id：明文由 Rust 自取自注入，不跨 IPC 回前端。
+    // `prefs_set_autotype_hotkey` 是设置页改键 UI 的写通道（读走 prefs_get）。
+    expect(invoked).toContain('auto_type_fill');
+    expect(registered).toContain('auto_type_fill');
+    expect(invoked).toContain('prefs_set_autotype_hotkey');
+    expect(registered).toContain('prefs_set_autotype_hotkey');
+  });
 });
 
 // D-67 / D-69：指纹与会话码字段的**镜像契约**。
@@ -337,18 +348,21 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   +1（backup_clear_error），属性 84 → 85、命令名 80 → 81。
     //   核心层 `clear_error` 一直存在却没有命令，粘性红字于是没有出口——用户只能看着
     //   「上次备份 10:30」与「最近一次没存成 10:28」两行并存，得出"备份坏了"的结论。
-    expect(total).toBe(85);
-    expect(withAttr).toBe(85);
+    // 1.5.39（Auto-Type）：+2（auto_type_fill / prefs_set_autotype_hotkey），
+    //   属性 85 → 87、命令名 81 → 83。前端已先行落地，Rust 侧并行注册中——
+    //   落地前本测试红是**约定的红**（同 #531 六条命令的先例）。
+    expect(total).toBe(87);
+    expect(withAttr).toBe(87);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
-    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数 = 72**，
-    // 即平台分立只许增加实现份数，不许增加命令名。
+    // `prefs_get` 就直接 `command not found`。所以再钉一条：**去重后的名字数**必须
+    // 与上面登记的命令名总数一致，即平台分立只许增加实现份数，不许增加命令名。
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(85);
-    expect(new Set(names).size).toBe(81);
+    expect(names.length).toBe(87);
+    expect(new Set(names).size).toBe(83);
   });
 });
 
@@ -551,16 +565,21 @@ describe('宿主事件名与 Rust `app_events.rs` 逐字一致（v1.4.10）', ()
     // `QUICK_SEARCH_EVENT` 的发出点从 `tray.rs` 搬到了 `quick_search.rs`。
     // 钉死文件名会让"只是搬家"被判成"事件没人发了"——这条不变量关心的是
     // **有没有人在发**，而不是**由谁发**。（真搬家过：本测试抓过一次。）
+    // 1.5.39：AUTOTYPE_PICK_EVENT 同列；Rust 侧落地前是约定的红。
     const all = Object.values(rustTree).join('\n');
     expect(all).toContain('emit(TRAY_HINT_EVENT');
     expect(all).toContain('emit(QUICK_SEARCH_EVENT');
+    expect(all).toContain('emit(AUTOTYPE_PICK_EVENT');
   });
 
   it('热键与托盘相关命令都在 generate_handler 注册面上（防幽灵前端调用）', () => {
     const registered = extract(libRs, /commands::prefs_cmd::([a-z_]+),/g);
+    // 1.5.39：+prefs_set_autotype_hotkey（设置页自动输入热键的写通道）。
+    // Rust 侧落地前本清单少一条是约定的红（同上面的锚点）。
     expect(registered).toEqual([
       'prefs_get',
       'prefs_set_autostart',
+      'prefs_set_autotype_hotkey',
       'prefs_set_hotkey',
       'tray_set_labels',
     ]);

@@ -379,6 +379,8 @@ export const enUS: Messages = {
     hotkey_saved: 'Hotkey updated.',
     hotkey_unavailable: 'That combination is taken by another program, so the hotkey is inactive. Pick another.',
     prefs_load_failed: 'Could not read system integration settings.',
+    autotype_hotkey: 'Auto-Type hotkey',
+    autotype_hotkey_hint: 'Press it anywhere to auto-fill the selected login into the target window. Must include Ctrl, Alt, or Win.',
     autostart: 'Start at login',
     autostart_hint: 'Starts in the background and stays in the tray, so the hotkey always works.',
     autostart_on: 'Start at login enabled.',
@@ -727,6 +729,19 @@ export const enUS: Messages = {
     key_password: 'copy password',
     key_username: 'copy username',
     key_close: 'close',
+  },
+  // 1.5.39: Auto-Type picker. A separate WebView from the main window; locale is
+  // inherited through the same localStorage value. Plaintext never passes through
+  // the frontend: the picker only hands over item_id, the Rust side does the typing.
+  autotype: {
+    search_placeholder: 'Search logins…',
+    empty: 'No matching logins',
+    failed: 'Could not read the entry.',
+    failed_focus: 'The target window changed. Typing was stopped.',
+    failed_not_unlocked: 'The vault is locked. Unlock it first.',
+    failed_not_supported: 'Auto-Type is not supported on this device.',
+    done: 'Typed automatically.',
+    foot_hint: 'Enter to type · Esc to cancel',
   },
   err: {
     hotkey_need_modifier: 'A hotkey needs Ctrl, Alt, or Win (Shift alone conflicts with normal typing).',

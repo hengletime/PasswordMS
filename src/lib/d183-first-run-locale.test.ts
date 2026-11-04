@@ -45,7 +45,8 @@ describe('D-183 首启语言校正', () => {
   });
 
   it('快速搜索小窗不跑校正（热键延迟最敏感）', () => {
-    expect(main).toContain('if (!quick)');
+    // 1.5.39：自动输入浮层也是热键唤出的小窗，与快速搜索同一条豁免。
+    expect(main).toContain('if (!quick && !autotype)');
     // 状态模块必须走动态 import：静态 import 会让小窗也解析主界面整套状态。
     expect(main).toContain("import('./lib/stores/ui.svelte')");
     expect(main).not.toContain("from './lib/stores/ui.svelte'");

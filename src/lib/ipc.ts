@@ -388,6 +388,16 @@ export const settings = {
 };
 
 /**
+ * 自动输入类（1.5.39）。
+ *
+ * ⚠️ 安全边界：`fill` 只收 `item_id`——用户名与密码由 Rust 侧自取并注入目标窗口，
+ * **明文不经过前端**（不读详情、不走 IPC 返回值）。守门见 `autotype-guard.test.ts`。
+ */
+export const autotype = {
+  fill: (itemId: string): Promise<void> => invoke<void>('auto_type_fill', { item_id: itemId }),
+};
+
+/**
  * 应用级配置类（v1.4.10 系统集成：热键 / 开机自启 / 托盘文案）。
  *
  * 与 `settings` 的区别：这里的东西**不随保险库加密**，锁屏态也要能读写。
@@ -402,6 +412,12 @@ export const prefs = {
    */
   setHotkey: (hotkey: string): Promise<PrefsDto> =>
     invoke<PrefsDto>('prefs_set_hotkey', { hotkey }),
+  /**
+   * 改自动输入热键（1.5.39）。与 `setHotkey` 同一形状：失败时后端已回滚到旧键位，
+   * 前端不做补偿。失败会抛 `ERR_HOTKEY_INVALID` / `ERR_HOTKEY_UNAVAILABLE`。
+   */
+  setAutotypeHotkey: (hotkey: string): Promise<PrefsDto> =>
+    invoke<PrefsDto>('prefs_set_autotype_hotkey', { hotkey }),
   setAutostart: (enabled: boolean): Promise<PrefsDto> =>
     invoke<PrefsDto>('prefs_set_autostart', { enabled }),
   /** 把托盘菜单文案交给后端（启动一次 + 切换界面语言时一次）。 */
@@ -410,4 +426,4 @@ export const prefs = {
 };
 
 /** 全部命令的聚合入口。 */
-export const api = { system, vault, backups, items, folders, keydocs, tools, importer, trash, health, sync, settings, prefs };
+export const api = { system, vault, backups, items, folders, keydocs, tools, importer, trash, health, sync, settings, autotype, prefs };
