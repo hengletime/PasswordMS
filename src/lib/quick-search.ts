@@ -54,13 +54,33 @@ function scoreOf(hit: QuickHit, query: string): number {
 }
 
 /**
- * 对**已经是 QuickHit 的列表**做过滤 + 排序（自动输入浮层只拿到三字段时复用）。
+ * 排序只需要的最小行（结构型，不绑定 `ItemDto`）。
  *
- * 与 `rankItems` 同一套打分：`url` 为 `null` 时网址那两档自然拿不到分，
- * 排序退化到「标题前缀 > 标题包含 > 用户名前缀 > 用户名包含」，正是
- * `autotype_candidates` 只给标题与用户名时期望的口径。
+ * 两个窗口共用 `rankItems`：快速搜索给的是完整 `ItemDto`（登录数据在 `kind` 里），
+ * 自动输入浮层给的是 `autotype_candidates` 的 5 字段行（扁平）。两边都要能喂进来，
+ * 且**必须共用同一套打分**——`quick-search.ts` 的产品承诺是「同一个条目在两个地方
+ * 的位置对得上」，复制一份改名 `rankItemsLite` 就把这句承诺作废了。
  */
-export function rankHits(hits: QuickHit[], query: string, limit = RESULT_LIMIT): QuickHit[] {
+export interface RankableCandidate {
+  item_id: string;
+  title: string;
+  username: string | null;
+  url: string | null;
+  use_count: number;
+}
+
+/** `ItemDto` 与扁平行二选一的分支判据：完整条目带 `kind`。 */
+function isFullItem(item: ItemDto | RankableCandidate): item is ItemDto {
+  return 'kind' in item;
+}
+
+/**
+ * 对**已经是 QuickHit 的列表**做过滤 + 排序（内部实现，两个入口共用同一把尺子）。
+ *
+ * `url` 为 `null` 时网址那两档自然拿不到分，排序退化到
+ * 「标题前缀 > 标题包含 > 用户名前缀 > 用户名包含」。
+ */
+function rankHits(hits: QuickHit[], query: string, limit: number): QuickHit[] {
   const q = query.trim().toLowerCase();
   const scored = q ? hits.filter((h) => (h.score = scoreOf(h, q)) > 0) : hits;
 
@@ -80,21 +100,36 @@ export function rankHits(hits: QuickHit[], query: string, limit = RESULT_LIMIT):
  * "给我上次用的那个"。排序口径与主列表一致（频度 → 最近使用 → 最近更新），
  * 免得同一个条目在两个地方的位置对不上。
  *
- * @param items 全量条目（含非登录项，本函数内部会筛掉）
+ * @param items 完整条目（`ItemDto`，内部筛掉非登录项）或候选行（只含登录项）
  * @param query 原始输入，内部做去空格 + 小写；纯空白视同空查询
  */
-export function rankItems(items: ItemDto[], query: string, limit = RESULT_LIMIT): QuickHit[] {
+export function rankItems(
+  items: ReadonlyArray<ItemDto | RankableCandidate>,
+  query: string,
+  limit = RESULT_LIMIT,
+): QuickHit[] {
   const hits: QuickHit[] = [];
   for (const item of items) {
-    // 只收登录项：笔记与附件没有可复制的密码，混进结果只会让回车"什么也没发生"。
-    if (item.kind.type !== 'login') {
+    if (isFullItem(item)) {
+      // 只收登录项：笔记与附件没有可复制的密码，混进结果只会让回车"什么也没发生"。
+      if (item.kind.type !== 'login') {
+        continue;
+      }
+      hits.push({
+        itemId: item.item_id,
+        title: item.kind.title,
+        username: item.kind.username ?? null,
+        url: item.kind.url ?? null,
+        useCount: item.use_count ?? 0,
+        score: 0,
+      });
       continue;
     }
     hits.push({
       itemId: item.item_id,
-      title: item.kind.title,
-      username: item.kind.username ?? null,
-      url: item.kind.url ?? null,
+      title: item.title,
+      username: item.username ?? null,
+      url: item.url ?? null,
       useCount: item.use_count ?? 0,
       score: 0,
     });

@@ -777,7 +777,7 @@ export const zhCN = {
     key_close: '关闭',
   },
   // 1.5.39：自动输入浮层。与主窗口是两个独立 WebView，语言靠 localStorage 继承同一个值。
-  // `auto_type_fill` 的入参与返回不含明文；浮层列表由 `autotype_candidates` 提供，只含标题与用户名。
+  // `auto_type_fill` 的入参与返回不含明文；浮层列表由 `autotype_candidates` 提供，只含标题、用户名、网址与使用次数。
   autotype: {
     search_placeholder: '搜索登录条目…',
     empty: '没有匹配的登录条目',

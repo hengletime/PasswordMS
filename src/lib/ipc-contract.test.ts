@@ -7,14 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-/** 从文本中按捕获组提取去重并排序后的名称集合。 */
-function extract(text: string, pattern: RegExp): string[] {
-  const out = new Set<string>();
-  for (const match of text.matchAll(pattern)) {
-    out.add(match[1]);
-  }
-  return [...out].sort();
-}
+// S10：抽取函数与 autotype-guard.test.ts 共用（source-scan.ts），两处不各写一份正则。
+import { extractMatches as extract } from './source-scan';
 
 const rustModules = import.meta.glob('../../src-tauri/src/*.rs', {
   query: '?raw',

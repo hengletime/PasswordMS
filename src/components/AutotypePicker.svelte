@@ -6,21 +6,21 @@
   // 同源共享，所以语言与主题直接继承，不需要宿主传参。
   //
   // 与 QuickSearch 的**关键差别**在数据与选定行为：列表来自 `autotype_candidates`，
-  // 每项只有标题与用户名（没有密码 / 备注 / TOTP 密钥）；回车不复制、不取详情——
-  // 只把 `item_id` 与动作名交给 `auto_type_fill`，用户名与密码由 Rust 侧自取并
-  // 注入目标窗口。`auto_type_fill` 的入参与返回不含明文；浮层列表由
-  // `autotype_candidates` 提供，只含标题与用户名。守门见 autotype-guard.test.ts。
+  // 每项只有标题、用户名、网址与使用次数（没有密码 / 备注 / TOTP 密钥）；回车不复制、
+  // 不取详情——只把 `item_id` 与动作名交给 `auto_type_fill`，用户名与密码由 Rust 侧
+  // 自取并注入目标窗口。`auto_type_fill` 的入参与返回不含明文；浮层列表由
+  // `autotype_candidates` 提供，只含标题、用户名、网址与使用次数。
+  // 守门见 autotype-guard.test.ts。
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
   import { api } from '../lib/ipc';
   import { LOCALES, mapSystemLanguage, translate, type Locale } from '../lib/i18n';
-  import { moveIndex, rankHits } from '../lib/quick-search';
+  import { moveIndex, rankItems } from '../lib/quick-search';
   import {
     autotypeCodeOf,
     autotypeFailureKey,
-    candidatesToHits,
     type AutotypeAction,
     type AutotypeCandidate,
   } from '../lib/autotype';
@@ -36,7 +36,7 @@
 
   let locale: Locale = 'zh-CN';
   let query = $state('');
-  /** 候选行只有三字段（`autotype_candidates`），浮层的 JS 堆里没有任何明文。 */
+  /** 候选行只有 5 个字段（`autotype_candidates`），浮层的 JS 堆里没有任何明文。 */
   let candidates = $state<AutotypeCandidate[]>([]);
   let selected = $state(0);
   let loading = $state(true);
@@ -49,8 +49,8 @@
 
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // 排序复用快速搜索的纯函数：候选没有 url / 频度，打分自然退化为标题 + 用户名。
-  const hits = $derived(rankHits(candidatesToHits(candidates), query));
+  // 排序复用快速搜索的同一个 rankItems（结构型入参，两边位置口径一致）。
+  const hits = $derived(rankItems(candidates, query));
 
   function t(key: string): string {
     return translate(locale, key);
@@ -93,8 +93,9 @@
         candidates = [];
         return;
       }
-      // 候选列表来自专用接口：只有标题与用户名，没有密码 / 备注 / TOTP 密钥。
-      // 不要改回全量条目列表——那个接口带 password，明文会躺在本窗口的 JS 堆里（M3）。
+      // 候选列表来自专用接口：只有标题、用户名、网址与使用次数，没有密码 / 备注 /
+      // TOTP 密钥。不要改回全量条目列表——那个接口带 password，明文会躺在本窗口的
+      // JS 堆里（M3）。
       candidates = await api.autotype.candidates();
     } catch {
       failed = true;

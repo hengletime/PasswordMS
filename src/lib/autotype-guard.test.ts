@@ -7,9 +7,9 @@
 // 1. **四本字典的 autotype.* 与 settings.autotype_hotkey 键集合一致**，且值不是
 //    按钮词（按钮词集合从 `common` 命名空间派生，判据照 D-192：值 ≤2 字符的键）。
 // 2. **浮层里没有明文**（M3 的教训）：`auto_type_fill` 的入参与返回不含明文；
-//    浮层列表由 `autotype_candidates` 提供，只含标题与用户名。浮层源码里一旦出现
-//    拉全量条目的调用（那个接口带 password）或者任何 `invoke(` 实参含 'password'
-//    字样，这条先红——早先这里只禁了取详情，于是"明文不经过前端"是一句假话。
+//    浮层列表由 `autotype_candidates` 提供，只含标题、用户名、网址与使用次数。
+//    浮层源码里一旦出现拉全量条目的调用（那个接口带 password）或取详情，这条先红
+//    ——早先这里只禁了取详情，于是"明文不经过前端"是一句假话。
 // 3. **失败文案必须显式映射**（D-185 铁律）：后端错误码 → 文案键的映射表是字面量，
 //    每个映射目标在四本字典里真实存在；禁止模板现拼键名
 //    （`autotype.failed_${reason}` 拼出来的键翻译器找不到，界面会印裸键名）。
@@ -24,6 +24,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { hasKey, LOCALES } from './i18n/index';
+// S10：正反两处扫描共用同一个抽取函数（与 ipc-contract.test.ts 是同一把尺子）。
+import { extractMatches } from './source-scan';
 
 const modules = import.meta.glob(
   ['../**/*.ts', '../**/*.svelte'],
@@ -200,26 +202,28 @@ describe('① autotype 键集合四语言一致，值非按钮词、够长', () 
 
 // ── ② 浮层里没有明文（M3） ───────────────────────────────────────────────────
 
-describe('② 浮层走三字段候选，明文不经过浮层', () => {
-  it('浮层必须调 autotype_candidates，且不得出现拉全量条目 / 取详情的调用', () => {
-    // 结构锚点：列表来自专用候选接口（只含标题与用户名）。
+describe('② 浮层走专用候选，明文不经过浮层', () => {
+  it('浮层必须调 fill 与 candidates，且不得出现拉全量条目 / 取详情的调用', () => {
+    // 判据（安全官更正）：**断言的正确性不得依赖扫描面为空**。
+    // 期望值本来就非零 → 存在性断言；本来就为零 → 换成语义正确的面 + 否定性断言。
+    // 浮层走 `api.*` 三层封装，`invoke(` 的正确出现次数就是 0——给那半条加
+    // 「匹配数 > 0」只会逼实现写一句裸 `invoke(` 来喂测试（用测试反向定制实现，更坏），
+    // 所以那半条整段删掉，改断言下面四个正确的面。
+    expect(picker, '浮层必须调用 api.autotype.fill').toContain('api.autotype.fill(');
     expect(picker, '浮层必须调用 api.autotype.candidates').toContain(
       'api.autotype.candidates(',
     );
     // M3 的根因：全量条目列表带 password（item_cmd.rs 直传 Vec<Item>），
     // 整个库的明文会躺在浮层 JS 堆里。两处入口都禁——只禁取详情曾让这句断言永远是绿的。
-    expect(picker, '浮层不得调用 items.list（带 password 的全量列表）').not.toContain(
-      'items.list(',
+    expect(picker, '浮层不得调用 api.items.list（带 password 的全量列表）').not.toContain(
+      'api.items.list(',
     );
-    expect(picker, '浮层不得调用 items.get（明文详情接口）').not.toContain('items.get(');
-    // 逐个 `invoke(` 调用点检查实参切片：'password' 字样一出现即红。
-    const calls = [...picker.matchAll(/invoke\([^)]*/g)].map((m) => m[0]);
-    for (const call of calls) {
-      expect(call, `浮层的 invoke 实参含敏感字样：${call.slice(0, 80)}`).not.toContain('password');
-    }
+    expect(picker, '浮层不得调用 api.items.get（明文详情接口）').not.toContain(
+      'api.items.get(',
+    );
   });
 
-  it('ipc.ts 的 autotype 封装：候选只回三字段，fill 只传 item_id 与动作名', () => {
+  it('ipc.ts 的 autotype 封装：候选只回五字段，fill 只传 item_id 与动作名', () => {
     // 自动输入树里不许出现取明文的形状；wire 键就是 item_id + action。
     // 查**代码**不查注释：注释里提 password 是为了说明为什么禁它，属正常。
     const start = ipcTs.indexOf('export const autotype');
@@ -332,15 +336,14 @@ describe('⑤ Rust 里所有 "err. 字面量都在字典里有键（S1）', () =
     // S1 的事故形态：后端抛 `{ code, message_key: "err.autotype_no_username" }`，
     // 字典里没有这个键 → 通用错误层原样印出裸键名。逐个字面量比对，缺一个即红。
     expect(Object.keys(rustModules).length, 'Rust 源码没扫到，glob 写错了').toBeGreaterThan(10);
-    const literals = new Set<string>();
-    for (const src of Object.values(rustModules)) {
-      for (const m of src.matchAll(/"(err\.[a-z0-9_]+)"/g)) {
-        literals.add(m[1]);
-      }
-    }
+    // 抽取函数与 ipc-contract 共用（source-scan.ts），两处不各写一份正则。
+    const literals = extractMatches(
+      Object.values(rustModules).join('\n'),
+      /"(err\.[a-z0-9_]+)"/g,
+    );
     // 防空跑：扫到的字面量太少说明正则或扫描面坏了（而不是"全都对上了"）。
-    expect(literals.size, '扫到的 err.* 字面量太少，扫描面坏了').toBeGreaterThan(3);
-    const missing = [...literals].filter((key) => !hasKey('zh-CN', key)).sort();
+    expect(literals.length, '扫到的 err.* 字面量太少，扫描面坏了').toBeGreaterThan(3);
+    const missing = literals.filter((key) => !hasKey('zh-CN', key));
     expect(missing, `这些后端 message_key 在字典里没有键：${missing.join(', ')}`).toEqual([]);
   });
 });

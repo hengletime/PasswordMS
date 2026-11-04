@@ -393,9 +393,9 @@ export const settings = {
  * 自动输入类（1.5.39）。
  *
  * ⚠️ 安全边界：`auto_type_fill` 的入参与返回不含明文；浮层列表由
- * `autotype_candidates` 提供，只含标题与用户名。用户名与密码由 Rust 侧自取并
- * 注入目标窗口。动作取值见 `autotype.ts::AutotypeAction`，与 Rust 侧逐字一致。
- * 守门见 `autotype-guard.test.ts`。
+ * `autotype_candidates` 提供，只含标题、用户名、网址与使用次数。用户名与密码由
+ * Rust 侧自取并注入目标窗口。动作取值见 `autotype.ts::AutotypeAction`，与 Rust
+ * 侧逐字一致。守门见 `autotype-guard.test.ts`。
  */
 export const autotype = {
   /**
