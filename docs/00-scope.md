@@ -68,11 +68,17 @@
 
 ### P2 · 二期 backlog（本期不做，仅登记）
 
-- 生物识别解锁（Windows Hello / Android 指纹）
-- Android 系统级自动填充（Autofill Framework）
-- Windows 全局热键快速搜索 + 自动输入
-- 标签 / 多视图（按类型、最近使用）
-- 密文快照版本历史
+> **状态复核（2026-11-04）**：逐条核过代码，**两条后来已经做了**，三条从未启动。
+> 保留原登记是为了不丢历史决策，但别再把它当"欠着的活"每轮重新盘一次。
+
+| 项 | 现状（2026-11-04） | 证据 |
+|---|---|---|
+| 生物识别解锁（Windows Hello / Android 指纹） | **已做** | `crates/passwordms-core/src/biometric.rs`、`src-tauri/src/commands/biometric_cmd.rs`、`tests/biometric_wrap.rs`、`docs/08-biometric-unlock.md` |
+| Windows 全局热键快速搜索 | **已做**（只做复制，不含自动输入） | `src-tauri/src/hotkey.rs`、`src/components/QuickSearch.svelte` |
+| 自动输入（模拟按键代填） | **未启动**，且建议明确不做：会触碰"不注入其它应用"的边界 | `QuickSearch.svelte` 只有 `copy_secret` |
+| Android 系统级自动填充（Autofill Framework） | **未启动** | `grep -i autofill` 全仓 0 命中 |
+| 标签 / 多视图（按类型、最近使用） | **未启动** | `model/item.rs` 的 `Item` 无 tags 字段 |
+| 密文快照版本历史 | **未启动** | `grep "版本历史\|item_history\|revisions"` 全仓 0 命中 |
 
 ### ❌ 明确不做（本期与可预见未来都不做）
 

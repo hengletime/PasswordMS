@@ -651,7 +651,7 @@ state.base.insert(id, { rev: change.rev, hash: [0u8;32] })      // 无论何分�
 #### 3.13.5 裁定五：与 blob 阶段的交互（确认）
 
 - 远端 item 墓碑 → 对端**软删**（blob 保留）→ 条目进对端回收站，`attachment_blob_refs()`（基于活跃条目）不再含该 `blob_ref` → §3.12.6 的孤儿清理**只清 spool 目录，不清正式 blob 索引**（现状设计即如此，确认无需改）→ 回收站内附件可正常还原导出；
-- 对端 30 天到期 `purge_expired_trash` / 手动彻底删 → 本端 `tombstone_blob` → blob 不可读、密文留待 compaction（TODO）；~~对端 purge 事件不需要额外过线报文~~ **D-98（C 案，2026-10-25）修订：purge 意图过线**，见 §3.13.7；
+- 对端 30 天到期 `purge_expired_trash` / 手动彻底删 → 本端 `tombstone_blob` → blob 不可读，密文由 compaction 回收（**已实现**：`compact()` 先 `gc_orphan_blobs()` 把漏标的孤儿 blob 变墓碑，再由 `plan_compaction()` 丢弃全部 blob 墓碑帧与无引用的活跃 blob，见 `repository.rs` 的 `compact`）；~~对端 purge 事件不需要额外过线报文~~ **D-98（C 案，2026-10-25）修订：purge 意图过线**，见 §3.13.7；
 - `blob_transfer.rs` 拉取判定基于活跃条目 → 已删条目的 blob 既不会被拉取也不会被误清 ✓。
 
 #### 3.13.7 裁定七：purge 意图过线（D-98，C 案）
