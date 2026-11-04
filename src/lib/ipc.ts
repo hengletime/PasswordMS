@@ -5,6 +5,8 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
+import type { AutotypeAction } from './autotype';
+
 import type {
   BackupClearDto,
   BackupStatusDto,
@@ -390,11 +392,14 @@ export const settings = {
 /**
  * 自动输入类（1.5.39）。
  *
- * ⚠️ 安全边界：`fill` 只收 `item_id`——用户名与密码由 Rust 侧自取并注入目标窗口，
- * **明文不经过前端**（不读详情、不走 IPC 返回值）。守门见 `autotype-guard.test.ts`。
+ * ⚠️ 安全边界：`fill` 只收 `item_id` 与动作名——用户名与密码由 Rust 侧自取并注入
+ * 目标窗口，**明文不经过前端**（不读详情、不走 IPC 返回值）。
+ * 动作取值见 `autotype.ts::AutotypeAction`，与 Rust 侧逐字一致。
+ * 守门见 `autotype-guard.test.ts`。
  */
 export const autotype = {
-  fill: (itemId: string): Promise<void> => invoke<void>('auto_type_fill', { item_id: itemId }),
+  fill: (itemId: string, action: AutotypeAction): Promise<void> =>
+    invoke<void>('auto_type_fill', { item_id: itemId, action }),
 };
 
 /**

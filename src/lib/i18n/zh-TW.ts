@@ -668,8 +668,11 @@ export const zhTW = {
     failed_focus: '目標視窗已切換，已停止輸入。',
     failed_not_unlocked: '保險庫已鎖定，請先解鎖。',
     failed_not_supported: '此裝置不支援自動輸入。',
+    no_username: '這一條沒有填使用者名稱。',
+    no_url: '這一條沒有填網址。',
+    no_totp: '這一條沒有動態密碼。',
     done: '已自動輸入。',
-    foot_hint: 'Enter 自動輸入 · Esc 取消',
+    foot_hint: 'Enter 使用者名稱+密碼 · Shift 僅使用者名稱 · Ctrl 僅密碼 · Alt 網址 · Ctrl+Shift 動態密碼 · Esc 取消',
   },
   err: {
     hotkey_need_modifier: '熱鍵至少需要一個 Ctrl、Alt 或 Win 鍵（只按 Shift 會與正常輸入衝突）。',

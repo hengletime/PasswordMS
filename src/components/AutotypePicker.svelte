@@ -15,7 +15,7 @@
   import { api } from '../lib/ipc';
   import { LOCALES, mapSystemLanguage, translate, type Locale } from '../lib/i18n';
   import { moveIndex, rankItems } from '../lib/quick-search';
-  import { autotypeCodeOf, autotypeFailureKey } from '../lib/autotype';
+  import { autotypeCodeOf, autotypeFailureKey, type AutotypeAction } from '../lib/autotype';
   import { AUTOLOCK_LOCKED_EVENT } from '../lib/auto-lock-event';
   import { AUTOTYPE_PICK_EVENT } from '../lib/tray-events';
   // 主题 store 在模块加载时就会把 `data-theme` 应用到 <html>：引用即继承主窗口主题。
@@ -93,15 +93,15 @@
     }
   }
 
-  /** 选定条目 → 注入。前端只交 `item_id`，明文一律不经过本窗口。 */
-  async function fill(): Promise<void> {
+  /** 选定条目 → 按动作注入。前端只交 `item_id` 与动作名，明文一律不经过本窗口。 */
+  async function fill(action: AutotypeAction): Promise<void> {
     const hit = hits[selected];
     if (!hit || busy) {
       return;
     }
     busy = true;
     try {
-      await api.autotype.fill(hit.itemId);
+      await api.autotype.fill(hit.itemId, action);
       // 先把回执显示出来再收起：注入了却没有任何反馈，用户会怀疑是否成功而重按。
       note = { text: t('autotype.done'), tone: 'ok' };
       hideTimer = setTimeout(hideWindow, HIDE_DELAY_MS);
@@ -134,7 +134,20 @@
     }
     if (event.key === 'Enter') {
       event.preventDefault();
-      void fill();
+      // 五种动作的修饰键直选。**Ctrl+Shift 必须先判**：它是 Ctrl 与 Shift 两个
+      // 单键分支的叠加，顺序反了 Ctrl+Shift+Enter 会落进「仅密码」。
+      // Alt+Enter 的 preventDefault 由上面统一做了（否则 Windows 会去敲窗口菜单/响铃）。
+      const action: AutotypeAction =
+        event.ctrlKey && event.shiftKey
+          ? 'totp'
+          : event.ctrlKey
+            ? 'password'
+            : event.shiftKey
+              ? 'username'
+              : event.altKey
+                ? 'url'
+                : 'default';
+      void fill(action);
     }
   }
 
@@ -208,7 +221,7 @@
             <button
               class="qs-row"
               class:is-on={i === selected}
-              onclick={() => { selected = i; void fill(); }}
+              onclick={() => { selected = i; void fill('default'); }}
               onmouseenter={() => (selected = i)}
             >
               <span class="qs-title">{hit.title}</span>

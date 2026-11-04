@@ -785,8 +785,11 @@ export const zhCN = {
     failed_focus: '目标窗口已切换，已停止输入。',
     failed_not_unlocked: '库已锁定，请先解锁。',
     failed_not_supported: '此设备不支持自动输入。',
+    no_username: '这一条没有填用户名。',
+    no_url: '这一条没有填网址。',
+    no_totp: '这一条没有动态口令。',
     done: '已自动输入。',
-    foot_hint: 'Enter 自动输入 · Esc 取消',
+    foot_hint: 'Enter 用户名+密码 · Shift 仅用户名 · Ctrl 仅密码 · Alt 网址 · Ctrl+Shift 动态口令 · Esc 取消',
   },
   err: {
     hotkey_need_modifier: '热键至少需要一个 Ctrl、Alt 或 Win 键（只按 Shift 会和正常输入冲突）。',

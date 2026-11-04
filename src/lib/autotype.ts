@@ -18,6 +18,19 @@ export function isAutotypeWindow(search: string): boolean {
 }
 
 /**
+ * 自动输入动作（1.5.39）。与 Rust `auto_type_fill` 的 wire 取值逐字一致。
+ *
+ * - `default`  用户名 + 密码（完整登录序列）
+ * - `username` 只打用户名
+ * - `password` 只打密码
+ * - `url`      只打网址
+ * - `totp`     只打动态口令
+ *
+ * 每种动作都是一个**整句**的语义，不是字符串拼装：后端按枚举分派，前端只传名字。
+ */
+export type AutotypeAction = 'default' | 'username' | 'password' | 'url' | 'totp';
+
+/**
  * `auto_type_fill` 失败原因 → 文案键的**显式映射表**（D-185 铁律：禁止后端枚举现拼）。
  *
  * 后端的 wire 取值是 IPC 错误的 `code` 字段（`IpcErrorShape.code`），所以键写全码。
@@ -31,6 +44,10 @@ export const AUTOTYPE_FAILURE_KEY_BY_CODE: Readonly<Record<string, string>> = {
   ERR_NOT_UNLOCKED: 'autotype.failed_not_unlocked',
   // 平台不具备注入能力。
   ERR_NOT_SUPPORTED: 'autotype.failed_not_supported',
+  // 选了某个动作，但这条目没填对应字段（1.5.39 修饰键直选）。
+  ERR_AUTOTYPE_NO_USERNAME: 'autotype.no_username',
+  ERR_AUTOTYPE_NO_URL: 'autotype.no_url',
+  ERR_AUTOTYPE_NO_TOTP: 'autotype.no_totp',
 };
 
 /** 兜底文案键：映射表没收录的失败都用它，永远不显示键名。 */

@@ -679,8 +679,11 @@ export const th = {
     failed_focus: 'หน้าต่างเป้าหมายเปลี่ยนไป จึงหยุดพิมพ์แล้ว',
     failed_not_unlocked: 'ตู้เซฟถูกล็อกอยู่ กรุณาปลดล็อกก่อน',
     failed_not_supported: 'อุปกรณ์นี้ไม่รองรับการพิมพ์อัตโนมัติ',
+    no_username: 'รายการนี้ไม่ได้กรอกชื่อผู้ใช้',
+    no_url: 'รายการนี้ไม่ได้กรอก URL',
+    no_totp: 'รายการนี้ไม่มีรหัส OTP',
     done: 'พิมพ์อัตโนมัติแล้ว',
-    foot_hint: 'Enter เพื่อพิมพ์ · Esc เพื่อยกเลิก',
+    foot_hint: 'Enter ชื่อผู้ใช้+รหัสผ่าน · Shift เฉพาะชื่อผู้ใช้ · Ctrl เฉพาะรหัสผ่าน · Alt URL · Ctrl+Shift รหัส OTP · Esc ยกเลิก',
   },
   err: {
     hotkey_need_modifier: 'คีย์ลัดต้องมี Ctrl, Alt หรือ Win อย่างน้อยหนึ่งปุ่ม (Shift อย่างเดียวจะชนกับการพิมพ์ปกติ)',

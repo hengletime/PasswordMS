@@ -64,6 +64,9 @@ const AUTOTYPE_KEYS = [
   'failed_focus',
   'failed_not_unlocked',
   'failed_not_supported',
+  'no_username',
+  'no_url',
+  'no_totp',
   'done',
   'foot_hint',
 ];
@@ -161,6 +164,26 @@ describe('① autotype 键集合四语言一致，值非按钮词、够长', () 
       }
     }
   });
+
+  it('foot_hint 一句话说清五种动作（每语言各查代表性 token）', () => {
+    // 键值必须是**整句**（D-185：不许把字典片段拼起来），所以这里按语言查整句里
+    // 该出现的动作词——少一种动作就是用户按了不知道会发生什么。
+    const tokens: Record<string, string[]> = {
+      'zh-CN': ['网址', '动态口令', 'Shift', 'Ctrl+Shift', 'Esc'],
+      'zh-TW': ['網址', '動態密碼', 'Shift', 'Ctrl+Shift', 'Esc'],
+      'en-US': ['URL', 'one-time', 'Shift', 'Ctrl+Shift', 'Esc'],
+      th: ['URL', 'รหัส OTP', 'Shift', 'Ctrl+Shift', 'Esc'],
+    };
+    for (const [name, src] of dicts) {
+      const text = dictValueOf(src, 'autotype.foot_hint') ?? '';
+      const expected = tokens[name] ?? [];
+      expect(expected.length, `${name} 没登记 foot_hint 的 token`).toBeGreaterThan(0);
+      for (const token of expected) {
+        expect(text, `${name} 的 foot_hint 缺「${token}」`).toContain(token);
+      }
+      expect(text.length, `${name} 的 foot_hint 太短，说不清五种动作`).toBeGreaterThan(20);
+    }
+  });
 });
 
 // ── ② 明文不经过前端 ─────────────────────────────────────────────────────────
@@ -178,14 +201,27 @@ describe('② 浮层只交 item_id，明文不经过前端', () => {
     }
   });
 
-  it('ipc.ts 的 autotype 封装只传 item_id', () => {
-    // 自动输入树里不许出现取明文的形状；wire 键就是 item_id。
+  it('ipc.ts 的 autotype 封装只传 item_id 与动作名', () => {
+    // 自动输入树里不许出现取明文的形状；wire 键就是 item_id + action。
     const start = ipcTs.indexOf('export const autotype');
     const end = ipcTs.indexOf('};', start);
     const block = ipcTs.slice(start, end);
     expect(block.length).toBeGreaterThan(0);
-    expect(block).toContain("invoke<void>('auto_type_fill', { item_id: itemId })");
+    expect(block).toContain("invoke<void>('auto_type_fill', { item_id: itemId, action })");
     expect(block).not.toContain('password');
+  });
+
+  it('五种动作齐全，且 Ctrl+Shift 的判定在单键分支之前', () => {
+    // 契约：default / username / password / url / totp 五种取值逐字一致。
+    for (const action of ['default', 'username', 'password', 'url', 'totp']) {
+      expect(picker, `浮层缺少动作 ${action}`).toContain(`'${action}'`);
+    }
+    // Ctrl+Shift+Enter 是 Ctrl 与 Shift 的叠加：判定顺序反了会落进「仅密码」。
+    const combo = picker.indexOf('event.ctrlKey && event.shiftKey');
+    const ctrlOnly = picker.indexOf("? 'password'");
+    expect(combo, '缺 Ctrl+Shift 组合判定').toBeGreaterThan(-1);
+    expect(ctrlOnly, '缺仅 Ctrl 分支').toBeGreaterThan(-1);
+    expect(combo, 'Ctrl+Shift 必须先判').toBeLessThan(ctrlOnly);
   });
 });
 
@@ -201,6 +237,9 @@ describe('③ 失败文案是显式映射表，不许模板现拼键名', () => 
       ['ERR_AUTOTYPE_FOCUS_LOST', 'autotype.failed_focus'],
       ['ERR_NOT_UNLOCKED', 'autotype.failed_not_unlocked'],
       ['ERR_NOT_SUPPORTED', 'autotype.failed_not_supported'],
+      ['ERR_AUTOTYPE_NO_USERNAME', 'autotype.no_username'],
+      ['ERR_AUTOTYPE_NO_URL', 'autotype.no_url'],
+      ['ERR_AUTOTYPE_NO_TOTP', 'autotype.no_totp'],
     ];
     for (const [code, key] of expected) {
       expect(block, `映射表缺 ${code} → ${key}`).toContain(`${code}: '${key}'`);

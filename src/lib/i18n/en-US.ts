@@ -740,8 +740,11 @@ export const enUS: Messages = {
     failed_focus: 'The target window changed. Typing was stopped.',
     failed_not_unlocked: 'The vault is locked. Unlock it first.',
     failed_not_supported: 'Auto-Type is not supported on this device.',
+    no_username: 'This entry has no username.',
+    no_url: 'This entry has no URL.',
+    no_totp: 'This entry has no one-time code.',
     done: 'Typed automatically.',
-    foot_hint: 'Enter to type · Esc to cancel',
+    foot_hint: 'Enter username+password · Shift username only · Ctrl password only · Alt URL · Ctrl+Shift one-time code · Esc cancel',
   },
   err: {
     hotkey_need_modifier: 'A hotkey needs Ctrl, Alt, or Win (Shift alone conflicts with normal typing).',
