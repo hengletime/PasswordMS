@@ -4708,6 +4708,24 @@ QuickSearch（`quick_search.rs` 的 ensure/show/toggle：440×520 无边框置�
 
 锁屏态热键**不弹浮层**，走 `tray::show_main` 进解锁页（照 hotkey.rs:97-101 的现有分叉）。
 
+**打什么，由按键决定**（主人 2026-11-04 追加：日常是用户名+密码，但也常只要其中一样、
+网址或动态口令）。浮层里五种动作，修饰键直选，不需要第二层菜单：
+
+| 按键 | 打什么 | 序列 | 结尾 |
+|---|---|---|---|
+| `Enter` | 用户名 + 密码 | `{USERNAME}{TAB}{PASSWORD}{ENTER}` | 带回车 |
+| `Shift+Enter` | 仅用户名 | `{USERNAME}` | 不带 |
+| `Ctrl+Enter` | 仅密码 | `{PASSWORD}` | 不带 |
+| `Alt+Enter` | 网址 | `{URL}` | 不带 |
+| `Ctrl+Shift+Enter` | 动态口令 | `{TOTP}` | 不带 |
+
+单字段一律不带回车（目标输入框可能已有内容，回车会把半填的表单提前提交）。
+字段为空时明说「这一条没有填用户名。」/「这一条没有填网址。」/「这一条没有动态口令。」，
+不静默、不退化——只有 `default` 保留"无用户名退化为仅密码"的既有行为
+（那是给只有密码的条目留的路）。foot 提示是**整句单键值**（D-185：不许拿字典片段拼接），
+五种动作与 Esc 都在同一句里说清。
+
+
 #### 6.71.2 安全设计（五道闸）
 
 1. **明文不过前端二传**：`auto_type_fill` 只收 `item_id`，Rust 走 get_item 同一条
@@ -4737,21 +4755,41 @@ canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：�
 
 #### 6.71.4 守门
 
-- core：解析器 9 条单测（全占位符/边界/报错路径）。
-- 前端 `autotype-guard.test.ts` 12 例：四语言键集合一致且值非按钮词（按钮词从字典派生，
+- core：解析器与动作映射的单测（七占位符 × 边界 × 报错路径 × 五动作模板自洽）。
+  **例数不写在这里**——它在 §6.70 之后又漂过一次，数会变，就绑到测试文件本身。
+- 前端 `autotype-guard.test.ts`：四语言键集合一致且值非按钮词（按钮词从字典派生，
   照 D-192）；明文不过前端（invoke 实参无 'password'）；失败映射必须显式映射表
-  （D-185：后端 code → 字典键，映射不到落 `autotype.failed` 兜底，禁后端枚举现拼）；
-  Android 分支无 `<button>`；守门扫描面非空（防空跑）。
+  （D-185：后端 code → 字典键，五个动作的"没填"三码与焦点丢失都在表内，映射不到落
+  `autotype.failed` 兜底，禁后端枚举现拼）；Ctrl+Shift 判定必须先于单修饰键分支
+  （顺序断言）；Android 分支无 `<button>`；守门扫描面非空（防空跑）。
 - `ipc-contract.test.ts`：`auto_type_fill` / `prefs_set_autotype_hotkey` 双侧锚点，
-  死数字 85→87（+2 命令，注释登记）。
+  死数字 85→87（+2 命令，注释登记）。**注意它只校验命令名不校验参数键**——wire
+  `{item_id, action}` 的正确性由 Rust 形参名 + `rename_all="snake_case"` 保证，
+  改签名时必须两边同看（impl-fe 在 1.5.39 增强时点出过这个盲区）。
 
 #### 6.71.5 已知限制（真机再调）
 
 - 注入节奏（6ms/字符、50ms/Token、200ms 焦点等待）是保守起点，待真机手感调参。
 - 目标窗口被系统前台锁策略拒绝时（SetForegroundWindow 被拒）会误报焦点丢失；
   真机出现再加 AttachThreadInput/AllowSetForegroundWindow 前戏。
-- 无 per-entry 自定义序列（有 username 用完整序列、无则只打密码；改序列=下版本）。
+- 五种动作是**固定模板**，尚无 per-entry 自定义序列（KeePassXC 那种每条目绑定序列
+  的能力留到有真实需求再谈——现在没人要写 `{DELAY 500}{TAB 3}`）。
+- 非法 action（正常路径到不了）与密钥本身非法的 TOTP 落通用 ERR_VALIDATION →
+  浮层兜底文案；不为防御路径另设专用码。
 - 热键被其他程序占用时只有保存失败 toast 一条提示路。
 - 错误码 `err.autotype_focus_lost` 暂无 i18n 键（前端按 code 显式映射，不消费
   message_key）；如其他错误展示面需要再补。
+
+#### 6.71.6 顺手修的 D-195：导入条目的动态口令本来是坏的
+
+做"仅动态口令"这个动作时发现：Bitwarden 导入把 `login_totp` **原样入库**（通常是
+`otpauth://totp/...?secret=...` 整串），而归一化成裸 base32 只发生在前端编辑器保存时。
+于是 Rust 侧（`totp_now` 命令）对这类条目解码必失败——**详情页看动态口令本来就是坏的**，
+只是没人导入过带 TOTP 的库所以没报。
+
+修法落在根因处：core `totp::code_at` 内部容忍 `otpauth://` URI（抽 secret 参数，语义
+对齐前端 normalizeTotpInput；抽不到原样返回、不静默吞空串），详情页与自动输入同时受益。
+一处修复胜过在命令层再抄一份解析。**登记为 D-195**，走查补一条：导入带 otpauth URI 的
+条目后，「仅动态口令」与详情页 TOTP 两处都要真的出码。
+
 
