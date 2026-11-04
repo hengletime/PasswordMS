@@ -4686,3 +4686,72 @@ ok: '确定',
 - **走查单里的每一句引文都得能落到字典里**。查不到时的第一反应常常是"文档过时了"，
   但这次恰好相反——文档是对的，代码漂了。`scripts/check-e2e-quotes.mjs` 因此存在。
 - 孤儿键不是"暂时没用的东西"，是**在等一个人去引它**。它已经在走查单里被引错过一次。
+
+### 6.71 自动输入：热键唤起浮层，SendInput 代填（1.5.39 未发布）
+
+一句话：在任意程序里按全局热键（默认 `Ctrl+Alt+Space`），PasswordMS 弹一个无边框浮层
+列出登录条目，回车选定后，浮层收起、焦点切回你原来的窗口，程序用 `SendInput`
+把 `{USERNAME}{TAB}{PASSWORD}{ENTER}` 逐键打进去。参考实现是 KeePassXC 的 Auto-Type
+（`Reference/KeePassXC-2.8.0-x64`，主人 2026-11-04 试通且无杀软拦截后才立项）。
+docs/00-scope 里"冻结待拍板"的记录随之改已立项，**原冻结前提全部保留为设计约束**：
+只对显式选中的条目、注入前校验目标焦点、无批量操作。Android 不做（无 Accessibility/
+Autofill 宿主挂载点，投入大收益小）。
+
+#### 6.71.1 交互流与骨架
+
+浮层是**第三个 WebviewWindow**（label `autotype`，URL `?w=autotype`），整骨架照抄
+QuickSearch（`quick_search.rs` 的 ensure/show/toggle：440×520 无边框置顶、跳过任务栏、
+启动时预建隐藏窗——热键最怕"按了没反应"；按鼠标所在屏居中）。排序纯函数
+`rankItems`/`moveIndex`/`RESULT_LIMIT` **直接复用** quick-search.ts（它只收
+`kind.type==='login'`，正好是本功能的边界）。数据通路同款：每个窗口独立 JS 上下文，
+唤出时现取 IPC（status → list_items 全量），locale 自己 readLocale。
+
+锁屏态热键**不弹浮层**，走 `tray::show_main` 进解锁页（照 hotkey.rs:97-101 的现有分叉）。
+
+#### 6.71.2 安全设计（五道闸）
+
+1. **明文不过前端二传**：`auto_type_fill` 只收 `item_id`，Rust 走 get_item 同一条
+   解密路径自取明文，取完立刻 `wipe_plaintext()`；守门测试断言浮层源码的 `invoke(`
+   实参不含 'password' 字样。
+2. **明文即清**：username/password 一到手 Zeroizing；UTF-16 注入缓冲用完
+   `securemem::wipe`（照 copy_secret/ClipboardMemory 先例）；不进日志。
+3. **入口闸门**：`session_unlocked()` + `touch_activity()`——后者防注入中途 auto-lock。
+4. **焦点校验**：热键触发时记 `GetForegroundWindow` 句柄；注入前 `IsWindow` 校验 +
+   `SetForegroundWindow` + 200ms 后前台复查；注入中每个 Token 边界复查前台，变了立即
+   中止报 `ERR_AUTOTYPE_FOCUS_LOST`（浮层报「目标窗口已切换，已停止输入。」）。
+5. **平台对称（D-144 铁律）**：命令非 Windows 端对称返回 `ERR_NOT_SUPPORTED`
+   （cfg 块无 return，照 platform_ui_locale 模式）；Android 能编译、运行时拒绝。
+
+序列解析器（`crates/passwordms-core/src/autotype_seq.rs`）是纯逻辑零依赖：五占位符
+`{USERNAME}{PASSWORD}{TAB}{ENTER}{DELAY n}`，`{DELAY n}` 上限 10000ms，未知/未闭合报
+Err。**设计裁定：{USERNAME}/{PASSWORD} 解析成保留标记的 Text，由命令层按字面值换
+字段**——明文完全不经过解析器，含 `{` 的密码不会被误解析。
+
+#### 6.71.3 热键：两颗键一条命
+
+hotkey.rs 的 `register()` 原本每次 `unregister_all()` 再注册（为改键回滚服务）。
+第二颗热键若另写注册逻辑，改键回滚就会把它抹掉——所以两颗键**成对注册、成对回滚**，
+Autotype 热键走 prefs 字段 `autotype_hotkey`（默认 `Ctrl+Alt+Space`，复用
+canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：入口判据独立成派生态
+（平台取后端 DTO 的 platform 字段，禁 navigator.userAgent），Android 分支纯文案无按钮。
+
+#### 6.71.4 守门
+
+- core：解析器 9 条单测（全占位符/边界/报错路径）。
+- 前端 `autotype-guard.test.ts` 12 例：四语言键集合一致且值非按钮词（按钮词从字典派生，
+  照 D-192）；明文不过前端（invoke 实参无 'password'）；失败映射必须显式映射表
+  （D-185：后端 code → 字典键，映射不到落 `autotype.failed` 兜底，禁后端枚举现拼）；
+  Android 分支无 `<button>`；守门扫描面非空（防空跑）。
+- `ipc-contract.test.ts`：`auto_type_fill` / `prefs_set_autotype_hotkey` 双侧锚点，
+  死数字 85→87（+2 命令，注释登记）。
+
+#### 6.71.5 已知限制（真机再调）
+
+- 注入节奏（6ms/字符、50ms/Token、200ms 焦点等待）是保守起点，待真机手感调参。
+- 目标窗口被系统前台锁策略拒绝时（SetForegroundWindow 被拒）会误报焦点丢失；
+  真机出现再加 AttachThreadInput/AllowSetForegroundWindow 前戏。
+- 无 per-entry 自定义序列（有 username 用完整序列、无则只打密码；改序列=下版本）。
+- 热键被其他程序占用时只有保存失败 toast 一条提示路。
+- 错误码 `err.autotype_focus_lost` 暂无 i18n 键（前端按 code 显式映射，不消费
+  message_key）；如其他错误展示面需要再补。
+
