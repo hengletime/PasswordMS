@@ -145,22 +145,37 @@ function cjkCount(text) {
  * 为什么不用 import：这些是 .ts，node 直接 import 需要 loader；而这条检查只关心
  * "这段话在不在字典里"，把值抠出来做子串匹配已经足够，且不引入任何依赖。
  * 注释必须跳过——否则一段被注释掉的旧文案会让检查误判为"还在"。
+ * 模块路径（`from './zh-CN'`）也必须跳过——否则字典条数会虚高一格。
  */
 function extractStringValues(src) {
   const values = [];
   let i = 0;
+  // 最近一个标识符词，以及它结束的位置——只用来识别 `import ... from './x'` 这类
+  // **模块路径**，它们不是文案。判据要求"词与引号之间只有空白"，否则 `from: '从'`
+  // 这种真键会被一起吃掉（键名也叫 from 是很常见的）。
+  let lastWord = '';
+  let lastWordEnd = -1;
   while (i < src.length) {
     const c = src[i];
     const next = src[i + 1];
 
-    if (c === '/' && next === '/') {
-      const nl = src.indexOf('\n', i);
-      i = nl === -1 ? src.length : nl + 1;
-      continue;
-    }
-    if (c === '/' && next === '*') {
+    if ((c === '/' && next === '/') || (c === '/' && next === '*')) {
+      // 注释里也可能出现 from/import 字样，先走注释分支，别污染 lastWord
+      if (next === '/') {
+        const nl = src.indexOf('\n', i);
+        i = nl === -1 ? src.length : nl + 1;
+        continue;
+      }
       const end = src.indexOf('*/', i + 2);
       i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    if (/[A-Za-z_$]/.test(c)) {
+      let j = i;
+      while (j < src.length && /[A-Za-z0-9_$]/.test(src[j])) j += 1;
+      lastWord = src.slice(i, j);
+      lastWordEnd = j;
+      i = j;
       continue;
     }
     if (c === "'" || c === '"' || c === '`') {
@@ -178,7 +193,14 @@ function extractStringValues(src) {
         buf += d;
         j += 1;
       }
-      values.push(buf);
+      // `import type { Messages } from './zh-CN'` 里的路径不是文案。不剔掉的话，它会被
+      // 当成"字典里的一条"，而那四行 `xxx 628 条` 就会变成 `en-US 629 条`——一个只在
+      // 英文那行多出来的数字，看的人只会以为英文多了一条文案，实际多的是一个 import。
+      // 判据（词与引号之间只有空白）保证 `from: '从'` 这种真键不被误杀。
+      const isModuleSpecifier =
+        (lastWord === 'from' || lastWord === 'import') &&
+        src.slice(lastWordEnd, i).trim() === '';
+      if (!isModuleSpecifier) values.push(buf);
       i = j + 1;
       continue;
     }
@@ -486,7 +508,25 @@ function runProbes(dict) {
   probes.push({ id: 'P5b/ellipsis-miss', expect: 'miss', frag: '…', note: '' });
   probes.push({ id: 'P5c/space-miss', expect: 'miss', frag: '   ', note: '' });
 
+  // P6：语料里不许出现模块路径。
+  // 这是一条**不变量**探针：它不测匹配器，测的是"喂进来的语料是不是文案"。
+  // 之前 `en-US.ts` 的 `from './zh-CN'` 被当成一条文案，于是四行字典计数变成
+  // `628 / 628 / 629 / 628`——一个只在英文那行多出来的数字，读的人只会以为
+  // 英文多了一条文案。数字不对，报告就不可信。
+  probes.push({
+    id: 'P6/no-module-path',
+    expect: '无模块路径混入语料',
+    check: () => {
+      const leaked = [...dict.exact].filter((v) => /^\.{0,2}\/[^\s]*$/.test(v));
+      return leaked.length === 0 ? null : `混入 ${leaked.join(' , ')}`;
+    },
+  });
+
   return probes.map((p) => {
+    if (p.check) {
+      const err = p.check();
+      return { ...p, ok: err === null, got: err === null ? '干净' : err };
+    }
     if (p.frag === undefined) return { ...p, ok: null };
     const got = isHit(p.frag, dict) ? 'hit' : 'miss';
     return { ...p, ok: got === p.expect, got };
@@ -596,7 +636,7 @@ function main() {
   const failed = probes.filter((p) => p.ok === false);
   const skippedProbes = probes.filter((p) => p.ok === null);
   console.log('');
-  console.log(`【自检】匹配器本身（探针 ${probes.length - skippedProbes.length} 条，输入取自字典）`);
+  console.log(`【自检】匹配器本身（探针 ${probes.length - skippedProbes.length} 条，输入取自字典/语料）`);
   for (const p of probes) {
     const mark = p.ok === null ? '—' : p.ok ? '✓' : '✗';
     const tail = p.ok === null ? `未跑（${p.note}）` : p.ok ? '' : `期望 ${p.expect} 实得 ${p.got}`;
@@ -605,9 +645,10 @@ function main() {
   }
   if (failed.length > 0) {
     console.log('');
-    console.log('  ⚠️  自检失败：匹配器已失效，**上面的"查不到"结论不可信**。');
-    console.log('      最常见原因：有人放松了 normalize()（把汉字也折了），于是所有片段都能"命中"。');
-    console.log('      这种失效不会报错，只会让报告变成一片绿——先修匹配器，再看结果。');
+    console.log('  ⚠️  自检失败：**上面的"查不到"结论不可信**，先修好再读结果。');
+    console.log('      P1–P5：匹配器失效。最常见是有人放松了 normalize()（把汉字也折了），');
+    console.log('             于是所有片段都能"命中"——这种失效不报错，只让报告变成一片绿。');
+    console.log('      P6   ：语料混进了非文案（如 import 路径），字典条数会虚高，数字不再可信。');
   }
   if (skippedProbes.length > 0) {
     console.log('');
