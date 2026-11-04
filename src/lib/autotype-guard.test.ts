@@ -347,3 +347,84 @@ describe('⑤ Rust 里所有 "err. 字面量都在字典里有键（S1）', () =
     expect(missing, `这些后端 message_key 在字典里没有键：${missing.join(', ')}`).toEqual([]);
   });
 });
+
+// ── ⑥ 命令层两条"早退"绊线（安全审查 M4 的机器判据） ─────────────────────────
+//
+// 为什么不放在 Rust 单测里：`src-tauri` 的 `#[cfg(test)]` **不进任何门禁**
+// （gate-all 的 Rust 全量只跑 `-p passwordms-core`），写在那里等于白写。
+// `commands/` 也没有测试台，而"这条命令里有没有闸门 / 有没有偷偷早退"本质上是
+// **源码形状**问题，不是行为问题——前端门禁顺手就能看住。
+//
+// 两条判据针对的都是"能编译、能跑、真机上以最难看的形态失败"的写法：
+// - 少一道 `session_unlocked()`：锁着库也能列出条目（M4 同族的入口问题）；
+// - `get_item(` 与 `wipe_plaintext()` 之间夹一个 `?`：解密出来的整条明文
+//   （含密码、备注、TOTP 密钥、附件文件名）在堆上留到自然回收。`?` 是**最隐蔽**
+//   的早退形态——`return` 一眼能看出来，`?` 藏在赋值语句末尾。
+
+/** 取某个顶层 `fn` 的函数体（从函数头到与之齐平的收尾 `}`）。 */
+function rustFnBody(src: string, head: string): string {
+  const at = src.indexOf(head);
+  if (at < 0) {
+    return '';
+  }
+  const rest = src.slice(at);
+  const close = /^}/m.exec(rest);
+  return close ? rest.slice(0, close.index) : rest;
+}
+
+/** 把注释剥掉再做"有没有这句代码"的判断（注释里写 `?` 是为了讲解，不算早退）。 */
+function rustCodeOnly(src: string): string {
+  return src
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n');
+}
+
+describe('⑥ 命令层的闸门与早退（源码形状）', () => {
+  const cmd = rustModules['../../src-tauri/src/commands/autotype_cmd.rs'] ?? '';
+
+  it('命令文件读到了（否则下面三条恒真）', () => {
+    expect(cmd.length, 'autotype_cmd.rs 没读到').toBeGreaterThan(10000);
+  });
+
+  it('autotype_candidates 函数体内有 session_unlocked 闸门', () => {
+    const body = rustCodeOnly(rustFnBody(cmd, 'pub fn autotype_candidates('));
+    // 防空跑：函数体取不到时下面那句 not 会恒真。
+    expect(body.length, 'autotype_candidates 函数体没取到').toBeGreaterThan(300);
+    expect(body, '候选列表没有解锁闸门').toContain('session_unlocked()');
+  });
+
+  it('auto_type_fill：取到明文之后到擦除之间不得有任何 `?`', () => {
+    const body = rustCodeOnly(rustFnBody(cmd, 'pub async fn auto_type_fill('));
+    expect(body.length, 'auto_type_fill 函数体没取到').toBeGreaterThan(2000);
+    const get = body.indexOf('get_item(');
+    const wipe = body.indexOf('wipe_plaintext()');
+    expect(get, 'auto_type_fill 里没有 get_item(').toBeGreaterThan(-1);
+    expect(wipe, 'auto_type_fill 里没有 wipe_plaintext() —— 明文没擦').toBeGreaterThan(get);
+    // 起点要从**取明文那句语句结束之后**算：`get_item(&item_id)?` 里的 `?` 是取明文
+    // 动作本身，它失败时手上还没有明文，谈不上漏擦（判据把它算进去会误报，实测过一次）。
+    // 风险从"明文到手"那一刻开始，即那条 `let ... = ...?;` 的分号之后。
+    const stmtEnd = body.indexOf(';', get);
+    expect(stmtEnd, '取明文那句没取到分号').toBeGreaterThan(get);
+    expect(stmtEnd, '语句结束位置落在擦除之后，切片写反了').toBeLessThan(wipe);
+    const between = body.slice(stmtEnd, wipe);
+    expect(
+      between.includes('?'),
+      `明文到手后到擦除之间有 ?，存在跳过擦除的早退路径：\n${between}`,
+    ).toBe(false);
+  });
+
+  it('autotype_candidates：列条目到擦除之间不得有任何 `?`', () => {
+    const body = rustCodeOnly(rustFnBody(cmd, 'pub fn autotype_candidates('));
+    const list = body.indexOf('list_items(');
+    const wipe = body.indexOf('wipe_plaintext()');
+    expect(list, 'autotype_candidates 里没有 list_items(').toBeGreaterThan(-1);
+    expect(wipe, 'autotype_candidates 里没有 wipe_plaintext()').toBeGreaterThan(list);
+    const between = body.slice(list, wipe);
+    expect(
+      between.includes('?'),
+      `list_items( 与 wipe_plaintext() 之间有 ?：\n${between}`,
+    ).toBe(false);
+  });
+});

@@ -54,12 +54,17 @@ function scoreOf(hit: QuickHit, query: string): number {
 }
 
 /**
- * 排序只需要的最小行（结构型，不绑定 `ItemDto`）。
+ * 自动输入候选行（`autotype_candidates` 的 5 字段 wire 形状）。
  *
- * 两个窗口共用 `rankItems`：快速搜索给的是完整 `ItemDto`（登录数据在 `kind` 里），
- * 自动输入浮层给的是 `autotype_candidates` 的 5 字段行（扁平）。两边都要能喂进来，
- * 且**必须共用同一套打分**——`quick-search.ts` 的产品承诺是「同一个条目在两个地方
- * 的位置对得上」，复制一份改名 `rankItemsLite` 就把这句承诺作废了。
+ * 结构型、不绑定 `ItemDto`。两个窗口共用**同一套打分**（私有 `rankHits`），
+ * 产品承诺是「同一个条目在两个地方的位置对得上」——共用的是打分，不是同一个入口：
+ * 快速搜索吃完整 `ItemDto`（登录数据在 `kind` 里、要按 `kind.type` 过滤），
+ * 浮层吃这份扁平行（登录项过滤已在 Rust 侧完成）。
+ *
+ * ⚠️ 刻意**不**让 `rankItems` 吃联合类型：一个函数吃两种形状就需要判别守卫，
+ * 而守卫（`'kind' in item`）依赖"另一侧恰好没有某个字段"——将来谁给候选行加个
+ * `kind`，扁平行会被当下完整条目、整列被滤空，且 TypeScript 一声不响。
+ * 两个入口各自收窄，判别代码根本不存在。
  */
 export interface RankableCandidate {
   item_id: string;
@@ -67,11 +72,6 @@ export interface RankableCandidate {
   username: string | null;
   url: string | null;
   use_count: number;
-}
-
-/** `ItemDto` 与扁平行二选一的分支判据：完整条目带 `kind`。 */
-function isFullItem(item: ItemDto | RankableCandidate): item is ItemDto {
-  return 'kind' in item;
 }
 
 /**
@@ -94,46 +94,54 @@ function rankHits(hits: QuickHit[], query: string, limit: number): QuickHit[] {
 }
 
 /**
- * 过滤 + 排序。
+ * 快速搜索窗口：过滤 + 排序。
  *
  * 空查询不是"没有结果"，而是**最常用的那几条**：用户按热键常常只是想说
  * "给我上次用的那个"。排序口径与主列表一致（频度 → 最近使用 → 最近更新），
  * 免得同一个条目在两个地方的位置对不上。
  *
- * @param items 完整条目（`ItemDto`，内部筛掉非登录项）或候选行（只含登录项）
+ * @param items 全量条目（含非登录项，本函数内部会筛掉）
  * @param query 原始输入，内部做去空格 + 小写；纯空白视同空查询
  */
-export function rankItems(
-  items: ReadonlyArray<ItemDto | RankableCandidate>,
-  query: string,
-  limit = RESULT_LIMIT,
-): QuickHit[] {
+export function rankItems(items: readonly ItemDto[], query: string, limit = RESULT_LIMIT): QuickHit[] {
   const hits: QuickHit[] = [];
   for (const item of items) {
-    if (isFullItem(item)) {
-      // 只收登录项：笔记与附件没有可复制的密码，混进结果只会让回车"什么也没发生"。
-      if (item.kind.type !== 'login') {
-        continue;
-      }
-      hits.push({
-        itemId: item.item_id,
-        title: item.kind.title,
-        username: item.kind.username ?? null,
-        url: item.kind.url ?? null,
-        useCount: item.use_count ?? 0,
-        score: 0,
-      });
+    // 只收登录项：笔记与附件没有可复制的密码，混进结果只会让回车"什么也没发生"。
+    if (item.kind.type !== 'login') {
       continue;
     }
     hits.push({
       itemId: item.item_id,
-      title: item.title,
-      username: item.username ?? null,
-      url: item.url ?? null,
+      title: item.kind.title,
+      username: item.kind.username ?? null,
+      url: item.kind.url ?? null,
       useCount: item.use_count ?? 0,
       score: 0,
     });
   }
+  return rankHits(hits, query, limit);
+}
+
+/**
+ * 自动输入浮层：候选行打分排序。
+ *
+ * **不判别、不过滤**：候选只含登录项（Rust `autotype_candidates` 已筛过），
+ * 这里再把关只会多一处需要测试的分支。打分与 `rankItems` 共用 `rankHits`——
+ * 同一个条目在两个窗口的位置因此必然一致。
+ */
+export function rankCandidates(
+  rows: readonly RankableCandidate[],
+  query: string,
+  limit = RESULT_LIMIT,
+): QuickHit[] {
+  const hits: QuickHit[] = rows.map((row) => ({
+    itemId: row.item_id,
+    title: row.title,
+    username: row.username ?? null,
+    url: row.url ?? null,
+    useCount: row.use_count ?? 0,
+    score: 0,
+  }));
   return rankHits(hits, query, limit);
 }
 

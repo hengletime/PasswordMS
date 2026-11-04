@@ -4,7 +4,7 @@
 // 排序错了会先复制到别人的密码，窗口判定错了会把主界面渲染进 440px 的小窗。
 import { describe, expect, it } from 'vitest';
 
-import { RESULT_LIMIT, copiedLabel, isQuickWindow, moveIndex, rankItems } from './quick-search';
+import { RESULT_LIMIT, copiedLabel, isQuickWindow, moveIndex, rankCandidates, rankItems } from './quick-search';
 import type { RankableCandidate } from './quick-search';
 import type { ItemDto, ItemKind } from '../types';
 
@@ -160,12 +160,13 @@ describe('copiedLabel：回执文案', () => {
   });
 });
 
-// 1.5.39：自动输入浮层的扁平候选行分支。
+// 1.5.39：自动输入浮层的候选行入口（`rankCandidates`）。
 //
-// `rankItems` 现在吃 `ItemDto | RankableCandidate`，上面所有用例只走 `ItemDto` 分支，
-// 浮层是扁平分枝的**唯一用户**。这三条把这个分支钉住：少 url → 站点名搜永不命中；
+// 它与 `rankItems` 共用私有 `rankHits`（同一套打分、两窗位置一致），但收窄到
+// 5 字段扁平行、**不判别不过滤**——登录项过滤已在 Rust `autotype_candidates` 做完。
+// 这个入口是浮层唯一的排序入口，不能零覆盖：少 url → 站点名搜永不命中；
 // 少 use_count → 空查询"最常用"退化成字母序（两种退化都不会有测试变红）。
-describe('rankItems：扁平候选行（autotype_candidates 分支）', () => {
+describe('rankCandidates：自动输入浮层候选行', () => {
   /** 造一条候选：5 字段，与 Rust `AutotypeCandidateDto` 同名。 */
   function candidate(
     id: string,
@@ -176,21 +177,16 @@ describe('rankItems：扁平候选行（autotype_candidates 分支）', () => {
     return { item_id: id, title, username: null, url, use_count: useCount };
   }
 
-  it('只有网址命中关键词的候选也会进结果（url 档不是白给的）', () => {
+  it('只有网址命中关键词的候选也会入选（url 档是站点名搜索的唯一途径）', () => {
     const rows = [
       candidate('site', '工作账号', 'https://github.com'),
       candidate('other', '个人邮箱', 'https://mail.example.com'),
     ];
-    expect(rankItems(rows, 'github').map((h) => h.itemId)).toEqual(['site']);
-  });
-
-  it('标题命中排在网址命中之前（title > url 是既有口径，两窗一致）', () => {
-    const rows = [candidate('url-hit', '工作账号', 'https://github.com'), candidate('title-hit', 'GitHub 登录')];
-    expect(rankItems(rows, 'github').map((h) => h.itemId)).toEqual(['title-hit', 'url-hit']);
+    expect(rankCandidates(rows, 'github').map((h) => h.itemId)).toEqual(['site']);
   });
 
   it('空查询按使用次数降序（"最常用"不退化成字母序）', () => {
     const rows = [candidate('rare', 'A 站', null, 1), candidate('often', 'Z 站', null, 9)];
-    expect(rankItems(rows, '').map((h) => h.itemId)).toEqual(['often', 'rare']);
+    expect(rankCandidates(rows, '').map((h) => h.itemId)).toEqual(['often', 'rare']);
   });
 });

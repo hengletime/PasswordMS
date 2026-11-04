@@ -17,7 +17,7 @@
 
   import { api } from '../lib/ipc';
   import { LOCALES, mapSystemLanguage, translate, type Locale } from '../lib/i18n';
-  import { moveIndex, rankItems } from '../lib/quick-search';
+  import { moveIndex, rankCandidates } from '../lib/quick-search';
   import {
     autotypeCodeOf,
     autotypeFailureKey,
@@ -49,8 +49,8 @@
 
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // 排序复用快速搜索的同一个 rankItems（结构型入参，两边位置口径一致）。
-  const hits = $derived(rankItems(candidates, query));
+  // 排序复用快速搜索的同一套打分（rankCandidates → 私有 rankHits），两窗位置口径一致。
+  const hits = $derived(rankCandidates(candidates, query));
 
   function t(key: string): string {
     return translate(locale, key);

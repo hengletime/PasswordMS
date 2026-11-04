@@ -39,8 +39,9 @@ export type AutotypeAction = 'default' | 'username' | 'password' | 'url' | 'totp
  *
  * 列表要显示与排序需要什么就只给什么：标题、用户名、网址、使用次数、id。
  * 密码 / 备注 / TOTP 密钥一个都不给——浮层的 JS 堆里因此没有任何明文，
- * 这是 M3 修复后真正的边界。形状直接复用 `quick-search.ts` 的排序入参类型，
- * 两个窗口共用同一套 `rankItems`，位置口径不会漂。
+ * 这是 M3 修复后真正的边界。形状直接复用 `quick-search.ts` 的 `RankableCandidate`，
+ * 排序走 `rankCandidates`——它与 `rankItems` 共用私有 `rankHits`（**同一套打分**，
+ * 不是同一个函数），同一个条目在两个窗口的位置因此不会漂。
  */
 export type AutotypeCandidate = RankableCandidate;
 
