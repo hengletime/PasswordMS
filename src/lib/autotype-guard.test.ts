@@ -179,22 +179,30 @@ describe('① autotype 键集合四语言一致，值非按钮词、够长', () 
     }
   });
 
-  it('foot_hint 一句话说清五种动作（每语言各查代表性 token）', () => {
+  it('foot_hint 说清四个数字键与 Esc（每语言各查动作词）', () => {
     // 键值必须是**整句**（D-185：不许把字典片段拼起来），所以这里按语言查整句里
     // 该出现的动作词——少一种动作就是用户按了不知道会发生什么。
-    const tokens: Record<string, string[]> = {
-      'zh-CN': ['网址', '动态口令', 'Shift', 'Ctrl+Shift', 'Esc'],
-      'zh-TW': ['網址', '動態密碼', 'Shift', 'Ctrl+Shift', 'Esc'],
-      'en-US': ['URL', 'one-time', 'Shift', 'Ctrl+Shift', 'Esc'],
-      th: ['URL', 'รหัส OTP', 'Shift', 'Ctrl+Shift', 'Esc'],
+    // 键位串本身不翻译（Ctrl+1 在各语言里都是 Ctrl+1），逐个断言出现：
+    const keyTokens = ['Ctrl+1', 'Ctrl+2', 'Ctrl+3', 'Ctrl+4', 'Esc'];
+    // 动作词逐语言登记（1.5.40 起键位与 KeePassXC 对齐：1=用户名 2=密码 3=动态口令 4=网址）。
+    const actionWords: Record<string, string[]> = {
+      'zh-CN': ['仅用户名', '仅密码', '动态口令', '网址'],
+      'zh-TW': ['僅使用者名稱', '僅密碼', '動態密碼', '網址'],
+      'en-US': ['username only', 'password only', 'one-time', 'URL'],
+      th: ['เฉพาะชื่อผู้ใช้', 'เฉพาะรหัสผ่าน', 'รหัส OTP', 'URL'],
     };
     for (const [name, src] of dicts) {
       const text = dictValueOf(src, 'autotype.foot_hint') ?? '';
-      const expected = tokens[name] ?? [];
-      expect(expected.length, `${name} 没登记 foot_hint 的 token`).toBeGreaterThan(0);
-      for (const token of expected) {
-        expect(text, `${name} 的 foot_hint 缺「${token}」`).toContain(token);
+      for (const token of keyTokens) {
+        expect(text, `${name} 的 foot_hint 缺键位「${token}」`).toContain(token);
       }
+      const words = actionWords[name] ?? [];
+      expect(words.length, `${name} 没登记 foot_hint 的动作词`).toBeGreaterThan(0);
+      for (const word of words) {
+        expect(text, `${name} 的 foot_hint 缺「${word}」`).toContain(word);
+      }
+      // 反向：旧修饰键位已废，别回流（回流 = 提示里写着按不出来的键）。
+      expect(text, `${name} 的 foot_hint 还残留旧键位 Shift/Alt`).not.toMatch(/Shift|Alt\b/);
       expect(text.length, `${name} 的 foot_hint 太短，说不清五种动作`).toBeGreaterThan(20);
     }
   });
@@ -235,17 +243,21 @@ describe('② 浮层走专用候选，明文不经过浮层', () => {
     expect(block).not.toContain('password');
   });
 
-  it('五种动作齐全，且 Ctrl+Shift 的判定在单键分支之前', () => {
+  it('五种动作齐全，且键位映射只有一份（在 autotype.ts，不在组件里）', () => {
     // 契约：default / username / password / url / totp 五种取值逐字一致。
     for (const action of ['default', 'username', 'password', 'url', 'totp']) {
-      expect(picker, `浮层缺少动作 ${action}`).toContain(`'${action}'`);
+      expect(autotypeTs, `autotype.ts 缺少动作 ${action}`).toContain(`'${action}'`);
     }
-    // Ctrl+Shift+Enter 是 Ctrl 与 Shift 的叠加：判定顺序反了会落进「仅密码」。
-    const combo = picker.indexOf('event.ctrlKey && event.shiftKey');
-    const ctrlOnly = picker.indexOf("? 'password'");
-    expect(combo, '缺 Ctrl+Shift 组合判定').toBeGreaterThan(-1);
-    expect(ctrlOnly, '缺仅 Ctrl 分支').toBeGreaterThan(-1);
-    expect(combo, 'Ctrl+Shift 必须先判').toBeLessThan(ctrlOnly);
+    const pickerCode = codeOnly(picker);
+    // 浮层必须走 actionForKey——这一句在，才说明映射只有一份（能单测的那一份）。
+    expect(pickerCode, '浮层必须调用 actionForKey(event)').toContain('actionForKey(event)');
+    // 组件里自己判修饰键 = 又出现一份映射。1.5.39 的 Alt+Enter 就是这么坏的：
+    // 映射藏在组件的嵌套三元里，既没法单测，真机上"事件到不了"也没人知道，
+    // 于是那个键在验收前一直是坏的、而代码看起来完全正确。
+    expect(
+      pickerCode,
+      '浮层不许自己判修饰键（映射只许在 autotype.ts::actionForKey 一处）',
+    ).not.toMatch(/event\.(ctrlKey|altKey|shiftKey)/);
   });
 });
 
@@ -426,5 +438,23 @@ describe('⑥ 命令层的闸门与早退（源码形状）', () => {
       between.includes('?'),
       `list_items( 与 wipe_plaintext() 之间有 ?：\n${between}`,
     ).toBe(false);
+  });
+
+  it('auto_type_fill 失败分支必须 reveal 浮层（1.5.40：否则失败提示没人看得见）', () => {
+    // 真机症状（主人 2026-11-04，7.9）：管理员权限程序里按热键选条目，
+    // 「按了没反应，也没提示」。原因不是没报错——`ERR_AUTOTYPE_BLOCKED` 产生了，
+    // 但注入前浮层已被 hide，前端的失败文案写进了一个**已隐藏的窗口**。
+    // 判据：`result.is_ok()` 分叉之后必须出现 `reveal(&app)`。
+    const body = rustCodeOnly(rustFnBody(cmd, 'pub async fn auto_type_fill('));
+    const okAt = body.indexOf('result.is_ok()');
+    expect(okAt, '缺 result.is_ok() 分叉').toBeGreaterThan(-1);
+    const revealAt = body.indexOf('reveal(&app)');
+    expect(revealAt, '失败分支没有 reveal —— 失败提示会写进已隐藏的窗口，用户看不到').toBeGreaterThan(
+      okAt,
+    );
+    // 反过来钉住时序：reveal 不许出现在注入之前（那时还没失败，露出来只是闪一下）。
+    const injectAt = body.indexOf('spawn_blocking');
+    expect(injectAt, '找不到 spawn_blocking，判据失效').toBeGreaterThan(-1);
+    expect(revealAt, 'reveal 必须在注入之后（失败才有意义）').toBeGreaterThan(injectAt);
   });
 });

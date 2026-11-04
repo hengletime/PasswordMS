@@ -790,7 +790,7 @@ export const zhCN = {
     no_url: '这一条没有填网址。',
     no_totp: '这一条没有动态口令。',
     done: '已自动输入。',
-    foot_hint: 'Enter 用户名+密码 · Shift 仅用户名 · Ctrl 仅密码 · Alt 网址 · Ctrl+Shift 动态口令 · Esc 取消',
+    foot_hint: 'Enter 用户名+密码 · Ctrl+1 仅用户名 · Ctrl+2 仅密码 · Ctrl+3 动态口令 · Ctrl+4 网址 · Esc 取消',
   },
   err: {
     hotkey_need_modifier: '热键至少需要一个 Ctrl、Alt 或 Win 键（只按 Shift 会和正常输入冲突）。',

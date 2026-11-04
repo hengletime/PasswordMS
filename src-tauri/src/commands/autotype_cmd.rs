@@ -208,6 +208,17 @@ pub async fn auto_type_fill(
     if result.is_ok() {
         // 注入成功补一次触点：整段注入期间的用户活动以完成时刻为准。
         state.touch_activity();
+    } else {
+        // 失败必须让用户看见（1.5.40）。注入前浮层已被 [`crate::autotype::hide`]，
+        // 前端的失败文案会写进一个**已隐藏的窗口**——1.5.39 真机验收的症状就是
+        // 「按了没反应，也没提示」：`ERR_AUTOTYPE_BLOCKED` 其实产生了，但没人看得见。
+        // 这里把浮层只"重新显示"（不重发事件，搜索词与选中项留着，方便换动作重试）。
+        #[cfg(desktop)]
+        crate::autotype::reveal(&app);
+        // 失败留痕：只记错误码，不记任何字段值（安全基线：参数值一律不进日志）。
+        if let Err(e) = &result {
+            crate::state::append_log(&app, &format!("[autotype] 注入失败：{}", e.code));
+        }
     }
     result
 }

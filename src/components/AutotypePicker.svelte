@@ -19,6 +19,7 @@
   import { LOCALES, mapSystemLanguage, translate, type Locale } from '../lib/i18n';
   import { moveIndex, rankCandidates } from '../lib/quick-search';
   import {
+    actionForKey,
     autotypeCodeOf,
     autotypeFailureKey,
     type AutotypeAction,
@@ -143,23 +144,18 @@
       selected = moveIndex(selected, -1, hits.length);
       return;
     }
-    if (event.key === 'Enter') {
-      event.preventDefault();
-      // 五种动作的修饰键直选。**Ctrl+Shift 必须先判**：它是 Ctrl 与 Shift 两个
-      // 单键分支的叠加，顺序反了 Ctrl+Shift+Enter 会落进「仅密码」。
-      // Alt+Enter 的 preventDefault 由上面统一做了（否则 Windows 会去敲窗口菜单/响铃）。
-      const action: AutotypeAction =
-        event.ctrlKey && event.shiftKey
-          ? 'totp'
-          : event.ctrlKey
-            ? 'password'
-            : event.shiftKey
-              ? 'username'
-              : event.altKey
-                ? 'url'
-                : 'default';
-      void fill(action);
+    // 其余按键全部交给 `actionForKey`（映射只有那一份，在 autotype.ts，有单测）。
+    // 组件这里**不判任何修饰键**：1.5.39 那段 `event.ctrlKey && event.shiftKey ?
+    // 'totp' : ...` 写在组件里，既没法单测，也正是 `Alt+Enter` 按不出来却没人
+    // 发现的原因——代码看着对，坏的是事件根本到不了这里。
+    const action = actionForKey(event);
+    if (!action) {
+      return;
     }
+    // 动作键一律 preventDefault：Enter 在搜索框里不该响铃，Ctrl+数字不该被
+    // WebView 当成自己的快捷键（某些版本会拿去做缩放）先消费掉。
+    event.preventDefault();
+    void fill(action);
   }
 
   onMount((): (() => void) | void => {

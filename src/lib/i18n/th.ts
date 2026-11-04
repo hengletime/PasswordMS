@@ -684,7 +684,7 @@ export const th = {
     no_url: 'รายการนี้ไม่ได้กรอก URL',
     no_totp: 'รายการนี้ไม่มีรหัส OTP',
     done: 'พิมพ์อัตโนมัติแล้ว',
-    foot_hint: 'Enter ชื่อผู้ใช้+รหัสผ่าน · Shift เฉพาะชื่อผู้ใช้ · Ctrl เฉพาะรหัสผ่าน · Alt URL · Ctrl+Shift รหัส OTP · Esc ยกเลิก',
+    foot_hint: 'Enter ชื่อผู้ใช้+รหัสผ่าน · Ctrl+1 เฉพาะชื่อผู้ใช้ · Ctrl+2 เฉพาะรหัสผ่าน · Ctrl+3 รหัส OTP · Ctrl+4 URL · Esc ยกเลิก',
   },
   err: {
     hotkey_need_modifier: 'คีย์ลัดต้องมี Ctrl, Alt หรือ Win อย่างน้อยหนึ่งปุ่ม (Shift อย่างเดียวจะชนกับการพิมพ์ปกติ)',

@@ -4720,10 +4720,26 @@ QuickSearch（`quick_search.rs` 的 ensure/show/toggle：440×520 无边框置�
 | 按键 | 打什么 | 序列 | 结尾 |
 |---|---|---|---|
 | `Enter` | 用户名 + 密码 | `{USERNAME}{TAB}{PASSWORD}{ENTER}` | 带回车 |
-| `Shift+Enter` | 仅用户名 | `{USERNAME}` | 不带 |
-| `Ctrl+Enter` | 仅密码 | `{PASSWORD}` | 不带 |
-| `Alt+Enter` | 网址 | `{URL}` | 不带 |
-| `Ctrl+Shift+Enter` | 动态口令 | `{TOTP}` | 不带 |
+| `Ctrl+1` | 仅用户名 | `{USERNAME}` | 不带 |
+| `Ctrl+2` | 仅密码 | `{PASSWORD}` | 不带 |
+| `Ctrl+3` | 动态口令 | `{TOTP}` | 不带 |
+| `Ctrl+4` | 网址 | `{URL}` | 不带 |
+
+**键位照抄 KeePassXC 2.8.0 的 Auto-Type 选择窗**（`src/autotype/AutoTypeSelectDialog.cpp`
+`:326-350` 的 `setShortcut`），主人 2026-11-04 指定对齐。**顺序不许按"顺手程度"重排**：
+这套键位是肌肉记忆，差一位就会让人按 `Ctrl+1` 以为只打用户名、实际把密码一起打进只有
+用户名的那一栏（1.5.40 开发时第一版就写成 `Ctrl+1 = 用户名+密码`，靠读参考实现拦住）。
+
+KeePassXC 还有两个键**刻意不做**：`Ctrl+5` = 虚拟键盘（需要它自己的安全桌面键盘，
+本应用没有）；`Ctrl+Shift+1..4` = 复制用户名/密码/TOTP/网址到剪贴板（本应用"复制"是
+快速搜索小窗的职责，同一浮层混两套语义会让"选中之后到底打进去了还是进剪贴板了"
+变成新的困惑）。
+
+1.5.39 原方案是修饰键组合（`Shift`/`Ctrl`/`Alt`/`Ctrl+Shift` + `Enter`），**真机验收
+证明 `Alt+Enter` 按不出来**：Alt 会被 Windows / 输入法先吃掉一层（单独按下就进菜单
+模式或响铃），事件到不了 WebView。把「网址」押在唯一不可用的键上，是这套方案最贵的
+一笔学费——所以键位映射现在抽成 `autotype.ts::actionForKey` 纯函数并单测，组件里
+**一个修饰键判断都没有**（守门断言组件源码不许出现 `event.ctrlKey/altKey/shiftKey`）。
 
 单字段一律不带回车（目标输入框可能已有内容，回车会把半填的表单提前提交）。
 字段为空时明说「这一条没有填用户名。」/「这一条没有填网址。」/「这一条没有动态口令。」，
@@ -4766,6 +4782,12 @@ canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：�
 - core `autotype_candidates`：候选行纯函数的三条（只收登录条目 / 五字段原样透传且
   wire 键集合恰好五个 / 空串按未填写处理）。这是"浮层不会拿到笔记与附件 id"的唯一
   保证——它同时让 `auto_type_fill` 的"非登录条目"早退路径变成不可达。
+- 前端 `autotype.test.ts`（1.5.40 新增）：`actionForKey` 键位映射九条——**逐位对齐
+  KeePassXC 的顺序**（`Ctrl+1` 仅用户名…`Ctrl+4` 网址）、`Enter` 只给完整序列、
+  `Ctrl+5` 与旧修饰键位返回 `null`、无 Ctrl 的数字**绝不**触发注入（在搜索框里打
+  数字不能把密码打进别人窗口）、`Shift` 不参与判定、`Alt` 一律拒绝。
+  这条测试是 1.5.39 的欠账：当时映射是组件里一段嵌套三元，没有单测，于是
+  "`Alt+Enter` 真机按不出来"在验收前谁都不知道——代码看着完全正确。
 - 前端 `autotype-guard.test.ts`：四语言键集合一致且值非按钮词（按钮词从字典派生，
   照 D-192）；明文不过前端（**否定性断言**：浮层源码里不得出现 `api.items.list(`
   与 `api.items.get(`——期望值为零，只能这样写；早先那条"循环检查 invoke 实参"的
@@ -4773,15 +4795,17 @@ canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：�
   code → 字典键，五个动作的"没填"三码 + 焦点丢失 + 被系统拦下共八条都在表内，映射
   不到落 `autotype.failed` 兜底，禁后端枚举现拼）；Ctrl+Shift 判定必须先于单修饰键
   分支（顺序断言）；Android 分支无 `<button>`；守门扫描面非空（防空跑）。
-- **命令层两条"早退"绊线也在 `autotype-guard.test.ts`（⑥ 节），刻意不放进 Rust
+- **命令层三条源码形状绊线也在 `autotype-guard.test.ts`（⑥ 节），刻意不放进 Rust
   单测**：`src-tauri` 的 `#[cfg(test)]` **不进任何门禁**（总门的 Rust 全量只跑
-  `-p passwordms-core`），写在那里等于白写；`commands/` 也没有测试台。这两条本质是
+  `-p passwordms-core`），写在那里等于白写；`commands/` 也没有测试台。这三条本质是
   **源码形状**问题，前端门顺手就能看住：① `autotype_candidates` 函数体内必须有
   `session_unlocked()`（否则锁着库也能列条目）；② `get_item(` / `list_items(` 到
   `wipe_plaintext()` 之间不得出现 `?`——`?` 是最隐蔽的早退形态，`return` 一眼能看出，
   `?` 藏在赋值语句末尾，跳过擦除就把整条明文（密码/备注/TOTP 密钥/附件文件名）留在
   堆上。**起点从"取明文那句的分号之后"算**：`get_item(...)?` 那个 `?` 是取明文动作
   本身，失败时手上还没有明文，判据把它算进去会误报（实测误报过一次）。
+  ③ `auto_type_fill` 的失败分支必须 `reveal(&app)`，且必须在注入（`spawn_blocking`）
+  **之后**——见 §6.71.7。
 - `ipc-contract.test.ts`：`auto_type_fill` / `autotype_candidates` /
   `prefs_set_autotype_hotkey` 双侧锚点，死数字 **88 / 88 / 88 / 去重名 84**（注释登记）。
   **注意它只校验命令名不校验参数键**——wire `{item_id, action}` 的正确性由 Rust 形参名
@@ -4812,5 +4836,27 @@ canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：�
 对齐前端 normalizeTotpInput；抽不到原样返回、不静默吞空串），详情页与自动输入同时受益。
 一处修复胜过在命令层再抄一份解析。**登记为 D-195**，走查补一条：导入带 otpauth URI 的
 条目后，「仅动态口令」与详情页 TOTP 两处都要真的出码。
+
+#### 6.71.7 失败必须让人看见（1.5.40，真机验收 7.9 揪出）
+
+1.5.39 的失败路径是**静默**的：注入命令在注入前已经把浮层 `hide()` 掉（不藏的话
+前台就是浮层自己，`SetForegroundWindow` 切不回目标窗口），而前端的失败文案是写进
+**浮层底部那行 `note`** 的——用户看到的只是一个消失了的窗口，什么提示都没有。
+真机症状（主人 2026-11-04）：在管理员权限的 PowerShell / 任务管理器里按热键选条目，
+「按了没反应，也没提示」。错误其实产生了（`ERR_AUTOTYPE_BLOCKED`：UIPI 静默丢弃
+低完整性进程的模拟按键），只是**没人看得见**。
+
+修法：命令失败时调 `autotype::reveal(app)` 把浮层重新显示出来，前端那行文案这才有
+观众。两个细节不许省：
+
+- **`reveal` 不是 `show`**：`show` 会 emit `AUTOTYPE_PICK_EVENT`，前端收到就清空
+  搜索词、把选中项归零——而失败之后用户多半想**换个动作重试同一条**，把选择清掉
+  等于逼他重搜一遍。`reveal` 只 `show + set_focus`，界面状态原样保留。
+- **必须由 Rust 调，不能让前端自己 `show()`**：前端调要额外开窗口 show 权限，
+  而且它此时不知道命令已经结束了；Rust 在 `result` 上分叉是唯一知道"失败了"的一方。
+
+成功路径不改：字已经打进目标窗口了，那就是最好的回执，不需要浮层再露一次脸。
+失败同时记一行日志（只记错误码，不记任何字段值）——否则下次再"没提示"，连是不是
+报错都无从判断。
 
 

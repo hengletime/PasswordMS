@@ -22,6 +22,79 @@ export function isAutotypeWindow(search: string): boolean {
 }
 
 /**
+ * 键位判据用到的字段（结构型，不绑 `KeyboardEvent`：单测里直接传字面量，
+ * 不需要在测试环境里造 DOM 事件）。
+ */
+export interface KeyLike {
+  key: string;
+  ctrlKey: boolean;
+  shiftKey: boolean;
+  altKey: boolean;
+}
+
+/**
+ * 键位 → 动作。**这是浮层唯一的键位映射，别在组件里另写一份**。
+ *
+ * 键位**照抄 KeePassXC 2.8.0 的 Auto-Type 选择窗**（`src/autotype/
+ * AutoTypeSelectDialog.cpp:326-350` 的 `setShortcut`），主人 2026-11-04 指定参考它：
+ *
+ * | 键 | 动作 | 打什么 |
+ * |---|---|---|
+ * | `Enter` | `default` | 用户名 + Tab + 密码 + 回车（默认序列） |
+ * | `Ctrl+1` | `username` | 仅用户名（KeePassXC：Type `{USERNAME}`） |
+ * | `Ctrl+2` | `password` | 仅密码（Type `{PASSWORD}`） |
+ * | `Ctrl+3` | `totp` | 仅动态口令（Type `{TOTP}`） |
+ * | `Ctrl+4` | `url` | 仅网址（Type `{URL}`） |
+ *
+ * **顺序必须与 KeePassXC 完全一致，不许按"我们觉得顺"重排**：这套键位是肌肉
+ * 记忆。差一位就会让人按 `Ctrl+1` 以为只打用户名、实际把密码一起打进只有用户名
+ * 的那一栏（1.5.40 开发时我自己第一版就这么错过，靠读参考实现才拦住）。
+ *
+ * KeePassXC 还有两个键我们**刻意不做**：
+ * - `Ctrl+5` = 虚拟键盘（仅 Windows/macOS，需要它自己的安全桌面键盘，我们没有）；
+ * - `Ctrl+Shift+1..4` = 复制用户名/密码/TOTP/网址到剪贴板——本应用"复制"是
+ *   快速搜索小窗（主热键）的职责，同一个浮层里混两套语义会让"选中之后到底
+ *   打进去了还是进剪贴板了"变成新的困惑。
+ *
+ * 为什么不用 1.5.39 那套修饰键组合：`Alt+Enter` 在真机上按不出来——Alt 会被
+ * Windows / 输入法先吃掉一层（单独按下就进菜单模式或响铃），事件到不了 WebView。
+ * 当初把「网址」押在 `Alt+Enter` 上，等于把最常用的功能之一压在唯一不可用的键上。
+ *
+ * `Shift` 不参与判定（`Shift+Enter` 与 `Enter` 同义、`Ctrl+Shift+2` 仍是仅密码）：
+ * 左手小指压在 Shift 上很常见，判成"无效"会让按键时灵时不灵。`Alt` 参与判定的
+ * 结果是**拒绝**，避免和窗口菜单抢键时误触发。
+ *
+ * 返回 `null` = 这个键不是动作键，调用方什么都不该做。
+ */
+export function actionForKey(e: KeyLike): AutotypeAction | null {
+  if (e.altKey) {
+    return null;
+  }
+  if (e.key === 'Enter') {
+    // Ctrl+Enter 不是动作（它是 1.5.39 的旧键位）：按下时直接拒绝，
+    // 免得用户以为自己在用旧快捷键而实际走了别的路径。
+    return e.ctrlKey ? null : 'default';
+  }
+  if (!e.ctrlKey) {
+    return null;
+  }
+  switch (e.key) {
+    case '1':
+      return 'username';
+    case '2':
+      return 'password';
+    case '3':
+      return 'totp';
+    case '4':
+      return 'url';
+    default:
+      // '5' 及以后留空：Ctrl+5 在 KeePassXC 是虚拟键盘，本应用没有该能力，
+      // 硬绑一个"看起来能用"的动作比不绑更坏。
+      return null;
+  }
+}
+
+/**
  * 自动输入动作（1.5.39）。与 Rust `auto_type_fill` 的 wire 取值逐字一致。
  *
  * - `default`  用户名 + 密码（完整登录序列）

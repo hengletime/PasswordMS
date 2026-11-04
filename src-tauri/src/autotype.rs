@@ -77,6 +77,24 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
+/// 注入失败后把浮层**重新显示**出来（1.5.40）。
+///
+/// 为什么不能直接复用 [`show`]：`show` 会 emit [`AUTOTYPE_PICK_EVENT`]，前端收到就
+/// 清空搜索词、把选中项归零——而失败之后用户多半想**换个动作重试同一条**，把选择
+/// 清掉等于逼他重搜一遍。这里只把窗口放回前台，界面状态原样保留。
+///
+/// 为什么必须由 Rust 做：注入前浮层已被 [`hide`]（不藏的话前台就是浮层自己，
+/// `SetForegroundWindow` 切不回目标窗口），前端的失败文案于是写在一个**已隐藏的
+/// 窗口**里。1.5.39 真机验收的症状正是这个：在管理员权限程序里按热键选条目，
+/// 「按了没反应，也没提示」——错误其实产生了（`ERR_AUTOTYPE_BLOCKED`），只是没人
+/// 看得见。
+pub fn reveal(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(LABEL) {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 /// 热键语义：可见则收起，不可见则唤出（与 quick 小窗同款开关键）。
 pub fn toggle(app: &AppHandle) {
     let visible = app

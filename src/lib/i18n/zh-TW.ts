@@ -673,7 +673,7 @@ export const zhTW = {
     no_url: '這一條沒有填網址。',
     no_totp: '這一條沒有動態密碼。',
     done: '已自動輸入。',
-    foot_hint: 'Enter 使用者名稱+密碼 · Shift 僅使用者名稱 · Ctrl 僅密碼 · Alt 網址 · Ctrl+Shift 動態密碼 · Esc 取消',
+    foot_hint: 'Enter 使用者名稱+密碼 · Ctrl+1 僅使用者名稱 · Ctrl+2 僅密碼 · Ctrl+3 動態密碼 · Ctrl+4 網址 · Esc 取消',
   },
   err: {
     hotkey_need_modifier: '熱鍵至少需要一個 Ctrl、Alt 或 Win 鍵（只按 Shift 會與正常輸入衝突）。',

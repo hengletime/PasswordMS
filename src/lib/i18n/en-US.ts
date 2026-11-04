@@ -746,7 +746,7 @@ export const enUS: Messages = {
     no_url: 'This entry has no URL.',
     no_totp: 'This entry has no one-time code.',
     done: 'Typed automatically.',
-    foot_hint: 'Enter username+password · Shift username only · Ctrl password only · Alt URL · Ctrl+Shift one-time code · Esc cancel',
+    foot_hint: 'Enter username+password · Ctrl+1 username only · Ctrl+2 password only · Ctrl+3 one-time code · Ctrl+4 URL · Esc cancel',
   },
   err: {
     hotkey_need_modifier: 'A hotkey needs Ctrl, Alt, or Win (Shift alone conflicts with normal typing).',
