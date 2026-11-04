@@ -383,6 +383,21 @@ mod tests {
         }
         // default 模板尾部是回车。
         assert_eq!(parse(TEMPLATE_DEFAULT).unwrap().last(), Some(&Token::Enter));
+        // 【S7 配套护栏】除 `totp` 之外的模板**不得**出现 `{TOTP}`：外壳层在
+        // `action != "totp"` 时会把 TOTP 密钥当场丢掉（少一份存活到注入线程的秘密
+        // 副本）。如果哪天有人把 `{TOTP}` 加进 default，丢密钥的逻辑会把它打成空串
+        // ——用户看不到任何错误，只是验证码那一格空着。
+        for template in [
+            TEMPLATE_DEFAULT,
+            TEMPLATE_USERNAME,
+            TEMPLATE_PASSWORD,
+            TEMPLATE_URL,
+        ] {
+            assert!(
+                !template.contains("TOTP"),
+                "只有 TEMPLATE_TOTP 可以要 {{TOTP}}，实际：{template:?}"
+            );
+        }
     }
 
     #[test]

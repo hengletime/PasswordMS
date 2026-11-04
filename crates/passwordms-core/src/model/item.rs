@@ -174,6 +174,18 @@ impl Item {
     pub fn title(&self) -> &str {
         self.kind.title()
     }
+
+    /// 擦除条目**全部**用户明文：`kind` 内的字段 + 内嵌附件的原始文件名。
+    ///
+    /// 为什么要有这一层：`ItemKind::wipe_plaintext` 只擦 `kind`，而附件文件名
+    /// （`attachments[].filename`，A-04 同级私密）挂在父条目上——只调前者会让
+    /// 文件名以明文留在堆上。命令层拿到条目副本后应整条走这里，而不是只擦 kind。
+    pub fn wipe_plaintext(&mut self) {
+        self.kind.wipe_plaintext();
+        for meta in &mut self.attachments {
+            meta.wipe_plaintext();
+        }
+    }
 }
 
 // ===== 明文擦除（A-04）：`Drop` 只释放不覆写，需显式 `zeroize`。=====

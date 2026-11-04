@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attachment_name;
+pub mod autotype_candidates;
 pub mod autotype_seq;
 pub mod biometric;
 pub mod clipboard_policy;
