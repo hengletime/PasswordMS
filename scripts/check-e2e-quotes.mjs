@@ -234,6 +234,7 @@ function loadDictionary() {
       else dict.droppedEmpty += 1;
     }
   }
+  dict.sha = dh.digest('hex').slice(0, 8);
   return dict;
 }
 
@@ -698,7 +699,7 @@ function main() {
   console.log('=== E2E 引文校验（只报警，不判负）===');
   console.log(`走查单：${CHECKLIST_PATH}  [${sha} · ${lineCount} 行]`);
   console.log(
-    `字典  ：${LOCALE_PATHS.map((p) => `${p.split('/').pop()} ${dict.files[p]} 条`).join(' · ')}`,
+    `字典  ：${LOCALE_PATHS.map((p) => `${p.split('/').pop()} ${dict.files[p]} 条`).join(' · ')}  [${dict.sha}]`,
   );
   console.log(line);
   console.log(
