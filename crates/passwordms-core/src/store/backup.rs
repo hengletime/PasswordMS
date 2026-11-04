@@ -711,7 +711,12 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// 已经落盘。若掉电发生在 rename 之后、数据块回写之前，重启后会得到一份「名字对、内容
 /// 是空的」的备份——比没有备份更糟（用户以为有）。备份是灾难恢复的唯一依靠，这个
 /// 顺序不能省。
-fn copy_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
+///
+/// D-189：`pub(crate)` 是给 `Repository::export_vault` 用的。用户导出到 U 盘/网盘时，
+/// 默认文件名恒为 `passwordms-export.vault`（**每次覆盖同一个文件**），裸 `fs::copy`
+/// 会先把旧的那份截断再灌新数据：中途拔盘 / 空间不足 / 进程被杀，**旧的外部副本就没了**，
+/// 而新的一份也不完整。导出恰恰是"换机、卸载前"的那一步，毁在这里等于把退路一起毁掉。
+pub(crate) fn copy_atomic(src: &Path, dest: &Path) -> std::io::Result<()> {
     let tmp = dest.with_extension(format!(
         "{}.tmp",
         dest.extension()
@@ -2010,6 +2015,9 @@ fn tighten_permissions(path: &Path) {
 // ── 配额（C-45）──────────────────────────────────────────────────────────
 
 /// 由库体积算备份总配额（字节）：`min(体积 × 12, 1 GB)`。
+///
+/// 注意这里只做纯算术：真正的**基数**由 [`quota_for`] 决定（取「库体积」与「盘上最大
+/// 一份备份」的大者，见那里的 D-190 说明）。
 pub fn quota_bytes(vault_size: u64) -> u64 {
     vault_size
         .saturating_mul(QUOTA_MULTIPLIER)
@@ -2017,8 +2025,31 @@ pub fn quota_bytes(vault_size: u64) -> u64 {
 }
 
 /// 当前库对应的备份配额（库不存在时为 0）。
+///
+/// ## 基数为什么是「库体积」与「盘上最大一份备份」的**大者**（D-190）
+///
+/// 旧口径只拿当前库体积算，于是有一个能自我锁死的状态：**库变小了**（用户删了大量
+/// 条目、或从一份很旧的备份恢复回来），配额跟着降到 `12 × 新库体积`，而盘上还躺着
+/// 几份按旧体积生成的备份——配额瞬间低于既有占用，`make_room` 裁到只剩保底三样
+/// 仍然不够，此后**每一份新备份都被拒**。真机现场：库 12 KB、4 份备份共 519 KB
+/// (`全 4 份（519484）`)、配额算出 147 KB，红字一直挂着，用户的话是「好像备份不了了」。
+///
+/// 那是**我们自己算出来的门**，却把用户唯一的安全退路关在门外。所以基数取大者：
+/// 库缩水不再连带砍配额，"备份还在，只是库小了"不再让备份停摆。
+///
+/// 约束并没有消失：
+/// * 槽位轮转本身就把数量压在 11 份上下；
+/// * 基数取大者后 `usage ≤ 份数 × 最大一份 < 12 × 基数 = 配额`，**除非**用户钉住的
+///   份数多到超出名额（钉住不受槽位限制）、或库大到撞上 [`QUOTA_MAX_BYTES`] 的
+///   1 GB 封顶——这两条路上配额仍然真的会挡住并报 [`BackupErrorKind::QuotaExceeded`]。
 pub fn quota_for(vault_path: &Path) -> u64 {
-    quota_bytes(fs::metadata(vault_path).map(|m| m.len()).unwrap_or(0))
+    let vault_size = fs::metadata(vault_path).map(|m| m.len()).unwrap_or(0);
+    let biggest_backup = inventory(vault_path)
+        .iter()
+        .map(|f| f.size_bytes)
+        .max()
+        .unwrap_or(0);
+    quota_bytes(vault_size.max(biggest_backup))
 }
 
 /// 在**创建新快照之前**腾地方。
@@ -2042,13 +2073,24 @@ pub fn quota_for(vault_path: &Path) -> u64 {
 ///
 /// * `last.bak`（"刚才改错了"的唯一退路，且只有 1 份）；
 /// * 最新 1 份日备份（"回到今天开始时"）；
-/// * 最新 1 份 `pre-restore`（恢复错了要能再恢复一次）。
+/// * 最新 1 份 `pre-restore`（恢复错了要能再恢复一次）；
+/// * **用户钉住的任何一份**（D-188：这是用户明确表态过的，优先级高于"今天多一份快照"）。
 ///
 /// `incoming_bytes` 传**净增量**（源体积减去将被覆盖的同名文件体积），稳态口径，
 /// 不计写 `.tmp` 期间的瞬时峰值。
 fn make_room(vault_path: &Path, incoming_bytes: u64) -> Result<Vec<PathBuf>, BackupErrorKind> {
     let quota = quota_for(vault_path);
     let files = inventory(vault_path);
+    // D-188：钉住的**不进候选集**，与 [`prune`] 同一口径。
+    //
+    // 旧版这里只滤了「最新一份」「`last.bak`」「最新一份 pre-restore」，把 `.pinned`
+    // 完全忘了 —— 于是出现过这样一条路：用户钉住某份，配额一紧它照样被删，
+    // 而界面上的「已钉住」还在。**钉住的承诺是"别自动扔"，不是"轮转时别扔、配额时可扔"。**
+    // 两种删除对用户是同一件事：他点过"留下"，文件没了。
+    //
+    // 代价是可能要报 [`BackupErrorKind::QuotaExceeded`]（宁可这次不备份，也不动钉住的）：
+    // 用户明确表态过的东西，优先级高于"今天多一份快照"。
+    let pins = pinned_tokens(vault_path);
     let used: u64 = files.iter().map(|f| f.size_bytes).sum();
     if used.saturating_add(incoming_bytes) <= quota {
         return Ok(Vec::new());
@@ -2058,7 +2100,7 @@ fn make_room(vault_path: &Path, incoming_bytes: u64) -> Result<Vec<PathBuf>, Bac
     let mut candidates: Vec<&BackupFile> = Vec::new();
     let daily: Vec<&BackupFile> = files
         .iter()
-        .filter(|f| f.class == BackupClass::Daily)
+        .filter(|f| f.class == BackupClass::Daily && !is_pinned(&pins, f))
         .collect();
     if daily.len() > 1 {
         candidates.extend(daily[..daily.len() - 1].iter().copied());
@@ -2066,12 +2108,14 @@ fn make_room(vault_path: &Path, incoming_bytes: u64) -> Result<Vec<PathBuf>, Bac
     candidates.extend(
         files
             .iter()
-            .filter(|f| f.class == BackupClass::Event && f.event != Some(EventTag::PreRestore)),
+            .filter(|f| f.class == BackupClass::Event && f.event != Some(EventTag::PreRestore))
+            .filter(|f| !is_pinned(&pins, f)),
     );
     let pre_restore: Vec<&BackupFile> = files
         .iter()
-        .filter(|f| f.event == Some(EventTag::PreRestore))
+        .filter(|f| f.event == Some(EventTag::PreRestore) && !is_pinned(&pins, f))
         .collect();
+
     if pre_restore.len() > 1 {
         candidates.extend(pre_restore[..pre_restore.len() - 1].iter().copied());
     }
@@ -3403,21 +3447,62 @@ mod tests {
         inventory(vault).into_iter().map(|f| f.path).collect()
     }
 
+    /// 直接往备份目录里堆 `n` 份日备份（**不钉**），返回它们的文件名。
+    fn stuff_days(vault: &Path, size: usize, n: usize) -> Vec<String> {
+        let dir = backup_dir(vault);
+        fs::create_dir_all(&dir).unwrap();
+        (0..n)
+            .map(|i| {
+                // 2026-01-01 起逐日递增；与用例里 `snapshot_*` 用的 2026-11 相隔很远，
+                // 不会误撞同一个日备份槽位。
+                let name = format!("bak.{:08}", 20_260_101 + i as i32);
+                fs::write(backup_dir(vault).join(&name), vec![9u8; size]).unwrap();
+                name
+            })
+            .collect()
+    }
+
+    /// 直接往备份目录里堆 `n` 份日备份并**全部钉住**。
+    ///
+    /// D-190（配额基数取「库或最大备份」的大者）之后，这是**唯一还能让配额真的挡住**
+    /// 的常见状态：槽位轮转把普通备份压在 11 份上下，`usage ≤ 份数 × 最大一份 <
+    /// 12 × 基数 = 配额`；而钉住不受槽位名额限制——用户钉几十份完全可能。
+    fn stuff_pinned_days(vault: &Path, size: usize, n: usize) -> Vec<String> {
+        let names = stuff_days(vault, size, n);
+        for name in &names {
+            set_pinned(vault, name, true).expect("钉住应成功");
+        }
+        names
+    }
+
+    /// D-190 的核心回归锚点：**库变小了，旧的大备份不许把配额压死**。
+    ///
+    /// 旧口径 `12 × 当前库体积` 会在这里塌到 24576，而盘上是 8 份 × 4096 = 32768，
+    /// 于是此后每一份新备份都被拒（真机现场：库 12 KB、备份 519 KB、配额 147 KB，
+    /// 红字一直挂着，用户说「好像备份不了了」）。
     #[test]
-    fn 配额不足时由旧到新裁剪且保住上次改动前与恢复前() {
-        let (_root, vault) = temp_vault("quota-trim");
+    fn 库变小后旧的大备份不再把配额压死() {
+        let (_root, vault) = temp_vault("quota-shrink");
         let base = 1_793_491_200_000;
         fill_slots(&vault, 4096, base);
         assert_eq!(usage(&vault).1, 8, "5 日备份 + last.bak + 2 份恢复前");
 
-        // 库缩小到一半 → 配额跟着降到 2048×12 = 24576，旧备份已经装不下。
+        // 库缩到一半：配额基数取大者 → 仍是 4096（最大一份备份），不是 2048。
         fs::write(&vault, vec![5u8; 2048]).unwrap();
-        assert_eq!(quota_for(&vault), 2048 * QUOTA_MULTIPLIER);
+        assert_eq!(
+            quota_for(&vault),
+            4096 * QUOTA_MULTIPLIER,
+            "配额基数必须是「库体积」与「盘上最大一份备份」的大者"
+        );
 
         let out = snapshot_event(&vault, EventTag::PreCompact, base + 5 * 90_000_000 + 100);
         assert!(out.error.is_none(), "{:?}", out.error);
-        assert_eq!(out.created.len(), 1, "装得下就该建");
-        assert!(!out.pruned.is_empty(), "应裁掉最旧的几份");
+        assert_eq!(out.created.len(), 1, "装得下就该建，库变小不该让备份停摆");
+        assert!(
+            out.pruned.is_empty(),
+            "还没到配额就不该删旧备份，退路只该变厚不该变薄：{:?}",
+            out.pruned
+        );
 
         let files = inventory(&vault);
         assert!(
@@ -3432,34 +3517,24 @@ mod tests {
             PRE_RESTORE_KEEP,
             "恢复前快照是保底项，配额不该动它"
         );
-        assert!(
-            files
-                .iter()
-                .filter(|f| f.class == BackupClass::Daily)
-                .count()
-                >= 1,
-            "至少留 1 份日备份"
-        );
-        // 裁剪后总占用必须真的回到配额内，否则配额形同虚设。
-        assert!(
-            usage(&vault).0 <= quota_for(&vault),
-            "裁剪后仍超配额：{} > {}",
-            usage(&vault).0,
-            quota_for(&vault)
-        );
     }
 
+    /// 真到装不下时，**一份都不许删**（试算与执行两趟走）。
     #[test]
     fn 裁到保底仍装不下时一份都不删() {
         let (_root, vault) = temp_vault("quota-block");
         let base = 1_793_491_200_000;
-        fill_slots(&vault, 4096, base);
+        // 先正常建一轮（留下 last.bak 与当天日备份），再把钉住的日备份堆到超配额。
+        snapshot_before_write(&vault, base);
+        stuff_pinned_days(&vault, 4096, 12);
         let before = usage(&vault);
-        assert_eq!(before.1, 8);
+        assert!(
+            before.0 > quota_for(&vault),
+            "铺场必须真的超配额：{} vs {}",
+            before.0,
+            quota_for(&vault)
+        );
 
-        // 库缩到 1 KiB → 配额 12288。保底三样（last.bak + 1 日备份 + 1 恢复前）
-        // 已经是 3×4096 = 12288，再加新快照必然装不下。
-        fs::write(&vault, vec![6u8; 1024]).unwrap();
         let out = snapshot_event(&vault, EventTag::PreCompact, base + 5 * 90_000_000 + 200);
 
         // 推翻 v1.5.29 早期决定：配额**不是**"正常跳过"，是"备份停了"，走失败通道。
@@ -3487,11 +3562,11 @@ mod tests {
     fn 两张同时被配额挡住时报更近的那条退路() {
         let (_root, vault) = temp_vault("quota-both");
         let base = 1_793_491_200_000;
-        fill_slots(&vault, 4096, base);
-        // 缩到 512 → 配额 6144，而保底三份就有 12288，两张都装不下。
-        // （缩到 1024 不够：那时 last.bak 净增为 0，裁到保底恰好装得下，它会成功。）
-        fs::write(&vault, vec![6u8; 512]).unwrap();
+        snapshot_before_write(&vault, base);
+        stuff_pinned_days(&vault, 4096, 12);
+        assert!(usage(&vault).0 > quota_for(&vault), "铺场必须真的超配额");
 
+        // 五天后再写：当天日备份与 `last.bak` 两张都要腾地方，两张都腾不出来。
         let out = snapshot_before_write(&vault, base + 5 * 90_000_000 + 700);
         assert_eq!(out.error_kind, Some(BackupErrorKind::QuotaExceeded));
         assert_eq!(
@@ -3526,11 +3601,12 @@ mod tests {
     fn 配额被挡时记失败但不推进上次备份时间() {
         let (_root, vault) = temp_vault("quota-state");
         let base = 1_793_491_200_000;
-        fill_slots(&vault, 4096, base);
+        snapshot_before_write(&vault, base);
         let before = state(&vault).last_ms;
         assert_ne!(before, 0, "铺场后应有上次备份时间");
 
-        fs::write(&vault, vec![6u8; 1024]).unwrap();
+        // 堆到超配额（见 `stuff_pinned_days` 的说明：D-190 之后只有这条路还能挡住）。
+        stuff_pinned_days(&vault, 4096, 12);
         let out = snapshot_event(&vault, EventTag::PreCompact, base + 5 * 90_000_000 + 300);
         assert_eq!(out.error_kind, Some(BackupErrorKind::QuotaExceeded));
         assert_eq!(
@@ -3545,8 +3621,89 @@ mod tests {
         );
     }
 
-    // ── 旧密钥隔离（R-5）────────────────────────────────────────────────
+    /// D-188：钉住 = 「别自动扔」，**配额的腾挪也算自动扔**。
+    ///
+    /// 旧版 `make_room` 的候选集只滤了「最新一份 / `last.bak` / 最新 `pre-restore`」，
+    /// 没读 `.pinned` —— 于是"配额紧了就把钉住的删掉"这条路一直通着，而界面上
+    /// 「已钉住」还亮着。用户在两种场景里看到的是同一件事：他点过"留下"，文件没了。
+    #[test]
+    fn 钉住的备份不会被配额腾挪删掉() {
+        let (_root, vault) = temp_vault("quota-pinned");
+        let base = 1_793_491_200_000;
+        // 先正常建一轮（last.bak + 当天日备份 + `.state`），再堆 12 份日备份把配额顶穿。
+        snapshot_before_write(&vault, base);
+        let days = stuff_days(&vault, 4096, 12);
 
+        // 钉住最旧的那份日备份 —— 配额腾挪的第一个牺牲品。
+        set_pinned(&vault, &days[0], true).expect("钉住应成功");
+        let pinned_path = backup_dir(&vault).join(&days[0]);
+        assert!(pinned_path.is_file());
+
+        let out = snapshot_event(&vault, EventTag::PreCompact, base + 5 * 90_000_000 + 400);
+
+        assert!(out.error.is_none(), "{:?}", out.error);
+        assert_eq!(out.created.len(), 1, "腾得开就该继续建，钉住不该让备份停摆");
+        assert!(
+            !out.pruned.is_empty(),
+            "这次确实腾了地方（否则本用例测不到东西）"
+        );
+        assert!(
+            !out.pruned.contains(&pinned_path),
+            "钉住的份被列进了删除计划：{:?}",
+            out.pruned
+        );
+        assert!(
+            pinned_path.is_file(),
+            "钉住的备份被配额删了：{}",
+            pinned_path.display()
+        );
+        assert!(
+            usage(&vault).0 <= quota_for(&vault),
+            "裁剪后仍超配额：{} > {}",
+            usage(&vault).0,
+            quota_for(&vault)
+        );
+    }
+
+    /// 反过来的一半：钉住把候选集挡窄之后，宁可**这次不备份**也不动钉住的。
+    ///
+    /// 这条用例必须用「去掉钉住检查就会**成功**」的场景来造，否则它测不到东西：
+    /// 若随便钉几份就让候选集整个空掉，那条路无论认不认钉住都是 `QuotaExceeded`，
+    /// 用例照样绿——**绿得没有信息**（变异探针验过）。
+    #[test]
+    fn 钉住之后裁不动就报配额失败而不是删它() {
+        let (_root, vault) = temp_vault("quota-pinned-block");
+        let base = 1_793_491_200_000;
+        // 正常建一轮留下 last.bak；再堆 12 份**全部钉住**的日备份 → 超配额，
+        // 而候选集里只剩"最新那一份日备份"，按保底规则它也不能被删 → 腾不出来。
+        snapshot_before_write(&vault, base);
+        let pinned = stuff_pinned_days(&vault, 4096, 12);
+        assert_eq!(pinned.len(), 12);
+
+        let before = usage(&vault);
+        assert!(
+            before.0 > quota_for(&vault),
+            "铺场必须真的超配额：{} vs {}",
+            before.0,
+            quota_for(&vault)
+        );
+        let out = snapshot_event(&vault, EventTag::PreCompact, base + 5 * 90_000_000 + 500);
+
+        assert_eq!(
+            out.error_kind,
+            Some(BackupErrorKind::QuotaExceeded),
+            "钉住的不许为了让路被删，只能报配额失败"
+        );
+        assert!(out.created.is_empty(), "装不下就不该建");
+        assert!(out.pruned.is_empty(), "钉住的一份都不许删");
+        assert_eq!(usage(&vault).1, before.1, "份数必须原样不动");
+        for name in &pinned {
+            let p = backup_dir(&vault).join(name);
+            assert!(p.is_file(), "钉住的被删了：{}", p.display());
+        }
+    }
+
+    // ── 旧密钥隔离（R-5）────────────────────────────────────────────────
     #[test]
     fn 换主密码后旧备份被隔离且当前代归零() {
         let (_root, vault) = temp_vault("isolate");
@@ -4141,13 +4298,16 @@ mod tests {
         let _ = fs::remove_dir_all(&root2);
         fs::create_dir_all(&root2).unwrap();
         let v2 = root2.join("passwordms.vault");
-        fill_slots(&v2, 4096, base);
-        fs::write(&v2, vec![6u8; 1024]).unwrap();
+        fs::write(&v2, vec![7u8; 1024]).unwrap();
+        snapshot_before_write(&v2, base);
+        // 堆到超配额（D-190 之后，配额只能在"钉住份数超出名额"或"大库撞 1 GB 封顶"
+        // 这两条路上真的挡住；这里用前者，见 `stuff_pinned_days`）。
+        stuff_pinned_days(&v2, 4096, 12);
         let blocked = snapshot_event(&v2, EventTag::PreRestore, base + 5 * 90_000_000 + 500);
         assert_eq!(
             blocked.error_kind,
             Some(BackupErrorKind::QuotaExceeded),
-            "铺场后缩库应触发配额"
+            "超配额时恢复前快照写不出来"
         );
         assert_eq!(
             restore_safety(&v2, &blocked),

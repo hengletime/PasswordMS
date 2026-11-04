@@ -3005,6 +3005,13 @@ impl Repository {
     // ===== 导出 =====
 
     /// 导出保险库副本（需重新验证主密码，见 O-03）。
+    ///
+    /// **D-189：走原子复制，不走裸 `fs::copy`。** 导出对话框的默认文件名恒为
+    /// `passwordms-export.vault`，绝大多数人就是点"保存"覆盖上一次那份；而
+    /// `fs::copy` 会先把目标截断再灌数据。中途拔盘 / 空间不足 / 进程被杀 =
+    /// 旧副本没了、新副本也不完整，而"导出"正是换机和卸载前的那一步——
+    /// 毁在这里等于把退路一起毁掉。`copy_atomic` 先写同目录 `.tmp`、
+    /// 校验长度、fsync，再 `rename` 覆盖：要么是新的一份，要么还是旧的那一份。
     pub fn export_vault(&self, dest_path: &Path, master_password: &str) -> CoreResult<()> {
         let header = self.container.header();
         // 【D-115】失败一律 `WrongMasterPassword`：本方法只在已解锁会话里可达，
@@ -3023,7 +3030,7 @@ impl Repository {
             &header.wrapped_vault_key,
         )
         .map_err(|_| CoreError::WrongMasterPassword)?;
-        std::fs::copy(self.container.path(), dest_path)?;
+        crate::store::backup::copy_atomic(self.container.path(), dest_path)?;
         Ok(())
     }
 
