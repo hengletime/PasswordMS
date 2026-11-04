@@ -463,7 +463,13 @@ export const enUS: Messages = {
     restore_point_never: 'No backup like this yet.',
     restore_point_last_ok: 'Last backup: {time}.',
     restore_point_error: 'The most recent backup was not saved ({reason}) at {time}.',
-    restore_point_reason_space: 'not enough space or quota',
+    restore_point_error_recovered:
+      'A backup was not saved ({reason}) at {time}; later backups are working again ({ok_time}).',
+    restore_point_error_dismiss: 'Got it',
+    restore_point_reason_no_space: 'the disk is full',
+    restore_point_reason_quota: 'the local backup allowance is full (the disk is not full)',
+    restore_point_quota_hint:
+      'Deleting a few older backups restores backups; you can also export one and keep it elsewhere.',
     restore_point_reason_permission: 'no permission to write',
     restore_point_reason_device: 'the storage device was disconnected',
     restore_point_reason_other: 'read or write error',

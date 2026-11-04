@@ -333,8 +333,12 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   不做平台分立：非 Windows 也要有这个命令名并返回 `None`，否则前端首启校正
     //   在移动端会变成 `command not found` 的异常分支（虽然它会被 try 吞掉，
     //   但"每天启动都失败一次"不该成为常态）。
-    expect(total).toBe(84);
-    expect(withAttr).toBe(84);
+    // D-186（2026-11-04，主人在设置页看到「最近一次备份没存成」永远不下去）：
+    //   +1（backup_clear_error），属性 84 → 85、命令名 80 → 81。
+    //   核心层 `clear_error` 一直存在却没有命令，粘性红字于是没有出口——用户只能看着
+    //   「上次备份 10:30」与「最近一次没存成 10:28」两行并存，得出"备份坏了"的结论。
+    expect(total).toBe(85);
+    expect(withAttr).toBe(85);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
@@ -343,8 +347,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(84);
-    expect(new Set(names).size).toBe(80);
+    expect(names.length).toBe(85);
+    expect(new Set(names).size).toBe(81);
   });
 });
 

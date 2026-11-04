@@ -486,7 +486,18 @@ export const zhCN = {
     restore_point_never: '还没有这样的备份。',
     restore_point_last_ok: '上次备份：{time}。',
     restore_point_error: '最近一次备份没存成（{reason}），时间 {time}。',
-    restore_point_reason_space: '磁盘空间或配额不足',
+    // D-186：之后又成功过 → 不再说"最近一次"，改成"有一次"并给出恢复时间。
+    // 粘性记录本身要保留（日备份被挡一周、last.bak 每天成功时，自动清会掩盖问题），
+    // 但不能让一句过时的话把"备份链当前是好的"说成"备份坏了"。
+    restore_point_error_recovered:
+      '有一次备份没存成（{reason}），时间 {time}；之后的备份已恢复正常（{ok_time}）。',
+    // 清的是记录，不是事实——所以是"知道了"，不是"忽略"或"已解决"。
+    restore_point_error_dismiss: '知道了',
+    // D-186：磁盘满与「本机备份额度满」必须分开说——用户要做的事完全不同。
+    // 合成一句「磁盘空间或配额不足」，用户去看磁盘发现几十 GB 空着，只会认为应用胡说。
+    restore_point_reason_no_space: '磁盘空间不足',
+    restore_point_reason_quota: '本机备份的额度满了（不是磁盘满了）',
+    restore_point_quota_hint: '删掉几份旧备份就会恢复；也可以先导出一份带走。',
     restore_point_reason_permission: '没有写入权限',
     restore_point_reason_device: '存储设备已断开',
     restore_point_reason_other: '读写出错',

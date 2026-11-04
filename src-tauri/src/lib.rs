@@ -246,6 +246,7 @@ pub fn run() {
             commands::vault_cmd::set_auto_lock,
             // backup（1.5.29 / B-03：自动回滚点——**不是**用户导出的"备份"，见 backup_cmd 文档）
             commands::backup_cmd::backup_status,
+            commands::backup_cmd::backup_clear_error,
             commands::backup_cmd::backup_clear_current,
             commands::backup_cmd::backup_clear_old_batch,
             commands::backup_cmd::backup_remove_point,

@@ -426,7 +426,12 @@ export const zhTW = {
     restore_point_never: '還沒有這樣的備份。',
     restore_point_last_ok: '上次備份：{time}。',
     restore_point_error: '最近一次備份沒有存成（{reason}），時間 {time}。',
-    restore_point_reason_space: '磁碟空間或配額不足',
+    restore_point_error_recovered:
+      '有一次備份沒有存成（{reason}），時間 {time}；之後的備份已恢復正常（{ok_time}）。',
+    restore_point_error_dismiss: '知道了',
+    restore_point_reason_no_space: '磁碟空間不足',
+    restore_point_reason_quota: '本機備份的額度滿了（不是磁碟滿了）',
+    restore_point_quota_hint: '刪掉幾份舊備份就會恢復；也可以先匯出一份帶走。',
     restore_point_reason_permission: '沒有寫入權限',
     restore_point_reason_device: '儲存裝置已中斷',
     restore_point_reason_other: '讀寫出錯',

@@ -123,6 +123,24 @@ pub fn backup_status(state: tauri::State<'_, AppState>) -> IpcResult<BackupStatu
     })
 }
 
+/// 清掉「最近一次备份没存成」这条粘性记录（用户点「知道了」）。
+///
+/// 核心层 [`backup::clear_error`] 早就存在，但**一直没有命令**——于是那条红字
+/// 一旦出现就再也下不去。2026-11-04 现场（主人）：10:28 因配额被挡、10:30 又成功，
+/// 界面同时显示「上次备份 10:30」和「最近一次备份没存成 10:28」，只能得出
+/// 「备份坏了」的结论。没有出口的警告等于永久误报。
+///
+/// 为什么不让"下一次成功"自动清：日备份被配额挡住、`last.bak` 每天成功的组合里，
+/// 自动清会让「几天前那条退路在悄悄变薄」这件事完全消失——两害相权，宁可保留红字
+/// 但给用户一个明确的「我知道了」。
+#[tauri::command(rename_all = "snake_case")]
+pub fn backup_clear_error(state: tauri::State<'_, AppState>) -> IpcResult<()> {
+    let session = state.lock_session().map_err(lock_err)?;
+    let repo = session.repo()?;
+    backup::clear_error(&repo.path());
+    Ok(())
+}
+
 /// 钉住 / 取消钉住**一份**回滚点。
 ///
 /// 只影响自动清理（[`backup::enforce_retention`]）与轮转（`prune`），**不影响手动删除**

@@ -435,7 +435,12 @@ export const th = {
     restore_point_never: 'ยังไม่มีข้อมูลสำรองแบบนี้',
     restore_point_last_ok: 'สำรองล่าสุด: {time}',
     restore_point_error: 'การสำรองครั้งล่าสุดไม่สำเร็จ ({reason}) เมื่อ {time}',
-    restore_point_reason_space: 'พื้นที่หรือโควตาไม่เพียงพอ',
+    restore_point_error_recovered:
+      'มีครั้งหนึ่งที่สำรองไม่สำเร็จ ({reason}) เมื่อ {time} หลังจากนั้นกลับมาสำรองได้ตามปกติ ({ok_time})',
+    restore_point_error_dismiss: 'เข้าใจแล้ว',
+    restore_point_reason_no_space: 'พื้นที่ดิสก์เต็ม',
+    restore_point_reason_quota: 'โควตาสำรองในเครื่องเต็ม (ดิสก์ไม่ได้เต็ม)',
+    restore_point_quota_hint: 'ลบสำรองเก่าบางส่วนแล้วจะกลับมาสำรองได้ หรือส่งออกหนึ่งชุดเก็บไว้ที่อื่น',
     restore_point_reason_permission: 'ไม่มีสิทธิ์เขียน',
     restore_point_reason_device: 'อุปกรณ์จัดเก็บถูกตัดการเชื่อมต่อ',
     restore_point_reason_other: 'เกิดข้อผิดพลาดในการอ่านหรือเขียน',

@@ -194,7 +194,10 @@
     const points = backupStatus?.points ?? [];
     return {
       count: points.length,
-      size: sumBytes(points),
+      // **必须过 `formatBytes`**：`restore_point_summary` 的 `{size}` 是给"人看的体积"，
+      // 不是字节数。D-186 之前这里直接塞了 `sumBytes(points)`，界面上印出
+      // 「共 4 份（519484）」——同一张卡片的表头却写着「507.3 KB」，自相矛盾。
+      size: formatBytes(sumBytes(points)),
       old: points.filter((p) => p.needs_old_password).length,
     };
   });
@@ -481,11 +484,20 @@
     }
   }
 
-  /** 把后端枚举翻成一句话。认不出的按"读写出错"——不显示原始 token。 */  function backupReason(kind: string | null): string {
+  /**
+   * 把后端枚举翻成一句话。认不出的按"读写出错"——不显示原始 token。
+   *
+   * **磁盘满与本机备份的额度满必须分开说**（D-186）：两者用户要做的事完全不同——
+   * 前者去清磁盘，后者只要删几份旧备份（磁盘可能还剩几十 GB）。合成一句
+   * 「磁盘空间或配额不足」，用户去看磁盘发现空间充足，只会认为应用在胡说，
+   * 然后什么也不做，备份就一直停着。
+   */
+  function backupReason(kind: string | null): string {
     switch (kind) {
       case 'no_space':
+        return ui.t('settings.restore_point_reason_no_space');
       case 'quota_exceeded':
-        return ui.t('settings.restore_point_reason_space');
+        return ui.t('settings.restore_point_reason_quota');
       case 'readonly':
       case 'permission':
         return ui.t('settings.restore_point_reason_permission');
@@ -494,6 +506,20 @@
       default:
         return ui.t('settings.restore_point_reason_other');
     }
+  }
+  /**
+   * 用户点「知道了」：清掉那条失败记录。
+   *
+   * 清的是**记录**，不是事实——那次没存成的退路不会因为点了按钮回来。
+   * 所以文案是「知道了」而不是「忽略」或「已解决」：它只承认"我看过了"。
+   */
+  async function dismissBackupError(): Promise<void> {
+    try {
+      await api.backups.clearError();
+    } catch {
+      // 清不掉也不阻断：界面照旧显示那条记录，用户能看到它没消失。
+    }
+    await refreshBackupStatus();
   }
   /** 压缩自身进行中（重写 200MB 级容器可能几秒，必须有忙碌态）。 */
   let compacting = $state(false);
@@ -1436,16 +1462,36 @@
           })}
         </p>
       {/if}
-      <!-- 两行制：只有 `last_error_ms != 0` 才有第二行。这条不是装饰——
-           日备份被配额挡了一周、而 last.bak 每天成功时，只有一行"上次成功"会让界面
-           天天显示"今天"，用户以为备份链一直是好的。 -->
+      <!-- D-186（2026-11-04，主人截图：「最近一次备份没存成…」红字一直挂着）：
+           失败记录是**粘性**的——下一次成功不会自动清（刻意的：日备份被配额挡一周、
+           `last.bak` 每天成功时，自动清会让"退路在悄悄变薄"这件事彻底消失）。
+           但「粘性 + 没有出口」= 永久误报：界面同时显示「上次备份 10:30」和
+           「最近一次没存成 10:28」，用户只能得出"备份坏了"。所以两件事：
+             ① 如果之后已经成功过，话要改成"曾经有一次没存成"，不再暗示现在坏了；
+             ② 给一个「知道了」把记录清掉（清的是记录，不是事实）。 -->
       {#if backupStatus.last_error_ms > 0}
-        <p class="pms-hint is-danger">
-          {ui.t('settings.restore_point_error', {
-            reason: backupReason(backupStatus.last_error_kind),
-            time: formatDateTime(backupStatus.last_error_ms, ui.locale),
-          })}
+        <p class="pms-hint is-danger set-backup-error">
+          {#if backupStatus.last_ms > backupStatus.last_error_ms}
+            {ui.t('settings.restore_point_error_recovered', {
+              reason: backupReason(backupStatus.last_error_kind),
+              time: formatDateTime(backupStatus.last_error_ms, ui.locale),
+              ok_time: formatDateTime(backupStatus.last_ms, ui.locale),
+            })}
+          {:else}
+            {ui.t('settings.restore_point_error', {
+              reason: backupReason(backupStatus.last_error_kind),
+              time: formatDateTime(backupStatus.last_error_ms, ui.locale),
+            })}
+          {/if}
+          <button class="pms-btn is-ghost is-sm" type="button" onclick={dismissBackupError}>
+            {ui.t('settings.restore_point_error_dismiss')}
+          </button>
         </p>
+        <!-- 额度满**不是**磁盘满：用户去看磁盘会发现几十 GB 空着，然后什么也不做。
+             所以要跟着一句"该做什么"，而且只在这种原因下出现，别的原因不瞎猜。 -->
+        {#if backupStatus.last_error_kind === 'quota_exceeded'}
+          <p class="pms-meta">{ui.t('settings.restore_point_quota_hint')}</p>
+        {/if}
       {/if}
 
       <!-- D-178 / D-179：盘上有几份能退的，就列几行；**一行一份、行内两个按钮**。
@@ -2118,6 +2164,14 @@
     gap: 0.75rem;
     flex-wrap: wrap;
     margin-top: 0.5rem;
+  }
+  /* D-186：失败那行后面要挂一个「知道了」。用 flex + wrap 让窄屏上按钮掉到第二行，
+     不去挤文字；`:has()` 在这里用不上（父元素没有可判的结构特征）。 */
+  .set-backup-error {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
   }
   .set-summary {
     font-size: 0.88rem;

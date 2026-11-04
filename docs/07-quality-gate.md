@@ -238,6 +238,54 @@ D-174 的第一版让 `remove_folder_direct` 在删壳的同一次操作里把�
   -newer <裸 exe>` 排除 `target/` 与 `src-tauri/gen/` 后**输出为空**——没有源文件或文档
   晚于 exe，说明树在构建前就冻结了。
 
+### 1.2o 最近一次完整实跑（2026-11-04 11:04 起 · v1.5.36 · D-186）
+
+> 口径：`env -u NODE_OPTIONS bash scripts/gate-all.sh`（日志 `target/_gate_1536b.log`），
+> 整轮墙钟 **约 11 分**（Rust 全量 619s 是大头），总判定 **PASS（通过 9 门 / 跳过 1 门 / 失败 0）**。
+> **锚：HEAD `27ff03c`，工作区 15 项未提交改动；首尾快照一致 → 数字对应本工作区。**
+
+| # | 门 | 本次实测（v1.5.36） | 判定 |
+|---|----|------|------|
+| 0 | 版本同步门 | 四处一致 `1.5.36` + `cargo metadata --locked --offline` 通过 | ✅ 2s |
+| 1 | 前端单测 | **89 文件 840/840 通过**（1.5.35 是 88/835：+1 文件 +5 例 = `d186-backup-error-stale.test.ts`） | ✅ 6s |
+| 2 | 前端类型检查 | 0 errors / 0 warnings | ✅ 7s |
+| 3 | CSS 层叠契约 | 0 FAIL / 6 WARN（既有浅色按钮对比度，未达 AA 4.5） | ✅ 2s |
+| 4 | fmt | 0 处差异 | ✅ 1s |
+| 5 | Rust 全量 | **414 通过 / 0 失败 / 1 ignored / 47 个测试二进制** | ✅ 619s |
+| 6 | clippy | **0 warning** | ✅ 2s |
+| 7 | 体积门-桌面 | 只核验 1.5.36 两件：NSIS 2.02 MB / MSI 2.85 MB | ✅ 3s |
+| 8 | 体积门-Android | 跑门时尚未出包 → 跳过；出包后 `check-size.sh all` 复跑通过 | ⏭ |
+
+**这一轮第一次跑是 FAIL 的，两处都记下来**：
+
+1. **clippy rc=101**：`backup::clear_error(repo.path())` 传了 `PathBuf` 给 `&Path` 形参
+   （`src-tauri/src/commands/backup_cmd.rs:140`）。核心层单测不覆盖命令层，所以
+   `cargo test -p passwordms-core` 是绿的，直到 clippy 才炸——**新加 IPC 命令后先单跑 clippy**。
+2. **锚自检 FAIL：门跑期间目录被改**——是我在门跑的同时往 `docs/06-ui-design.md` 追加了
+   §6.68。这不是误报，是锚在干本职工作（它只比对文件集合与 HEAD）。**规矩重申：开跑前冻结文件树，
+   跑的时候一个字都别写**，否则整轮读数不可引用，只能白跑一遍。
+
+**出包（2026-11-04 实测，非推算）**：
+
+| 产物 | 字节 | sha256 前缀 |
+|---|---|---|
+| `PasswordMS_1.5.36_x64-setup.exe`（NSIS） | 2,115,632 | `a50cc35fb854` |
+| `PasswordMS_1.5.36_x64_en-US.msi` | 2,985,984 | `cec0168a19f0` |
+| `PasswordMS-1.5.36-portable-x64.zip`（4 条目） | 2,492,229 | `46025665528f` |
+| `PasswordMS-1.5.36-arm64.apk`（V3 签名 + zipalign） | 7,893,419 | `9ae470c5af78` |
+| 裸 exe | 5,127,168 | `27f4ef6a5638` |
+
+- 体积门 `check-size.sh all`：NSIS 2.02 MB / MSI 2.85 MB / APK 7.53 MB，全部达标。
+- zip 内 exe ↔ 裸 exe：`27f4ef6a5638…` 两边逐字节相同（注意 zip 条目带 `PasswordMS-Portable/` 前缀）。
+- 双端同源：`assets/index-DExT4ix_.js` 在 `dist/index.html`、exe 资源表、APK 内
+  `libpasswordms_lib.so` 三处一致。
+- NSIS 端到端静默安装：`/S /D=<tmp>` 退出码 0，落地 exe `FileVersion = 1.5.36`、
+  `ProductVersion = 1.5.36`、5,127,168 B。
+- 产物新鲜度：`find src src-tauri crates scripts docs package.json Cargo.toml -newer <裸 exe>`
+  排除 `src-tauri/gen/` 后**输出为空**。
+- **APK 字节数与 1.5.34 完全相同（7,893,419）**，与 1.5.35 也相同——纯属压缩后尺寸巧合，
+  判据看包内 `.so` 的资源名（本轮是新的 `index-DExT4ix_.js`）。
+
 ### 1.2n 最近一次完整实跑（2026-11-04 08:58 起 · v1.5.35 · D-184/D-185）
 
 > 口径：`bash scripts/gate-all.sh`，整轮墙钟 **11 分 00 秒**（08:58:35 起 / 09:09:35 止，

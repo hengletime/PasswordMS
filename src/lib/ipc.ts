@@ -149,6 +149,15 @@ export const vault = {
 export const backups = {
   status: (): Promise<BackupStatusDto> => invoke<BackupStatusDto>('backup_status'),
   /**
+   * 清掉「最近一次备份没存成」那条记录（用户点「知道了」）。
+   *
+   * 失败记录**只能**由用户显式确认清除：下一次成功备份不会自动清，因为
+   * "第一帧失败、后面又成功"会让警告凭空消失，而那次失败里丢掉的退路不会回来。
+   * 反过来说，没有这个出口时那条红字一旦出现就永远下不去——用户看着
+   * 「上次备份 10:30」与「最近一次没存成 10:28」两行并存，只能得出"备份坏了"。
+   */
+  clearError: (): Promise<void> => invoke<void>('backup_clear_error'),
+  /**
    * 删除**当前代**回滚点。`old-key/` 一份不动。
    *
    * 返回 `{ deleted, remaining }`：删除是逐份尝试的，任何一份删不掉都会留下，
