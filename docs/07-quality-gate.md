@@ -238,6 +238,53 @@ D-174 的第一版让 `remove_folder_direct` 在删壳的同一次操作里把�
   -newer <裸 exe>` 排除 `target/` 与 `src-tauri/gen/` 后**输出为空**——没有源文件或文档
   晚于 exe，说明树在构建前就冻结了。
 
+### 1.2n 最近一次完整实跑（2026-11-04 08:58 起 · v1.5.35 · D-184/D-185）
+
+> 口径：`bash scripts/gate-all.sh`，整轮墙钟 **11 分 00 秒**（08:58:35 起 / 09:09:35 止，
+> 任务计时实测）。总判定 **PASS（通过 9 门 / 跳过 1 门 / 失败 0）**；
+> 跳过的 1 门是 Android 体积门（门禁跑在出包之前，出包后**单独补跑**，见下）。
+> 锚：HEAD `72b24f4` + 本轮未提交改动（版本号 + 代码 + 文档）。
+
+| # | 门 | 本次实测（v1.5.35） | 判定 |
+|---|----|------|------|
+| 0 | **版本同步门** | 四处一致 `1.5.35`（含 Cargo.lock） | ✅ 2s |
+| 1 | 前端单测 | **88 文件 835/835**（825 → 835：+6 折叠守门 D-184、+4 失效原因守门 D-185） | ✅ 6s |
+| 2 | 前端类型检查 | 0 / 0 | ✅ 7s |
+| 3 | CSS 层叠契约 | 0 FAIL / 6 WARN（既有项） | ✅ 1s |
+| 4 | fmt | 0 处差异 | ✅ 1s |
+| 5 | Rust 全量 | **414 通过 / 0 失败 / 1 ignored / 47 二进制**（本轮未动 Rust；628s，机器负载偏高） | ✅ 628s |
+| 6 | clippy | 0 error / 0 warning | ✅ 10s |
+| 7 | 体积门-桌面（出包后补跑） | NSIS 2.02 MB / MSI 2.85 MB ≤ 10 MB | ✅ |
+| 8 | 体积门-Android（出包后补跑） | APK 7.52 MB ≤ 12 MB | ✅ |
+
+**出包（同日 09:09–09:18 实测）**：桌面 **4 分 02 秒**、Android **4 分 37 秒**。
+
+| 产物 | 字节 | sha256 前缀 |
+|---|---|---|
+| `PasswordMS_1.5.35_x64-setup.exe`（NSIS） | 2,114,474 | `4aac48bf34b17c9d` |
+| `PasswordMS_1.5.35_x64_en-US.msi` | 2,985,984 | `94f9a866512b1b5b` |
+| `PasswordMS-1.5.35-portable-x64.zip`（4 条目） | 2,492,056 | `4f225a1361ba13b5` |
+| `PasswordMS-1.5.35-arm64.apk`（V3 签名） | 7,889,323 | `e413e94a5d744e33` |
+| 裸 exe | 5,126,144 | `feb77287d019d8ba` |
+
+- **双端同源**：`index-CTbP-1t2.js`（+ 第二个入口 chunk `index-D_ghNIYi.js`）在 dist、
+  裸 exe、APK 的 `.so` 三处一致。
+- **APK 体积与 1.5.33 恰好同为 7,889,323 B 属巧合**（1.5.34 是 7,893,419）。
+  已用资源名核对：包内 `.so` 里是**本轮新构建的** `index-CTbP-1t2.js`，不是旧包。
+  记在这里免得下次有人拿"字节数没变"当"没重编"的证据。
+- **portable zip**：条目在 `PasswordMS-Portable/` 前缀下（取 exe 哈希要带前缀）。
+- **NSIS 静默安装**：`/S` + `/D=<dir>` → exit=0，`passwordms.exe` 5,126,144 B、
+  `FileVersion=1.5.35`。
+- **产物新鲜度**：`find src src-tauri/src crates scripts package.json Cargo.toml -newer <APK>` 为空。
+- **D-185 变异自证（实测）**：把 `bioStaleStateKey` 的映射表改回
+  `settings.bio_state_stale_${reason}` 现拼 → 「每个 wire 原因在四种语言里都有键」与
+  「兜底」两条 **红**，报错正文为
+  `master_password_changed → settings.bio_state_stale_master_password_changed 缺 zh-CN`
+  （正是主人截图那串）；还原后 4 条全绿。
+- **D-184 用例**：`d184-backup-collapsed.test.ts` 6 条结构守门（默认收起、摘要含旧密码份数、
+  表格在折叠块内、`backupHints` 在折叠块外、独立类名）；首次编写时故意没做变异实验
+  ——它不是修 bug 而是加折叠，结构事实由断言直接钉住。
+
 ### 1.2m 最近一次完整实跑（2026-11-03 22:37 起 · v1.5.34 · D-182/D-183）
 
 > 口径：`bash scripts/gate-all.sh`，整轮墙钟 **9 分 15 秒**（22:37:25 起 / 22:46:40 止，

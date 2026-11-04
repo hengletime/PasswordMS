@@ -380,6 +380,7 @@ export const th = {
     bio_state_stale_vault_key: 'คีย์ตู้เซฟถูกเปลี่ยน (เข้าร่วมด้วยการจับคู่) การปลดล็อกเร็วจึงใช้ไม่ได้แล้ว',
     bio_state_stale_enrollment: 'การตั้งค่า Windows Hello เปลี่ยนไป การปลดล็อกเร็วจึงใช้ไม่ได้แล้ว',
     bio_state_stale_enrollment_android: 'ข้อมูลไบโอเมตริกของอุปกรณ์มีการเปลี่ยนแปลง การปลดล็อกเร็วจึงใช้ไม่ได้แล้ว',
+    bio_state_stale_other: 'การปลดล็อกเร็วใช้ไม่ได้แล้ว กรุณาเปิดใช้อีกครั้ง',
     bio_state_stale_tampered: 'การตั้งค่าปลดล็อกเร็วถูกแก้ไขหรือเสียหาย จึงใช้ไม่ได้แล้ว',
     bio_state_stale_platform_key_reset:
       'คีย์ความปลอดภัยของระบบถูกรีเซ็ต (มักเกิดหลังติดตั้งระบบใหม่หรืออัปเดตระบบ) การปลดล็อกเร็วจึงใช้ไม่ได้แล้ว',
@@ -465,6 +466,10 @@ export const th = {
     restore_point_kind_daily: 'สำเนาเมื่อเริ่มต้นวันนั้น',
     restore_point_kind_last_write: 'สำเนาก่อนการแก้ไขครั้งล่าสุด',
     restore_point_kind_other: 'สำเนาข้อมูลสำรอง',
+    restore_point_summary: 'ทั้งหมด {count} ชุด ({size})',
+    restore_point_summary_old: 'ทั้งหมด {count} ชุด ({size}) · {old} ชุดต้องใช้รหัสผ่านตอนที่บันทึกไว้',
+    restore_point_expand: 'ดูข้อมูลสำรองทั้งหมด',
+    restore_point_collapse: 'ย่อ',
     restore_point_table_hint: 'หนึ่งแถวคือหนึ่งสำเนาสำรอง “ย้อนกลับ” จะเปลี่ยนคลังเป็นสำเนานั้น “ลบ” จะลบเฉพาะสำเนานั้น',
     restore_point_group_current: 'เปิดได้ด้วยรหัสผ่านปัจจุบัน ({count} สำเนา, {size})',
     restore_point_group_older: 'เปิดด้วยรหัสผ่านตอนบันทึก ({count} สำเนา, {size})',

@@ -420,6 +420,7 @@ export const zhCN = {
     bio_state_stale_vault_key: '保险库密钥已更换（配对加入），快速解锁已失效。',
     bio_state_stale_enrollment: 'Windows Hello 配置已变更，快速解锁已失效。',
     bio_state_stale_enrollment_android: '设备的生物识别记录已变更，快速解锁已失效。',
+    bio_state_stale_other: '快速解锁已失效，请重新开启。',
     bio_state_stale_tampered: '快速解锁配置被篡改或损坏，已失效。',
     bio_state_stale_platform_key_reset: '系统的安全密钥已被重置（常见于重装系统或系统更新），快速解锁已失效。',
     // D-114：`not_present` 曾被写成「本机没有可用的硬件」，但 Windows Hello 从未配置过时
@@ -529,6 +530,10 @@ export const zhCN = {
     restore_point_kind_daily: '当天开始时的备份',
     restore_point_kind_last_write: '上一次改动之前的备份',
     restore_point_kind_other: '一份备份',
+    restore_point_summary: '共 {count} 份（{size}）',
+    restore_point_summary_old: '共 {count} 份（{size}）· 其中 {old} 份要用保存时的密码',
+    restore_point_expand: '查看全部备份',
+    restore_point_collapse: '收起',
     restore_point_table_hint: '每一行是一份备份。点「退回去」把库换成那一份的样子；点「删除」只删那一份。',
     restore_point_group_current: '用现在的密码能打开（{count} 份，共 {size}）',
     restore_point_group_older: '要用保存时的密码打开（{count} 份，共 {size}）',

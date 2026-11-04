@@ -40,6 +40,7 @@
     bioCanOpenSettings,
     bioPlatformOf,
     bioShouldOfferSettings,
+    bioStaleStateKey,
     bioTextSuffix,
     localizeBioMessageKey,
   } from '../lib/bio-platform';
@@ -177,6 +178,26 @@
   // 分开存、分开显示，且文案必须各自带边界——同名不同物是本项目踩过的坑。
   let backupStatus = $state<BackupStatusDto | null>(null);
   let backupLoadFailed = $state(false);
+  /**
+   * 备份清单是否展开（D-184）。
+   *
+   * 默认**收起**。主人 2026-11-04 原话：「备份这个卡片在设置里占了很大地盘，
+   * 能不能平常不用时是缩在上面，只要有几行提示……用户需要时可点击按钮向下展开。」
+   * 摊开时这张卡约 1000px（两张表 6 行 + 两个组头 + 自动清理块），收起后约 180px。
+   *
+   * **故意不做持久化**：每次都收起来，"平常不用就缩着"才成立；真要看的人
+   * 点一下是一秒的事，而记住"上次展开"会让这张卡隔三差五又占满一屏。
+   */
+  let backupExpanded = $state(false);
+  /** 收起态的摘要：几份、多大、其中几份要用保存时的密码（D-184）。 */
+  const backupSummary = $derived.by(() => {
+    const points = backupStatus?.points ?? [];
+    return {
+      count: points.length,
+      size: sumBytes(points),
+      old: points.filter((p) => p.needs_old_password).length,
+    };
+  });
   /**
    * 两张表：现在的密码能打开 / 改密码之前。
    *
@@ -864,16 +885,15 @@
   }
 
   /**
-   * 失效原因对应的文案键（§23）。
+   * 失效原因对应的文案键（§23 / D-185）。
    *
-   * 只有 `enrollment_changed`（生物特征变更）与平台绑定：Windows 说「Windows Hello 配置
-   * 已变更」，Android 说「指纹 / 人脸记录已变更」。其余三条（改主密码 / 换 VK / 被篡改）
-   * 是数据层原因，两个平台说法一致，不带后缀。
+   * 实现在 `lib/bio-platform.ts`（`bioStaleStateKey`）：那里是**显式映射表**。
+   * 原实现是拿原因值去拼键名后缀，而后端 wire 值叫 `master_password_changed`、
+   * 字典键叫 `bio_state_stale_password` —— 五个原因里两个永远拼出空键，界面直接
+   * 显示裸键名（2026-11-04 主人真机截图）。这里只做转发，判据只留一份。
    */
   function bioStaleKey(reason: string): string {
-    return reason === 'enrollment_changed'
-      ? `settings.bio_state_stale_enrollment${bioSuffix}`
-      : `settings.bio_state_stale_${reason}`;
+    return bioStaleStateKey(reason, bioSuffix);
   }
 
   /**
@@ -1438,126 +1458,152 @@
       {#if backupStatus.points.length === 0}
         <p class="pms-meta">{ui.t('settings.restore_point_never')}</p>
       {:else}
-        <p class="pms-hint">{ui.t('settings.restore_point_table_hint')}</p>
-        {#each pointTables as table (table.group)}
-          {#if table.rows.length > 0}
-            <div class="set-group-head">
-              <h4>
-                {ui.t(table.titleKey, {
-                  count: table.rows.length,
-                  size: formatBytes(sumBytes(table.rows)),
-                })}
-              </h4>
-              <button
-                class="pms-btn is-ghost is-sm set-danger"
-                type="button"
-                onclick={() =>
-                  (backupClearTarget = {
-                    kind: 'group',
-                    group: table.group,
-                    count: table.rows.length,
-                    bytes: sumBytes(table.rows),
-                  })}
-              >
-                {ui.t('settings.restore_point_clear_group')}
-              </button>
-            </div>
-            {#if table.noteKey !== ''}
-              <p class="pms-hint">{ui.t(table.noteKey)}</p>
-            {/if}
-            <table class="set-table">
-              <thead>
-                <tr>
-                  <th scope="col">{ui.t('settings.restore_point_col_time')}</th>
-                  <th scope="col">{ui.t('settings.restore_point_col_what')}</th>
-                  <th scope="col" class="col-actions">
-                    {ui.t('settings.restore_point_col_actions')}
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {#each table.rows as point (point.token)}
-                  <tr>
-                    <td class="col-time">{formatDateTime(point.at_ms, ui.locale)}</td>
-                    <td>{ui.t(restorePointKindKey(point.kind))}</td>
-                    <td class="col-actions">
-                      <button
-                        class="pms-btn is-ghost is-sm"
-                        type="button"
-                        onclick={() => {
-                          restorePointTarget = point;
-                          restorePointPwd = '';
-                          restorePointOpen = true;
-                        }}
-                      >
-                        {ui.t('settings.restore_point_retreat')}
-                      </button>
-                      <!-- 钉住做成图标按钮：它是"别自动删"的一个附加开关，不是主操作。
-                           给文字按钮会和「退回去 / 删除」抢注意力，而主人要的是
-                           「一行一条，有删除按钮/恢复按钮就好了」。 -->
-                      <button
-                        class="pms-icon-btn set-pin"
-                        class:is-pinned={point.pinned}
-                        type="button"
-                        aria-pressed={point.pinned}
-                        aria-label={ui.t(
-                          point.pinned
-                            ? 'settings.restore_point_unpin'
-                            : 'settings.restore_point_pin',
-                        )}
-                        title={ui.t(
-                          point.pinned
-                            ? 'settings.restore_point_unpin'
-                            : 'settings.restore_point_pin',
-                        )}
-                        disabled={pinBusy === point.token}
-                        onclick={() => void togglePin(point)}
-                      >
-                        <Icon name="pin" size={15} />
-                      </button>
-                      <button
-                        class="pms-btn is-ghost is-sm set-danger"
-                        type="button"
-                        onclick={() =>
-                          (backupClearTarget = {
-                            kind: 'point',
-                            token: point.token,
-                            atMs: point.at_ms,
-                            bytes: point.bytes,
-                          })}
-                      >
-                        {ui.t('settings.restore_point_remove')}
-                      </button>
-                    </td>
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-          {/if}
-        {/each}
-      {/if}
-
-      <!-- 自动清理：一个开关 + 一句人话。
-           不做档位下拉（主人：「所有的功能越简单越好」），天数与份数由后端给。
-           关掉之后一份都不删——这是"我自己管"的唯一表达方式。 -->
-      <div class="set-retention">
-        <div class="set-row is-check">
-          <span class="set-label">{ui.t('settings.restore_point_retention_on')}</span>
-          <label class="pms-check">
-            <input
-              type="checkbox"
-              checked={backupStatus.retention_on}
-              disabled={retentionBusy}
-              onchange={(e) => void toggleRetention(e)}
-            />
-          </label>
+        <!-- D-184：收起态一行说清"几份、多大、几份要用保存时的密码"。
+             摘要里**必须带"其中几份要用保存时的密码"**——这是用户唯一无法从
+             "共 N 份"里推出来的信息，而它决定了退回去时要输哪把密码。
+             数量为 0 时不写这一截：给一个永远为 0 的读数只是噪音。 -->
+        <div class="set-backup-summary">
+          <span class="set-summary">
+            {backupSummary.old > 0
+              ? ui.t('settings.restore_point_summary_old', backupSummary)
+              : ui.t('settings.restore_point_summary', backupSummary)}
+          </span>
+          <button
+            class="pms-btn is-ghost is-sm"
+            type="button"
+            aria-expanded={backupExpanded}
+            onclick={() => (backupExpanded = !backupExpanded)}
+          >
+            {ui.t(
+              backupExpanded
+                ? 'settings.restore_point_collapse'
+                : 'settings.restore_point_expand',
+            )}
+          </button>
         </div>
-        <p class="pms-hint">
-          {ui.t('settings.restore_point_retention_note', {
-            days: backupStatus.retention_days,
-          })}
-        </p>
-      </div>
+
+        {#if backupExpanded}
+          <p class="pms-hint">{ui.t('settings.restore_point_table_hint')}</p>
+          {#each pointTables as table (table.group)}
+            {#if table.rows.length > 0}
+              <div class="set-group-head">
+                <h4>
+                  {ui.t(table.titleKey, {
+                    count: table.rows.length,
+                    size: formatBytes(sumBytes(table.rows)),
+                  })}
+                </h4>
+                <button
+                  class="pms-btn is-ghost is-sm set-danger"
+                  type="button"
+                  onclick={() =>
+                    (backupClearTarget = {
+                      kind: 'group',
+                      group: table.group,
+                      count: table.rows.length,
+                      bytes: sumBytes(table.rows),
+                    })}
+                >
+                  {ui.t('settings.restore_point_clear_group')}
+                </button>
+              </div>
+              {#if table.noteKey !== ''}
+                <p class="pms-hint">{ui.t(table.noteKey)}</p>
+              {/if}
+              <table class="set-table">
+                <thead>
+                  <tr>
+                    <th scope="col">{ui.t('settings.restore_point_col_time')}</th>
+                    <th scope="col">{ui.t('settings.restore_point_col_what')}</th>
+                    <th scope="col" class="col-actions">
+                      {ui.t('settings.restore_point_col_actions')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each table.rows as point (point.token)}
+                    <tr>
+                      <td class="col-time">{formatDateTime(point.at_ms, ui.locale)}</td>
+                      <td>{ui.t(restorePointKindKey(point.kind))}</td>
+                      <td class="col-actions">
+                        <button
+                          class="pms-btn is-ghost is-sm"
+                          type="button"
+                          onclick={() => {
+                            restorePointTarget = point;
+                            restorePointPwd = '';
+                            restorePointOpen = true;
+                          }}
+                        >
+                          {ui.t('settings.restore_point_retreat')}
+                        </button>
+                        <!-- 钉住做成图标按钮：它是"别自动删"的一个附加开关，不是主操作。
+                             给文字按钮会和「退回去 / 删除」抢注意力，而主人要的是
+                             「一行一条，有删除按钮/恢复按钮就好了」。 -->
+                        <button
+                          class="pms-icon-btn set-pin"
+                          class:is-pinned={point.pinned}
+                          type="button"
+                          aria-pressed={point.pinned}
+                          aria-label={ui.t(
+                            point.pinned
+                              ? 'settings.restore_point_unpin'
+                              : 'settings.restore_point_pin',
+                          )}
+                          title={ui.t(
+                            point.pinned
+                              ? 'settings.restore_point_unpin'
+                              : 'settings.restore_point_pin',
+                          )}
+                          disabled={pinBusy === point.token}
+                          onclick={() => void togglePin(point)}
+                        >
+                          <Icon name="pin" size={15} />
+                        </button>
+                        <button
+                          class="pms-btn is-ghost is-sm set-danger"
+                          type="button"
+                          onclick={() =>
+                            (backupClearTarget = {
+                              kind: 'point',
+                              token: point.token,
+                              atMs: point.at_ms,
+                              bytes: point.bytes,
+                            })}
+                        >
+                          {ui.t('settings.restore_point_remove')}
+                        </button>
+                      </td>
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            {/if}
+          {/each}
+
+          <!-- 自动清理：一个开关 + 一句人话。
+               不做档位下拉（主人：「所有的功能越简单越好」），天数与份数由后端给。
+               关掉之后一份都不删——这是"我自己管"的唯一表达方式。 -->
+          <div class="set-retention">
+            <div class="set-row is-check">
+              <span class="set-label">{ui.t('settings.restore_point_retention_on')}</span>
+              <label class="pms-check">
+                <input
+                  type="checkbox"
+                  checked={backupStatus.retention_on}
+                  disabled={retentionBusy}
+                  onchange={(e) => void toggleRetention(e)}
+                />
+              </label>
+            </div>
+            <p class="pms-hint">
+              {ui.t('settings.restore_point_retention_note', {
+                days: backupStatus.retention_days,
+              })}
+            </p>
+          </div>
+        {/if}
+      {/if}
 
       <!-- 盘上有、界面删不了（名字认不出，或目录读不出）。不说出来就是"假装没有"；
            也不能给它的名字编一个 `to_string_lossy` 的版本——那个假名字永远匹配不上，
@@ -1568,7 +1614,10 @@
            D-175：该显示哪几条由 `backupHints()` 决定，不在这里写 `{#if}`。
            原来两格靠**兄弟关系**保证"最坏情形也说出口"，而兄弟关系是布局不是逻辑——
            被顺手并进上面 `old_files > 0` 那一块，改完测试全绿、这一格静默消失，
-           而全部批次读不出时 `old_files` 恰好是 0，正好把该开口的一刻吞掉。 -->
+           而全部批次读不出时 `old_files` 恰好是 0，正好把该开口的一刻吞掉。
+
+           D-184：这一段**刻意留在折叠之外**——它是异常态（有文件删不掉），
+           收起来就等于"假装没有"，而收起的动机只是省地方。 -->
       {#each backupHints(backupStatus) as hint (hint.id)}
         <p class="pms-hint is-danger">
           {#if hint.count === null}
@@ -2057,6 +2106,23 @@
   }
   .set-name {
     font-size: 0.88rem;
+  }
+  /* D-184：收起态的摘要行（「共 N 份（X MB）· 其中 M 份要用保存时的密码」+ 展开按钮）。
+     单独一个类而不是复用 `.set-row`：`.set-row` 的三个变体（is-info / is-actions /
+     is-check）是窄屏守门测试在数的结构事实，这里多插一行会把那份读数搅乱，而这一行
+     本来也不需要 `.set-row` 的 160px 控件宽。`flex-wrap` 让窄屏自然换行，不必再加媒体查询。 */
+  .set-backup-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.5rem;
+  }
+  .set-summary {
+    font-size: 0.88rem;
+    color: var(--pms-muted);
+    font-variant-numeric: tabular-nums;
   }
   /* 「能退回去的备份」两张表（D-179：主人要「一行一条，有删除按钮/恢复按钮就好了」）。
      用表格而不是卡片列表：三列天然上下对齐，扫一眼就能比"哪份更近、哪份是哪一步"。

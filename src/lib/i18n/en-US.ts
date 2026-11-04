@@ -406,6 +406,7 @@ export const enUS: Messages = {
     bio_state_stale_vault_key: 'The vault key was replaced (joined by pairing), so quick unlock no longer works.',
     bio_state_stale_enrollment: 'Windows Hello settings changed, so quick unlock no longer works.',
     bio_state_stale_enrollment_android: 'The device’s biometric records changed, so quick unlock no longer works.',
+    bio_state_stale_other: 'Quick unlock no longer works. Turn it on again.',
     bio_state_stale_tampered: 'The quick-unlock configuration was tampered with or damaged and no longer works.',
     bio_state_stale_platform_key_reset:
       'The system security key was reset (usually after a system update or reinstall), so quick unlock no longer works.',
@@ -495,6 +496,10 @@ export const enUS: Messages = {
     restore_point_kind_daily: 'Saved at the start of that day',
     restore_point_kind_last_write: 'Saved just before your last change',
     restore_point_kind_other: 'A backup copy',
+    restore_point_summary: '{count} backups ({size})',
+    restore_point_summary_old: '{count} backups ({size}) · {old} need the password they were saved with',
+    restore_point_expand: 'Show all backups',
+    restore_point_collapse: 'Collapse',
     restore_point_table_hint: 'One row per backup. “Roll back” turns the vault into that copy; “Delete” removes just that one.',
     restore_point_group_current: 'Opens with your current password ({count}, {size})',
     restore_point_group_older: 'Opens with the password at save time ({count}, {size})',

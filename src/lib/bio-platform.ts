@@ -90,3 +90,43 @@ export function localizeBioMessageKey(key: string, platform: BioPlatform): strin
   if (platform !== 'android') return key;
   return PLATFORM_NOUN_KEYS.includes(key) ? `${key}_android` : key;
 }
+
+/**
+ * 「快速解锁已失效」那一行的文案键（§23 / D-185）。
+ *
+ * **必须显式映射，不许现拼键名**。后端的 wire 取值是
+ * `master_password_changed` / `vault_key_changed` / `enrollment_changed` /
+ * `platform_key_reset` / `tampered`（`src-tauri/src/commands/biometric_cmd.rs`
+ * 的 `reason_name`），而字典键历史上叫 `bio_state_stale_password` /
+ * `bio_state_stale_vault_key` —— 两个名字天然对不上。原实现用
+ * `settings.bio_state_stale_${reason}` 现拼，于是五个原因里有**两个**永远拼出
+ * 不存在的键，界面直接显示裸键名
+ * `settings.bio_state_stale_master_password_changed`（2026-11-04 主人真机截图）。
+ *
+ * 未收录的取值也不许回显键名：落到 `bio_state_stale_other` 那句人话上。
+ * 新增 `InvalidatedReason` 时，这里加一行就能被 `d185-bio-stale-keys.test.ts`
+ * 的守门发现（它直接解析上面的 Rust 源，把五个 wire 值挨个对字典）。
+ */
+export const BIO_STALE_KEY_BY_REASON: Readonly<Record<string, string>> = {
+  master_password_changed: 'settings.bio_state_stale_password',
+  vault_key_changed: 'settings.bio_state_stale_vault_key',
+  tampered: 'settings.bio_state_stale_tampered',
+  platform_key_reset: 'settings.bio_state_stale_platform_key_reset',
+};
+
+/** 兜底文案键：原因没收录时用它，**永远不显示键名**。 */
+export const BIO_STALE_UNKNOWN_KEY = 'settings.bio_state_stale_other';
+
+/**
+ * 取失效原因的文案键。
+ *
+ * `enrollment_changed` 单独处理：只有它按平台分叉（Windows 说「Windows Hello 配置
+ * 已变更」/ Android 说「生物识别记录已变更」），后缀只可能是 `''` 或 `_android`，
+ * 两个键都真实存在。
+ */
+export function bioStaleStateKey(reason: string, suffix: '' | '_android'): string {
+  if (reason === 'enrollment_changed') {
+    return `settings.bio_state_stale_enrollment${suffix}`;
+  }
+  return BIO_STALE_KEY_BY_REASON[reason] ?? BIO_STALE_UNKNOWN_KEY;
+}

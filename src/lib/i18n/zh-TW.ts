@@ -372,6 +372,7 @@ export const zhTW = {
     bio_state_stale_vault_key: '保險庫金鑰已更換（配對加入），快速解鎖已失效。',
     bio_state_stale_enrollment: 'Windows Hello 設定已變更，快速解鎖已失效。',
     bio_state_stale_enrollment_android: '裝置的生物辨識記錄已變更，快速解鎖已失效。',
+    bio_state_stale_other: '快速解鎖已失效，請重新開啟。',
     bio_state_stale_tampered: '快速解鎖設定遭竄改或損毀，已失效。',
     bio_state_stale_platform_key_reset: '系統的安全金鑰已被重設（常見於重裝系統或系統更新），快速解鎖已失效。',
     // D-114：`not_present` 不再替系統斷言「你沒有硬體」——Hello 從未設定時 WinRT 回報的
@@ -456,6 +457,10 @@ export const zhTW = {
     restore_point_kind_daily: '當天開始時的備份',
     restore_point_kind_last_write: '上一次改動之前的備份',
     restore_point_kind_other: '一份備份',
+    restore_point_summary: '共 {count} 份（{size}）',
+    restore_point_summary_old: '共 {count} 份（{size}）· 其中 {old} 份要用儲存時的密碼',
+    restore_point_expand: '查看全部備份',
+    restore_point_collapse: '收起',
     restore_point_table_hint: '每一列是一份備份。點「退回去」把庫換成那一份的樣子；點「刪除」只刪那一份。',
     restore_point_group_current: '用現在的密碼能打開（{count} 份，共 {size}）',
     restore_point_group_older: '要用儲存時的密碼開啟（{count} 份，共 {size}）',
