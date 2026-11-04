@@ -5,23 +5,30 @@
   // WebView，这里没有 vault / session store 可用，数据全部现取。`localStorage`
   // 同源共享，所以语言与主题直接继承，不需要宿主传参。
   //
-  // 与 QuickSearch 的**关键差别**在选定行为：回车不复制、不取明文——只把
-  // `item_id` 交给 `auto_type_fill`，用户名与密码由 Rust 侧自取并注入目标窗口。
-  // 明文不经过前端（`src/lib/autotype.ts` 的安全边界，守门见 autotype-guard.test.ts）。
+  // 与 QuickSearch 的**关键差别**在数据与选定行为：列表来自 `autotype_candidates`，
+  // 每项只有标题与用户名（没有密码 / 备注 / TOTP 密钥）；回车不复制、不取详情——
+  // 只把 `item_id` 与动作名交给 `auto_type_fill`，用户名与密码由 Rust 侧自取并
+  // 注入目标窗口。`auto_type_fill` 的入参与返回不含明文；浮层列表由
+  // `autotype_candidates` 提供，只含标题与用户名。守门见 autotype-guard.test.ts。
   import { onMount } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
 
   import { api } from '../lib/ipc';
   import { LOCALES, mapSystemLanguage, translate, type Locale } from '../lib/i18n';
-  import { moveIndex, rankItems } from '../lib/quick-search';
-  import { autotypeCodeOf, autotypeFailureKey, type AutotypeAction } from '../lib/autotype';
+  import { moveIndex, rankHits } from '../lib/quick-search';
+  import {
+    autotypeCodeOf,
+    autotypeFailureKey,
+    candidatesToHits,
+    type AutotypeAction,
+    type AutotypeCandidate,
+  } from '../lib/autotype';
   import { AUTOLOCK_LOCKED_EVENT } from '../lib/auto-lock-event';
   import { AUTOTYPE_PICK_EVENT } from '../lib/tray-events';
   // 主题 store 在模块加载时就会把 `data-theme` 应用到 <html>：引用即继承主窗口主题。
   // 它内部同步标题栏的那步在小窗上会失败（无边框 + 无 set-theme 权限），那边已 catch 吞掉。
   import '../lib/stores/theme.svelte';
-  import type { ItemDto } from '../types';
 
   const LOCALE_KEY = 'passwordms.locale';
   /** 注入成功后的驻留时间：足够看清回执，又不会让用户以为没生效而重按。 */
@@ -29,7 +36,8 @@
 
   let locale: Locale = 'zh-CN';
   let query = $state('');
-  let items = $state<ItemDto[]>([]);
+  /** 候选行只有三字段（`autotype_candidates`），浮层的 JS 堆里没有任何明文。 */
+  let candidates = $state<AutotypeCandidate[]>([]);
   let selected = $state(0);
   let loading = $state(true);
   let locked = $state(false);
@@ -41,7 +49,8 @@
 
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const hits = $derived(rankItems(items, query));
+  // 排序复用快速搜索的纯函数：候选没有 url / 频度，打分自然退化为标题 + 用户名。
+  const hits = $derived(rankHits(candidatesToHits(candidates), query));
 
   function t(key: string): string {
     return translate(locale, key);
@@ -81,11 +90,12 @@
       // 正常情况下根本走不到这里——热键在锁屏态不会唤出本窗口（Rust 侧把关）。
       locked = status.locked || !status.has_vault;
       if (locked) {
-        items = [];
+        candidates = [];
         return;
       }
-      // 全量条目：浮层不做分组/收藏过滤，排序复用快速搜索的纯函数（只收登录项）。
-      items = await api.items.list(undefined, undefined, undefined);
+      // 候选列表来自专用接口：只有标题与用户名，没有密码 / 备注 / TOTP 密钥。
+      // 不要改回全量条目列表——那个接口带 password，明文会躺在本窗口的 JS 堆里（M3）。
+      candidates = await api.autotype.candidates();
     } catch {
       failed = true;
     } finally {

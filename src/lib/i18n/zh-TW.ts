@@ -660,7 +660,7 @@ export const zhTW = {
     key_close: '關閉',
   },
   // 1.5.39：自動輸入浮層。與主視窗是兩個獨立 WebView，語言靠 localStorage 繼承同一個值。
-  // 選定後明文不經過前端：浮層只交 item_id，注入由 Rust 側完成。
+  // `auto_type_fill` 的入參與回傳不含明文；浮層清單由 `autotype_candidates` 提供，只含標題與使用者名稱。
   autotype: {
     search_placeholder: '搜尋登入項目…',
     empty: '沒有符合的登入項目',
@@ -668,6 +668,7 @@ export const zhTW = {
     failed_focus: '目標視窗已切換，已停止輸入。',
     failed_not_unlocked: '保險庫已鎖定，請先解鎖。',
     failed_not_supported: '此裝置不支援自動輸入。',
+    failed_blocked: '目標程式不接受模擬按鍵，請手動貼上。',
     no_username: '這一條沒有填使用者名稱。',
     no_url: '這一條沒有填網址。',
     no_totp: '這一條沒有動態密碼。',
@@ -680,6 +681,11 @@ export const zhTW = {
     hotkey_unknown_key: '這個按鍵不能當作熱鍵，請換一個。',
     hotkey_unavailable: '該熱鍵已被其他程式佔用，請換一個組合。',
     autostart_failed: '開機自動啟動設定失敗，可能被系統原則限制。',
+    autotype_no_username: '這條項目沒有填寫使用者名稱，無法只輸入使用者名稱。',
+    autotype_no_url: '這條項目沒有填寫網址，無法只輸入網址。',
+    autotype_no_totp: '這條項目沒有設定動態密碼，無法輸入驗證碼。',
+    autotype_focus_lost: '目標視窗在輸入前發生變化，已取消本次自動輸入。',
+    autotype_blocked: '目標程式不接受模擬按鍵，已停止本次自動輸入。',
     desktop_only: '此功能僅在桌面版提供。',
     startup_failed: '啟動狀態查詢失敗，請重試。',
     clipboard_clear_failed: '剪貼簿自動清空失敗，請手動清理。',

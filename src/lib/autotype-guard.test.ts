@@ -6,14 +6,18 @@
 //
 // 1. **四本字典的 autotype.* 与 settings.autotype_hotkey 键集合一致**，且值不是
 //    按钮词（按钮词集合从 `common` 命名空间派生，判据照 D-192：值 ≤2 字符的键）。
-// 2. **明文不经过前端**：自动输入浮层只交 `item_id`，组件源码里任何 `invoke(` 的
-//    实参都不得含 'password' 字样——前端一旦开始转发明文，这条先红。
+// 2. **浮层里没有明文**（M3 的教训）：`auto_type_fill` 的入参与返回不含明文；
+//    浮层列表由 `autotype_candidates` 提供，只含标题与用户名。浮层源码里一旦出现
+//    拉全量条目的调用（那个接口带 password）或者任何 `invoke(` 实参含 'password'
+//    字样，这条先红——早先这里只禁了取详情，于是"明文不经过前端"是一句假话。
 // 3. **失败文案必须显式映射**（D-185 铁律）：后端错误码 → 文案键的映射表是字面量，
 //    每个映射目标在四本字典里真实存在；禁止模板现拼键名
 //    （`autotype.failed_${reason}` 拼出来的键翻译器找不到，界面会印裸键名）。
 // 4. **平台门控**（D-121/D-122 同一口径）：自动输入热键的设置控件只在 Windows 分支
 //    渲染 `<button>`；Android 分支只渲染纯文案 `<p>`——挂一个录不上的按钮等于给
 //    不存在的功能做广告。
+// 5. **后端 message_key 面（S1）**：Rust 里所有 `"err.` 开头的字面量都必须在字典里
+//    有键——缺一个就是界面印裸键名。
 //
 // 读源码用 `import.meta.glob('?raw')`：本仓禁止 `node:fs`（svelte-check 不认 node types）。
 
@@ -25,6 +29,13 @@ const modules = import.meta.glob(
   ['../**/*.ts', '../**/*.svelte'],
   { query: '?raw', import: 'default', eager: true },
 ) as Record<string, string>;
+
+/** Rust 全树（S1：后端 message_key 字面量面的守门；`**` 递归，防只扫顶层得到假绿）。 */
+const rustModules = import.meta.glob('../../src-tauri/**/*.rs', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
 
 const picker = modules['../components/AutotypePicker.svelte'] ?? '';
 const autotypeTs = modules['./autotype.ts'] ?? '';
@@ -64,6 +75,7 @@ const AUTOTYPE_KEYS = [
   'failed_focus',
   'failed_not_unlocked',
   'failed_not_supported',
+  'failed_blocked',
   'no_username',
   'no_url',
   'no_totp',
@@ -186,13 +198,19 @@ describe('① autotype 键集合四语言一致，值非按钮词、够长', () 
   });
 });
 
-// ── ② 明文不经过前端 ─────────────────────────────────────────────────────────
+// ── ② 浮层里没有明文（M3） ───────────────────────────────────────────────────
 
-describe('② 浮层只交 item_id，明文不经过前端', () => {
-  it('浮层走 api.autotype.fill，且任何 invoke 实参都不含明文字段', () => {
-    // 结构锚点：选定行为真的接在 autotype.fill 上（而不是绕回 get_item 详情取明文）。
-    expect(picker).toContain('api.autotype.fill(');
-    // 浮层不得出现「取详情」的调用：列表项的明文一经过前端，边界就破了。
+describe('② 浮层走三字段候选，明文不经过浮层', () => {
+  it('浮层必须调 autotype_candidates，且不得出现拉全量条目 / 取详情的调用', () => {
+    // 结构锚点：列表来自专用候选接口（只含标题与用户名）。
+    expect(picker, '浮层必须调用 api.autotype.candidates').toContain(
+      'api.autotype.candidates(',
+    );
+    // M3 的根因：全量条目列表带 password（item_cmd.rs 直传 Vec<Item>），
+    // 整个库的明文会躺在浮层 JS 堆里。两处入口都禁——只禁取详情曾让这句断言永远是绿的。
+    expect(picker, '浮层不得调用 items.list（带 password 的全量列表）').not.toContain(
+      'items.list(',
+    );
     expect(picker, '浮层不得调用 items.get（明文详情接口）').not.toContain('items.get(');
     // 逐个 `invoke(` 调用点检查实参切片：'password' 字样一出现即红。
     const calls = [...picker.matchAll(/invoke\([^)]*/g)].map((m) => m[0]);
@@ -201,12 +219,14 @@ describe('② 浮层只交 item_id，明文不经过前端', () => {
     }
   });
 
-  it('ipc.ts 的 autotype 封装只传 item_id 与动作名', () => {
+  it('ipc.ts 的 autotype 封装：候选只回三字段，fill 只传 item_id 与动作名', () => {
     // 自动输入树里不许出现取明文的形状；wire 键就是 item_id + action。
+    // 查**代码**不查注释：注释里提 password 是为了说明为什么禁它，属正常。
     const start = ipcTs.indexOf('export const autotype');
     const end = ipcTs.indexOf('};', start);
-    const block = ipcTs.slice(start, end);
+    const block = codeOnly(ipcTs.slice(start, end));
     expect(block.length).toBeGreaterThan(0);
+    expect(block).toContain("invoke<AutotypeCandidate[]>('autotype_candidates')");
     expect(block).toContain("invoke<void>('auto_type_fill', { item_id: itemId, action })");
     expect(block).not.toContain('password');
   });
@@ -240,6 +260,7 @@ describe('③ 失败文案是显式映射表，不许模板现拼键名', () => 
       ['ERR_AUTOTYPE_NO_USERNAME', 'autotype.no_username'],
       ['ERR_AUTOTYPE_NO_URL', 'autotype.no_url'],
       ['ERR_AUTOTYPE_NO_TOTP', 'autotype.no_totp'],
+      ['ERR_AUTOTYPE_BLOCKED', 'autotype.failed_blocked'],
     ];
     for (const [code, key] of expected) {
       expect(block, `映射表缺 ${code} → ${key}`).toContain(`${code}: '${key}'`);
@@ -301,5 +322,25 @@ describe('④ 自动输入热键设置的平台门控', () => {
     expect(androidBranch, 'Android 分支不许有按钮——录不上的按钮是假功能').not.toContain(
       '<button',
     );
+  });
+});
+
+// ── ⑤ 后端 message_key 字面量在字典里都有键（S1） ─────────────────────────────
+
+describe('⑤ Rust 里所有 "err. 字面量都在字典里有键（S1）', () => {
+  it('每个 err.* message_key 都能被 zh-CN 字典翻译', () => {
+    // S1 的事故形态：后端抛 `{ code, message_key: "err.autotype_no_username" }`，
+    // 字典里没有这个键 → 通用错误层原样印出裸键名。逐个字面量比对，缺一个即红。
+    expect(Object.keys(rustModules).length, 'Rust 源码没扫到，glob 写错了').toBeGreaterThan(10);
+    const literals = new Set<string>();
+    for (const src of Object.values(rustModules)) {
+      for (const m of src.matchAll(/"(err\.[a-z0-9_]+)"/g)) {
+        literals.add(m[1]);
+      }
+    }
+    // 防空跑：扫到的字面量太少说明正则或扫描面坏了（而不是"全都对上了"）。
+    expect(literals.size, '扫到的 err.* 字面量太少，扫描面坏了').toBeGreaterThan(3);
+    const missing = [...literals].filter((key) => !hasKey('zh-CN', key)).sort();
+    expect(missing, `这些后端 message_key 在字典里没有键：${missing.join(', ')}`).toEqual([]);
   });
 });

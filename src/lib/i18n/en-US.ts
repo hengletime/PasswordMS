@@ -731,8 +731,9 @@ export const enUS: Messages = {
     key_close: 'close',
   },
   // 1.5.39: Auto-Type picker. A separate WebView from the main window; locale is
-  // inherited through the same localStorage value. Plaintext never passes through
-  // the frontend: the picker only hands over item_id, the Rust side does the typing.
+  // inherited through the same localStorage value. auto_type_fill's arguments and
+  // return carry no plaintext; the list comes from autotype_candidates, which only
+  // exposes titles and usernames.
   autotype: {
     search_placeholder: 'Search logins…',
     empty: 'No matching logins',
@@ -740,6 +741,7 @@ export const enUS: Messages = {
     failed_focus: 'The target window changed. Typing was stopped.',
     failed_not_unlocked: 'The vault is locked. Unlock it first.',
     failed_not_supported: 'Auto-Type is not supported on this device.',
+    failed_blocked: 'The target application does not accept simulated keystrokes. Please paste manually.',
     no_username: 'This entry has no username.',
     no_url: 'This entry has no URL.',
     no_totp: 'This entry has no one-time code.',
@@ -752,6 +754,11 @@ export const enUS: Messages = {
     hotkey_unknown_key: 'That key cannot be used as a hotkey. Pick another.',
     hotkey_unavailable: 'That hotkey is already taken by another program. Pick another combination.',
     autostart_failed: 'Could not change the start-at-login setting (it may be restricted by policy).',
+    autotype_no_username: 'This entry has no username, so there is nothing to type for that action.',
+    autotype_no_url: 'This entry has no URL, so there is nothing to type for that action.',
+    autotype_no_totp: 'This entry has no one-time code configured, so there is nothing to type for that action.',
+    autotype_focus_lost: 'The target window changed before typing started. Auto-Type was cancelled.',
+    autotype_blocked: 'The target application does not accept simulated keystrokes. Auto-Type was stopped.',
     desktop_only: 'This feature is only available in the desktop app.',
     startup_failed: 'Failed to read startup status. Please retry.',
     clipboard_clear_failed: 'Clipboard auto-clear failed. Please clear it manually.',

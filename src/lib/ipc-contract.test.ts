@@ -165,13 +165,17 @@ describe('ipc command contract', () => {
     }
   });
 
-  it('keeps auto_type_fill / prefs_set_autotype_hotkey wired on both sides (1.5.39 自动输入回归锚点)', () => {
+  it('keeps auto_type_fill / autotype_candidates / prefs_set_autotype_hotkey wired on both sides (1.5.39 自动输入回归锚点)', () => {
     // 1.5.39：自动输入全链新命令，前端先落、Rust 侧并行注册 —— 后端落地前
-    // `registered` 少这两条是**约定的红**（同 #531 先例，落地后复跑须全绿）。
-    // `auto_type_fill` 只收 item_id：明文由 Rust 自取自注入，不跨 IPC 回前端。
+    // `registered` 少这几条是**约定的红**（同 #531 先例，落地后复跑须全绿）。
+    // `auto_type_fill` 只收 item_id + action：明文由 Rust 自取自注入，不跨 IPC 回前端。
+    // `autotype_candidates` 只回 { item_id, title, username } 三字段（M3 修复：
+    // 浮层不许再拉带 password 的全量条目列表）。
     // `prefs_set_autotype_hotkey` 是设置页改键 UI 的写通道（读走 prefs_get）。
     expect(invoked).toContain('auto_type_fill');
     expect(registered).toContain('auto_type_fill');
+    expect(invoked).toContain('autotype_candidates');
+    expect(registered).toContain('autotype_candidates');
     expect(invoked).toContain('prefs_set_autotype_hotkey');
     expect(registered).toContain('prefs_set_autotype_hotkey');
   });
@@ -348,11 +352,12 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     //   +1（backup_clear_error），属性 84 → 85、命令名 80 → 81。
     //   核心层 `clear_error` 一直存在却没有命令，粘性红字于是没有出口——用户只能看着
     //   「上次备份 10:30」与「最近一次没存成 10:28」两行并存，得出"备份坏了"的结论。
-    // 1.5.39（Auto-Type）：+2（auto_type_fill / prefs_set_autotype_hotkey），
-    //   属性 85 → 87、命令名 81 → 83。前端已先行落地，Rust 侧并行注册中——
-    //   落地前本测试红是**约定的红**（同 #531 六条命令的先例）。
-    expect(total).toBe(87);
-    expect(withAttr).toBe(87);
+    // 1.5.39（Auto-Type）：+3（auto_type_fill / prefs_set_autotype_hotkey /
+    //   autotype_candidates），属性 85 → 88、命令名 81 → 84。
+    //   前端已先行落地，Rust 侧并行注册中——落地前本测试红是**约定的红**
+    //   （同 #531 六条命令的先例）。
+    expect(total).toBe(88);
+    expect(withAttr).toBe(88);
 
     // 上面两个数相等只证明「每个属性都带 snake_case」，证明不了「两套实现真的是同名」——
     // 若移动端桩写成 `prefs_get_mobile`，计数仍会对得上，但前端在 Android 上 invoke
@@ -361,8 +366,8 @@ describe('docs §14：`rename_all = "snake_case"` 必须 100% 覆盖', () => {
     const names = [
       ...all.matchAll(/#\[tauri::command[^\]]*\]\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g),
     ].map((m) => m[1]);
-    expect(names.length).toBe(87);
-    expect(new Set(names).size).toBe(83);
+    expect(names.length).toBe(88);
+    expect(new Set(names).size).toBe(84);
   });
 });
 

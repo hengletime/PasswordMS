@@ -1,12 +1,16 @@
 // 自动输入（Auto-Type）前端侧的纯逻辑（1.5.39）。
 //
 // 与 `quick-search.ts` 同一分工：能出错又难肉眼验证的部分抽出来，组件里剩下的
-// 只有 DOM 接线。这里只有两件事——窗口判定与失败文案映射。
+// 只有 DOM 接线。这里只有三件事——窗口判定、候选行映射与失败文案映射。
 //
-// 一条安全边界写在这里而不是藏进组件：**明文不经过前端**。
-// 用户在浮层里选定条目后，前端只把 `item_id` 交给 `auto_type_fill`；
-// 用户名与密码由 Rust 侧自取并注入目标窗口，全程不进任何 IPC 返回值。
-// `src/lib/autotype-guard.test.ts` 用源码断言守这条线。
+// 一条安全边界写在这里而不是藏进组件：**`auto_type_fill` 的入参与返回不含明文；
+// 浮层列表由 `autotype_candidates` 提供，只含标题与用户名**（没有密码、备注、
+// TOTP 密钥）。明文只在 Rust 进程内从库里取出并注入目标窗口。
+// `src/lib/autotype-guard.test.ts` 用源码断言守这条线——浮层源码里一旦出现
+// 拉全量条目的调用即红。M3 的教训：早先浮层拉的是带 password 的全量列表，
+// 那句「明文不经过前端」在当时是**假话**，修的是数据通路而不是措辞。
+
+import type { QuickHit } from './quick-search';
 
 /** 自动输入浮层的窗口判定（与 `isQuickWindow` 同一形状）。
  *
@@ -31,6 +35,36 @@ export function isAutotypeWindow(search: string): boolean {
 export type AutotypeAction = 'default' | 'username' | 'password' | 'url' | 'totp';
 
 /**
+ * 自动输入候选行（`autotype_candidates` 的返回项）。
+ *
+ * **只有三个字段**：列表要显示什么就只给什么。密码 / 备注 / TOTP 密钥一个都不给，
+ * 浮层的 JS 堆里因此没有任何明文——这是 M3 修复后真正的边界。
+ */
+export interface AutotypeCandidate {
+  item_id: string;
+  title: string;
+  username: string | null;
+}
+
+/**
+ * 候选行 → 排序输入（喂给 `quick-search.ts::rankHits`）。
+ *
+ * `url` 与频度缺失：网址那两档打分自然拿不到分、同分时按标题排序，
+ * 排序退化到「标题前缀 > 标题包含 > 用户名前缀 > 用户名包含」——正是
+ * 三字段候选期望的口径，且没有复制一份打分逻辑。
+ */
+export function candidatesToHits(candidates: AutotypeCandidate[]): QuickHit[] {
+  return candidates.map((c) => ({
+    itemId: c.item_id,
+    title: c.title,
+    username: c.username,
+    url: null,
+    useCount: 0,
+    score: 0,
+  }));
+}
+
+/**
  * `auto_type_fill` 失败原因 → 文案键的**显式映射表**（D-185 铁律：禁止后端枚举现拼）。
  *
  * 后端的 wire 取值是 IPC 错误的 `code` 字段（`IpcErrorShape.code`），所以键写全码。
@@ -48,6 +82,8 @@ export const AUTOTYPE_FAILURE_KEY_BY_CODE: Readonly<Record<string, string>> = {
   ERR_AUTOTYPE_NO_USERNAME: 'autotype.no_username',
   ERR_AUTOTYPE_NO_URL: 'autotype.no_url',
   ERR_AUTOTYPE_NO_TOTP: 'autotype.no_totp',
+  // 目标程序不接受模拟按键（UIPI / 提权窗口拦截）。
+  ERR_AUTOTYPE_BLOCKED: 'autotype.failed_blocked',
 };
 
 /** 兜底文案键：映射表没收录的失败都用它，永远不显示键名。 */

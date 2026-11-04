@@ -54,6 +54,26 @@ function scoreOf(hit: QuickHit, query: string): number {
 }
 
 /**
+ * 对**已经是 QuickHit 的列表**做过滤 + 排序（自动输入浮层只拿到三字段时复用）。
+ *
+ * 与 `rankItems` 同一套打分：`url` 为 `null` 时网址那两档自然拿不到分，
+ * 排序退化到「标题前缀 > 标题包含 > 用户名前缀 > 用户名包含」，正是
+ * `autotype_candidates` 只给标题与用户名时期望的口径。
+ */
+export function rankHits(hits: QuickHit[], query: string, limit = RESULT_LIMIT): QuickHit[] {
+  const q = query.trim().toLowerCase();
+  const scored = q ? hits.filter((h) => (h.score = scoreOf(h, q)) > 0) : hits;
+
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (b.useCount !== a.useCount) return b.useCount - a.useCount;
+    return a.title.localeCompare(b.title);
+  });
+
+  return scored.slice(0, limit);
+}
+
+/**
  * 过滤 + 排序。
  *
  * 空查询不是"没有结果"，而是**最常用的那几条**：用户按热键常常只是想说
@@ -64,8 +84,6 @@ function scoreOf(hit: QuickHit, query: string): number {
  * @param query 原始输入，内部做去空格 + 小写；纯空白视同空查询
  */
 export function rankItems(items: ItemDto[], query: string, limit = RESULT_LIMIT): QuickHit[] {
-  const q = query.trim().toLowerCase();
-
   const hits: QuickHit[] = [];
   for (const item of items) {
     // 只收登录项：笔记与附件没有可复制的密码，混进结果只会让回车"什么也没发生"。
@@ -81,16 +99,7 @@ export function rankItems(items: ItemDto[], query: string, limit = RESULT_LIMIT)
       score: 0,
     });
   }
-
-  const scored = q ? hits.filter((h) => (h.score = scoreOf(h, q)) > 0) : hits;
-
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    if (b.useCount !== a.useCount) return b.useCount - a.useCount;
-    return a.title.localeCompare(b.title);
-  });
-
-  return scored.slice(0, limit);
+  return rankHits(hits, query, limit);
 }
 
 /**

@@ -777,7 +777,7 @@ export const zhCN = {
     key_close: '关闭',
   },
   // 1.5.39：自动输入浮层。与主窗口是两个独立 WebView，语言靠 localStorage 继承同一个值。
-  // 选定后明文不经过前端：浮层只交 item_id，注入由 Rust 侧完成。
+  // `auto_type_fill` 的入参与返回不含明文；浮层列表由 `autotype_candidates` 提供，只含标题与用户名。
   autotype: {
     search_placeholder: '搜索登录条目…',
     empty: '没有匹配的登录条目',
@@ -785,6 +785,7 @@ export const zhCN = {
     failed_focus: '目标窗口已切换，已停止输入。',
     failed_not_unlocked: '库已锁定，请先解锁。',
     failed_not_supported: '此设备不支持自动输入。',
+    failed_blocked: '目标程序不接受模拟按键，请手动粘贴。',
     no_username: '这一条没有填用户名。',
     no_url: '这一条没有填网址。',
     no_totp: '这一条没有动态口令。',
@@ -797,6 +798,13 @@ export const zhCN = {
     hotkey_unknown_key: '这个按键不能用作热键，请换一个。',
     hotkey_unavailable: '该热键已被其它程序占用，请换一个组合。',
     autostart_failed: '开机自启设置失败，可能被系统策略限制。',
+    // 1.5.39：自动输入的后端 message_key 面（与浮层按错误码映射的 autotype.* 是两层：
+    // 这里写给任何走到通用错误通路的地方看，措辞可以不同但都要说清发生了什么）。
+    autotype_no_username: '这条条目没有填写用户名，无法只输入用户名。',
+    autotype_no_url: '这条条目没有填写网址，无法只输入网址。',
+    autotype_no_totp: '这条条目没有配置动态口令，无法输入验证码。',
+    autotype_focus_lost: '目标窗口在输入前发生变化，已取消本次自动输入。',
+    autotype_blocked: '目标程序不接受模拟按键，已停止本次自动输入。',
     desktop_only: '此功能仅在桌面版提供。',
     startup_failed: '启动状态查询失败，请重试。',
     clipboard_clear_failed: '剪贴板自动清空失败，请手动清理。',

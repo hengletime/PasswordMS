@@ -5,7 +5,7 @@
 
 import { invoke } from '@tauri-apps/api/core';
 
-import type { AutotypeAction } from './autotype';
+import type { AutotypeAction, AutotypeCandidate } from './autotype';
 
 import type {
   BackupClearDto,
@@ -392,12 +392,18 @@ export const settings = {
 /**
  * 自动输入类（1.5.39）。
  *
- * ⚠️ 安全边界：`fill` 只收 `item_id` 与动作名——用户名与密码由 Rust 侧自取并注入
- * 目标窗口，**明文不经过前端**（不读详情、不走 IPC 返回值）。
- * 动作取值见 `autotype.ts::AutotypeAction`，与 Rust 侧逐字一致。
+ * ⚠️ 安全边界：`auto_type_fill` 的入参与返回不含明文；浮层列表由
+ * `autotype_candidates` 提供，只含标题与用户名。用户名与密码由 Rust 侧自取并
+ * 注入目标窗口。动作取值见 `autotype.ts::AutotypeAction`，与 Rust 侧逐字一致。
  * 守门见 `autotype-guard.test.ts`。
  */
 export const autotype = {
+  /**
+   * 浮层候选列表（三字段）。**不许改回全量条目列表**：那个接口带 password，
+   * 整个库的明文会躺在浮层 JS 堆里（M3 就是这么发生的）。
+   */
+  candidates: (): Promise<AutotypeCandidate[]> =>
+    invoke<AutotypeCandidate[]>('autotype_candidates'),
   fill: (itemId: string, action: AutotypeAction): Promise<void> =>
     invoke<void>('auto_type_fill', { item_id: itemId, action }),
 };
