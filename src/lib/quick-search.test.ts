@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { RESULT_LIMIT, copiedLabel, isQuickWindow, moveIndex, rankItems } from './quick-search';
+import type { RankableCandidate } from './quick-search';
 import type { ItemDto, ItemKind } from '../types';
 
 /** 造一条条目：只写本组测试关心的字段，其余给稳定的默认值。 */
@@ -156,5 +157,40 @@ describe('copiedLabel：回执文案', () => {
 
   it('条目没有用户名时如实说"没有用户名"，不能假装复制成功', () => {
     expect(copiedLabel('username', false)).toBe('quick.no_username');
+  });
+});
+
+// 1.5.39：自动输入浮层的扁平候选行分支。
+//
+// `rankItems` 现在吃 `ItemDto | RankableCandidate`，上面所有用例只走 `ItemDto` 分支，
+// 浮层是扁平分枝的**唯一用户**。这三条把这个分支钉住：少 url → 站点名搜永不命中；
+// 少 use_count → 空查询"最常用"退化成字母序（两种退化都不会有测试变红）。
+describe('rankItems：扁平候选行（autotype_candidates 分支）', () => {
+  /** 造一条候选：5 字段，与 Rust `AutotypeCandidateDto` 同名。 */
+  function candidate(
+    id: string,
+    title: string,
+    url: string | null = null,
+    useCount = 0,
+  ): RankableCandidate {
+    return { item_id: id, title, username: null, url, use_count: useCount };
+  }
+
+  it('只有网址命中关键词的候选也会进结果（url 档不是白给的）', () => {
+    const rows = [
+      candidate('site', '工作账号', 'https://github.com'),
+      candidate('other', '个人邮箱', 'https://mail.example.com'),
+    ];
+    expect(rankItems(rows, 'github').map((h) => h.itemId)).toEqual(['site']);
+  });
+
+  it('标题命中排在网址命中之前（title > url 是既有口径，两窗一致）', () => {
+    const rows = [candidate('url-hit', '工作账号', 'https://github.com'), candidate('title-hit', 'GitHub 登录')];
+    expect(rankItems(rows, 'github').map((h) => h.itemId)).toEqual(['title-hit', 'url-hit']);
+  });
+
+  it('空查询按使用次数降序（"最常用"不退化成字母序）', () => {
+    const rows = [candidate('rare', 'A 站', null, 1), candidate('often', 'Z 站', null, 9)];
+    expect(rankItems(rows, '').map((h) => h.itemId)).toEqual(['often', 'rare']);
   });
 });

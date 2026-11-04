@@ -22,8 +22,20 @@ const ipcModules = import.meta.glob('./ipc.ts', {
   eager: true,
 }) as Record<string, string>;
 
+/**
+ * 前端候选行的字段声明处。`AutotypeCandidate` 是 `RankableCandidate` 的别名，
+ * 真正的字段声明只有一个（quick-search.ts），**不在 types.ts**——所以下面那条
+ * 字段集合断言必须取这份源码，不能套 `typesTs`。
+ */
+const quickSearchModules = import.meta.glob('./quick-search.ts', {
+  query: '?raw',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>;
+
 const libRs = Object.entries(rustModules).find(([path]) => path.endsWith('lib.rs'))?.[1] ?? '';
 const ipcTs = ipcModules['./ipc.ts'] ?? '';
+const quickSearchTs = quickSearchModules['./quick-search.ts'] ?? '';
 /** D-68：Rust 侧 DTO 定义文件（`PairingDto` / `PairResultDto` / `DeviceDto` 都在这里）。 */
 const dtoRs = Object.entries(rustModules).find(([path]) => path.endsWith('dto.rs'))?.[1] ?? '';
 
@@ -163,8 +175,9 @@ describe('ipc command contract', () => {
     // 1.5.39：自动输入全链新命令，前端先落、Rust 侧并行注册 —— 后端落地前
     // `registered` 少这几条是**约定的红**（同 #531 先例，落地后复跑须全绿）。
     // `auto_type_fill` 只收 item_id + action：明文由 Rust 自取自注入，不跨 IPC 回前端。
-    // `autotype_candidates` 只回 { item_id, title, username } 三字段（M3 修复：
-    // 浮层不许再拉带 password 的全量条目列表）。
+    // `autotype_candidates` 回**五字段** { item_id, title, username, url, use_count }
+    // （M3 修复：浮层不许再拉带 password 的全量条目列表）。url 是"按站点名搜"的唯一
+    // 命中途径，use_count 是空查询"最常用"的排序主轴——两者都不许少（dto.rs 同注）。
     // `prefs_set_autotype_hotkey` 是设置页改键 UI 的写通道（读走 prefs_get）。
     expect(invoked).toContain('auto_type_fill');
     expect(registered).toContain('auto_type_fill');
@@ -257,6 +270,25 @@ describe('体积构成 / 压缩 DTO 的前后端镜像契约（D-76）', () => {
     const ts = interfaceFields(typesTs, 'CompactionResultDto');
     expect(rust.length).toBe(4);
     expect(ts).toEqual(rust);
+  });
+});
+
+// 1.5.39：自动输入候选 DTO 的字段集合镜像契约（与 PairResultDto 同一手法）。
+//
+// 只查命令名在不在两侧注册面，3 字段与 5 字段都全绿。而少 `url` → 按站点名搜
+// 永不命中；少 `use_count` → 空查询"最常用"退化字母序；两种退化都不会有测试变红
+// （`dto.rs` 的注释自己写了这句诊断）。逐项 `toContain` 也挡不住"删一个"——
+// 只有**字段集合完全相等**同时锁住"加了没"和"删了没"。
+describe('自动输入候选 DTO 的前后端镜像契约（1.5.39 五字段）', () => {
+  it('两侧字段集合完全一致：item_id / title / username / url / use_count', () => {
+    const rust = structFields(dtoRs, 'AutotypeCandidateDto');
+    // 前端字段声明在 quick-search.ts 的 `RankableCandidate`（autotype.ts 只是别名）。
+    const ts = interfaceFields(quickSearchTs, 'RankableCandidate');
+    // 防空扫：两边都没抽到字段时 `toEqual([])` 会假绿。
+    expect(rust.length).toBeGreaterThan(0);
+    expect(ts.length).toBeGreaterThan(0);
+    expect(ts).toEqual(rust);
+    expect(ts).toEqual(['item_id', 'title', 'url', 'use_count', 'username']);
   });
 });
 
