@@ -615,6 +615,23 @@ function runProbes(dict) {
     },
   });
 
+  // P8：四本字典的条数必须相等。
+  // P6 是"针对已知污染源"的规则（模块路径），抓得住这一次，抓不住下一次的形态
+  // （注释里带引号的句子、模板字面量、`as const` 里多出来的值……每一种都要再补一条）。
+  // 而"四个数相等"是**不变量**：不需要预知污染长什么样，任何形态的混入都会让它红。
+  // 依据是 `src/lib/i18n.test.ts` 已经断言了四语言键集合与 zh-CN 完全一致——所以
+  // 条数不等只可能是"抠出来当文案的东西"变了，不是"字典合法地多了一条"。
+  probes.push({
+    id: 'P8/four-counts-equal',
+    expect: '四本条数相等',
+    check: () => {
+      const pairs = LOCALE_PATHS.map((p) => [p.split('/').pop(), dict.files[p]]);
+      const vals = new Set(pairs.map(([, n]) => n));
+      if (vals.size === 1) return null;
+      return pairs.map(([f, n]) => `${f} ${n}`).join(' / ');
+    },
+  });
+
   // P7：括号配平检测本身（输入是合成串，故意写坏）。
   // 这条测的不是"文档没错"，而是"文档错了我会不会发现"。落单括号是我这套实现里
   // 唯一一个**静默**丢数据的入口：配不上对就整段不 push，报告照样全绿。
