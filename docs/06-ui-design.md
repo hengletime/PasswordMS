@@ -4701,10 +4701,16 @@ Autofill 宿主挂载点，投入大收益小）。
 
 浮层是**第三个 WebviewWindow**（label `autotype`，URL `?w=autotype`），整骨架照抄
 QuickSearch（`quick_search.rs` 的 ensure/show/toggle：440×520 无边框置顶、跳过任务栏、
-启动时预建隐藏窗——热键最怕"按了没反应"；按鼠标所在屏居中）。排序纯函数
-`rankItems`/`moveIndex`/`RESULT_LIMIT` **直接复用** quick-search.ts（它只收
-`kind.type==='login'`，正好是本功能的边界）。数据通路同款：每个窗口独立 JS 上下文，
-唤出时现取 IPC（status → list_items 全量），locale 自己 readLocale。
+启动时预建隐藏窗——热键最怕"按了没反应"；按鼠标所在屏居中）。排序入口
+`rankCandidates`/`moveIndex`/`RESULT_LIMIT` 复用 quick-search.ts 的**同一套打分**
+（私有 `rankHits`）：`rankItems` 吃完整 `ItemDto`、`rankCandidates` 吃五字段扁平行，
+**两个入口各自收窄**，`isFullItem` 那种判别守卫根本不存在——守卫依赖"另一侧恰好没有
+某个字段"，将来谁给候选行加个 `kind`，整列会被误滤空且 TypeScript 一声不响
+（1.5.39 曾合并成一个联合类型入口，因此造出没测的分支，已按此裁定撤回）。
+浮层的登录项过滤在 Rust 侧完成（`autotype_candidates` → core
+`autotype_candidates::login_candidates`，有单测）。数据通路：每个窗口独立 JS 上下文，
+唤出时现取 IPC（status → `autotype_candidates` 五字段候选，**不是** `list_items`
+全量——那个接口每条都带密码），locale 自己 readLocale。
 
 锁屏态热键**不弹浮层**，走 `tray::show_main` 进解锁页（照 hotkey.rs:97-101 的现有分叉）。
 
@@ -4757,15 +4763,30 @@ canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：�
 
 - core：解析器与动作映射的单测（七占位符 × 边界 × 报错路径 × 五动作模板自洽）。
   **例数不写在这里**——它在 §6.70 之后又漂过一次，数会变，就绑到测试文件本身。
+- core `autotype_candidates`：候选行纯函数的三条（只收登录条目 / 五字段原样透传且
+  wire 键集合恰好五个 / 空串按未填写处理）。这是"浮层不会拿到笔记与附件 id"的唯一
+  保证——它同时让 `auto_type_fill` 的"非登录条目"早退路径变成不可达。
 - 前端 `autotype-guard.test.ts`：四语言键集合一致且值非按钮词（按钮词从字典派生，
-  照 D-192）；明文不过前端（invoke 实参无 'password'）；失败映射必须显式映射表
-  （D-185：后端 code → 字典键，五个动作的"没填"三码与焦点丢失都在表内，映射不到落
-  `autotype.failed` 兜底，禁后端枚举现拼）；Ctrl+Shift 判定必须先于单修饰键分支
-  （顺序断言）；Android 分支无 `<button>`；守门扫描面非空（防空跑）。
-- `ipc-contract.test.ts`：`auto_type_fill` / `prefs_set_autotype_hotkey` 双侧锚点，
-  死数字 85→87（+2 命令，注释登记）。**注意它只校验命令名不校验参数键**——wire
-  `{item_id, action}` 的正确性由 Rust 形参名 + `rename_all="snake_case"` 保证，
-  改签名时必须两边同看（impl-fe 在 1.5.39 增强时点出过这个盲区）。
+  照 D-192）；明文不过前端（**否定性断言**：浮层源码里不得出现 `api.items.list(`
+  与 `api.items.get(`——期望值为零，只能这样写；早先那条"循环检查 invoke 实参"的
+  写法样本数恒为零，绿而无信息，已整段删除）；失败映射必须显式映射表（D-185：后端
+  code → 字典键，五个动作的"没填"三码 + 焦点丢失 + 被系统拦下共八条都在表内，映射
+  不到落 `autotype.failed` 兜底，禁后端枚举现拼）；Ctrl+Shift 判定必须先于单修饰键
+  分支（顺序断言）；Android 分支无 `<button>`；守门扫描面非空（防空跑）。
+- **命令层两条"早退"绊线也在 `autotype-guard.test.ts`（⑥ 节），刻意不放进 Rust
+  单测**：`src-tauri` 的 `#[cfg(test)]` **不进任何门禁**（总门的 Rust 全量只跑
+  `-p passwordms-core`），写在那里等于白写；`commands/` 也没有测试台。这两条本质是
+  **源码形状**问题，前端门顺手就能看住：① `autotype_candidates` 函数体内必须有
+  `session_unlocked()`（否则锁着库也能列条目）；② `get_item(` / `list_items(` 到
+  `wipe_plaintext()` 之间不得出现 `?`——`?` 是最隐蔽的早退形态，`return` 一眼能看出，
+  `?` 藏在赋值语句末尾，跳过擦除就把整条明文（密码/备注/TOTP 密钥/附件文件名）留在
+  堆上。**起点从"取明文那句的分号之后"算**：`get_item(...)?` 那个 `?` 是取明文动作
+  本身，失败时手上还没有明文，判据把它算进去会误报（实测误报过一次）。
+- `ipc-contract.test.ts`：`auto_type_fill` / `autotype_candidates` /
+  `prefs_set_autotype_hotkey` 双侧锚点，死数字 **88 / 88 / 88 / 去重名 84**（注释登记）。
+  **注意它只校验命令名不校验参数键**——wire `{item_id, action}` 的正确性由 Rust 形参名
+  + `rename_all="snake_case"` 保证，改签名时必须两边同看（impl-fe 在 1.5.39 增强时
+  点出过这个盲区）。
 
 #### 6.71.5 已知限制（真机再调）
 

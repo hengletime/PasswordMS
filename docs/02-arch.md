@@ -2648,7 +2648,8 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `generate_password` | `GeneratorOptions` | `{password}` | F-07 |
 | `copy_secret` | `{text,ttl_secs}` | `u64` | F-06（返回**代际号**，到期清理时带回；`ttl_secs=0` = 不安排自动清空，见 §3.25） |
 | `clear_secret_if_own` | `{gen}` | `bool` | A-03 到期清空（**仅清 `gen` 那一代**，且仅当剪贴板仍是本应用写的内容） |
-| `auto_type_fill` | `{item_id,action}` | `()` | 1.5.39 自动输入（热键 → 浮层选中条目按动作注入）。`action` ∈ `default｜username｜password｜url｜totp`；default = 用户名+Tab+密码+回车（无用户名退化为仅密码），其余单字段不带回车。只收 `item_id`，明文/TOTP 命令内现取；Android 返回 `ERR_NOT_SUPPORTED` |
+| `auto_type_fill` | `{item_id,action}` | `()` | 1.5.39 自动输入（热键 → 浮层选中条目按动作注入）。`action` ∈ `default｜username｜password｜url｜totp`；default = 用户名+Tab+密码+回车（无用户名退化为仅密码），其余单字段不带回车。只收 `item_id`，明文/TOTP 命令内现取；**形参带 `tauri::WebviewWindow` 且校验 `label == "autotype"`**（自定义命令不受 capability 约束，见 §9 末条）；`SendInput` 返回不足报 `ERR_AUTOTYPE_BLOCKED`；Android 返回 `ERR_NOT_SUPPORTED` |
+| `autotype_candidates` | — | `Vec<{item_id,title,username,url,use_count}>` | 【安全审查 S2】浮层条目清单。**只回登录条目**（判断在 core `autotype_candidates::login_candidates`，有单测），只回这五个字段，**绝不带 password/notes/totp_secret**。五字段是前端 `quick-search.ts::rankCandidates` 的真实入参：`title`/`username`/`url` 参与打分（`url` 包含是"按站点名搜"唯一命中途径），`use_count` 是空查询排序主轴。`username`/`url` 无值时为 `null`。**不截断条数**（前端 `RESULT_LIMIT=40` 是显示上限，先截再排会让第 41 条之后永远搜不到）。未解锁报 `ERR_NOT_UNLOCKED` |
 | `prefs_set_autotype_hotkey` | `{hotkey}` | `PrefsDto` | 1.5.39 改自动输入热键（空串 = 禁用；注册失败旧键位已回滚、配置不动；单实现命令，Android 正常路径到不了——设置卡不渲染） |
 | `open_url` | `{url}` | `()` | F-05（协议白名单） |
 | `totp_now` | `{secret}` | `{code,period,remaining}` | F-11 |
@@ -2983,10 +2984,15 @@ graph TD
 | `ERR_AUTOTYPE_NO_USERNAME` | 【1.5.39】`username` 动作要求条目有非空用户名 | `autotype.no_username`（前端显式映射） |
 | `ERR_AUTOTYPE_NO_URL` | 【1.5.39】`url` 动作要求条目有非空网址 | `autotype.no_url`（前端显式映射） |
 | `ERR_AUTOTYPE_NO_TOTP` | 【1.5.39】`totp` 动作要求条目配置了 TOTP 密钥 | `autotype.no_totp`（前端显式映射） |
+| `ERR_AUTOTYPE_BLOCKED` | 【1.5.39 / 安全审查 M2】`SendInput` 返回的事件数不足（系统**拦下**了注入）。最常见是 UIPI：目标窗口属于更高完整性级别的进程（管理员权限程序），低完整性进程的输入被静默丢弃；输入桌面被切换时同样如此 | `autotype.failed_blocked`（前端显式映射）。**不复用** `ERR_AUTOTYPE_FOCUS_LOST`：焦点丢了他点回去重试就行，被拦下得关掉目标程序的管理员权限或改用复制粘贴——两者给用户的建议相反 |
 | `ERR_CRYPTO` | 密码学操作失败 | `err.crypto` |
 | `ERR_INTERNAL` | 内部错误 | `err.internal` |
 
 > **错误回传格式（IPC）**：`{ "code": "ERR_...", "message_key": "err.xxx" }`。**日志中只记录 code，不记录任何参数值。**
+
+> **自定义命令不受 capability 约束（安全审查 S4）**：Tauri 的 capability / ACL 只约束**内置命令**（`core:*`、插件命令）。本应用所有 `#[tauri::command]` 都是自定义命令，**任何能执行我们自己前端 JS 的窗口都能 invoke 任意一个**——`capabilities/autotype.json` 里的 `"windows": ["autotype"]` 只限制了「这个窗口能用哪些内置窗口能力」，**不是**「只有它能调 auto_type_fill」。
+>
+> 因此凡是有窗口身份语义的命令必须在**命令内部**自校验：`auto_type_fill` 收一个 `tauri::WebviewWindow` 形参并拒绝 `label != "autotype"` 的调用（`Validation("auto_type_window")`）。新增此类命令时照抄这条模式，别指望 capability。
 
 ### 9.3 常量定义位置
 
