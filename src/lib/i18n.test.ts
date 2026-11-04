@@ -129,7 +129,7 @@ describe('旧代目录提示不许断言内容（绊线，非"意思正确"的�
 // （「里面有旧密码还能打开的备份」），而 en-US / th 仍是可能句（`may hold` / `อาจมี`）——
 // 同一句话两门语言下结论、两门语言留余地。所以判据得是**三条并立**，缺一条就漏：
 //
-//   ① **可能标记必须在场**：它不是可有可无的语气词，是这句话成立的前提（`docs/06` §6.65
+//   ① **可能标记必须在场**：它不是可有可无的语气词，是这句话成立的前提（`docs/06` §6.64.9
 //      写明「正确形状是把断言降到'可能有'」）；
 //   ② **断言式必须不在场**：「里面**有**」这种说法把"没看进去"说成了"看进去了"；
 //   ③ **必须点名"主密码"**：退化成"旧密码"同样让句子不再成立——本版本换主密码只换锁、
@@ -137,6 +137,11 @@ describe('旧代目录提示不许断言内容（绊线，非"意思正确"的�
 //
 // ⚠️ 仍然是**绊线**：换一种说法说同一件事（「里头兴许有」）它就看不见。它守的是
 // "这两句话不会在没人读中文的情况下被改回断言式"，不是"意思一定对"。
+//
+// ⚠️ 大小写口径：英文的两个 token 一律**两侧转小写**再比，与本文件既有 `forbidden`
+// 循环一致。第一版这里写的是裸 `text.includes('they hold')`，而运行时文案是
+// `They may hold …`（大写 T）——那是一个**看起来有覆盖、实际从不触发**的死格，
+// 正向的 `may hold` 会替它兜住，所以连变异都发现不了。这类"死格"比写错更难查。
 const POTENTIAL_MARKER: Record<string, string> = {
   'zh-CN': '可能有',
   'zh-TW': '可能有',
@@ -156,6 +161,9 @@ const MASTER_PASSWORD_TOKEN: Record<string, string> = {
   th: 'รหัสผ่านหลัก',
 };
 
+const has = (text: string, token: string): boolean =>
+  text.toLowerCase().includes(token.toLowerCase());
+
 describe('旧代目录提示：可能句必须在场、断言式必须不在场（D-191 绊线）', () => {
   const keys = [
     'settings.restore_point_old_unreadable',
@@ -164,24 +172,36 @@ describe('旧代目录提示：可能句必须在场、断言式必须不在场�
 
   for (const locale of LOCALES) {
     it(`${locale}：两格都是"可能有"而不是"有"，且点名主密码`, () => {
+      // 先查"这个 locale 有没有登记 token"。不登记 ≠ 文案写错——把人引去改文案
+      // 是最糟的一种误报（改了也不绿），所以这条要单独先说清楚。
+      const registered =
+        POTENTIAL_MARKER[locale] !== undefined &&
+        MASTER_PASSWORD_TOKEN[locale] !== undefined &&
+        ASSERTIVE_FORM[locale] !== undefined;
+      expect(
+        registered,
+        `${locale} 没在三张 token 表里登记（POTENTIAL_MARKER / MASTER_PASSWORD_TOKEN / ` +
+          `ASSERTIVE_FORM）——新增语言时先登记这三张表，不是去改文案`,
+      ).toBe(true);
+
+      const marker = POTENTIAL_MARKER[locale] ?? '';
+      const master = MASTER_PASSWORD_TOKEN[locale] ?? '';
+
       for (const key of keys) {
         const text = translate(locale, key);
         const label = `${locale}:${key}`;
 
-        expect(
-          text.includes(POTENTIAL_MARKER[locale] ?? '\u0000'),
-          `${label} 缺可能标记「${POTENTIAL_MARKER[locale]}」——没有它就变成了断言`,
-        ).toBe(true);
+        expect(has(text, marker), `${label} 缺可能标记「${marker}」——没有它就变成了断言`).toBe(true);
 
         for (const bad of ASSERTIVE_FORM[locale] ?? []) {
-          expect(text.includes(bad), `${label} 出现断言式「${bad}」：我们没看进去，不能说里面有什么`).toBe(
+          expect(has(text, bad), `${label} 出现断言式「${bad}」：我们没看进去，不能说里面有什么`).toBe(
             false,
           );
         }
 
         expect(
-          text.includes(MASTER_PASSWORD_TOKEN[locale] ?? '\u0000'),
-          `${label} 缺「${MASTER_PASSWORD_TOKEN[locale]}」——写成"旧密码"会让人以为钥匙也换了`,
+          has(text, master),
+          `${label} 缺「${master}」——写成"旧密码"会让人以为钥匙也换了`,
         ).toBe(true);
       }
     });
