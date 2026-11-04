@@ -38,33 +38,47 @@ function isScannable(path: string): boolean {
 const OK_LITERAL = /['"]common\.ok['"]/;
 
 /**
- * 成功 toast 的字面量键：`toast('success', 'attach.added')`。
+ * 成功 toast 的**字面量**键：`toast('success', 'attach.added')`。
  *
- * 这里刻意只收**字面量**：常量（`ATTACHMENT_OK_KEY` / `EXPORT_OK_KEY`）在定义处就是
- * 字面量，已被上一条覆盖，重复收会把同一个问题报两遍。
+ * 常量形态（`toast('success', ATTACHMENT_OK_KEY)`）另外由 `SUCCESS_TOAST_CONST` 收，
+ * 靠"全大写常量 → 它的字面量值"这条映射对上，不再靠"常量定义处是字面量所以自然被覆盖"
+ * ——那句话只对 `common.ok` 成立，对其余常量不成立。
  */
 const SUCCESS_TOAST_KEY = /toast\(\s*['"]success['"]\s*,\s*(['"])([^'"]+)\1/g;
 
+/** `toast('success', SOME_CONST)` 里的常量名（值在下面的映射表里查）。 */
+const SUCCESS_TOAST_CONST = /toast\(\s*['"]success['"]\s*,\s*([A-Z][A-Z0-9_]+)\s*[,)]/g;
+
+/** 全大写常量的定义：`export const X_OK_KEY = 'ns.key';`（只收带命名空间的键值）。 */
+const CONST_DEF = /(?:export\s+)?const\s+([A-Z][A-Z0-9_]+)\s*=\s*'([a-z][a-z0-9_]*\.[a-z0-9_]+)'/g;
+
 /**
- * 按钮词键名单：这些键的值是按钮上的字（「确定」「取消」…），当结果文案用等于没说。
+ * 按钮词集合**从字典派生**，不手写名单。
  *
- * 不按 `common.*` 整个命名空间禁——`common.copied`（「已复制」）是**结果句**，
- * 按命名空间一刀切会把合法的用法也判红。只点名这几个。
+ * 判据：`common` 命名空间下、值的字符数 ≤ 2 的那些键——中文两字以内基本只可能是
+ * 按钮/状态标签（确定、取消、保存、移除…）。阈值卡 2 而不卡 3，是因为
+ * `common.copied`「已复制」是**结果句**且正在被合法用作成功提示；卡 3 会把它误判。
+ *
+ * 手写名单的问题是漏（`common.edit`、`common.retry` 当年就没写进去），派生则跟着字典走。
  */
-const BUTTON_KEYS = new Set([
-  'common.ok',
-  'common.cancel',
-  'common.confirm',
-  'common.close',
-  'common.save',
-  'common.delete',
-  'common.back',
-  'common.yes',
-  'common.no',
-]);
+const zhCN = modules['./i18n/zh-CN.ts'] ?? '';
+
+function dictBlock(src: string, ns: string): string {
+  const m = new RegExp(`\\n {2}${ns}: \\{([\\s\\S]*?)\\n {2}\\},`).exec(src);
+  return m ? m[1] : '';
+}
+
+function dictPairs(block: string): Array<[string, string]> {
+  return [...block.matchAll(/\n {4}([a-z0-9_]+):\s*'((?:[^'\\]|\\.)*)'/g)].map((m) => [m[1], m[2]]);
+}
+
+const commonPairs = dictPairs(dictBlock(zhCN, 'common'));
+const BUTTON_WORDS = new Set(commonPairs.filter(([, v]) => v.length <= 2).map(([, v]) => v));
+const BUTTON_KEYS = new Set(
+  commonPairs.filter(([, v]) => v.length <= 2).map(([k]) => `common.${k}`),
+);
 
 const scannable = Object.keys(modules).filter(isScannable);
-const zhCN = modules['./i18n/zh-CN.ts'] ?? '';
 
 /** 取字典里某个键的字符串值（字典是 `key: 'value',` 的平铺结构，够用且不引解析器）。 */
 function dictValue(src: string, key: string): string | null {
@@ -72,19 +86,21 @@ function dictValue(src: string, key: string): string | null {
   return m ? m[1] : null;
 }
 
-/** 带命名空间的键（`attach.added`）是否真的存在于某本字典里。 */
-function dictHasKey(src: string, dotted: string): boolean {
+/** 带命名空间的键（`attach.added`）在某本字典里的值。 */
+function dictValueOf(src: string, dotted: string): string | null {
   const dot = dotted.indexOf('.');
   if (dot < 0) {
-    return false;
+    return null;
   }
-  const ns = dotted.slice(0, dot);
+  const block = dictBlock(src, dotted.slice(0, dot));
   const key = dotted.slice(dot + 1);
-  const block = new RegExp(`\\n {2}${ns}: \\{([\\s\\S]*?)\\n {2}\\},`).exec(src);
-  if (block === null) {
-    return false;
-  }
-  return new RegExp(`\\n {4}${key}:`).test(block[1]);
+  const m = new RegExp(`\\n {4}${key}:\\s*'((?:[^'\\\\]|\\\\.)*)'`).exec(block);
+  return m ? m[1] : null;
+}
+
+/** 带命名空间的键（`attach.added`）是否真的存在于某本字典里。 */
+function dictHasKey(src: string, dotted: string): boolean {
+  return dictValueOf(src, dotted) !== null;
 }
 
 describe('D-192 成功提示不得复用 `common.ok`（那是按钮上的「确定」）', () => {
@@ -109,30 +125,66 @@ describe('D-192 成功提示不得复用 `common.ok`（那是按钮上的「确�
     expect(offenders, `这些文件仍把 common.ok 当文案：${offenders.join(', ')}`).toEqual([]);
   });
 
-  it('所有成功 toast 的字面量键都不是按钮词，而且真的存在于字典里', () => {
-    // 这一条比上一条宽：它管的是"形状"——任何新写的 `toast('success', '某键')` 都会被看，
-    // 不只 `common.ok`。两个失败面各自有名字：
-    //   · 命中按钮词 → 又一次「结果是一条按钮」；
-    //   · 查不到这个键 → 界面会原样印出键名（D-185 同族，`translate()` 三级回落兜底）。
+  it('所有成功 toast 的键都不是按钮词、值也不等于按钮标签，且键真的存在于字典', () => {
+    // 两种写法都收：字面量 `'attach.added'` 与全大写常量 `ATTACHMENT_OK_KEY`
+    // （常量的值从它的定义处取）。只收字面量会漏掉常量形态——那条路永远不会红。
+    const consts = new Map<string, string>();
+    for (const path of scannable) {
+      for (const m of (modules[path] ?? '').matchAll(CONST_DEF)) {
+        consts.set(m[1], m[2]);
+      }
+    }
+
     const found: Array<{ file: string; key: string }> = [];
+    const unresolved: string[] = [];
     for (const path of scannable) {
       const src = modules[path] ?? '';
       for (const m of src.matchAll(SUCCESS_TOAST_KEY)) {
         found.push({ file: path, key: m[2] });
       }
+      for (const m of src.matchAll(SUCCESS_TOAST_CONST)) {
+        const key = consts.get(m[1]);
+        if (key === undefined) {
+          unresolved.push(`${path}→${m[1]}`);
+        } else {
+          found.push({ file: path, key });
+        }
+      }
     }
-    // 扫描面空转保护：全套源码里成功 toast 至少两位数，否则正则写错了。
-    expect(found.length, '一条成功 toast 都没扫到，正则或扫描面有问题').toBeGreaterThan(5);
+    // 常量名解析不到 = 扫描口径断了，先报这个，别让人去猜后面的断言。
+    expect(unresolved, `成功 toast 用了找不到定义的常量：${unresolved.join(', ')}`).toEqual([]);
+    // 下界取实测值（19 条字面量 + 3 条常量 = 22）：少一条就红，逼人回来看一眼是不是漏扫了
+    // （而不是默默少扫）。删掉一条成功提示时，把这个数一起改小——红一次比永远绿好。
+    expect(found.length, '扫到的成功 toast 少于实测值，正则或扫描面出问题了').toBeGreaterThanOrEqual(22);
 
-    const asButton = found.filter((f) => BUTTON_KEYS.has(f.key));
-    expect(asButton, `成功 toast 借用了按钮词：${asButton.map((f) => `${f.file}→${f.key}`).join(', ')}`).toEqual(
-      [],
-    );
+    const asButtonKey = found.filter((f) => BUTTON_KEYS.has(f.key));
+    expect(
+      asButtonKey,
+      `成功 toast 直接借用了按钮键：${asButtonKey.map((f) => `${f.file}→${f.key}`).join(', ')}`,
+    ).toEqual([]);
+
+    // 值级判据：拦住"换个命名空间写出同一个按钮词"这类规避（`attach.remove` 的值就是「移除」）。
+    const asButtonWord = found.filter((f) => {
+      const value = dictValueOf(zhCN, f.key);
+      return value !== null && BUTTON_WORDS.has(value.trim());
+    });
+    expect(
+      asButtonWord,
+      `成功 toast 的文案就是按钮上的字：${asButtonWord.map((f) => `${f.file}→${f.key}`).join(', ')}`,
+    ).toEqual([]);
 
     const unknown = found.filter((f) => !dictHasKey(zhCN, f.key));
-    expect(unknown, `成功 toast 用了字典里没有的键：${unknown.map((f) => `${f.file}→${f.key}`).join(', ')}`).toEqual(
-      [],
-    );
+    expect(
+      unknown,
+      `成功 toast 用了字典里没有的键：${unknown.map((f) => `${f.file}→${f.key}`).join(', ')}`,
+    ).toEqual([]);
+  });
+
+  it('派生出来的按钮词集合本身非空且包含「确定」（否则上面那条是空跑）', () => {
+    expect(BUTTON_WORDS.size, '一个按钮词都没派生出来，阈值或字典块解析坏了').toBeGreaterThan(10);
+    expect(BUTTON_WORDS.has('确定'), '按钮词集合里没有「确定」').toBe(true);
+    // 结果句不许被误判成按钮词：`common.copied`「已复制」正在被合法用作成功提示。
+    expect(BUTTON_WORDS.has('已复制'), '把结果句「已复制」当成了按钮词，阈值卡错了').toBe(false);
   });
 
   it('四个新文案在四本字典里都存在、够长、且没有退化成按钮词', () => {
