@@ -138,6 +138,9 @@ export const AUTOTYPE_FAILURE_KEY_BY_CODE: Readonly<Record<string, string>> = {
   ERR_AUTOTYPE_NO_TOTP: 'autotype.no_totp',
   // 目标程序不接受模拟按键（UIPI / 提权窗口拦截）。
   ERR_AUTOTYPE_BLOCKED: 'autotype.failed_blocked',
+  // 目标程序以管理员权限运行：注入前就判定了打不进去（1.5.41）。与上面那条分开，
+  // 因为**给用户的建议相反**——这条能照做（以管理员身份运行本程序，或手动粘贴）。
+  ERR_AUTOTYPE_TARGET_ELEVATED: 'autotype.failed_target_elevated',
 };
 
 /** 兜底文案键：映射表没收录的失败都用它，永远不显示键名。 */

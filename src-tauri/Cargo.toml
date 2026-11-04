@@ -99,5 +99,11 @@ windows = { version = "0.62", features = [
     # 1.5.39 自动输入：`SendInput` / `KEYBDINPUT` / `KEYEVENTF_UNICODE` /
     # `GetMessageExtraInfo` —— 把凭据打进原焦点窗口。只开特性、不引入新包。
     "Win32_UI_Input_KeyboardAndMouse",
+    # 1.5.41 自动输入：注入**前**判目标进程是否提权（`OpenProcess` /
+    # `PROCESS_QUERY_LIMITED_INFORMATION`）。必须提前判：跨完整性注入时
+    # `SendInput` 会返回"成功"，靠返回值根本发现不了打没打进去。
+    "Win32_System_Threading",
+    # 同上：`OpenProcessToken` / `GetTokenInformation(TokenElevation)`。
+    "Win32_Security",
 ] }
 windows-future = "0.3"

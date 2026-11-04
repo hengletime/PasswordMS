@@ -239,7 +239,8 @@ pub struct AutotypeCandidateDto {
     pub username: Option<String>,
     /// 无网址时为 `null`，与 `username` 同一口径。
     pub url: Option<String>,
-    /// 使用次数（前端在空查询时按它降序，即「最常用」）。
+    /// 使用次数。**前端不拿它排序**（D-196）：空查询的顺序由后端 `list_items`
+    /// 给定（钉住块 → 频度），前端层层重排会把钉住块整块抹掉。
     pub use_count: u64,
 }
 

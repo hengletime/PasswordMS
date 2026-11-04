@@ -78,6 +78,7 @@ const AUTOTYPE_KEYS = [
   'failed_not_unlocked',
   'failed_not_supported',
   'failed_blocked',
+  'failed_target_elevated',
   'no_username',
   'no_url',
   'no_totp',
@@ -277,6 +278,7 @@ describe('③ 失败文案是显式映射表，不许模板现拼键名', () => 
       ['ERR_AUTOTYPE_NO_URL', 'autotype.no_url'],
       ['ERR_AUTOTYPE_NO_TOTP', 'autotype.no_totp'],
       ['ERR_AUTOTYPE_BLOCKED', 'autotype.failed_blocked'],
+      ['ERR_AUTOTYPE_TARGET_ELEVATED', 'autotype.failed_target_elevated'],
     ];
     for (const [code, key] of expected) {
       expect(block, `映射表缺 ${code} → ${key}`).toContain(`${code}: '${key}'`);
@@ -438,6 +440,22 @@ describe('⑥ 命令层的闸门与早退（源码形状）', () => {
       between.includes('?'),
       `list_items( 与 wipe_plaintext() 之间有 ?：\n${between}`,
     ).toBe(false);
+  });
+
+  it('目标预检必须在 hide 之前（1.5.41：这是失败提示能显示出来的唯一时机）', () => {
+    // 1.5.40 的教训：管理员权限的目标程序里"没有提示"。根因是失败分支压根没走到
+    // ——跨完整性注入时 `SendInput` 返回"成功"，注入层发现不了。所以只能**注入前**
+    // 用目标进程的 TokenElevation 预检，而且必须在 `hide` 之前调：hide 之后报错，
+    // 浮层已经不在屏幕上了，reveal 也抢不回前台（目标权限更高时前台锁会拒绝）。
+    const body = rustCodeOnly(rustFnBody(cmd, 'pub async fn auto_type_fill('));
+    const pre = body.indexOf('precheck_target(');
+    const hideAt = body.indexOf('crate::autotype::hide(');
+    expect(pre, '缺 precheck_target 调用').toBeGreaterThan(-1);
+    expect(hideAt, '缺 hide 调用').toBeGreaterThan(-1);
+    expect(
+      pre,
+      'precheck_target 必须在 hide 之前——hide 之后再报错，浮层已经不见了',
+    ).toBeLessThan(hideAt);
   });
 
   it('auto_type_fill 失败分支必须 reveal 浮层（1.5.40：否则失败提示没人看得见）', () => {

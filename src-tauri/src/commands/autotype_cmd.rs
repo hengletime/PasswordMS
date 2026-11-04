@@ -36,17 +36,29 @@ use crate::dto::AutotypeCandidateDto;
 use crate::error::{lock_err, shell_codes, IpcError, IpcResult};
 use crate::state::{AppState, AutotypeTarget};
 
-/// 每个字符注入后的间隔（毫秒）。SendInput 是异步进系统队列的，太快会被
-/// 目标应用的输入处理吞掉；6ms 是保守起点，真机再调。
+/// 每个字符注入后的间隔（毫秒）。
+///
+/// 1.5.41：6 → 12。6ms 在记事本、普通输入框里没问题，但 **Chromium 的地址栏
+/// （omnibox）跟不上**——它在收到输入后会做 inline autocomplete 并把补全的那截选中，
+/// 太快的后续字符会替换掉那截选中内容，表现为"网址打了一半就断了"。慢一倍换稳定，
+/// 30 个字符也就多 180ms。
 #[cfg(windows)]
-const PER_CHAR_DELAY_MS: u64 = 6;
+const PER_CHAR_DELAY_MS: u64 = 12;
 /// 每个 Token（文本块 / Tab / Enter / 停顿）之间的间隔（毫秒）。
 #[cfg(windows)]
 const PER_TOKEN_DELAY_MS: u64 = 50;
 /// 切回目标窗口后的等待（毫秒）：`SetForegroundWindow` 是异步的，焦点转移
 /// 需要一点时间；等完再校验，不等就是"对着旧窗口注入"。
+///
+/// 1.5.41：200 → 300。Chromium 系窗口拿回前台后还要让 renderer 侧的编辑框恢复
+/// 输入状态，200ms 常常不够（表现为第一个字符丢在空白里）。
 #[cfg(windows)]
-const FOCUS_SETTLE_MS: u64 = 200;
+const FOCUS_SETTLE_MS: u64 = 300;
+/// 开始打一段文本前的静默期（毫秒）。
+///
+/// 1.5.41：给"编辑框被自动补全选中一截"留出消化时间（见 [`PER_CHAR_DELAY_MS`]）。
+#[cfg(windows)]
+const TEXT_SETTLE_MS: u64 = 150;
 
 /// 自动输入：把 `item_id` 对应条目的**指定内容**打进热键触发那一刻的前台窗口。
 ///
@@ -184,6 +196,13 @@ pub async fn auto_type_fill(
     // 热键触发时记录的目标窗口（句柄 + pid；None = 未记录/是自身窗口，注入前必拒）。
     let target = *state.autotype_target.lock().map_err(lock_err)?;
 
+    // 【1.5.41】预检必须在 `hide` **之前**——这是失败原因能出现在"还看得见的浮层"
+    // 里的唯一时机。管理员权限的目标程序在这里被拦下：跨完整性注入时 `SendInput`
+    // 返回"成功"但字一个都没进去（主人 2026-11-04 实测，日志里连失败都没有），
+    // 所以注入层根本发现不了，只能提前判。
+    #[cfg(windows)]
+    precheck_target(target)?;
+
     // 注入前先把浮层藏起来：它此刻是前台窗口，不藏就等于"往自己身上打"。
     // 失焦即收起（lib.rs on_window_event）通常已把它藏了，这里显式再藏一次防竞态。
     // （浮层是桌面专属模块，Android 上没有第二个窗口可藏。）
@@ -200,10 +219,12 @@ pub async fn auto_type_fill(
         .map_err(|_| IpcError::internal("auto_type_template_parse"))?;
 
     // ── 注入（平台对称；会话锁已释放，阻塞注入不占锁，也不阻塞 IPC 线程池）──
-    let result =
-        tauri::async_runtime::spawn_blocking(move || inject_with_focus(fields, target, &tokens))
-            .await
-            .map_err(|e| IpcError::internal(&format!("spawn_blocking auto_type_fill: {e}")))?;
+    let log_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        inject_with_focus(&log_app, fields, target, &tokens)
+    })
+    .await
+    .map_err(|e| IpcError::internal(&format!("spawn_blocking auto_type_fill: {e}")))?;
 
     if result.is_ok() {
         // 注入成功补一次触点：整段注入期间的用户活动以完成时刻为准。
@@ -274,23 +295,135 @@ struct Fields {
 
 /// 解析 Token → 注入。**平台对称函数**：Windows 真实现 / 其它平台报不支持。
 fn inject_with_focus(
+    app: &tauri::AppHandle,
     fields: Fields,
     target: Option<AutotypeTarget>,
     tokens: &[Token],
 ) -> IpcResult<()> {
     #[cfg(windows)]
     {
-        windows_inject(fields, target, tokens)
+        windows_inject(app, fields, target, tokens)
     }
     #[cfg(not(windows))]
     {
         // 非 Windows（Android）：运行时可读事实。cfg 块里禁止写 return，用尾表达式。
-        let _ = (fields, target, tokens);
+        let _ = (app, fields, target, tokens);
         Err(IpcError::shell(
             shell_codes::ERR_NOT_SUPPORTED,
             "err.desktop_only",
         ))
     }
+}
+
+/// 焦点丢失：句柄失效 / 句柄换了主人 / 切回失败 / 注入中途前台变了。
+#[cfg(windows)]
+fn focus_lost() -> IpcError {
+    IpcError::shell(
+        shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
+        "err.autotype_focus_lost",
+    )
+}
+
+/// 注入途中被系统拦下（`SendInput` 返回的事件数不足）。
+#[cfg(windows)]
+fn blocked() -> IpcError {
+    IpcError::shell(shell_codes::ERR_AUTOTYPE_BLOCKED, "err.autotype_blocked")
+}
+
+/// 进程是否以提权身份运行（`TokenElevation.TokenIsElevated`）。
+///
+/// `None` = 查不到（进程已退出、受保护进程、没有查询权限）。**查不到不当成"是"**：
+/// 拿不到信息就拦掉正常场景，比漏判更糟。
+///
+/// 为什么用 `TokenElevation` 而不解析完整性级别 SID：在"会不会被 UIPI 拦"这件事上
+/// 两者等价（Elevated 即中/高完整性），而前者不需要把 SID 拆出来比，几行就够。
+#[cfg(windows)]
+fn process_is_elevated(pid: u32) -> Option<bool> {
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    // 注意：`OpenProcessToken` 在 windows 0.62 里挂在 Threading 下（不在 Security），
+    // 与 Win32 头文件的直觉相反——照头文件去 Security 里找会 E0432。
+    use windows::Win32::System::Threading::{
+        OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    // SAFETY: 只申请查询权限、不继承句柄；下面每条出路都会关掉已打开的句柄。
+    let process: HANDLE =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok()?;
+    let mut token = HANDLE::default();
+    // SAFETY: process 是刚打开的有效句柄；token 是本栈上的合法 out 参数。
+    let token_ok = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) }.is_ok();
+    let mut elevation = TOKEN_ELEVATION::default();
+    let mut ret_len = 0u32;
+    let queried = token_ok
+        && unsafe {
+            GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut TOKEN_ELEVATION as *mut core::ffi::c_void),
+                u32::try_from(std::mem::size_of::<TOKEN_ELEVATION>()).unwrap_or(0),
+                &mut ret_len,
+            )
+        }
+        .is_ok();
+    // SAFETY: 只关闭确实打开过的句柄；关闭失败无补救动作，忽略。
+    unsafe {
+        if token_ok {
+            let _ = CloseHandle(token);
+        }
+        let _ = CloseHandle(process);
+    }
+    queried.then_some(elevation.TokenIsElevated != 0)
+}
+
+/// 注入**前**预检：目标窗口仍有效、仍属于记录的进程、且没有提权。
+///
+/// 必须在 [`crate::autotype::hide`] **之前**调用——这是让失败原因出现在"还看得见
+/// 的浮层"里的唯一时机。理由（1.5.40 的教训）：
+///
+/// - hide 之后的失败只能靠 [`crate::autotype::reveal`] 把窗口塞回前台，而**目标窗口
+///   权限更高时普通进程抢不回前台**（前台锁），那条路对管理员程序必然失效；
+/// - 更根本的是：跨完整性注入时 `SendInput` **返回成功**，注入层压根不会报错，
+///   所以"事后检测"这条路本身就不存在。
+///
+/// 注入层仍会重复做句柄/pid 复核：预检到真正注入之间有窗口期，用户可能已经切走。
+/// 两份检查目的不同——这份是为了"报得出错"，那份是为了"绝不误打"。
+#[cfg(windows)]
+fn precheck_target(target: Option<AutotypeTarget>) -> IpcResult<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+
+    let Some(target) = target else {
+        // 热键那一刻前台是本进程自己的窗口，或被清掉了：没有可注入的目标。
+        return Err(focus_lost());
+    };
+    if crate::platform::hwnd_if_valid(target.hwnd).is_none() {
+        return Err(focus_lost());
+    }
+    let mut pid = 0u32;
+    // SAFETY: 句柄刚过 IsWindow 校验；pid 是本栈上的合法 out 参数。
+    unsafe {
+        GetWindowThreadProcessId(HWND(target.hwnd as *mut core::ffi::c_void), Some(&mut pid))
+    };
+    if pid == 0 || pid != target.pid {
+        return Err(focus_lost());
+    }
+    // 提权预检：目标 elevated、自身不是 → UIPI 必然丢弃我们的输入。
+    if matches!(
+        (
+            process_is_elevated(target.pid),
+            process_is_elevated(std::process::id())
+        ),
+        (Some(true), Some(false))
+    ) {
+        return Err(IpcError::shell(
+            shell_codes::ERR_AUTOTYPE_TARGET_ELEVATED,
+            "err.autotype_target_elevated",
+        ));
+    }
+    Ok(())
 }
 
 /// Windows 注入本体。
@@ -303,6 +436,7 @@ fn inject_with_focus(
 /// 「系统不让打」与「焦点跑了」是两件事，用户要做的动作也不同（见错误码注释）。
 #[cfg(windows)]
 fn windows_inject(
+    app: &tauri::AppHandle,
     fields: Fields,
     target: Option<AutotypeTarget>,
     tokens: &[Token],
@@ -318,19 +452,6 @@ fn windows_inject(
     use windows::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
     };
-
-    /// 焦点丢失：句柄失效 / 句柄换了主人 / 切回失败 / 注入中途前台变了。
-    fn focus_lost() -> IpcError {
-        IpcError::shell(
-            shell_codes::ERR_AUTOTYPE_FOCUS_LOST,
-            "err.autotype_focus_lost",
-        )
-    }
-
-    /// 输入被系统拦下（`SendInput` 返回的事件数不足）。
-    fn blocked() -> IpcError {
-        IpcError::shell(shell_codes::ERR_AUTOTYPE_BLOCKED, "err.autotype_blocked")
-    }
 
     /// `KEYBDINPUT.dwExtraInfo`。
     ///
@@ -463,12 +584,19 @@ fn windows_inject(
                 let mut buf: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
                 // `as_chunks::<2>()`：固定 2 字节一组，比 `chunks_exact(2)` 少一次
                 // 运行期对齐检查（与 `capture_screen` 的 `as_chunks_mut::<4>` 同款写法）。
+                // 开口前先静默一下：Chromium 系编辑框（尤其地址栏）在上一段输入后
+                // 会跑一次自动补全并选中补全内容，立刻接着打会把那截选中替换掉。
+                std::thread::sleep(std::time::Duration::from_millis(TEXT_SETTLE_MS));
                 for pair in buf.as_chunks::<2>().0 {
                     send_unicode(u16::from_le_bytes(*pair))?;
                     std::thread::sleep(std::time::Duration::from_millis(PER_CHAR_DELAY_MS));
                 }
                 // 明文缓冲用完即擦（安全基线：不依赖作用域回收）。
                 securemem::wipe(&mut buf);
+                // 留证据（**不含内容、不含长度**）：SendInput 说成功而用户没看到字，
+                // 就是目标应用吞了。没有这行，"没注入"和"注入了没人收"在日志里长得
+                // 一模一样——1.5.40 排查管理员程序那次就卡在这里。
+                crate::state::append_log(app, "[autotype] 文本段注入完成");
             }
         }
         std::thread::sleep(std::time::Duration::from_millis(PER_TOKEN_DELAY_MS));

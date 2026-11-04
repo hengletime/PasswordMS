@@ -79,26 +79,48 @@ export interface RankableCandidate {
  *
  * `url` 为 `null` 时网址那两档自然拿不到分，排序退化到
  * 「标题前缀 > 标题包含 > 用户名前缀 > 用户名包含」。
+ *
+ * ## 为什么空查询**不排序**、同分也不设次键（D-196，主人 2026-11-04 真机）
+ *
+ * 顺序不是前端能自己决定的东西。后端 `list_items` 已按
+ * 「钉住块 `pin_order` ASC → 未钉住 `use_count` DESC → `last_used_at` DESC
+ * → `updated_at` DESC → `item_id` ASC」排好，两个入口拿到的数组都带着这个顺序
+ * （`login_candidates` 的 `filter_map` 与 DTO 的 `map` 都保序）。
+ *
+ * 前端再补一层 `use_count` + 标题序就会把整块顺序**覆盖**掉：钉住条目的 `use_count`
+ * 通常不高，一按频度重排就沉到未钉住的常用条目下面——1.5.41 真机反馈的
+ * 「钉住和手动排序在呼出的弹窗里不管用、钉住的没排前面」就是这么来的
+ * （旧排序目标里根本没有「钉住」这一维，`pin_order` 更是从未被读取）。
+ *
+ * 所以这里只做一件事：**按匹配得分做稳定排序**。得分是前端独有的信息（后端不知道
+ * 用户在搜什么），其余维度一律继承后端顺序。`Array.prototype.sort` 自 ES2019 起
+ * 保证稳定，同分条目保持原序 = 免费继承「钉住 + 手动顺序 + 频度」三层语义，
+ * 且后端哪天改了排序口径，这里自动跟随，不会长出第二套事实。
+ *
+ * `QuickHit.useCount` 因此**不再参与排序**（保留在结构里只为 wire 稳定，
+ * 不许为了"加点兜底"把它重新塞回比较函数）。
  */
 function rankHits(hits: QuickHit[], query: string, limit: number): QuickHit[] {
   const q = query.trim().toLowerCase();
-  const scored = q ? hits.filter((h) => (h.score = scoreOf(h, q)) > 0) : hits;
-
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    if (b.useCount !== a.useCount) return b.useCount - a.useCount;
-    return a.title.localeCompare(b.title);
-  });
-
+  if (!q) {
+    // 空查询 = "给我最该看的几条"：后端顺序本身就是答案，切前 limit 条即可。
+    // 这个早退还切断了一个隐性依赖：下面那句 `scoreOf(h, '') > 0` 之所以不会
+    // 把全部条目滤光，全靠 `''.startsWith('')` 是 true（返回 100 分）。哪天
+    // `scoreOf` 改成空串不匹配，空查询就会白屏 —— 早退让这种事只影响不到这里。
+    return hits.slice(0, limit);
+  }
+  const scored = hits.filter((h) => (h.score = scoreOf(h, q)) > 0);
+  scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit);
 }
 
 /**
  * 快速搜索窗口：过滤 + 排序。
  *
- * 空查询不是"没有结果"，而是**最常用的那几条**：用户按热键常常只是想说
- * "给我上次用的那个"。排序口径与主列表一致（频度 → 最近使用 → 最近更新），
- * 免得同一个条目在两个地方的位置对不上。
+ * 空查询不是"没有结果"，而是**最该看的几条**：用户按热键常常只是想说
+ * "给我上次用的那个"。顺序**完全继承主列表**（钉住块 `pin_order` → 未钉按频度），
+ * 所以同一个条目在两个地方的位置必然对得上——前提是调用方传进来的是
+ * 后端 `list_items` 的原序（别先自己 `sort()` 一遍再传）。
  *
  * @param items 全量条目（含非登录项，本函数内部会筛掉）
  * @param query 原始输入，内部做去空格 + 小写；纯空白视同空查询
@@ -128,6 +150,9 @@ export function rankItems(items: readonly ItemDto[], query: string, limit = RESU
  * **不判别、不过滤**：候选只含登录项（Rust `autotype_candidates` 已筛过），
  * 这里再把关只会多一处需要测试的分支。打分与 `rankItems` 共用 `rankHits`——
  * 同一个条目在两个窗口的位置因此必然一致。
+ *
+ * 空查询保序这一条对浮层尤其要紧：`autotype_candidates` 走的就是
+ * `repo.list_items()`，候选顺序 = 主列表顺序 = 钉住块在前（D-196）。
  */
 export function rankCandidates(
   rows: readonly RankableCandidate[],

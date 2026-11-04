@@ -2984,6 +2984,7 @@ graph TD
 | `ERR_AUTOTYPE_NO_USERNAME` | 【1.5.39】`username` 动作要求条目有非空用户名 | `autotype.no_username`（前端显式映射） |
 | `ERR_AUTOTYPE_NO_URL` | 【1.5.39】`url` 动作要求条目有非空网址 | `autotype.no_url`（前端显式映射） |
 | `ERR_AUTOTYPE_NO_TOTP` | 【1.5.39】`totp` 动作要求条目配置了 TOTP 密钥 | `autotype.no_totp`（前端显式映射） |
+| `ERR_AUTOTYPE_TARGET_ELEVATED` | 【1.5.41】**目标进程提权**——注入前就判定打不进去（`TokenElevation.TokenIsElevated`：目标 elevated 而自身不是）。为什么必须提前判：跨完整性注入时 `SendInput` **返回成功**（事件入队后被 UIPI 在更底层丢弃），返回值不指示真实结果，事后无从发现（2026-11-04 管理员 PowerShell 实测：一个字没进去、日志里连失败都没有）。**在 `autotype::hide` 之前返回**，所以错误能显示在还看得见的浮层里 | `autotype.failed_target_elevated`（前端显式映射）。与 `ERR_AUTOTYPE_BLOCKED` 分开：那条是注入途中被拦、用户无从下手；这条可以照做（以管理员身份运行本程序，或手动粘贴） |
 | `ERR_AUTOTYPE_BLOCKED` | 【1.5.39 / 安全审查 M2】`SendInput` 返回的事件数不足（系统**拦下**了注入）。最常见是 UIPI：目标窗口属于更高完整性级别的进程（管理员权限程序），低完整性进程的输入被静默丢弃；输入桌面被切换时同样如此 | `autotype.failed_blocked`（前端显式映射）。**不复用** `ERR_AUTOTYPE_FOCUS_LOST`：焦点丢了他点回去重试就行，被拦下得关掉目标程序的管理员权限或改用复制粘贴——两者给用户的建议相反 |
 | `ERR_CRYPTO` | 密码学操作失败 | `err.crypto` |
 | `ERR_INTERNAL` | 内部错误 | `err.internal` |

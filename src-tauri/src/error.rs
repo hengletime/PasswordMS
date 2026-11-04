@@ -72,6 +72,19 @@ pub mod shell_codes {
     pub const ERR_AUTOTYPE_NO_URL: &str = "ERR_AUTOTYPE_NO_URL";
     /// 自动输入（1.5.39 增强）：`totp` 动作要求条目配置了 TOTP 密钥。
     pub const ERR_AUTOTYPE_NO_TOTP: &str = "ERR_AUTOTYPE_NO_TOTP";
+    /// 自动输入（1.5.41）：**目标进程提权**——注入前就能确定打不进去。
+    ///
+    /// 与 [`ERR_AUTOTYPE_BLOCKED`] 分开，理由有两条：
+    /// 1. **给用户的建议相反**。这条可以照做（以管理员身份运行 PasswordMS，或者手动
+    ///    复制粘贴）；"被拦"那条是注入途中的意外，用户无从下手。
+    /// 2. **时序不同**。这条在 `hide()` **之前**就返回，所以错误能显示在还看得见的
+    ///    浮层里；`BLOCKED` 只能发生在 hide 之后。
+    ///
+    /// 为什么非得"注入前"判：跨完整性注入时 `SendInput` **返回成功**（事件进了系统
+    /// 队列，被 UIPI 在更底层丢弃），返回值根本不指示有没有真打进去。主人 2026-11-04
+    /// 在管理员 PowerShell 里实测：一个字没打进去，日志里连一条失败都没有——
+    /// 1.5.39 的"检查 SendInput 返回值"因此形同虚设。
+    pub const ERR_AUTOTYPE_TARGET_ELEVATED: &str = "ERR_AUTOTYPE_TARGET_ELEVATED";
     /// 自动输入（1.5.39 增强 / 安全审查 M2）：**按键被系统拦下**——`SendInput`
     /// 返回 0（不足请求的事件数）。
     ///
