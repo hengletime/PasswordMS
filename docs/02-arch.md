@@ -2648,6 +2648,8 @@ pub struct BaseRev { pub rev: u64, pub hash: [u8; 32] }
 | `generate_password` | `GeneratorOptions` | `{password}` | F-07 |
 | `copy_secret` | `{text,ttl_secs}` | `u64` | F-06（返回**代际号**，到期清理时带回；`ttl_secs=0` = 不安排自动清空，见 §3.25） |
 | `clear_secret_if_own` | `{gen}` | `bool` | A-03 到期清空（**仅清 `gen` 那一代**，且仅当剪贴板仍是本应用写的内容） |
+| `auto_type_fill` | `{item_id}` | `()` | 1.5.39 自动输入（热键 → 浮层选中条目 → Rust 切回原焦点窗口逐键 `SendInput`；只收 `item_id`，明文命令内现取；Android 返回 `ERR_NOT_SUPPORTED`） |
+| `prefs_set_autotype_hotkey` | `{hotkey}` | `PrefsDto` | 1.5.39 改自动输入热键（空串 = 禁用；注册失败旧键位已回滚、配置不动；单实现命令，Android 正常路径到不了——设置卡不渲染） |
 | `open_url` | `{url}` | `()` | F-05（协议白名单） |
 | `totp_now` | `{secret}` | `{code,period,remaining}` | F-11 |
 | `import_preview` | `{source_path,format}` | `ImportPreviewDto` | F-14 预览（D-87：源编码容错 UTF-8 BOM/UTF-16/GBK） |
@@ -2890,6 +2892,7 @@ graph TD
 | `tauri-plugin-clipboard-manager` | `2` | 剪贴板读写（F-06） | 轻微 |
 | `tauri-plugin-opener` | `2` | 调用系统浏览器打开 URL（F-05） | 轻微 |
 | `tauri-plugin-fs` | `2` | 前端受限文件访问（导出路径） | 轻微 |
+| `tauri-plugin-global-shortcut` | `2` | 全局热键（托盘/快速搜索/自动输入；v1.4.10 起用，26399fc 漏记、2026-11-04 补录；**只在 Rust 侧调用**，前端无 JS 包无权限） | 轻微 |
 | `serde` | `1` | 序列化 | 轻 |
 | `serde_json` | `1` | JSON 编解码（头部、同步报文） | 轻 |
 | `thiserror` | `2` | 错误类型派生 | 轻 |
@@ -2976,6 +2979,7 @@ graph TD
 | `ERR_CONFLICT_EXISTS` | 存在未仲裁冲突 | `err.conflict` |
 | `ERR_RESTORE_CONFLICT` | 【D-91】回收站还原被拒（同 item_id 已有活跃条目） | `err.restore_conflict` |
 | `ERR_IO` | 文件 IO 错误 | `err.io` |
+| `ERR_AUTOTYPE_FOCUS_LOST` | 【1.5.39】自动输入目标窗口焦点丢失（句柄失效 / `SetForegroundWindow` 失败 / 切回后前台不是目标 / **注入中途前台变了**——立即中止，剩余序列不发）。与前端 `autotype.ts::AUTOTYPE_FAILURE_KEY_BY_CODE` 逐字对齐 | 前端浮层按 code 显式映射 `autotype.failed_focus` |
 | `ERR_CRYPTO` | 密码学操作失败 | `err.crypto` |
 | `ERR_INTERNAL` | 内部错误 | `err.internal` |
 

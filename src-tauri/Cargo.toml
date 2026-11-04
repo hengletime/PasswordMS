@@ -96,5 +96,8 @@ windows = { version = "0.62", features = [
     # UI 语言兜底。WebView2 的 `navigator.language` 在档案瞬时不可用时可能报
     # en-US（2026-11-03 实例），只开特性、不引入新包。
     "Win32_Globalization",
+    # 1.5.39 自动输入：`SendInput` / `KEYBDINPUT` / `KEYEVENTF_UNICODE` /
+    # `GetMessageExtraInfo` —— 把凭据打进原焦点窗口。只开特性、不引入新包。
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 windows-future = "0.3"

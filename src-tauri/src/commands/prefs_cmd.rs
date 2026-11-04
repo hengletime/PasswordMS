@@ -1,4 +1,4 @@
-//! 应用级配置命令（v1.4.10）：热键键位 / 开机自启 / 托盘菜单文案。
+//! 应用级配置命令（v1.4.10）：热键键位 / 开机自启 / 托盘菜单文案（1.5.39 增自动输入热键）。
 //!
 //! ## 为什么是两套实现
 //!
@@ -7,9 +7,14 @@
 //! 所以这里按 `cfg(desktop)` 给同名同签名的两份实现 —— 而不是在函数体里塞 cfg 分支，
 //! 那样会把桌面 API 的引用留在移动端的编译单元里，仍然炸（实测 17 个错误）。
 //!
+//! 例外是 `prefs_set_autotype_hotkey`（1.5.39）：**单实现**命令——真实现拆进
+//! cfg(desktop) 的 helper，命令本体的两个 cfg 块各自只引用本平台可用符号。
+//! 这样做是因为契约测试按「属性出现次数」钉死总数，而该命令在移动端设置卡
+//! 本来就不渲染（Android 走纯文案，前端不做任何 invoke）。
+//!
 //! 移动端行为：`prefs_get` 回 `supported: false`（前端据此整卡不渲染），写操作一律
 //! `ERR_NOT_SUPPORTED`（正常路径到不了，属于防御）。命令名两端完全一致，
-//! `generate_handler!` 与契约测试（命令数 67）都不需要分叉。
+//! `generate_handler!` 与契约测试（命令数）都不需要分叉。
 //!
 //! ## 桌面端三条写入命令的顺序
 //!
@@ -35,7 +40,7 @@ use crate::error::lock_err;
 use crate::hotkey::ApplyError;
 #[cfg(desktop)]
 use crate::prefs::{canonical_hotkey, HotkeyReject};
-#[cfg(desktop)]
+// `AppState` 只是类型标注（命令签名用），两个平台都要在作用域里。
 use crate::state::AppState;
 #[cfg(desktop)]
 use crate::tray::{self, TrayLabels};
@@ -83,6 +88,28 @@ pub fn prefs_set_hotkey(
     snapshot(&app)
 }
 
+/// 改**自动输入**热键（1.5.39）。`hotkey` 为空串表示关闭。
+///
+/// 单实现命令（命令属性只出现一次，契约测试按属性总数计数）：桌面真实现
+/// 拆进 [`set_autotype_hotkey_desktop`]，移动端分支只引用桩错误——两个 cfg 块
+/// 各自只出现本平台可用的符号，Android 编译单元里没有热键模块的任何引用。
+#[tauri::command(rename_all = "snake_case")]
+pub fn prefs_set_autotype_hotkey(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    hotkey: String,
+) -> IpcResult<PrefsDto> {
+    #[cfg(desktop)]
+    {
+        set_autotype_hotkey_desktop(&app, state.inner(), &hotkey)
+    }
+    #[cfg(not(desktop))]
+    {
+        let _ = (&app, state.inner(), &hotkey);
+        Err(unsupported_err())
+    }
+}
+
 /// 开关开机自启。写入系统注册表成功后才记进配置。
 #[cfg(desktop)]
 #[tauri::command(rename_all = "snake_case")]
@@ -126,6 +153,43 @@ pub fn tray_set_labels(app: tauri::AppHandle, labels: TrayLabels) -> IpcResult<(
     })
 }
 
+/// 桌面实现：先让系统状态成立（注册成功），再落配置——与 `prefs_set_hotkey`
+/// 同一条纪律。注册/回滚走 [`crate::hotkey::apply_autotype`]（成对重建两颗热键）。
+#[cfg(desktop)]
+fn set_autotype_hotkey_desktop(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    hotkey: &str,
+) -> IpcResult<PrefsDto> {
+    let canonical = if hotkey.trim().is_empty() {
+        String::new()
+    } else {
+        canonical_hotkey(hotkey).map_err(map_reject)?
+    };
+
+    crate::hotkey::apply_autotype(app, &canonical).map_err(|e| match e {
+        ApplyError::Invalid(r) => map_reject(r),
+        ApplyError::Unavailable(detail) => {
+            crate::state::append_log(
+                app,
+                &format!("[hotkey] 注册自动输入热键 {canonical} 失败：{detail}"),
+            );
+            IpcError::shell(
+                shell_codes::ERR_HOTKEY_UNAVAILABLE,
+                "err.hotkey_unavailable",
+            )
+        }
+    })?;
+
+    {
+        let mut guard = state.prefs.lock().map_err(lock_err)?;
+        guard.autotype_hotkey = canonical;
+    }
+    let prefs = state.prefs_snapshot();
+    tray::persist(app, &prefs);
+    snapshot(app)
+}
+
 /// 组装返回体。三处写入命令成功后都走这里，保证字段口径一致。
 #[cfg(desktop)]
 fn snapshot(app: &tauri::AppHandle) -> IpcResult<PrefsDto> {
@@ -135,6 +199,7 @@ fn snapshot(app: &tauri::AppHandle) -> IpcResult<PrefsDto> {
         supported: true,
         hotkey: prefs.hotkey,
         hotkey_ok,
+        autotype_hotkey: prefs.autotype_hotkey,
         autostart: autostart_enabled(app, prefs.autostart),
     })
 }
@@ -177,6 +242,7 @@ fn unsupported_dto() -> PrefsDto {
         supported: false,
         hotkey: String::new(),
         hotkey_ok: false,
+        autotype_hotkey: String::new(),
         autostart: false,
     }
 }

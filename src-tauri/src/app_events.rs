@@ -23,3 +23,13 @@ pub const TRAY_HINT_EVENT: &str = "app://tray-hint";
 /// 事件只负责"聚焦"，唤出窗口由 Rust 侧完成（`show + set_focus`）——
 /// 前端拿不到窗口 API 的正确时序，等 JS 收到事件再唤窗会慢半拍且可能抢焦点失败。
 pub const QUICK_SEARCH_EVENT: &str = "app://quick-search";
+
+/// 自动输入浮层被唤出 → 浮层前端加载条目清单、把光标放进搜索框（1.5.39）。
+///
+/// 触发链：全局热键（解锁态）→ Rust 记下目标窗口句柄 → 唤出 `autotype` 浮层
+/// （`show + set_focus`）→ 本事件只负责"让浮层把界面备好"，与
+/// [`QUICK_SEARCH_EVENT`] 同一层分工——窗口唤起由 Rust 完成，前端拿不到正确时序。
+///
+/// **与前端常量是跨语言字面值契约**（前端 `tray-events.ts::AUTOTYPE_PICK_EVENT`）：
+/// 两边写不一样不会有任何报错，只会静默失效。
+pub const AUTOTYPE_PICK_EVENT: &str = "app://auto-type";

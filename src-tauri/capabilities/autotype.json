@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "autotype",
+  "description": "自动输入浮层（1.5.39）：只给它「把自己藏起来」这一项窗口能力，加上事件监听。",
+  "windows": ["autotype"],
+  "permissions": ["core:default", "core:window:allow-hide"]
+}

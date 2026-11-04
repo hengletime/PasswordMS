@@ -76,7 +76,7 @@
 |---|---|---|
 | 生物识别解锁（Windows Hello / Android 指纹） | **已做** | `crates/passwordms-core/src/biometric.rs`、`src-tauri/src/commands/biometric_cmd.rs`、`tests/biometric_wrap.rs`、`docs/08-biometric-unlock.md` |
 | Windows 全局热键快速搜索 | **已做**（只做复制，不含自动输入） | `src-tauri/src/hotkey.rs`、`src/components/QuickSearch.svelte` |
-| 自动输入（模拟按键代填） | **未启动**。**建议冻结，待主人拍板**——理由：要往其它应用里注入按键，等于绕过目标应用自己的权限与焦点校验。真要做的前置条件：只对显式选中的条目、先校验目标焦点、不批量 | `QuickSearch.svelte` 只有 `copy_secret` |
+| 自动输入（模拟按键代填） | **已立项（2026-11-04 主人拍板）**：Windows 最小可用版——全局热键 → 条目选择浮层 → Rust 切回原焦点窗口 `SendInput` 注入；**Android 不做**。原冻结前提全部保留为设计约束：只对显式选中的条目（命令只收 `item_id`）、注入前校验目标焦点（`IsWindow` + `SetForegroundWindow` + 前台复查，中途变窗立即中止）、无批量操作 | `crates/passwordms-core/src/autotype_seq.rs`、`src-tauri/src/autotype.rs`、`src-tauri/src/commands/autotype_cmd.rs`、`src-tauri/src/hotkey.rs` |
 | Android 系统级自动填充（Autofill Framework） | **未启动** | `grep -i autofill` 全仓 0 命中 |
 | 标签 / 多视图（按类型、最近使用） | **未启动** | `model/item.rs` 的 `Item` 无 tags 字段 |
 | 密文快照版本历史 | **未启动** | `grep "版本历史\|item_history\|revisions"` 全仓 0 命中 |

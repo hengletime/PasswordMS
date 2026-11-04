@@ -97,6 +97,14 @@ pub struct AppState {
     /// **不放进保险库**：锁屏态和冷启动时就要用它（详见 `prefs.rs` 模块文档）。
     /// 启动时由 `lib.rs` 从磁盘载入并覆盖这里的默认值。
     pub prefs: Mutex<crate::prefs::AppPrefs>,
+    /// 自动输入（1.5.39）：热键触发那一刻的**目标窗口句柄**（Windows HWND 原始值，
+    /// `isize` 存储——HWND 不是 `Send + Sync`，互斥里只能放原始值，与
+    /// `platform::main_hwnd` 同一取舍）。
+    ///
+    /// 生命周期：热键按下 → `GetForegroundWindow()` 记入；`auto_type_fill` 注入前
+    /// 用 `IsWindow` 现查，无效（0 / 已销毁 / 假句柄）一律报「焦点丢失」。
+    /// 锁定级联把它清回 `None`，防句柄跨锁定会话残留。
+    pub autotype_target: Mutex<Option<isize>>,
 }
 
 impl AppState {
@@ -114,6 +122,7 @@ impl AppState {
             biometric_busy: AtomicBool::new(false),
             last_activity_ms: AtomicI64::new(now_ms()),
             prefs: Mutex::new(crate::prefs::AppPrefs::default()),
+            autotype_target: Mutex::new(None),
         }
     }
 

@@ -32,6 +32,13 @@ use tauri_plugin_global_shortcut::Shortcut;
 /// `P` = Password。
 pub const DEFAULT_HOTKEY: &str = "ctrl+alt+KeyP";
 
+/// 自动输入（Auto-Type）浮层的全局热键默认值。
+///
+/// **与前端设置界面的字面值是跨端契约**：默认 `Ctrl+Alt+Space`（同 `Space` 的
+/// W3C `KeyboardEvent.code` 写法）。注册前仍过 [`canonical_hotkey`] 归一
+/// （修饰符小写、键名 `Space` 原样保留）。
+pub const DEFAULT_AUTOTYPE_HOTKEY: &str = "Ctrl+Alt+Space";
+
 /// 应用级配置。
 ///
 /// `hotkey` 存的是**规范化字符串**（小写修饰符 + W3C `KeyboardEvent.code`），
@@ -41,6 +48,8 @@ pub const DEFAULT_HOTKEY: &str = "ctrl+alt+KeyP";
 pub struct AppPrefs {
     /// 全局热键。空字符串表示**用户主动禁用热键**（托盘与关窗行为照常）。
     pub hotkey: String,
+    /// 自动输入浮层热键（1.5.39）。空串 = 用户禁用；校验与 [`Self::hotkey`] 同一条路。
+    pub autotype_hotkey: String,
     /// 开机自启是否开启。**以系统实际状态为准**：这里只是「上次我们设置的值」，
     /// 用户在任务管理器里禁用了启动项时，界面要显示真实状态而不是这个字段。
     pub autostart: bool,
@@ -52,6 +61,7 @@ impl Default for AppPrefs {
     fn default() -> Self {
         Self {
             hotkey: DEFAULT_HOTKEY.to_string(),
+            autotype_hotkey: DEFAULT_AUTOTYPE_HOTKEY.to_string(),
             autostart: false,
             tray_hint_shown: false,
         }
@@ -186,17 +196,24 @@ pub fn load_or_default(path: &Path) -> (AppPrefs, Option<String>) {
     };
 
     // 字段级的「合法但不可用」：热键写坏了，只该回退热键那一项，不该把自启设置一起清掉。
+    let mut warn: Option<String> = None;
     if !prefs.hotkey.is_empty() && canonical_hotkey(&prefs.hotkey).is_err() {
         let bad = std::mem::replace(&mut prefs.hotkey, DEFAULT_HOTKEY.to_string());
-        return (
-            prefs,
-            Some(format!(
-                "[prefs] 热键 {bad:?} 非法，已回落到 {DEFAULT_HOTKEY}"
-            )),
-        );
+        warn = Some(format!(
+            "[prefs] 热键 {bad:?} 非法，已回落到 {DEFAULT_HOTKEY}"
+        ));
     }
-
-    (prefs, None)
+    // 自动输入热键：同一条校验路（`canonical_hotkey`），坏值只回退自己。
+    if !prefs.autotype_hotkey.is_empty() && canonical_hotkey(&prefs.autotype_hotkey).is_err() {
+        let bad = std::mem::replace(
+            &mut prefs.autotype_hotkey,
+            DEFAULT_AUTOTYPE_HOTKEY.to_string(),
+        );
+        warn = Some(format!(
+            "[prefs] 自动输入热键 {bad:?} 非法，已回落到 {DEFAULT_AUTOTYPE_HOTKEY}"
+        ));
+    }
+    (prefs, warn)
 }
 
 /// 原子写配置（`.tmp` + rename）。目录不存在时自动创建。
@@ -320,6 +337,31 @@ mod tests {
     }
 
     #[test]
+    fn default_autotype_hotkey_is_canonical() {
+        // 默认值必须过规范化——否则全新机器上自动输入热键注册不上。
+        assert!(canonical_hotkey(DEFAULT_AUTOTYPE_HOTKEY).is_ok());
+        assert_eq!(AppPrefs::default().autotype_hotkey, DEFAULT_AUTOTYPE_HOTKEY);
+    }
+
+    #[test]
+    fn bad_autotype_hotkey_only_resets_that_field() {
+        // 关键行为：自动输入热键写坏只回退自己，主热键与自启选择必须保住。
+        let dir = temp_dir("badautotype");
+        let f = dir.join("prefs.json");
+        std::fs::write(
+            &f,
+            br#"{"hotkey":"ctrl+shift+KeyL","autotype_hotkey":"ctrl+alt+NotAKey","autostart":true}"#,
+        )
+        .unwrap();
+        let (p, warn) = load_or_default(&f);
+        assert_eq!(p.autotype_hotkey, DEFAULT_AUTOTYPE_HOTKEY);
+        assert_eq!(p.hotkey, "ctrl+shift+KeyL", "主热键必须保住");
+        assert!(p.autostart, "自启选择必须保住");
+        assert!(warn.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn missing_fields_fall_back_to_default() {
         // 向前兼容：将来加字段，旧文件不能读崩。
         let p: AppPrefs = serde_json::from_str(r#"{"autostart":true}"#).expect("缺字段可读");
@@ -367,6 +409,7 @@ mod tests {
         let f = dir.join("prefs.json");
         let p = AppPrefs {
             hotkey: "ctrl+shift+KeyL".into(),
+            autotype_hotkey: DEFAULT_AUTOTYPE_HOTKEY.into(),
             autostart: true,
             tray_hint_shown: true,
         };

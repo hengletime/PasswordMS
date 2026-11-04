@@ -59,6 +59,13 @@ pub mod shell_codes {
     ///
     /// 正常路径到不了：设置卡按 `PrefsDto.supported` 整块不渲染。纯防御。
     pub const ERR_NOT_SUPPORTED: &str = "ERR_NOT_SUPPORTED";
+    /// 自动输入（1.5.39）：目标窗口焦点丢失——保存的句柄失效 / `SetForegroundWindow`
+    /// 失败 / 切回后前台不是目标 / **注入中途前台变了**（立即中止，剩余序列不发）。
+    ///
+    /// 与前端 `autotype.ts` 的 `AUTOTYPE_FAILURE_KEY_BY_CODE` 逐字对齐：前端只认
+    /// 这一个码（统一显示「目标窗口已切换，已停止输入」），不区分失焦发生在
+    /// 注入前还是注入中——对用户那是同一句话。
+    pub const ERR_AUTOTYPE_FOCUS_LOST: &str = "ERR_AUTOTYPE_FOCUS_LOST";
 }
 
 impl From<CoreError> for IpcError {

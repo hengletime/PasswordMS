@@ -11,6 +11,10 @@ pub mod error;
 // target 条件依赖与 `docs/06` §6.33）。Android 上设置卡按 DTO 的 `supported` 不渲染。
 #[cfg(desktop)]
 pub mod hotkey;
+// 自动输入浮层同样是桌面专属：注入凭据到「原焦点窗口」这件事只在桌面发生
+// （Android 不做，docs/00-scope 主人 2026-11-04 拍板）。
+#[cfg(desktop)]
+pub mod autotype;
 pub mod platform;
 pub mod prefs;
 // 快速搜索小窗同样是桌面专属：移动端只有一个窗口，也没有"任意程序里按热键唤出"这回事。
@@ -181,6 +185,12 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
+            // 自动输入浮层同款：失焦即收起（用户点回目标程序 = 放弃本次选择）。
+            crate::autotype::LABEL => {
+                if matches!(event, tauri::WindowEvent::Focused(false)) {
+                    let _ = window.hide();
+                }
+            }
             _ => {}
         });
 
@@ -214,6 +224,17 @@ pub fn run() {
                             &format!("[quick] 预建小窗失败：{e}"),
                         ),
                     }
+                    // 自动输入浮层同样预建（首按热键零等待，理由同 `autotype` 模块注释）。
+                    // 建不出来不影响主程序——热键仍会唤窗失败留痕，功能退化为不可用而已。
+                    match crate::autotype::ensure(app.handle()) {
+                        Ok(_) => {
+                            crate::state::append_log(app.handle(), "[autotype] 浮层已预建（隐藏）")
+                        }
+                        Err(e) => crate::state::append_log(
+                            app.handle(),
+                            &format!("[autotype] 预建浮层失败：{e}"),
+                        ),
+                    }
                 }
                 Err(e) => crate::state::append_log(app.handle(), &e),
             }
@@ -222,6 +243,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // system
             commands::system_cmd::get_status,
+            // autotype（1.5.39：热键 → 浮层选条目 → SendInput 注回原焦点窗口）
+            commands::autotype_cmd::auto_type_fill,
             commands::system_cmd::copy_secret,
             commands::system_cmd::clear_secret_if_own,
             commands::system_cmd::open_url,
@@ -320,10 +343,11 @@ pub fn run() {
             // settings
             commands::settings_cmd::get_settings,
             commands::settings_cmd::update_settings,
-            // prefs（v1.4.10 系统集成：热键 / 开机自启 / 托盘文案）
+            // prefs（v1.4.10 系统集成：热键 / 开机自启 / 托盘文案；1.5.39 加自动输入热键）
             commands::prefs_cmd::prefs_get,
-            commands::prefs_cmd::prefs_set_hotkey,
             commands::prefs_cmd::prefs_set_autostart,
+            commands::prefs_cmd::prefs_set_autotype_hotkey,
+            commands::prefs_cmd::prefs_set_hotkey,
             commands::prefs_cmd::tray_set_labels,
         ])
         .build(tauri::generate_context!());

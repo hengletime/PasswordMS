@@ -100,6 +100,13 @@ pub fn perform_lock(app: &tauri::AppHandle) -> IpcResult<()> {
     }
     // 锁定后停止重同步监听，避免持有明文上下文。
     stop_resync_listener(app);
+    // 1.5.39 自动输入：目标窗口句柄只是「热键那一刻的前台窗口」指针，不含明文，
+    // 但跨锁定会话残留没有意义（下次注入前会话闸门本来就会拦）——锁定时清回 None。
+    // 锁中毒也照清（into_inner 兜底），与上一段 pending_imports 同一纪律。
+    match state.autotype_target.lock() {
+        Ok(mut guard) => *guard = None,
+        Err(poisoned) => *poisoned.into_inner() = None,
+    }
     Ok(())
 }
 
