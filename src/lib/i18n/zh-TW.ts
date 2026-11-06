@@ -346,6 +346,8 @@ export const zhTW = {
     hotkey_recording: '請按下組合鍵…',
     hotkey_hint: '在任何程式中按下即可喚出視窗並聚焦搜尋框。需包含 Ctrl、Alt 或 Win 之一。',
     hotkey_none: '未設定',
+    hotkey_no_response:
+      '按了沒反應？這個組合已經被註冊成全域熱鍵了（可能就是本程式自己的），系統會把它攔下來，視窗收不到按鍵。請換一個組合。',
     hotkey_saved: '熱鍵已更新。',
     hotkey_unavailable: '該組合已被其他程式佔用，熱鍵目前未生效。請換一個組合。',
     prefs_load_failed: '系統整合設定讀取失敗。',

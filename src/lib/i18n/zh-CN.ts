@@ -389,6 +389,8 @@ export const zhCN = {
     hotkey_recording: '请按下组合键…',
     hotkey_hint: '在任意程序中按下即可唤出窗口并聚焦搜索框。需包含 Ctrl、Alt 或 Win 之一。',
     hotkey_none: '未设置',
+    hotkey_no_response:
+      '按了没反应？这个组合已经被注册成全局热键了（可能就是本程序自己的），系统会把它拦下来，窗口收不到按键。请换一个组合。',
     hotkey_saved: '热键已更新。',
     hotkey_unavailable: '该组合已被其它程序占用，热键当前未生效。请换一个组合。',
     prefs_load_failed: '系统集成设置读取失败。',

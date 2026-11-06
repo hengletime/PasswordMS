@@ -602,6 +602,22 @@
   }
 
   /**
+   * 录制态静置多久就主动说一句话（D-200，1.6.3）。
+   *
+   * 按了键却什么都没发生，在 Windows 上是**必然结果**、不是程序卡了：这个组合若已经被
+   * 注册成全局热键（本程序自己的也算），系统会把按键拦下来交给注册方，录制窗口根本
+   * 收不到 `keydown`。真机原话是「改不回去了，什么提示都没有」——沉默是这里最坏的输出。
+   */
+  const HOTKEY_STALL_HINT_MS = 8000;
+
+  /** 开一个静置计时器；录到东西时调用方负责 `clearTimeout` 撤掉。 */
+  function startStallHint(): number {
+    return window.setTimeout(() => {
+      ui.toast('info', 'settings.hotkey_no_response');
+    }, HOTKEY_STALL_HINT_MS);
+  }
+
+  /**
    * 录制期间接管键盘。
    *
    * 用 `capture` + `preventDefault`：否则用户按 Ctrl+P 会先被 WebView 当成打印、
@@ -612,6 +628,7 @@
     if (!hotkeyRecording) {
       return;
     }
+    const stall = startStallHint();
     const onKeydown = (event: KeyboardEvent): void => {
       event.preventDefault();
       event.stopPropagation();
@@ -624,10 +641,15 @@
         // 还只是按下了修饰键，或者没有主修饰键——继续等，不报错。
         return;
       }
+      // 已经录到东西：撤掉静置提示，免得过 8 秒又冒出一句"按了没反应"。
+      window.clearTimeout(stall);
       void saveHotkey(combo);
     };
     window.addEventListener('keydown', onKeydown, true);
-    return (): void => window.removeEventListener('keydown', onKeydown, true);
+    return (): void => {
+      window.clearTimeout(stall);
+      window.removeEventListener('keydown', onKeydown, true);
+    };
   });
 
   /** 保存热键。失败时**保持录制态**，用户直接再按一个组合即可——省一次点击。 */
@@ -678,6 +700,7 @@
     if (!autotypeHotkeyRecording) {
       return;
     }
+    const stall = startStallHint();
     const onKeydown = (event: KeyboardEvent): void => {
       event.preventDefault();
       event.stopPropagation();
@@ -690,10 +713,14 @@
         // 还只是按下了修饰键，或者没有主修饰键——继续等，不报错。
         return;
       }
+      window.clearTimeout(stall);
       void saveAutotypeHotkey(combo);
     };
     window.addEventListener('keydown', onKeydown, true);
-    return (): void => window.removeEventListener('keydown', onKeydown, true);
+    return (): void => {
+      window.clearTimeout(stall);
+      window.removeEventListener('keydown', onKeydown, true);
+    };
   });
 
   /** 保存自动输入热键。失败时保持录制态，用户直接再按一个组合即可。 */

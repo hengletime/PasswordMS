@@ -376,6 +376,8 @@ export const enUS: Messages = {
     hotkey_recording: 'Press a combination…',
     hotkey_hint: 'Press it anywhere to bring up the window and focus search. Must include Ctrl, Alt, or Win.',
     hotkey_none: 'Not set',
+    hotkey_no_response:
+      'Nothing happened? That combination is already registered as a global hotkey (possibly by this app itself), so the system intercepts it and the window never sees the key. Try another combination.',
     hotkey_saved: 'Hotkey updated.',
     hotkey_unavailable: 'That combination is taken by another program, so the hotkey is inactive. Pick another.',
     prefs_load_failed: 'Could not read system integration settings.',

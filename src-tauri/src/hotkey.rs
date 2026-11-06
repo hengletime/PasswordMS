@@ -10,9 +10,9 @@
 //!
 //! ## 为什么两颗热键必须在同一次 register 里
 //!
-//! [`register`] 的第一步是 `unregister_all()`——如果自动输入热键单独走一遍注册，
-//! 主热键的改键回滚（重新 `register` 旧值）会把它抹掉。所以两颗键都并进同一个
-//! `register` / `apply` / 回滚流程：任何一次重注册都是**成对重建**。
+//! [`register`] 会先把旧键位撤掉（`unregister_all` + 按本次键位定向撤一次）——如果
+//! 自动输入热键单独走一遍注册，主热键的改键回滚（重新 `register` 旧值）会把它抹掉。
+//! 所以两颗键都并进同一个 `register` / `apply` / 回滚流程：任何一次重注册都是**成对重建**。
 
 use tauri::AppHandle;
 use tauri::Manager;
@@ -143,8 +143,33 @@ fn previous_autotype_spec(app: &AppHandle) -> Option<String> {
 fn register(app: &AppHandle, main: Option<&str>, autotype: Option<&str>) -> Result<(), String> {
     let gs = app.global_shortcut();
     // 无差别注销：改键场景下旧键必须先失效，否则会出现"两个键都能唤起"。
-    // 没注册过时这里报错也无所谓，忽略即可。
-    let _ = gs.unregister_all();
+    // 没注册过时这里报错也无所谓，但**不能吞掉**——它失败就是下面那步要兜的洞。
+    if let Err(e) = gs.unregister_all() {
+        crate::state::append_log(
+            app,
+            &format!(
+                "[hotkey] 注销旧键位失败：{e}（系统里可能有残留，下面会按本次键位再定向撤一次）"
+            ),
+        );
+    }
+
+    // 【1.6.3 / D-200】按**本次要注册的这两个键位**再定向注销一次。
+    //
+    // 为什么 `unregister_all` 不够：插件实现是「先把内部表 `mem::take` 清空，再逐条对
+    // 系统 `UnregisterHotKey`」，底层的 Windows 版本遇到第一个错误就 `return`。只要那一步
+    // 出过一次错，这条键就**留在系统里，而插件已经忘了自己持有它**。此后任何一次注册
+    // 只要碰到它，系统就回「已被注册」；我们把这句翻成「该热键已被其它程序占用」，
+    // 而占用它的其实是本程序自己 —— 用户换多少个别的组合都改不动，因为失败的永远是
+    // 那颗没被释放的旧键（真机 2026-11-06 就是这个形状：改自动输入键一直报占用，
+    // 把主热键改走之后又能改了，改回原值则连提示都没有）。
+    //
+    // 定向注销只对**本进程注册过的**生效：别的程序占着的键，`UnregisterHotKey` 撤不掉，
+    // 所以这一步不会去抢别人的热键。没注册过的键必然报错，忽略即可。
+    for spec in [main, autotype].into_iter().flatten() {
+        if let Ok(shortcut) = spec.parse::<Shortcut>() {
+            let _ = gs.unregister(shortcut);
+        }
+    }
 
     if let Some(spec) = main {
         // 规范化阶段已用同一个解析器验过，这里理论上不会失败；仍然处理，不 unwrap。
