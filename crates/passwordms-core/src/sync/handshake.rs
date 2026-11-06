@@ -8,7 +8,7 @@ use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-use crate::constants::{HKDF_INFO_SYNC_CONFIRM, HKDF_INFO_SYNC_KEY};
+use crate::constants::{HKDF_INFO_SYNC_ABORT, HKDF_INFO_SYNC_CONFIRM, HKDF_INFO_SYNC_KEY, KEY_LEN};
 use crate::crypto::kdf;
 use crate::crypto::{aead, rng};
 use crate::error::{CoreError, CoreResult};
@@ -121,6 +121,22 @@ pub fn derive_session_sk(
         32,
     )?;
     to_arr32(&sk)
+}
+
+/// 数据阶段「中止帧」专用 MAC 密钥（#22，audit-crypto 方案 2）。
+///
+/// `HKDF-Extract(salt=∅, ikm=sync_key)` → `Expand(HKDF_INFO_SYNC_ABORT, 32)`，
+/// 与 [`derive_session_sk`] 同构但 info 不同：中止帧的 HMAC 与数据信封的 AEAD
+/// **永不同钥**。IKM 必须是数据阶段实际用于 `open_envelope` 的那把 `sync_key`
+/// （`&[u8]`），不是 `PreparedResync.sync_key: ItemKey`。长度闸对齐
+/// [`crate::crypto::aead`] 的 `cipher_for`：非 32B 一律 [`CoreError::Crypto`]。
+pub fn derive_abort_key(sync_key: &[u8]) -> CoreResult<Zeroizing<[u8; 32]>> {
+    if sync_key.len() != KEY_LEN {
+        return Err(CoreError::Crypto("abort key len".to_string()));
+    }
+    let prk = kdf::hkdf_extract(&[], sync_key);
+    let key = kdf::hkdf_expand(&prk, HKDF_INFO_SYNC_ABORT.as_bytes(), 32)?;
+    to_arr32(&key)
 }
 
 /// `transcript = sha256(HELLO ‖ ACCEPT)`。

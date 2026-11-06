@@ -63,6 +63,9 @@ pub const HKDF_INFO_VERIFY: &str = "passwordms/v1/verify";
 pub const HKDF_INFO_SYNC_KEY: &str = "passwordms/sync/v1/key";
 pub const HKDF_INFO_SYNC_CONFIRM: &str = "passwordms/sync/v1/confirm";
 pub const HKDF_INFO_SYNC_SESSION: &str = "passwordms/sync/v1/session";
+/// 数据阶段「中止帧」专用 MAC 密钥的 HKDF info（#22，audit-crypto 方案 2）。
+/// 与上面三把会话密钥域分离：**绝不让同一把 `sync_key` 兼做 AEAD 与 HMAC**。
+pub const HKDF_INFO_SYNC_ABORT: &str = "passwordms/sync/v1/abort";
 
 // ===== AAD 常量 =====
 /// 根层 VK 包裹 AAD。

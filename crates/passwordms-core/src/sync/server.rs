@@ -22,7 +22,7 @@ use crate::sync::blob_transfer;
 use crate::sync::handshake::{self, EphemeralKeypair, HostIdentity, SessionKeys};
 use crate::sync::merge;
 use crate::sync::paging;
-use crate::sync::protocol::{Accept, Confirm, HandshakeMessage, QRPayload, Reject};
+use crate::sync::protocol::{AbortCtx, Accept, Confirm, HandshakeMessage, QRPayload, Reject};
 use crate::sync::replay::ReplayGuard;
 use crate::sync::transport;
 
@@ -352,6 +352,11 @@ impl SyncServer {
         }))?;
         let state = st_out.take().ok_or(CoreError::SyncAborted)??;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
+        // #22：配对通道数据阶段恒 Strict（本端不产生合法中止帧）；ctx 只用于认证上下文。
+        let abort_ctx = AbortCtx {
+            local_id: self.host_id.clone(),
+            peer_id: joiner_id.clone(),
+        };
 
         // 网络段：5) 收 Joiner 的 Push（O1：多页聚合，密文载荷）。
         let push = paging::recv_push_pages(
@@ -360,6 +365,7 @@ impl SyncServer {
             &self.session_id,
             &mut replay,
             now,
+            &abort_ctx,
         )
         .map_err(|e| stage_io(e, "push_recv"))?;
 
@@ -409,6 +415,7 @@ impl SyncServer {
                 &self.session_id,
                 &mut replay,
                 now,
+                &abort_ctx,
             )
             .map_err(|e| stage_io(e, "done_recv"))?;
             // 游标照常落盘：这一帧确实占了一个序号，不记下来的话下一轮会重发同一个
@@ -488,6 +495,7 @@ impl SyncServer {
             &self.session_id,
             &mut replay,
             now,
+            &abort_ctx,
         )
         .map_err(|e| stage_io(e, "done_recv"))?;
 
@@ -547,9 +555,8 @@ impl SyncServer {
 
 /// 发送 REJECT 帧。
 fn send_reject<W: Write>(writer: &mut W, code: &str) -> CoreResult<()> {
-    let msg = HandshakeMessage::Reject(Reject {
-        code: code.to_string(),
-    });
+    // 握手阶段 REJECT：六个认证字段全 None，线上字节与 1.6.3 逐字节相同（#22）。
+    let msg = HandshakeMessage::Reject(Reject::handshake(code));
     transport::send_frame(writer, &serde_json::to_vec(&msg)?)
 }
 

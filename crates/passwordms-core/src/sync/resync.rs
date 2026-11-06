@@ -37,7 +37,7 @@ use crate::sync::discovery::{self, DiscoveryResponder};
 use crate::sync::handshake::{self, ROLE_CLIENT, ROLE_SERVER};
 use crate::sync::merge;
 use crate::sync::paging;
-use crate::sync::protocol::{seal_envelope, ChangeRecord, Reject, SyncKind, SyncPayload};
+use crate::sync::protocol::{seal_envelope, AbortCtx, ChangeRecord, Reject, SyncKind, SyncPayload};
 use crate::sync::replay::ReplayGuard;
 use crate::sync::server::device_key_aad;
 use crate::sync::transport;
@@ -408,6 +408,11 @@ pub fn resync_with_peer_access(
     // 状态沿用锁内段①载入的副本（含本次发送侧水位推进的落点）；sync_busy 保证本场
     // 交换期间没有并发同步改写同一份 DeviceSyncState。
     let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
+    // #22：中止帧认证上下文（方向写死：本端=发起方 local，对端=peer）。
+    let abort_ctx = AbortCtx {
+        local_id: client_id.clone(),
+        peer_id: peer_device_id.to_string(),
+    };
 
     // 8) 发本端 Push（网络段，不持锁；页已在锁内段①导出。D-53：随报文通告本端 blob 能力；
     // D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送水位过滤、超预算自动分页）。
@@ -432,8 +437,15 @@ pub fn resync_with_peer_access(
     }
 
     // 9) 收对端 Push（网络段，不持锁；O1：多页聚合，密文载荷）。
-    let reply = paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
-        .map_err(|e| stage_io(e, "reply_recv"))?;
+    let reply = paging::recv_push_pages(
+        &mut stream,
+        &sk[..],
+        &session_id,
+        &mut replay,
+        now,
+        &abort_ctx,
+    )
+    .map_err(|e| stage_io(e, "reply_recv"))?;
     // D-147：增量重同步通道永远不会是「只配对」那一轮；`pair_only` 在这里恒 false，
     // 显式断言语义而不是静默忽略。
     debug_assert!(!reply.pair_only, "resync 通道不该出现 pair_only");
@@ -459,7 +471,15 @@ pub fn resync_with_peer_access(
         Ok(())
     }));
     if let Err(e) = merge_run {
-        announce_abort(&mut stream, &e);
+        announce_abort(
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &abort_ctx,
+            &replay,
+            now,
+            &e,
+        );
         return Err(e);
     }
     let (applied, conflicts) = match merged.take().ok_or(CoreError::SyncAborted)? {
@@ -467,7 +487,15 @@ pub fn resync_with_peer_access(
         Err(e) => {
             // D-199：本端合并失败（典型：两端不是同一条库）→ 先说原因再断，
             // 否则响应方只会看到「连接断了」。
-            announce_abort(&mut stream, &e);
+            announce_abort(
+                &mut stream,
+                &sk[..],
+                &session_id,
+                &abort_ctx,
+                &replay,
+                now,
+                &e,
+            );
             return Err(e);
         }
     };
@@ -773,10 +801,22 @@ impl ResyncServer {
 
         let session_id = session_id_of(&transcript);
         let mut replay = ReplayGuard::with_state(last_recv_seq, SYNC_TIME_WINDOW_SECS);
+        // #22：中止帧认证上下文（方向写死：本端=响应方 local，对端=发起方 peer）。
+        let abort_ctx = AbortCtx {
+            local_id: server_id.clone(),
+            peer_id: hello.client_id.clone(),
+        };
 
         // 6) 收发起方 Push（O1：多页聚合后一次合并——页面间记录互不重叠，等价单帧）。
-        let push = paging::recv_push_pages(&mut stream, &sk[..], &session_id, &mut replay, now)
-            .map_err(|e| stage_io(e, "push_recv"))?;
+        let push = paging::recv_push_pages(
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &mut replay,
+            now,
+            &abort_ctx,
+        )
+        .map_err(|e| stage_io(e, "push_recv"))?;
         debug_assert!(!push.pair_only, "resync 通道不该出现 pair_only");
         let push_changes = push.changes;
         let push_blob_support = push.blob_support;
@@ -814,7 +854,15 @@ impl ResyncServer {
             Ok(())
         }));
         if let Err(e) = section_run {
-            announce_abort(&mut stream, &e);
+            announce_abort(
+                &mut stream,
+                &sk[..],
+                &session_id,
+                &abort_ctx,
+                &replay,
+                now,
+                &e,
+            );
             return Err(e);
         }
         let (mut state, pages, applied, conflicts) =
@@ -823,7 +871,15 @@ impl ResyncServer {
                 Err(e) => {
                     // D-199：合并失败（典型：两端不是同一条库）→ 先说原因再断，
                     // 否则发起方只会看到「文件读写出错」。
-                    announce_abort(&mut stream, &e);
+                    announce_abort(
+                        &mut stream,
+                        &sk[..],
+                        &session_id,
+                        &abort_ctx,
+                        &replay,
+                        now,
+                        &e,
+                    );
                     return Err(e);
                 }
             };
@@ -845,8 +901,15 @@ impl ResyncServer {
         .map_err(|e| stage_io(e, "reply_send"))?;
 
         // 8) 收 Done。
-        let done_payload = paging::recv_done(&mut stream, &sk[..], &session_id, &mut replay, now)
-            .map_err(|e| stage_io(e, "done_recv"))?;
+        let done_payload = paging::recv_done(
+            &mut stream,
+            &sk[..],
+            &session_id,
+            &mut replay,
+            now,
+            &abort_ctx,
+        )
+        .map_err(|e| stage_io(e, "done_recv"))?;
 
         // D-53 blob 阶段：双方都支持才进入；seq 从 Done 之后单调延续（过 ReplayGuard）。
         // 响应方次序：先供（收发起方 Pull、发 Meta/Data/End），再拉（发 Pull、收 Meta/Data/End）——
@@ -904,9 +967,8 @@ impl ResyncServer {
 
 /// 发送 REJECT 帧。
 fn send_reject<W: Write>(writer: &mut W, code: &str) -> CoreResult<()> {
-    let msg = ResyncMessage::Reject(Reject {
-        code: code.to_string(),
-    });
+    // 握手阶段 REJECT：六个认证字段全 None，线上字节与 1.6.3 逐字节相同（#22）。
+    let msg = ResyncMessage::Reject(Reject::handshake(code));
     transport::send_frame(writer, &serde_json::to_vec(&msg)?)
 }
 
@@ -918,13 +980,44 @@ fn reject_to_error(code: &str) -> CoreError {
     crate::sync::protocol::reject_code_to_error(code)
 }
 
-/// D-199：**中止前先把原因说出去**。
+/// D-199/#22：**中止前先把原因说出去**（带会话认证）。
 ///
 /// 此前任一端放弃就直接 drop 连接，对端拿到的是 `UnexpectedEof` → `err.io`
-/// （「文件读写出错」）——与真正原因无关，且两端说法不同。现在尽力发一帧中止报文，
-/// 发不出去（对端已走）就忽略，**绝不改变本端要返回的错误**。
-fn announce_abort<W: Write>(writer: &mut W, err: &CoreError) {
-    let _ = send_reject(writer, err.code());
+/// （「文件读写出错」）——与真正原因无关，且两端说法不同。现在尽力发一帧带认证字段的
+/// 中止报文，发不出去（对端已走）就忽略，**绝不改变本端要返回的错误**。
+///
+/// 【abort 处理路径不得写入任何持久状态】这里只发一帧：不 `save_sync_state`、
+/// 不 `update_paired_addr`、不写游标、不落日志型状态机；失败路径「整段丢弃、下轮重发」
+/// 不变（依据：两处 `save_sync_state` 只在成功路径）。一旦将来触发状态写入，seq 必须
+/// 改走 `replay.accept`（否则重放护栏与序号语义对不上）。
+fn announce_abort<W: Write>(
+    writer: &mut W,
+    sync_key: &[u8],
+    session_id: &[u8],
+    ctx: &AbortCtx,
+    replay: &ReplayGuard,
+    now: i64,
+    err: &CoreError,
+) {
+    // seq 只做 MAC 绑定、不参与单调判定（接收侧恒不调 replay.accept）：取一个确定性
+    // 值即可，无需沿用分页/Done 的序号，也不要求两端事先约定。
+    let seq = replay.last_recv_seq().saturating_add(1);
+    let _ = send_abort_reject(writer, sync_key, session_id, ctx, seq, now, err.code());
+}
+
+/// 数据阶段「带认证字段」的中止帧（#22）；握手阶段 REJECT 仍走 [`send_reject`]（明文）。
+fn send_abort_reject<W: Write>(
+    writer: &mut W,
+    sync_key: &[u8],
+    session_id: &[u8],
+    ctx: &AbortCtx,
+    seq: u64,
+    ts: i64,
+    code: &str,
+) -> CoreResult<()> {
+    // IKM 钉死为数据阶段 open_envelope 用的那把 `sk`（`&[u8]`），不是 ItemKey。
+    let frame = crate::sync::protocol::build_abort_frame(sync_key, session_id, ctx, seq, ts, code)?;
+    transport::send_frame(writer, &frame)
 }
 
 /// 编译期占位：确保 `Zeroizing` 导入被使用（避免未使用告警）。

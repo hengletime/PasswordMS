@@ -19,13 +19,23 @@ use passwordms_core::session::Session;
 use passwordms_core::store::repository::ItemDraft;
 use passwordms_core::sync::client::{self, JoinerSyncResult};
 use passwordms_core::sync::paging;
-use passwordms_core::sync::protocol::{envelope_aad, ChangeRecord, SyncKind, SyncPayload};
+use passwordms_core::sync::protocol::{
+    envelope_aad, AbortCtx, ChangeRecord, SyncKind, SyncPayload,
+};
 use passwordms_core::sync::replay::ReplayGuard;
 use passwordms_core::sync::resync::{self, ResyncOutcome, ResyncServer};
 use passwordms_core::sync::server::{HostSyncResult, SyncServer};
 
 const HOST_PWD: &str = "Pag#Host-Pw1";
 const JOINER_PWD: &str = "Pag#Joiner-Pw1";
+
+/// #22：分页回归用例不涉及中止帧，ctx 只用于补齐接收签名。
+fn abort_ctx() -> AbortCtx {
+    AbortCtx {
+        local_id: "rx".to_string(),
+        peer_id: "tx".to_string(),
+    }
+}
 
 fn temp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("pms-pag-{tag}-{}", uuid::Uuid::new_v4()));
@@ -334,8 +344,15 @@ fn case3_legacy_payload_interop() {
 
     let mut stream = &wire[..];
     let mut replay = ReplayGuard::with_state(0, 60);
-    let got = paging::recv_push_pages(&mut stream, &sync_key, &session_id, &mut replay, now_ms())
-        .unwrap();
+    let got = paging::recv_push_pages(
+        &mut stream,
+        &sync_key,
+        &session_id,
+        &mut replay,
+        now_ms(),
+        &abort_ctx(),
+    )
+    .unwrap();
     let changes = got.changes;
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].record_id.len(), 36);
@@ -398,8 +415,15 @@ fn paging_loop_aggregates_and_stops() {
 
     let mut stream = &wire[..];
     let mut replay = ReplayGuard::with_state(0, 60);
-    let got = paging::recv_push_pages(&mut stream, &sync_key, &session_id, &mut replay, now_ms())
-        .unwrap();
+    let got = paging::recv_push_pages(
+        &mut stream,
+        &sync_key,
+        &session_id,
+        &mut replay,
+        now_ms(),
+        &abort_ctx(),
+    )
+    .unwrap();
     assert_eq!(got.changes.len(), 12);
     assert!(got.blob_support);
     assert_eq!(stream.len(), framed(b"trailing garbage").len());

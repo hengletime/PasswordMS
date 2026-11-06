@@ -516,7 +516,8 @@ impl Repository {
     /// 解密一帧的 payload。
     fn open_frame(&self, frame: &Frame) -> CoreResult<zeroize::Zeroizing<Vec<u8>>> {
         let aad = keys::record_aad(frame.record_type, &frame.record_id);
-        let ik = keys::unwrap_item_key(&self.vault_key, &frame.wrapped_key, &aad)?;
+        let ik = keys::unwrap_item_key(&self.vault_key, &frame.wrapped_key, &aad)
+            .map_err(|_| CoreError::VaultKeyMismatch)?;
         aead::open(&ik[..], &frame.nonce, &aad, &frame.ct)
     }
 

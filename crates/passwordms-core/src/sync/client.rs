@@ -21,7 +21,7 @@ use crate::sync::handshake::{self, EphemeralKeypair, SessionKeys};
 use crate::sync::merge;
 use crate::sync::paging;
 use crate::sync::protocol::{
-    seal_envelope, Confirm, HandshakeMessage, Hello, QRPayload, SyncKind, SyncPayload,
+    seal_envelope, AbortCtx, Confirm, HandshakeMessage, Hello, QRPayload, SyncKind, SyncPayload,
 };
 use crate::sync::replay::ReplayGuard;
 use crate::sync::server::{device_key_aad, to_arr32};
@@ -225,6 +225,11 @@ impl JoinerSession {
         }))?;
         let (mut state, pages, my_device_id) = prepared.take().ok_or(CoreError::SyncAborted)??;
         let mut replay = ReplayGuard::with_state(state.last_recv_seq, SYNC_TIME_WINDOW_SECS);
+        // #22：配对通道数据阶段恒 Strict（本端不产生合法中止帧）；ctx 只用于认证上下文。
+        let abort_ctx = AbortCtx {
+            local_id: my_device_id.clone(),
+            peer_id: self.host_id.clone(),
+        };
 
         // 网络段（O2，不持锁）：seq=c1.. 推送本端变更（D-53：随报文通告本端 blob 能力；
         // D-56：载荷含墓碑，按对端 base 过滤；O1：live 按发送水位过滤、超预算自动分页）。
@@ -254,6 +259,7 @@ impl JoinerSession {
             &self.session_id,
             &mut replay,
             now,
+            &abort_ctx,
         )?;
         // D-147：**以对端的确认为准**。回包带 `pair_only` = 双方都同意「这一轮只配对」，
         // 于是一个字节都不落地、水位也不动；回包不带（老版本 Host 会忽略我们发的标记）

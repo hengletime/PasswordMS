@@ -49,6 +49,13 @@
  *   node scripts/check-e2e-quotes.mjs
  *   node scripts/check-e2e-quotes.mjs --verbose     # 连同命中项与全部跳过项一起打印
  *
+ * ## 页眉读数口径
+ *
+ * `sha256 <8 位> · <字节数> B`：前者是**文件内容**的 sha256 前 8 位，**不是**
+ * `git hash-object` 的 blob 哈希；后者是文件字节数。不印行数——`wc -l` 数换行符，
+ * `split(/\r?\n/).length` 因末尾换行多一个空串，两套口径差 1，印出来只会制造歧义。
+ * 两套哈希算法、两套行数口径，任一混用都会让两个人拿着"同一个文件"对不上数。
+ *
  * ## 退出码
  *
  * **恒为 0（只报警，不判负）。** 理由：这条检查的目标是"提醒有人来读一遍"，
@@ -211,11 +218,12 @@ function extractStringValues(src) {
 }
 
 function loadDictionary() {
-  /** @type {{exact: Set<string>, normalized: string[], files: Record<string, number>, droppedEmpty: number, sha: string}} */
-  const dict = { exact: new Set(), normalized: [], files: {}, droppedEmpty: 0, sha: '' };
+  /** @type {{exact: Set<string>, normalized: string[], files: Record<string, number>, droppedEmpty: number, sha: string, bytes: number}} */
+  const dict = { exact: new Set(), normalized: [], files: {}, droppedEmpty: 0, sha: '', bytes: 0 };
   const dh = createHash('sha256');
   for (const rel of LOCALE_PATHS) {
     const raw = readFileSync(resolve(ROOT, rel));
+    dict.bytes += raw.length;
     // 字典侧同样留指纹：四本字典在工作区里被改过（D-191/D-192 那两批），
     // 只报走查单哈希时，两个人可能在"同一份走查单 + 不同字典"上得出不同结论。
     dh.update(raw);
@@ -308,6 +316,50 @@ function quoteBalance(line) {
   return d;
 }
 
+/**
+ * 逐行括号统计：左端取扫描器的结果，右端**只扫括号深度、绝不经过扫描器**。
+ *
+ * 配平且没丢东西的行上有恒等式：`开括号数 − 顶层片段数 == 嵌套内层数`。
+ * 每个顶层片段恰好消耗一个在 depth=0 处遇到的开括号；其余开括号都在 depth>0
+ * 处遇到，就是"嵌套内层"。所以两边必然相等，与嵌套有几层无关。
+ *
+ * 一旦有片段被静默丢掉（落单的 `「` 让从那里到行尾配不上对、整段不 push），
+ * 左端少算一个或多个片段，右端仍按括号原样计数 —— 等式立刻失衡。
+ *
+ * 这是「开 − 片段 ≥ 2」做不到的地方：`docs/07-e2e-checklist.md:175` 的合法双重嵌套
+ * （外层一句套「导出保险库」「从备份恢复」两对）本来就是 开8 / 片段6 / 内层2，
+ * 差恰好等于 2。拿 ≥2 当阈值必然把"嵌套"和"丢失"混成同一维，当场误报。
+ * qa-lead 2026-11-06 复算给出 `lhs=2 eq=true`，这里让它成为判据本身。
+ */
+function bracketStats(line) {
+  let opens = 0;
+  let inner = 0;
+  let depth = 0;
+  for (const ch of line) {
+    if (ch === '「' || ch === '『') {
+      opens += 1;
+      if (depth > 0) inner += 1;
+      depth += 1;
+    } else if (ch === '」' || ch === '』') {
+      depth -= 1;
+      // 多余的右括号不该让后续开括号被算成"外层"；夹到 0 后照常继续数。
+      if (depth < 0) depth = 0;
+    }
+  }
+  const frags = parseQuotedFragments(line).length;
+  const lhs = opens - frags;
+  return { opens, frags, inner, lhs, eq: lhs === inner };
+}
+
+/**
+ * 唯一的"疑似丢失"判据。`loadChecklist()` 与 P9 探针**共用这一个函数**：
+ * 判据只许有一份实现，否则"文档上跑的那套"和"探针里验的那套"会各自漂移，
+ * 探针绿着却什么都没守住。把这里改回 `st.lhs >= 2`，P9 的 `:175` 形状 case 立刻变红。
+ */
+function isLostFragment(st) {
+  return st.lhs !== st.inner;
+}
+
 function loadChecklist() {
   // 把输入文件的**内容指纹**一起带出去。理由不是洁癖：这一轮里我和 qa-lead 各自跑出
   // `347/280` 和 `354/288` 两组数，差 10 条，光看数字没法判断是"口径不同"还是"看的不是
@@ -319,20 +371,47 @@ function loadChecklist() {
   const items = [];
   /** @type {{line: number, row: string, balance: number}[]} */
   const unbalanced = [];
+  // 非表格行里也有引文（章节导语、修订记录、书写规范本身），这里既不算命中也不算跳过。
+  // 不报出来的后果是"分母看起来很大、盲区没人知道"——qa-lead 实测这些行里有 1 行
+  // 引着一条代码里 0 命中的死文案，已经存在很久，没有任何东西提示过它。
+  let proseLines = 0;
+  let proseOpens = 0;
+  /** @type {{line: number, row: string, opens: number, frags: number, inner: number, lhs: number}[]} */
+  const suspicious = [];
+  const countOpens = (s) => (s.match(/[「『]/g) ?? []).length;
   lines.forEach((line, idx) => {
-    if (!line.trimStart().startsWith('|')) return; // 只扫表格行
+    if (!line.trimStart().startsWith('|')) {
+      const n = countOpens(line);
+      if (n > 0) {
+        proseLines += 1;
+        proseOpens += n;
+      }
+      return;
+    }
     const row = parseRowId(line);
     const balance = quoteBalance(line);
     if (balance !== 0) unbalanced.push({ line: idx + 1, row, balance });
-    for (const text of parseQuotedFragments(line)) {
+    const frags = parseQuotedFragments(line);
+    // 逐行恒等式：开 − 顶层片段 == 嵌套内层。右端只扫括号深度、不经过扫描器，
+    // 所以扫描器静默丢片段时它仍会失衡。判据在 isLostFragment()，与 P9 探针共用一份实现。
+    const st = bracketStats(line);
+    if (isLostFragment(st)) suspicious.push({ line: idx + 1, row, ...st });
+    for (const text of frags) {
       items.push({ line: idx + 1, row, text });
     }
   });
+  // 页眉只报 sha256 + 字节数，**不再报行数**：`wc -l` 数换行符（当前 237），
+  // `split(/\r?\n/).length` 因末尾换行多一个空串元素（当前 238）。两套口径印在同一行，
+  // 等于亲手把"报数带锚"要消灭的歧义挪到另一列。字节数 + 内容哈希是单一事实来源。
+  // 另：这里的 sha256 是**文件内容**哈希，不是 `git hash-object` 的 blob 哈希（后者为 d7843f19），
+  // 两套算法不要拿来对数。
   return {
     items,
     unbalanced,
+    suspicious,
+    prose: { lines: proseLines, opens: proseOpens },
     sha: createHash('sha256').update(raw).digest('hex').slice(0, 8),
-    lineCount: lines.length,
+    bytes: raw.length,
   };
 }
 
@@ -410,17 +489,22 @@ const SKIP_RULES = [
   {
     id: 'R3a/nav-path',
     reason:
-      '导航路径：每一段都是字典里真有的菜单/分区标签，只是被 → 串起来了——屏幕上是两级菜单，不存在这一整句',
+      '导航路径：整句严格形如 ^A → B( → C)*$，每段都是字典里真有的菜单/分区标签，段内不含其它标点——屏幕上是两级菜单，不存在这一整句',
     // 可判型：不但"理由成立"，而且**顺手验了一遍**——每段都得在字典里原样存在。
-    // 哪天某个菜单改名了，这条引文会从"跳过"掉回"查不到"，正是我们要的。
+    // 形态判据不能省：只看"含 → 且每段在字典里"，`「密码 → 用户名」` 这种对注入顺序的
+    // 描述也会被当成菜单路径收走；而 `A → → B` / `→ A → B` 里的空段会被 filter(Boolean)
+    // 悄悄抹平，等于规则自己放宽了自己。所以先钉 `^段(\s*→\s*段)+$`（段内不许出现 →
+    // 与常见分隔符/标点，首尾都必须是段），再逐段查字典。哪天某个菜单改名，这条会掉回
+    // "查不到"，正是我们要的。反向验证在 P10/r3a-shape 探针里。
     test: (t, dict) => {
-      if (!t.includes('→')) return false;
-      const segs = t
-        .replace(/\*\*/g, '')
-        .split('→')
-        .map((s) => s.trim())
-        .filter(Boolean);
-      return segs.length >= 2 && segs.every((s) => dict.exact.has(s));
+      const s = t.replace(/\*\*/g, '').trim();
+      if (
+        !/^[^\s→·+｜|：:，,。！？、（）()]+(?:\s*→\s*[^\s→·+｜|：:，,。！？、（）()]+)+$/.test(s)
+      ) {
+        return false;
+      }
+      const segs = s.split('→').map((x) => x.trim());
+      return segs.length >= 2 && segs.every((x) => dict.exact.has(x));
     },
   },
   {
@@ -539,7 +623,7 @@ const SKIP_ITEM_REASONS = new Map(NOT_COPY);
  * 探针的输入**从字典现取**，不写死任何一条文案——否则文案一改，探针自己先红，
  * 那就成了"又一个需要维护的假警报"。取不到合适样本时如实报 skip，不假装通过。
  */
-function runProbes(dict) {
+function runProbes(dict, ctx) {
   const probes = [];
   const values = [...dict.exact].filter((v) => v.length >= 8 && cjkCount(v) >= 6);
 
@@ -632,27 +716,135 @@ function runProbes(dict) {
     },
   });
 
+  // P9：逐行等式 `开 − 顶层片段 == 嵌套内层`。
+  // 合成三类输入，全部走**与文档同一份判据** isLostFragment(bracketStats(line))：
+  //   ① :175 形状（外层一句套多个内层）→ 合法，绝不能算丢失；
+  //   ② 落单在最前 → 从第一个「 起整段不 push，0 片段，必须算丢失；
+  //   ③ 落单在中间 → 之前闭合的对子照常入账、之后全丢，必须算丢失。
+  // ③ 是 qa-lead 用 1.18 修前 13 条 / 修后 15 条实测纠正过的失效模式：不是"整行 0 条"，
+  // 而是"落单处之后全丢"。① 同样不能少——否则下一个人为了让探针绿会去动解析器。
+  // 把判据改回 `st.lhs >= 2`，①（lhs=2）会立刻变红，②③ 也会被这份 case 表点出来。
+  probes.push({
+    id: 'P9/no-lost-fragment',
+    expect: '等式判据能区分合法嵌套与静默丢失',
+    check: () => {
+      const cases = [
+        {
+          name: ':175 形状（合法双重嵌套）',
+          line: '| x | 提示「请在那台「导出保险库」，到另一台「从备份恢复」，然后再重新配对」 |',
+          lost: false,
+        },
+        { name: '落单在最前', line: '| x | 「甲「乙」 |', lost: true },
+        { name: '落单在中间', line: '| x | 先「甲」「乙」「丙 |', lost: true },
+      ];
+      const bad = [];
+      for (const c of cases) {
+        const st = bracketStats(c.line);
+        const got = isLostFragment(st);
+        if (got !== c.lost) {
+          bad.push(
+            `${c.name}: 期望 lost=${c.lost} 实得 ${got}（开${st.opens}/片段${st.frags}/内层${st.inner}/差${st.lhs}）`,
+          );
+        }
+      }
+      return bad.length === 0 ? null : bad.join(' ; ');
+    },
+  });
+
+  // P9b：当前走查单本身也不许有等式失衡的行。P9 验判据、P9b 验输入，分开报——
+  // 把判据改回 ≥2 时，P9 先红（:175 形状），P9b 也会把 :175 那一行点出来。
+  probes.push({
+    id: 'P9b/doc-clean',
+    expect: '当前走查单没有等式失衡的行',
+    check: () => {
+      const bad = ctx?.suspicious ?? [];
+      if (bad.length === 0) return null;
+      return bad
+        .map((b) => `:${b.line} 开${b.opens}/片段${b.frags}/内层${b.inner}/差${b.lhs}`)
+        .join(' ; ');
+    },
+  });
+
   // P7：括号配平检测本身（输入是合成串，故意写坏）。
   // 这条测的不是"文档没错"，而是"文档错了我会不会发现"。落单括号是我这套实现里
   // 唯一一个**静默**丢数据的入口：配不上对就整段不 push，报告照样全绿。
-  // 三个用例各代表一种坏法：嵌套（朴素 [^」]* 会截断）、少右括号、多右括号。
+  //
+  // 三个 case 是 qa-lead 用 1.18 修前 13 条 / 修后 15 条实测定下来的形状：
+  //   ① 落单在最前 → 0 片段（第一个「 一直吃到行尾仍不闭合）；
+  //   ② 落单在中间 → 2 片段（之前闭合的对子照常入账，之后全丢）——**不是整行 0 条**，
+  //      上一版把这里写成"整行 0 条"是错的，已撤回；
+  //   ③ 外层套多个内层（:175 形状）→ 1 片段且等式仍成立，这是合法形状、不许被改坏。
+  // 另留「正常两对」「多一个右括号」两个基础 case 作形状回归。③ 在这里再钉一次的理由：
+  // 它是合法形状，下一个人为了让探针绿最容易去动解析器，而不是去改判据。
   probes.push({
     id: 'P7/unbalanced-detected',
-    expect: '三种坏法都能报出来',
+    expect: '三种落单/嵌套形状都按实测条数解析',
     check: () => {
       const cases = [
-        { line: '| x | 点「复制截图」再点「粘贴」 |', frags: 2, bal: 0 },
-        // 少一个 」时**整行 0 条**：第一个「 一直吃到行尾仍不闭合，连它前面配好的那半句
-        // 也一起被丢掉。1.18 就是这样瞎的——它的「全删」在落单「 之后。
-        { line: '| x | 旧写法「删除当前回滚点 现在是「全删」 |', frags: 0, bal: 1 },
-        { line: '| x | 多了一个「复制」」 |', frags: 1, bal: -1 },
+        { name: '正常两对', line: '| x | 点「复制截图」再点「粘贴」 |', frags: 2, bal: 0 },
+        { name: '落单在最前', line: '| x | 「甲「乙」 |', frags: 0, bal: 1 },
+        { name: '落单在中间', line: '| x | 先「甲」「乙」「丙 |', frags: 2, bal: 1 },
+        {
+          name: ':175 形状（外层套两个内层）',
+          line: '| x | 提示「请在那台「导出保险库」，到另一台「从备份恢复」」 |',
+          frags: 1,
+          bal: 0,
+          eq: true,
+        },
+        { name: '多一个右括号', line: '| x | 多了一个「复制」」 |', frags: 1, bal: -1 },
       ];
       const bad = [];
       for (const c of cases) {
         const got = parseQuotedFragments(c.line).length;
         const bal = quoteBalance(c.line);
-        if (got !== c.frags || bal !== c.bal) {
-          bad.push(`「${c.line.slice(6, 26)}…」片段 ${got}/${c.frags} 配平 ${bal}/${c.bal}`);
+        const eq = bracketStats(c.line).eq;
+        if (got !== c.frags || bal !== c.bal || (c.eq !== undefined && eq !== c.eq)) {
+          bad.push(
+            `${c.name}: 片段 ${got}/${c.frags} 配平 ${bal}/${c.bal}` +
+              (c.eq !== undefined ? ` 等式 ${eq}/${c.eq}` : ''),
+          );
+        }
+      }
+      return bad.length === 0 ? null : bad.join(' ; ');
+    },
+  });
+
+  // P10：R3a 的形态判据本身也要被验（可判型规则不许只靠"写了理由"就算数）。
+  // 正向：从字典现取两个真标签串成 `A → B` / `A → B → A`，必须被 R3a 收走；
+  // 反向：带 `→` 但不是导航路径的描述（夹了别的标点 / 空段）不许被 R3a 收走，
+  //       且必须被某条跳过规则接住 —— 否则它会从"跳过"掉进"查不到"，凭空多一条噪声。
+  // 产品评审 2026-11-06 指出：`「密码 → 用户名」` 两段都可能在字典里，只看"每段命中"
+  // 会把它误收成菜单路径；形态判据 + 反向验证就是为这一侧补的。
+  probes.push({
+    id: 'P10/r3a-shape',
+    expect: 'R3a 只收 ^A → B( → C)*$，其余 → 描述仍被跳过',
+    check: () => {
+      const r3a = SKIP_RULES.find((r) => r.id === 'R3a/nav-path');
+      const r3c = SKIP_RULES.find((r) => r.id === 'R3c/composed');
+      const labels = [...dict.exact].filter(
+        (v) => cjkCount(v) >= 2 && /^[^\s→·+｜|：:，,。！？、（）()\/\\<>.%\-]+$/.test(v),
+      );
+      if (labels.length < 2 || !r3a || !r3c) return '取不到两个可拼的字典标签，或规则缺失';
+      const [a, b] = labels;
+      const cases = [
+        { name: '正向 A → B', frag: `${a} → ${b}`, byR3a: true },
+        { name: '正向 A → B → A', frag: `${a} → ${b} → ${a}`, byR3a: true },
+        { name: '反向 夹了别的标点', frag: `${a} → ${b}，再确认`, byR3a: false },
+        { name: '反向 中间空段', frag: `${a} → → ${b}`, byR3a: false },
+        // 这两条专门钉住旧实现的 `filter(Boolean)`：前导/尾随的 → 会被它悄悄抹平，
+        // 于是"形态不对"的串照样被 R3a 收走。去掉形态判据，P10 立刻红。
+        { name: '反向 前导空段', frag: `→ ${a} → ${b}`, byR3a: false },
+        { name: '反向 尾随空段', frag: `${a} → ${b} →`, byR3a: false },
+      ];
+      const bad = [];
+      for (const c of cases) {
+        const gotA = r3a.test(c.frag, dict);
+        const first = SKIP_RULES.find((r) => r.test(c.frag, dict));
+        const landed = first?.id ?? 'none（会掉进查不到）';
+        const stillSkipped =
+          c.byR3a || (landed !== 'none（会掉进查不到）' && landed !== 'R3a/nav-path' && r3c.test(c.frag, dict));
+        if (gotA !== c.byR3a || !stillSkipped) {
+          bad.push(`${c.name}: R3a=${gotA}/${c.byR3a} 首命中=${landed}`);
         }
       }
       return bad.length === 0 ? null : bad.join(' ; ');
@@ -674,7 +866,7 @@ function runProbes(dict) {
 
 function main() {
   const dict = loadDictionary();
-  const { items, unbalanced, sha, lineCount } = loadChecklist();
+  const { items, unbalanced, suspicious, prose, sha, bytes } = loadChecklist();
 
   const hits = [];
   const misses = [];
@@ -714,9 +906,12 @@ function main() {
     .flatMap((b) => b.items.filter((s) => !SKIP_ITEM_REASONS.get(s.text)));
   console.log('');
   console.log('=== E2E 引文校验（只报警，不判负）===');
-  console.log(`走查单：${CHECKLIST_PATH}  [${sha} · ${lineCount} 行]`);
+  console.log(`走查单：${CHECKLIST_PATH}  [sha256 ${sha} · ${bytes} B]`);
   console.log(
-    `字典  ：${LOCALE_PATHS.map((p) => `${p.split('/').pop()} ${dict.files[p]} 条`).join(' · ')}  [${dict.sha}]`,
+    `字典  ：${LOCALE_PATHS.map((p) => `${p.split('/').pop()} ${dict.files[p]} 条`).join(' · ')}  [sha256 ${dict.sha} · ${dict.bytes} B]`,
+  );
+  console.log(
+    '  （页眉是文件内容 sha256 前 8 位 + 字节数；不是 `git hash-object` 的 blob 哈希，也不再印行数——避免 wc -l / split 两套口径。）',
   );
   console.log(line);
   console.log(
@@ -738,6 +933,33 @@ function main() {
     }
     console.log('  这不是"格式问题"：扫描器配不上对就整段不 push，于是那些引文既不算命中也不算查不到，');
     console.log('  报告照样是"查不到 0 条"——因为它压根没去看。补上括号再跑，数字会变。');
+  }
+
+  // ---- 未纳入（既不进分子也不进分母）----
+  // 这一段不参与任何判定，但必须打出来：**"没查"和"查了没问题"在报告里长得一样**，
+  // 这是所有诊断工具最常见的失信方式。qa-lead 是靠人工挖才发现在这些行里
+  // （走查单 :19）已经引着一句代码里 0 命中的死文案——它不是未来的风险，是已经发生过、
+  // 没人看见。不把它印在报告里，就等于继续假装分母是全部。
+  if (prose.lines > 0) {
+    console.log('');
+    console.log(
+      `【未纳入】非表格行含开括号 ${prose.lines} 行 ${prose.opens} 处（章节导语 / 修订记录 / 书写规范本身）`,
+    );
+    console.log('  这些引文**既不进分子也不进分母**：本节只校表格行（判据所在处）。');
+    console.log('  非表格行里的引文请人工过一眼——它们不会被本脚本报出来，但同样会误导走查的人。');
+  }
+
+  // ---- 疑似整段丢失 ----
+  if (suspicious.length > 0) {
+    console.log('');
+    console.log(`【疑似丢失】${suspicious.length} 行（逐行等式 开 − 顶层片段 == 嵌套内层 失衡）`);
+    for (const s of suspicious) {
+      console.log(
+        `  :${String(s.line).padEnd(4)} ${(s.row || '').padEnd(6)}开 ${s.opens} / 片段 ${s.frags} / 内层 ${s.inner} / 差 ${s.lhs}`,
+      );
+    }
+    console.log('  右端只扫括号深度、不经过扫描器：合法嵌套（差恰好等于内层数）不会报；');
+    console.log('  失衡才说明扫描器静默丢过片段。落单括号行也会同时出现在这里（两个独立信号）。');
   }
 
   // ---- 查不到 ----
@@ -804,7 +1026,7 @@ function main() {
   }
 
   // ---- 自检 ----
-  const probes = runProbes(dict);
+  const probes = runProbes(dict, { suspicious });
   const failed = probes.filter((p) => p.ok === false);
   const skippedProbes = probes.filter((p) => p.ok === null);
   console.log('');
@@ -820,7 +1042,9 @@ function main() {
     console.log('  ⚠️  自检失败：**上面的"查不到"结论不可信**，先修好再读结果。');
     console.log('      P1–P5：匹配器失效。最常见是有人放松了 normalize()（把汉字也折了），');
     console.log('             于是所有片段都能"命中"——这种失效不报错，只让报告变成一片绿。');
-    console.log('      P6   ：语料混进了非文案（如 import 路径），字典条数会虚高，数字不再可信。');
+    console.log('      P6/P8：语料混进了非文案（如 import 路径），字典条数会虚高，数字不再可信。');
+    console.log('      P7/P9/P9b：括号形状或逐行等式判据失效，报告的分母可能被静默截断。');
+    console.log('      P10  ：R3a 形态判据失效，导航路径桶会误收或漏收 → 描述。');
   }
   if (skippedProbes.length > 0) {
     console.log('');

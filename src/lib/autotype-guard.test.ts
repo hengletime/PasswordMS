@@ -475,4 +475,24 @@ describe('⑥ 命令层的闸门与早退（源码形状）', () => {
     expect(injectAt, '找不到 spawn_blocking，判据失效').toBeGreaterThan(-1);
     expect(revealAt, 'reveal 必须在注入之后（失败才有意义）').toBeGreaterThan(injectAt);
   });
+
+  it('windows_inject：UTF-16 明文缓冲必须装进 Zeroizing（M4 早退漏擦）', () => {
+    // 早退绊线原本只按函数头取 auto_type_fill / autotype_candidates，看不到
+    // :438 之后的 `fn windows_inject`——那里才是逐字符注入、真正持有整段 UTF-16
+    // 明文的地方。裸 Vec + `send_unicode(...)?` 早退时，末尾那句 wipe 根本不执行，
+    // 而 Vec 的 Drop 不清零：恰好是**失败的那一次**把明文留在堆上。
+    // `send_unicode(...)?` 的 `?` 是 M2 早退要求（注入失败不许继续灌字符），
+    // 所以修法只能是让缓冲自己擦，不是删 `?`、也不是把 wipe 往前挪。
+    const body = rustCodeOnly(rustFnBody(cmd, 'fn windows_inject('));
+    // 防空跑：函数体没取到时下面三条命中断言会给出误导性的绿/红，先钉住扫描面。
+    expect(body.length, 'windows_inject 函数体没取到').toBeGreaterThan(3000);
+    expect(body, 'windows_inject 里没有 send_unicode，扫描面不对').toContain('send_unicode');
+    expect(body, 'windows_inject 里没有 wipe，扫描面不对').toContain('wipe');
+    const bufLine = body.split('\n').find((l) => l.includes('let mut buf'));
+    expect(bufLine, '找不到 UTF-16 缓冲声明行，扫描面不对').toBeDefined();
+    expect(
+      bufLine,
+      'UTF-16 明文缓冲退回裸 Vec：send_unicode 失败早退会跳过 wipe（M4 回流）',
+    ).toMatch(/Zeroizing|SecretBytes/);
+  });
 });

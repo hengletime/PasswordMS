@@ -4,7 +4,10 @@
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 
 use crate::constants::{QR_PREFIX, QR_PROTOCOL_VERSION};
 use crate::error::{CoreError, CoreResult};
@@ -169,10 +172,49 @@ pub struct Confirm {
     pub mac: Vec<u8>,
 }
 
-/// 握手 REJECT。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// 握手 REJECT / 数据阶段「中止帧」（#22）。
+///
+/// 握手阶段恒用 [`Reject::handshake`] 构造：`v/sid/seq/ts/nonce/mac` 全 `None`，
+/// `skip_serializing_if` 让线上字节与 1.6.3 逐字节相同（`{"t":"reject","code":…}`）。
+/// 数据阶段的新帧补全六字段并带 HMAC（见 [`build_abort_frame`]）；新版接收方恒
+/// Strict，缺任一字段的裸帧（old→new）一律 [`CoreError::SyncAborted`]。
+/// `serde(default)` 保证旧版裸帧仍能被新版解析（形状层），认证在验证入口做。
+///
+/// 【形状不变量（M11）】中止帧相对 [`SyncEnvelope`] 始终至少缺一个**无默认值的必填**
+/// 字段，当前恰好缺 `session_id`（帧内用的是 `sid`）与 `ct` 两个，安全边际各只有一
+/// 字段宽；改帧形状前先看 M11（把 `sid` 改名 `session_id` 且补 `ct`、或给
+/// `SyncEnvelope` 的 `session_id`/`ct` 都加 `#[serde(default)]`，都会让缺口归零，
+/// 使中止帧被 `from_slice::<SyncEnvelope>` 误认成正常信封）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Reject {
     pub code: String,
+    /// 带认证中止帧的形状版本标记（不进 MAC）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub v: Option<u32>,
+    /// 发送侧填入的 `session_id`（形状完整性；MAC 用接收侧**本地** session_id 重算）。
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub sid: Option<Vec<u8>>,
+    /// 只做 MAC 绑定、不参与单调判定（接收侧不调 `replay.accept`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ts: Option<i64>,
+    /// 16B 随机数，进 MAC 但不加语义。
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<Vec<u8>>,
+    /// 32B HMAC-SHA256。
+    #[serde(default, with = "b64::opt", skip_serializing_if = "Option::is_none")]
+    pub mac: Option<Vec<u8>>,
+}
+
+impl Reject {
+    /// 握手阶段 REJECT：只带 code，六个认证字段全 None（线上字节与 1.6.3 相同）。
+    pub fn handshake(code: &str) -> Self {
+        Self {
+            code: code.to_string(),
+            ..Default::default()
+        }
+    }
 }
 
 /// 握手阶段帧体（明文 JSON）。
@@ -353,11 +395,205 @@ pub fn open_envelope(
 /// 数据阶段收到的帧若不是信封，尝尝它是不是对端的**中止帧**（D-199）。
 ///
 /// 只有 `{"t":"reject", …}` 这种握手形状才认；正常信封没有 `t` 字段，不会被误判。
+///
+/// 【#22】这是**纯形状解析**（不做认证），只保留给形状兼容/回归用例。生产接收路径
+/// 一律走 [`verify_abort_frame`]（恒 Strict、先验 MAC 再产生行为），绝不直接调用本函数。
 pub fn parse_reject(bytes: &[u8]) -> Option<CoreError> {
     match serde_json::from_slice::<HandshakeMessage>(bytes) {
         Ok(HandshakeMessage::Reject(r)) => Some(reject_code_to_error(&r.code)),
         _ => None,
     }
+}
+
+/// 中止帧认证上下文（#22）：用一个结构体打包，别散着加参数；方向写死。
+///
+/// 发送侧：`sender_id = local_id`，`receiver_id = peer_id`；
+/// 接收侧：`sender_id = peer_id`，`receiver_id = local_id`。
+/// 两端 `AbortCtx` 天然互为镜像（local/peer 互换）；方向写反两端会算出不同 MAC。
+#[derive(Debug, Clone)]
+pub struct AbortCtx {
+    pub local_id: String,
+    pub peer_id: String,
+}
+
+/// 中止帧 MAC 输入的固定前缀（纵深域分离；主要域分离由 HKDF_INFO_SYNC_ABORT 承担）。
+const ABORT_LABEL: &[u8] = b"passwordms/sync/v1/abort-frame";
+/// 带认证中止帧的形状版本标记（不进 MAC 输入域）。
+pub const ABORT_VERSION: u32 = 1;
+/// 中止帧 nonce 长度（字节）。
+const ABORT_NONCE_LEN: usize = 16;
+/// 中止帧 MAC 长度（HMAC-SHA256，字节）。
+const ABORT_MAC_LEN: usize = 32;
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// 中止帧 MAC 输入域的全部字段（打包，避免散着加参数）。
+struct AbortMacFields<'a> {
+    sid: &'a [u8],
+    seq: u64,
+    ts: i64,
+    nonce: &'a [u8],
+    code: &'a str,
+    sender_id: &'a str,
+    receiver_id: &'a str,
+}
+
+/// 长度前缀追加：`u64 LE 长度 ‖ bytes`（全部字段长度前缀，防拼接歧义）。
+fn lp(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+    out.extend_from_slice(bytes);
+}
+
+/// 中止帧 MAC 输入域（全部长度前缀）：
+/// `ABORT_LABEL ‖ sid ‖ seq ‖ ts ‖ nonce ‖ code ‖ sender_id ‖ receiver_id`。
+///
+/// `code` 走「长度前缀 + UTF-8 原始字节」，**绝不**把 `serde_json` 结果或 JSON 片段进 MAC。
+/// `receiver_id` 必进 MAC（否则两端方向可替换）。
+fn abort_mac_input(f: &AbortMacFields<'_>) -> Vec<u8> {
+    let mut out = Vec::new();
+    lp(&mut out, ABORT_LABEL);
+    lp(&mut out, f.sid);
+    lp(&mut out, &f.seq.to_le_bytes());
+    lp(&mut out, &f.ts.to_le_bytes());
+    lp(&mut out, f.nonce);
+    lp(&mut out, f.code.as_bytes());
+    lp(&mut out, f.sender_id.as_bytes());
+    lp(&mut out, f.receiver_id.as_bytes());
+    out
+}
+
+/// 用 `derive_abort_key` 派生的专用密钥计算 HMAC-SHA256。
+fn compute_abort_mac(abort_key: &[u8], f: &AbortMacFields<'_>) -> CoreResult<Vec<u8>> {
+    let mut mac = HmacSha256::new_from_slice(abort_key)
+        .map_err(|_| CoreError::Crypto("abort hmac key".to_string()))?;
+    mac.update(&abort_mac_input(f));
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+/// 构造带认证字段的中止帧（#22，发送侧）。
+///
+/// `sync_key` 必须是数据阶段 `recv_push_pages`/`recv_done` 收到的那把（`&[u8]`），
+/// 与接收侧 [`verify_abort_frame`] 完全同源。`sid` 用本地 `session_id`，方向按
+/// [`AbortCtx`] 写死。`seq` 只做 MAC 绑定、不参与单调判定（接收侧不调
+/// `replay.accept`），故取任一确定性值即可。
+pub fn build_abort_frame(
+    sync_key: &[u8],
+    session_id: &[u8],
+    ctx: &AbortCtx,
+    seq: u64,
+    ts: i64,
+    code: &str,
+) -> CoreResult<Vec<u8>> {
+    let abort_key = crate::sync::handshake::derive_abort_key(sync_key)?;
+    let nonce = crate::crypto::rng::random_bytes(ABORT_NONCE_LEN)?;
+    let mac = compute_abort_mac(
+        &abort_key[..],
+        &AbortMacFields {
+            sid: session_id,
+            seq,
+            ts,
+            nonce: &nonce,
+            code,
+            sender_id: &ctx.local_id,
+            receiver_id: &ctx.peer_id,
+        },
+    )?;
+    let frame = Reject {
+        code: code.to_string(),
+        v: Some(ABORT_VERSION),
+        sid: Some(session_id.to_vec()),
+        seq: Some(seq),
+        ts: Some(ts),
+        nonce: Some(nonce),
+        mac: Some(mac),
+    };
+    Ok(serde_json::to_vec(&HandshakeMessage::Reject(frame))?)
+}
+
+/// 验证数据阶段收到的「中止帧」（#22，接收侧恒 **Strict**）。
+///
+/// 验证顺序（crypto 硬约束：先验 MAC 再产生行为）：
+/// ① 形状解析 + 字段完整性/长度闸（mac 32B、nonce 16B、`sync_key.len()==KEY_LEN`
+///    由 `derive_abort_key` 入口兜）+ 帧内 `sid` 与本地 `session_id` 的诊断一致性检查
+///    ——纯解析 / 形状完整性，不产生行为；
+/// ② 用**本地** `session_id` / `sender_id=peer_id` / `receiver_id=local_id` 重算 expected MAC；
+/// ③ [`crate::sync::handshake::verify_mac`] 常量时间比对（长度不等即 false，
+///    截断天然被拒，不用 `==`）；
+/// ④ 验过之后才 `check_ts(ts, now)` 与 `reject_code_to_error(code)`；`now` 只在此步消费，
+///    第 ①–③ 步绝不读它；
+/// ⑤ 任一步失败 → [`CoreError::SyncAborted`]，绝不回显/记录 raw code，绝不落 Internal。
+///
+/// 返回 `None` = 不是 reject 形状（调用方一律收敛到 `CoreError::SyncAborted`；
+/// M10：绝不回落到 `Internal("json")` 那种可区分文案）；`Some` = 中止帧判定结果。
+/// 帧内 `sid` 的一致性检查只是**形状完整性、不是第二套认证闸**：认证仍由 MAC
+/// 单独承担，帧内 `sid` 绝不进 MAC 输入域（本地 `session_id` 才是唯一会话绑定源，
+/// 信任对端值会弱化绑定）；跨会话复制由 MAC 输入域里的本地 `session_id` 兜住。
+///
+/// 【abort 处理路径不得写入任何持久状态】本函数是纯函数：不 `save_sync_state`、
+/// 不 `update_paired_addr`、不写游标、不调 `replay.accept`（只 `check_ts`）、不落日志型
+/// 状态机；失败路径维持「整段丢弃、下轮重发」。一旦将来触发状态写入，seq 必须改走
+/// `replay.accept`（否则重放护栏与序号语义会对不上）。
+pub fn verify_abort_frame(
+    bytes: &[u8],
+    sync_key: &[u8],
+    session_id: &[u8],
+    ctx: &AbortCtx,
+    replay: &crate::sync::replay::ReplayGuard,
+    now: i64,
+) -> Option<CoreError> {
+    // ① 形状解析：只认 `{"t":"reject", …}`；正常信封/其它形状 → None（不是中止帧）。
+    let r = match serde_json::from_slice::<HandshakeMessage>(bytes) {
+        Ok(HandshakeMessage::Reject(r)) => r,
+        _ => return None,
+    };
+    // 字段完整性/长度闸：六字段缺一即为「裸帧」（old→new，已接受的单向退化）或
+    // 畸形帧，新版恒 Strict。
+    let (seq, ts, nonce, mac) = match (r.v, &r.sid, r.seq, r.ts, &r.nonce, &r.mac) {
+        (Some(v), Some(sid), Some(seq), Some(ts), Some(nonce), Some(mac))
+            if v == ABORT_VERSION
+                && mac.len() == ABORT_MAC_LEN
+                && nonce.len() == ABORT_NONCE_LEN =>
+        {
+            // 诊断一致性检查（形状完整性，不是第二套认证闸）：帧内 `sid` 必须与本地
+            // `session_id` 常量时间相等，防止这个「死字段」被任意篡改而无人察觉。
+            // 认证仍由下面的 MAC 单独承担；帧内 `sid` 绝不进 MAC 输入域（本地
+            // `session_id` 才是唯一会话绑定源，信任对端值会弱化绑定）。
+            if sid.len() != session_id.len() || !bool::from(session_id.ct_eq(sid.as_slice())) {
+                return Some(CoreError::SyncAborted);
+            }
+            (seq, ts, nonce, mac)
+        }
+        _ => return Some(CoreError::SyncAborted),
+    };
+
+    // ② 用本地 session_id / 方向重算 expected MAC（方向写死，两端镜像）。
+    let expected = match crate::sync::handshake::derive_abort_key(sync_key) {
+        Ok(k) => match compute_abort_mac(
+            &k[..],
+            &AbortMacFields {
+                sid: session_id,
+                seq,
+                ts,
+                nonce,
+                code: &r.code,
+                sender_id: &ctx.peer_id,
+                receiver_id: &ctx.local_id,
+            },
+        ) {
+            Ok(m) => m,
+            Err(_) => return Some(CoreError::SyncAborted),
+        },
+        Err(_) => return Some(CoreError::SyncAborted),
+    };
+    // ③ 常量时间比对；长度不等即 false，截断天然被拒，绝不写 `==`。
+    if !crate::sync::handshake::verify_mac(&expected, mac) {
+        return Some(CoreError::SyncAborted);
+    }
+    // ④ 验过之后才产生行为：时间窗 + 白名单 code → 具体错误；`now` 只在此步消费。
+    if replay.check_ts(ts, now).is_err() {
+        return Some(CoreError::SyncAborted);
+    }
+    Some(reject_code_to_error(&r.code))
 }
 
 /// 中止帧的 code → 具体错误（前端据此给出对应文案）。

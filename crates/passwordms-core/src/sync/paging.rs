@@ -18,7 +18,7 @@ use std::io::Read;
 use crate::constants::{SYNC_MAX_FRAME_BYTES, SYNC_MAX_RECV_PAGES, SYNC_MAX_RECV_TOTAL_BYTES};
 use crate::error::{CoreError, CoreResult};
 use crate::sync::protocol::{
-    open_envelope, seal_envelope, ChangeRecord, SyncEnvelope, SyncKind, SyncPayload,
+    open_envelope, seal_envelope, AbortCtx, ChangeRecord, SyncEnvelope, SyncKind, SyncPayload,
 };
 use crate::sync::replay::ReplayGuard;
 use crate::sync::transport;
@@ -135,6 +135,7 @@ pub fn recv_push_pages<R: Read>(
     session_id: &[u8],
     replay: &mut ReplayGuard,
     now: i64,
+    ctx: &AbortCtx,
 ) -> CoreResult<PushPages> {
     recv_push_pages_with_limits(
         stream,
@@ -144,11 +145,15 @@ pub fn recv_push_pages<R: Read>(
         now,
         SYNC_MAX_RECV_TOTAL_BYTES,
         SYNC_MAX_RECV_PAGES,
+        ctx,
     )
 }
 
 /// [`recv_push_pages`] 的可测内核：上限由调用方注入（生产传 [`SYNC_MAX_RECV_TOTAL_BYTES`]
 /// / [`SYNC_MAX_RECV_PAGES`]，测试传极小值验证拒绝路径，不必真传 200 MB）。
+// 参数均为协议帧的必要字段（含 #22 的认证 ctx）；打包成参数结构体需改公开签名
+// （红线，同 `send_push_pages` 先例）。
+#[allow(clippy::too_many_arguments)]
 fn recv_push_pages_with_limits<R: Read>(
     stream: &mut R,
     sync_key: &[u8],
@@ -157,6 +162,7 @@ fn recv_push_pages_with_limits<R: Read>(
     now: i64,
     max_total_bytes: usize,
     max_pages: usize,
+    ctx: &AbortCtx,
 ) -> CoreResult<PushPages> {
     let mut all: Vec<ChangeRecord> = Vec::new();
     let mut blob_support;
@@ -166,12 +172,18 @@ fn recv_push_pages_with_limits<R: Read>(
     let mut page_count = 0usize;
     loop {
         let bytes = transport::recv_frame(stream)?;
-        // D-199：对端可能在中途放弃并把原因当帧发过来（`seal_reject`）。那才是真话，
-        // 解析不成信封就试它——否则这里会退化成 `Internal("json")` 或干脆等超时。
+        // D-199/#22：对端可能在中途放弃并把原因当帧发过来（`build_abort_frame`）。那才是
+        // 真话；新版恒 Strict——先验 MAC 才产生行为，裸帧（old→new）一律 SyncAborted。
+        // 解析不成信封才试它；形状不匹配 / 字段不全 / 长度闸 / MAC 不符 / ts 越窗这五类
+        // 失败一律收敛到同一个 `SyncAborted`（M10：绝不 `?` 透传 `serde_json::Error`
+        // → `Internal("json")`，否则「畸形帧」与「MAC 不符」会给出可区分文案，白送探测口）。
         let env: SyncEnvelope = match serde_json::from_slice(&bytes) {
             Ok(env) => env,
-            Err(e) => {
-                return Err(crate::sync::protocol::parse_reject(&bytes).unwrap_or_else(|| e.into()))
+            Err(_) => {
+                return Err(crate::sync::protocol::verify_abort_frame(
+                    &bytes, sync_key, session_id, ctx, replay, now,
+                )
+                .unwrap_or(CoreError::SyncAborted))
             }
         };
         replay.accept(env.seq, env.ts, now)?;
@@ -209,13 +221,18 @@ pub fn recv_done<R: Read>(
     session_id: &[u8],
     replay: &mut ReplayGuard,
     now: i64,
+    ctx: &AbortCtx,
 ) -> CoreResult<SyncPayload> {
     let bytes = transport::recv_frame(stream)?;
-    // D-199：同上——中止帧比「解析失败」有用得多。
+    // D-199/#22：同上——带认证的中止帧比「解析失败」有用得多；恒 Strict，先验 MAC，
+    // 五类失败一律收敛到同一个 `SyncAborted`（M10，不回落到 `Internal("json")`）。
     let env: SyncEnvelope = match serde_json::from_slice(&bytes) {
         Ok(env) => env,
-        Err(e) => {
-            return Err(crate::sync::protocol::parse_reject(&bytes).unwrap_or_else(|| e.into()))
+        Err(_) => {
+            return Err(crate::sync::protocol::verify_abort_frame(
+                &bytes, sync_key, session_id, ctx, replay, now,
+            )
+            .unwrap_or(CoreError::SyncAborted))
         }
     };
     replay.accept(env.seq, env.ts, now)?;
@@ -297,6 +314,14 @@ mod tests {
         crate::crypto::rng::random_key().unwrap()
     }
 
+    /// #22：分页单测不涉及中止帧，ctx 只用于补齐接收签名。
+    fn test_ctx() -> AbortCtx {
+        AbortCtx {
+            local_id: "rx".to_string(),
+            peer_id: "tx".to_string(),
+        }
+    }
+
     /// 构造「发端写满 cursor 分页 Push」的内存流，供接收侧测试回放。
     fn feed_pages(
         sync_key: &[u8],
@@ -337,6 +362,7 @@ mod tests {
             0,
             2_000_000_000,
             2,
+            &test_ctx(),
         )
         .unwrap_err();
         match err {
@@ -365,6 +391,7 @@ mod tests {
             0,
             0,
             4096,
+            &test_ctx(),
         )
         .unwrap_err();
         match err {
@@ -395,6 +422,7 @@ mod tests {
             0,
             2_000_000_000,
             4096,
+            &test_ctx(),
         )
         .unwrap();
         assert_eq!(got.changes.len(), 6);

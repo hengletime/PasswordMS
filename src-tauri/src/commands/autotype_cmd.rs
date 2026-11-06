@@ -581,7 +581,13 @@ fn windows_inject(
                 // UTF-16 码元的小端字节缓冲（KEYEVENTF_UNICODE 按 wScan 逐码元发）。
                 // 用字节缓冲是为了用完能直接过 `securemem::wipe`（吃 &mut [u8]），
                 // 不需要手工转切片的 unsafe。
-                let mut buf: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
+                // 【M4】必须装进 Zeroizing：下面 `send_unicode(...)?` 一旦早退，
+                // 末尾那句 wipe 就不会执行；裸 Vec 的 Drop 不清零，恰好是**失败的那
+                // 一次**把整段 UTF-16 明文留在堆上。Zeroizing 让成功 / `?` 早退 /
+                // panic unwind 三条离开路径都擦干净；末尾的显式 wipe 保留但不作唯一
+                // 擦除手段。`?` 本身是 M2 早退要求，绝不能删。
+                let mut buf: Zeroizing<Vec<u8>> =
+                    Zeroizing::new(text.encode_utf16().flat_map(u16::to_le_bytes).collect());
                 // `as_chunks::<2>()`：固定 2 字节一组，比 `chunks_exact(2)` 少一次
                 // 运行期对齐检查（与 `capture_screen` 的 `as_chunks_mut::<4>` 同款写法）。
                 // 开口前先静默一下：Chromium 系编辑框（尤其地址栏）在上一段输入后
