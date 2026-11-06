@@ -444,7 +444,8 @@ pub fn resync_with_peer_access(
     let sent_flat: Vec<crate::sync::protocol::ChangeRecord> =
         prep.pages.iter().flatten().cloned().collect();
     let mut merged: Option<CoreResult<(usize, Vec<String>)>> = None;
-    access.with_repo(Box::new(|repo| {
+    // D-199：同上——闭包里的 `?` 会直接穿透，必须在这层拦。
+    let merge_run = access.with_repo(Box::new(|repo| {
         if repo.device_id().as_bytes() != client_id.as_bytes() {
             // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
             return Err(CoreError::SyncAborted);
@@ -456,8 +457,20 @@ pub fn resync_with_peer_access(
         merge::note_received_changes(repo, &mut state, &reply_changes);
         merged = Some(Ok((rep.applied, rep.conflicts.clone())));
         Ok(())
-    }))?;
-    let (applied, conflicts) = merged.take().ok_or(CoreError::SyncAborted)??;
+    }));
+    if let Err(e) = merge_run {
+        announce_abort(&mut stream, &e);
+        return Err(e);
+    }
+    let (applied, conflicts) = match merged.take().ok_or(CoreError::SyncAborted)? {
+        Ok(v) => v,
+        Err(e) => {
+            // D-199：本端合并失败（典型：两端不是同一条库）→ 先说原因再断，
+            // 否则响应方只会看到「连接断了」。
+            announce_abort(&mut stream, &e);
+            return Err(e);
+        }
+    };
 
     // 10) 发 Done（网络段，不持锁；seq 延续分页序号）。
     let done = SyncPayload {
@@ -775,7 +788,9 @@ impl ResyncServer {
         type SectionResult =
             CoreResult<(DeviceSyncState, Vec<Vec<ChangeRecord>>, usize, Vec<String>)>;
         let mut section: Option<SectionResult> = None;
-        access.with_repo(Box::new(|repo| {
+        // D-199：闭包里的 `?`（典型：合并时解不开对端条目）会在这里就地穿透，
+        // 所以**必须在这层拦**——拦在下面的 `section` 上等于没拦。
+        let section_run = access.with_repo(Box::new(|repo| {
             if repo.device_id() != server_id {
                 // 锁定后换库重开（device_id 变化）→ 本场交换作废，密文暂存丢弃。
                 return Err(CoreError::SyncAborted);
@@ -797,9 +812,21 @@ impl ResyncServer {
             }
             section = Some(Ok((st, pgs, rep.applied, rep.conflicts.clone())));
             Ok(())
-        }))?;
+        }));
+        if let Err(e) = section_run {
+            announce_abort(&mut stream, &e);
+            return Err(e);
+        }
         let (mut state, pages, applied, conflicts) =
-            section.take().ok_or(CoreError::SyncAborted)??;
+            match section.take().ok_or(CoreError::SyncAborted)? {
+                Ok(v) => v,
+                Err(e) => {
+                    // D-199：合并失败（典型：两端不是同一条库）→ 先说原因再断，
+                    // 否则发起方只会看到「文件读写出错」。
+                    announce_abort(&mut stream, &e);
+                    return Err(e);
+                }
+            };
         let mut seq = state.last_sent_seq + 1;
 
         // 7) 回送本端 Push（D-53：随报文通告本端 blob 能力；D-56：载荷含墓碑，按对端 base
@@ -884,14 +911,20 @@ fn send_reject<W: Write>(writer: &mut W, code: &str) -> CoreResult<()> {
 }
 
 /// REJECT code → CoreError。
+///
+/// D-199：映射表只留 [`crate::sync::protocol::reject_code_to_error`] 一份，
+/// 这里仅作本文件内的短名。
 fn reject_to_error(code: &str) -> CoreError {
-    use crate::error::codes::*;
-    match code {
-        ERR_NOT_PAIRED => CoreError::NotPaired,
-        ERR_FINGERPRINT_MISMATCH => CoreError::FingerprintMismatch,
-        ERR_REPLAY_DETECTED => CoreError::ReplayDetected,
-        _ => CoreError::SyncAborted,
-    }
+    crate::sync::protocol::reject_code_to_error(code)
+}
+
+/// D-199：**中止前先把原因说出去**。
+///
+/// 此前任一端放弃就直接 drop 连接，对端拿到的是 `UnexpectedEof` → `err.io`
+/// （「文件读写出错」）——与真正原因无关，且两端说法不同。现在尽力发一帧中止报文，
+/// 发不出去（对端已走）就忽略，**绝不改变本端要返回的错误**。
+fn announce_abort<W: Write>(writer: &mut W, err: &CoreError) {
+    let _ = send_reject(writer, err.code());
 }
 
 /// 编译期占位：确保 `Zeroizing` 导入被使用（避免未使用告警）。

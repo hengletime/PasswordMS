@@ -166,7 +166,14 @@ fn recv_push_pages_with_limits<R: Read>(
     let mut page_count = 0usize;
     loop {
         let bytes = transport::recv_frame(stream)?;
-        let env: SyncEnvelope = serde_json::from_slice(&bytes)?;
+        // D-199：对端可能在中途放弃并把原因当帧发过来（`seal_reject`）。那才是真话，
+        // 解析不成信封就试它——否则这里会退化成 `Internal("json")` 或干脆等超时。
+        let env: SyncEnvelope = match serde_json::from_slice(&bytes) {
+            Ok(env) => env,
+            Err(e) => {
+                return Err(crate::sync::protocol::parse_reject(&bytes).unwrap_or_else(|| e.into()))
+            }
+        };
         replay.accept(env.seq, env.ts, now)?;
         let payload = open_envelope(sync_key, session_id, &env)?;
         blob_support = payload.blob_support;
@@ -204,7 +211,13 @@ pub fn recv_done<R: Read>(
     now: i64,
 ) -> CoreResult<SyncPayload> {
     let bytes = transport::recv_frame(stream)?;
-    let env: SyncEnvelope = serde_json::from_slice(&bytes)?;
+    // D-199：同上——中止帧比「解析失败」有用得多。
+    let env: SyncEnvelope = match serde_json::from_slice(&bytes) {
+        Ok(env) => env,
+        Err(e) => {
+            return Err(crate::sync::protocol::parse_reject(&bytes).unwrap_or_else(|| e.into()))
+        }
+    };
     replay.accept(env.seq, env.ts, now)?;
     open_envelope(sync_key, session_id, &env)
 }

@@ -10,10 +10,11 @@
 //! ② 跳过之后两端各用自己的 VK 包裹同一把 `sync_key`：信封层（`seal_envelope`）与
 //!    握手 MAC 全部照常通过，握手阶段没有任何检查能发现两条库不是同一条；
 //! ③ 一旦开始搬数据，Host 侧 `merge::apply_changes` → `Repository::decrypt_change`
-//!    用**本机 VK** 解对端的 `wrapped_key` → AEAD 打不开 → `CoreError::Crypto`
-//!    → 用户看到「加密操作失败」；
-//! ④ Host 中止后直接关连接，发起方还停在 `recv_frame` 上，收到的是 `UnexpectedEof`，
-//!    归一到 `err.io` → 用户看到「文件读写出错」。
+//!    用**本机 VK** 解对端的 `wrapped_key` → AEAD 打不开 → 原先报 `CoreError::Crypto`
+//!    （用户看到「加密操作失败」），1.6.1 起报 `VaultKeyMismatch`；
+//! ④ Host 中止后关连接，发起方还停在 `recv_frame` 上 → `UnexpectedEof` → `err.io`
+//!    （用户看到「文件读写出错」）。**1.6.2（D-199）起中止方先把原因发出去**，
+//!    所以两端现在说的是同一句话。
 //!
 //! 两个提示**同源**：不是两个故障，是一个故障的两端显示。
 //!
@@ -190,15 +191,14 @@ fn reproduce() -> (CoreError, CoreError, bool) {
     (host_err, joiner_err, keys_differ)
 }
 
-/// 复现本体：把「两个提示同源」钉成断言。
+/// 复现本体：两端**都必须说出同一句话**。
 ///
-/// 关键在**两端都失败、但只有一端说的话有用**：
-/// - 合并方（这里是 Host）现在能当场点名「不是同一个保险库」（D-198 修好之前它是
-///   `Crypto`，用户看到的正是「加密操作失败」）；
-/// - 发起方**永远只能**看到 `err.io`——它只是被掐断了连接，本身没有任何判断依据。
-///   这也是为什么必须由合并方把话说清楚。
+/// 1.6.1 时这条用例钉的是「合并方点名、发起方只能 io」——因为发起方只是被掐断了连接，
+/// 手上没有任何依据。1.6.2（D-199）起中止方会先把原因当一帧发出去，所以这条断言的
+/// 期望值随之改成「两端同码」：**把 `announce_abort` 删掉，本用例立刻变红**
+/// （发起方退回 `ERR_IO`）。
 #[test]
-fn vk_mismatch_shows_as_key_mismatch_on_merger_and_io_on_peer() {
+fn vk_mismatch_is_reported_on_both_ends() {
     let (host_err, joiner_err, keys_differ) = reproduce();
 
     assert!(
@@ -211,20 +211,46 @@ fn vk_mismatch_shows_as_key_mismatch_on_merger_and_io_on_peer() {
         matches!(host_err, CoreError::VaultKeyMismatch),
         "合并方应点名「两端不是同一个保险库」，实际 {host_err:?}"
     );
-    assert_eq!(host_err.code(), "ERR_VAULT_KEY_MISMATCH");
-    assert_eq!(host_err.message_key(), "err.vault_key_mismatch");
 
-    // 发起方：对端已关连接，自己还停在等回包上 → UnexpectedEof → `err.io`。
+    // 发起方：收到对方的中止帧，说同一句话（不再是一句与原因无关的 io 错误）。
     assert_eq!(
         joiner_err.code(),
-        "ERR_IO",
-        "发起方只会看到笼统的 io 错误，实际 {joiner_err:?}"
+        "ERR_VAULT_KEY_MISMATCH",
+        "发起方必须收到同一原因，实际 {joiner_err:?}"
     );
+    assert_eq!(joiner_err.message_key(), "err.vault_key_mismatch");
     assert_eq!(
-        joiner_err.message_key(),
-        "err.io",
-        "笔记本提示「文件读写出错」"
+        host_err.code(),
+        joiner_err.code(),
+        "两端必须是同一个错误码——这正是 D-199 要的"
     );
+}
+
+/// 中止帧的形状与解析（D-199）：正常信封不会被误判成中止帧。
+#[test]
+fn abort_frame_is_recognised_but_envelopes_are_not() {
+    use passwordms_core::sync::protocol::{parse_reject, reject_code_to_error};
+
+    // 中止帧：`{"t":"reject","code":"…"}`（握手枚举的中止形状）。
+    let frame = br#"{"t":"reject","code":"ERR_VAULT_KEY_MISMATCH"}"#;
+    assert!(
+        matches!(parse_reject(frame), Some(CoreError::VaultKeyMismatch)),
+        "中止帧必须被认出来，且映射到具体原因"
+    );
+
+    // 认不出的 code 只能是「已中止」，绝不能是「内部错误」。
+    assert!(matches!(
+        reject_code_to_error("ERR_SOMETHING_NEW"),
+        CoreError::SyncAborted
+    ));
+    assert_eq!(
+        reject_code_to_error("ERR_SOMETHING_NEW").message_key(),
+        "err.sync_aborted"
+    );
+
+    // 正常数据帧（信封）不该被当成中止帧——否则会把正常报文误报成失败。
+    let envelope = br#"{"v":1,"session_id":"AAAA","seq":3,"ts":1,"nonce":"AAAA","ct":"AAAA"}"#;
+    assert!(parse_reject(envelope).is_none(), "信封不是中止帧");
 }
 
 /// D-198 的准入判定：**只有密钥相等才豁免采纳**。

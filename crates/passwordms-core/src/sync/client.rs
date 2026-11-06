@@ -511,14 +511,9 @@ pub fn pair(
 }
 
 /// REJECT code → CoreError。
+/// REJECT code → CoreError（D-199：映射表只留 `protocol::reject_code_to_error` 一份）。
 fn reject_to_error(code: &str) -> CoreError {
-    use crate::error::codes::*;
-    match code {
-        ERR_PAIR_TOKEN_USED => CoreError::PairTokenUsed,
-        ERR_PAIR_TOKEN_EXPIRED => CoreError::PairTokenExpired,
-        ERR_PAIR_TOKEN_INVALID => CoreError::PairTokenInvalid,
-        _ => CoreError::SyncAborted,
-    }
+    crate::sync::protocol::reject_code_to_error(code)
 }
 
 /// D-138：Io 载荷（`io:Kind`，可能带 `stage|` 前缀）归一化后是否含某关键词。

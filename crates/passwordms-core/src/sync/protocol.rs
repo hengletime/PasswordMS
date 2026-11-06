@@ -350,6 +350,37 @@ pub fn open_envelope(
     Ok(serde_json::from_slice(&pt)?)
 }
 
+/// 数据阶段收到的帧若不是信封，尝尝它是不是对端的**中止帧**（D-199）。
+///
+/// 只有 `{"t":"reject", …}` 这种握手形状才认；正常信封没有 `t` 字段，不会被误判。
+pub fn parse_reject(bytes: &[u8]) -> Option<CoreError> {
+    match serde_json::from_slice::<HandshakeMessage>(bytes) {
+        Ok(HandshakeMessage::Reject(r)) => Some(reject_code_to_error(&r.code)),
+        _ => None,
+    }
+}
+
+/// 中止帧的 code → 具体错误（前端据此给出对应文案）。
+///
+/// **全仓唯一一份映射**：`resync.rs` 与 `client.rs` 各有同名私有函数的年代已经过去——
+/// 三份表迟早漂移，而漂移的后果是「同一件事三种说法」。
+///
+/// 认不出来的 code 一律回 [`CoreError::SyncAborted`]——**绝不**用 `Internal`：
+/// 那会把「对方主动中止」说成「程序出错」。
+pub fn reject_code_to_error(code: &str) -> CoreError {
+    use crate::error::codes::*;
+    match code {
+        ERR_PAIR_TOKEN_USED => CoreError::PairTokenUsed,
+        ERR_PAIR_TOKEN_EXPIRED => CoreError::PairTokenExpired,
+        ERR_PAIR_TOKEN_INVALID => CoreError::PairTokenInvalid,
+        ERR_NOT_PAIRED => CoreError::NotPaired,
+        ERR_FINGERPRINT_MISMATCH => CoreError::FingerprintMismatch,
+        ERR_REPLAY_DETECTED => CoreError::ReplayDetected,
+        ERR_VAULT_KEY_MISMATCH => CoreError::VaultKeyMismatch,
+        _ => CoreError::SyncAborted,
+    }
+}
+
 /// 将文本渲染为二维码 SVG（纯矢量，无图像编解码依赖；§8.1 `qrcode` 仅启用 `svg` 特性）。
 pub fn qr_svg(text: &str) -> CoreResult<String> {
     let code = qrcode::QrCode::new(text.as_bytes())

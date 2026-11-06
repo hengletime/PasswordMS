@@ -37,6 +37,9 @@ describe('D-198：两端保险库密钥不一致的提示', () => {
     expect(text).toContain(restoreLabel);
     // 还要点名病灶，否则用户以为是网络问题。
     expect(text).toContain('不是同一个保险库');
+    // D-198 的第一版文案只写了「重装过，或恢复过别的库」，漏掉最常见的一种：
+    // 对方**新建**了一个库（主人真机 2026-11-06 就是这种）。漏了就等于没解释。
+    expect(text).toContain('新建');
   });
 
   it('错误码兜底：后端没带 message_key 时也落到这条提示，不落 err.internal', () => {
