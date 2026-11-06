@@ -4991,3 +4991,87 @@ scored.sort((a, b) => b.score - a.score); // 有查询只按得分；同分靠�
 已写进两个函数的文档注释。
 
 
+### 6.72 配对「成功」是假的：两端密钥已经不同，却照样放行（D-198，1.6.1）
+
+现象（主人真机 1.6.0，2026-11-06 早）：笔记本与公司台式机配对**成功**，随后点「立即
+同步」——笔记本提示「文件读写错误」，台式机提示「加密操作失败」。两个提示都不指向
+真正的原因，且看起来像两个故障。
+
+**它们是一个故障的两端显示。** 完整链路见
+`crates/passwordms-core/tests/d198_stale_pairing_vk.rs`（真跑 socket 的复现，未修前
+实测：合并方 `Crypto`、发起方 `ERR_IO`）：
+
+```
+配对放行判据： 有过这台 Host 的配对记录 || 本机 VK == 对端 VK
+                              ↑ 这一条就够了 ⇒ adopt_vault_key 被跳过
+  ⇒ 两端各用自己的 VK 包裹同一把 sync_key（信封层、握手 MAC 全部照常通过）
+  ⇒ 搬数据时 Repository::decrypt_change 用本机 VK 解对端的 wrapped_key → 打不开
+  ⇒ 合并方 CoreError::Crypto →「加密操作失败」
+  ⇒ 合并方直接关连接，发起方还停在 recv_frame → UnexpectedEof →「文件读写出错」
+```
+
+关键在于**握手层查不出这件事**：两端共享的 `sync_key` 确实是同一把（配对时建的），
+所有 MAC、所有信封都能过，直到拿条目密钥去解对端数据时才第一次暴露。
+
+**为什么「有过记录」不能当判据**：记录比密钥活得久。其中一台重装、或恢复过别的备份，
+`PairedDevice` 记录还在，VK 却已经换掉——于是「以前配过」这句话仍然成立，而它想表达的
+「我们已经是一伙的」已经为假。D-47（同组重配对）/ D-62（解绑后重扫）本来写的就是
+「密钥相等」，实现退化成「有记录 || 密钥相等」，才漏出这个口子。
+
+**修法一：准入判定改成显式三态，只有密钥相等才豁免。**
+
+```rust
+// crates/passwordms-core/src/sync/client.rs
+if repo.matches_vault_key(host_vault_key) { return SameVault; }        // D-47/D-62 豁免
+if repo.list_paired_devices().iter().any(|d| d.device_id == host_id) {
+    return RefuseMismatch;                                             // D-198 拒绝
+}
+AdoptHostKey
+```
+
+`sync_cmd.rs` 在**落盘之前**拒绝（不覆盖既有记录、不动任何数据），文案点名病灶并给出
+两个真实按钮：
+
+> 这两台设备里的数据不是同一个保险库：对方的保险库密钥已经变了（重装过，或恢复过别的
+> 库），配对不能继续。请留一台为准——在那台上「导出保险库」，到另一台「从备份恢复」，
+> 然后再重新配对。
+
+**修法二：已经坏掉的配对也要能说话。** 既有配对无法追溯，靠配对判定救不回来，所以
+`Repository::decrypt_change` 的**密钥包裹层**失败改报 `VaultKeyMismatch`（新错误码
+`ERR_VAULT_KEY_MISMATCH` → `err.vault_key_mismatch`）。范围严格限定在包裹层：同一函数
+里 `aead::open` 失败仍是 `Crypto`——那说明密钥对了、条目密文本身坏了，是另一类问题，
+不能混成同一句「不是同一个保险库」。
+
+效果：主人**不必先解绑再重配**，直接点「立即同步」就能看到真正原因和下一步。
+
+**守门**：
+
+| 断言 | 文件 | 变异后是否变红 |
+|---|---|---|
+| 合并方报 `VaultKeyMismatch`、发起方报 `ERR_IO`（故障链两端同源） | `d198_stale_pairing_vk.rs` | ✅ 还原 `decrypt_change` 的 `map_err` 即红 |
+| 有记录 + 密钥不同 → `RefuseMismatch` | 同上 | ✅ 判据改回「有记录即 `SameVault`」即红 |
+| 有记录 + 密钥相同 → `SameVault`（D-47/D-62 不许被一起删掉） | 同上 | ✅ 见上一条同一处变异 |
+| 无记录 → `AdoptHostKey`（上一台的记录不许影响新主机） | 同上 | ✅ 同上 |
+| `err.vault_key_mismatch` 四语言都有、不是空话、点名两个真实按钮 | `d198-pairing-mismatch-guard.test.ts` | ✅ 删字典键或抽掉按钮名即红 |
+| 错误码兜底落到本键，且与 `ERR_VK_ADOPT_REQUIRES_EMPTY` 分开 | 同上 | ✅ 漏写 `FALLBACK_MESSAGE_KEY` 即红（本轮实际踩到） |
+
+**两条错误码的分工**（不许合并）：
+
+| 码 | 说的是 | 用户要做 |
+|---|---|---|
+| `ERR_VK_ADOPT_REQUIRES_EMPTY` | 还没有这一组的历史，但本机库非空 | 清空 / 新建空库后重扫 |
+| `ERR_VAULT_KEY_MISMATCH` | **有历史，可历史已经过期** | 选一台为准，导出 → 恢复 → 重配 |
+
+**拒绝时两端看到什么**：这句话只出现在**扫码的那一台**（它才是做判定的一方）。被扫的
+另一台（Host）只会看到这一次配对中断——它没有拿到任何理由，也没有协议帧可以承载这个
+理由（`Reject` 帧只有 Host→Joiner 一个方向，反向没有定义）。所以文案写成「请留一台为
+准」而不是「请在两边都操作」，用户读完在扫码那台上就能把事办完。
+
+**已知残留（本轮不修，写在这里防遗忘）**：若对端这一轮**一条 live 变更都没有**、只有
+附件要传，`blob_transfer.rs` 的 `verify_blob_frame` 仍会以 `Crypto` 报错（那里的
+`open_frame` 与本地读帧共用，直接改会把「本地库损坏」也误报成「两库不同」）。配对
+判定修好之后，这条路径在正常流程里不可达。
+
+**未确认的一点**（不许当结论写）：两台机器里**是哪一台**换过库（重装 / 恢复过别的备份），
+本轮没有现场日志可以证明，需要在两台机器的 `passwordms.log` 里看
+`[sync_now] failed: … err=…` 与 `[resync] aborted: …` 才能落定。修法不依赖这个答案。

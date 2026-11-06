@@ -803,6 +803,8 @@ export const enUS: Messages = {
     load_partial: 'Some data failed to load. Please retry, or lock and unlock again.',
     conflict: 'There are unresolved conflicts.',
     vk_adopt_requires_empty: 'The local vault is not empty; the peer key cannot be adopted directly.',
+    vault_key_mismatch:
+      'These two devices do not hold the same vault: the peer vault key has changed (reinstalled, or restored from a different vault), so pairing cannot continue. Keep one device as the source of truth — use "Export vault" there, use "Restore from backup" on the other device, then pair again.',
     restore_conflict: 'Cannot restore: a newer version of this item already exists (caused by multi-device sync). Handle it in the item list or the Conflicts tab.',
     blob_missing: 'The attachment content has not been synced to this device yet; try again after syncing.',
     blob_incomplete: 'The attachment content transfer was incomplete; please sync again.',

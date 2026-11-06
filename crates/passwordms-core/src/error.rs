@@ -62,6 +62,13 @@ pub mod codes {
     pub const ERR_ATTACHMENT_LIMIT: &str = "ERR_ATTACHMENT_LIMIT";
     /// 【主理人裁定 U1/U2 新增】Joiner 本地库非空时禁止静默采用 Host 的 VK。
     pub const ERR_VK_ADOPT_REQUIRES_EMPTY: &str = "ERR_VK_ADOPT_REQUIRES_EMPTY";
+    /// 【D-198 新增】本机与该 Host 有过配对记录，但两端保险库密钥已经不同
+    /// （重装 / 恢复过别的备份）——**两条库不是同一条，同步不可能成功**。
+    ///
+    /// 与 `ERR_VK_ADOPT_REQUIRES_EMPTY` 分工：那条是「还没有历史、但本机库非空」；
+    /// 这条是「有历史、可历史已经过期」。混用会让用户以为是「库非空」，
+    /// 去做无用的清空动作。
+    pub const ERR_VAULT_KEY_MISMATCH: &str = "ERR_VAULT_KEY_MISMATCH";
     /// 【D-91 新增】回收站还原被拒：同 item_id 已有活跃条目（多设备同步复活了新版本），
     /// 旧快照还原会顶掉同步来的新数据（两端丢数据）。
     pub const ERR_RESTORE_CONFLICT: &str = "ERR_RESTORE_CONFLICT";
@@ -167,6 +174,16 @@ pub enum CoreError {
     /// 【主理人裁定 U1/U2】Joiner 本地库非空，需前端确认后清空或拒绝。
     #[error("vault key adoption requires an empty local vault")]
     VkAdoptRequiresEmpty { record_count: usize },
+    /// 【D-198】有过与该 Host 的配对记录，但两端 VK 已不同（重装 / 恢复过别的备份）。
+    ///
+    /// 为什么必须**在配对时就拒绝**：放行之后两端各用自己的 VK 包裹同一把 `sync_key`，
+    /// 信封层与握手 MAC 全部照常通过（`sync_key` 确实一致），一直到搬数据时
+    /// `Repository::decrypt_change` 才用本机 VK 解不开对端的 `wrapped_key` →
+    /// Host 侧报 `Crypto`（「加密操作失败」）、发起方只看到一个被掐断的连接
+    /// （「文件读写出错」）。两个提示同源，且都不指向真正的原因（主人真机 1.6.0，
+    /// `tests/d198_stale_pairing_vk.rs` 已复现）。
+    #[error("local vault key differs from the peer's")]
+    VaultKeyMismatch,
     /// 【D-91】回收站还原被拒：同 item_id 已有活跃条目（典型：对端删除后又编辑、
     /// 同步复活了新版本）。旧快照 rev+1 + updated_at=now 会把同步来的新数据顶掉，
     /// 并经 LWW 把覆盖传播回对端（两端丢数据）。
@@ -240,6 +257,7 @@ impl CoreError {
             CoreError::BlobIncomplete => codes::ERR_BLOB_INCOMPLETE,
             CoreError::BlobCapacity => codes::ERR_BLOB_CAPACITY,
             CoreError::VkAdoptRequiresEmpty { .. } => codes::ERR_VK_ADOPT_REQUIRES_EMPTY,
+            CoreError::VaultKeyMismatch => codes::ERR_VAULT_KEY_MISMATCH,
             CoreError::RestoreConflict => codes::ERR_RESTORE_CONFLICT,
             CoreError::BiometricUnavailable => codes::ERR_BIOMETRIC_UNAVAILABLE,
             CoreError::BiometricCanceled => codes::ERR_BIOMETRIC_CANCELED,
@@ -286,6 +304,7 @@ impl CoreError {
             CoreError::BlobIncomplete => "err.blob_incomplete",
             CoreError::BlobCapacity => "err.blob_capacity",
             CoreError::VkAdoptRequiresEmpty { .. } => "err.vk_adopt_requires_empty",
+            CoreError::VaultKeyMismatch => "err.vault_key_mismatch",
             CoreError::RestoreConflict => "err.restore_conflict",
             // 1.3.0 生物识别：四类失败各给独立 key —— 用户能据此决定「去配 Hello」
             // 「重新开启开关」还是「改用主密码」，笼统一句「解锁失败」反而误导（`docs/08` §10）。

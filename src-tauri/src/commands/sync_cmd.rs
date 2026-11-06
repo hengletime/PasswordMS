@@ -183,16 +183,23 @@ fn sync_join_impl(
     //    库的加密密钥**就是**握手下发的 Host VK，采纳是零风险幂等（同值重包裹）。
     //    故补「本机当前 VK == 对端 VK」豁免：相等 = 同一逻辑库（安全跳过）；
     //    不等 = 真正的异组保险库（仍拒绝，U1/U2 红线不破）。
+    //    【D-198 更正】上面两条都写对了「用密钥相等做判据」，实现却退化成
+    //    `有过记录 || 密钥相等`——「有过记录」比「密钥相等」活得久（其中一台重装、
+    //    或恢复过别的备份，记录还在而 VK 早已换掉），于是配对静默成功，
+    //    直到下一次「立即同步」才以「加密操作失败 / 文件读写出错」暴露（两端同源）。
+    //    现改为显式三态：只有 `SameVault` 才跳过采纳；`RefuseMismatch` 当场拒绝。
     {
         let mut session = state.lock_session().map_err(lock_err)?;
-        let already_paired = {
+        let admission = {
             let repo = session.repo()?;
-            repo.list_paired_devices()
-                .iter()
-                .any(|d| d.device_id == joiner.host_id())
-                || repo.matches_vault_key(joiner.host_vault_key())
+            client::admit_pairing(repo, joiner.host_id(), joiner.host_vault_key())
         };
-        if !already_paired {
+        if admission == client::PairAdmission::RefuseMismatch {
+            // 拒绝发生在**落盘之前**：不覆盖既有配对记录、不动任何数据。
+            // 文案要点名「不是同一个保险库」并给下一步，不能只说「失败了」。
+            return Err(IpcError::from(passwordms_core::CoreError::VaultKeyMismatch));
+        }
+        if admission == client::PairAdmission::AdoptHostKey {
             // D-139：身份文件是「本机旧 VK」包裹的。采纳对端 VK 后若不重包裹，
             // 旧 VK 随采纳永久消失，这份私钥再也解不开——之后本机每次当 Host
             // （生成二维码）都报「加密操作失败」，且永不自愈（主人实测）。

@@ -38,6 +38,12 @@ export const ErrorCode = {
   ERR_RESTORE_NO_RETREAT: 'ERR_RESTORE_NO_RETREAT',
   ERR_CONFLICT_EXISTS: 'ERR_CONFLICT_EXISTS',
   ERR_VK_ADOPT_REQUIRES_EMPTY: 'ERR_VK_ADOPT_REQUIRES_EMPTY',
+  /**
+   * D-198：有配对记录但两端保险库密钥已不同（配对时当场拒绝）。
+   * 与 `ERR_VK_ADOPT_REQUIRES_EMPTY` 分开：那条说「本机库非空」，这条说
+   * 「两条库不是同一条」——用户要做的事完全不同（前者清空/新建，后者迁移数据）。
+   */
+  ERR_VAULT_KEY_MISMATCH: 'ERR_VAULT_KEY_MISMATCH',
   /** D-91：回收站还原被拒——同 item_id 已有活跃条目（多设备同步复活了新版本）。 */
   ERR_RESTORE_CONFLICT: 'ERR_RESTORE_CONFLICT',
   ERR_BLOB_MISSING: 'ERR_BLOB_MISSING',
@@ -89,6 +95,7 @@ const FALLBACK_MESSAGE_KEY: Record<string, string> = {
   [ErrorCode.ERR_RESTORE_NO_RETREAT]: 'lock.restore_no_retreat_short',
   [ErrorCode.ERR_CONFLICT_EXISTS]: 'err.conflict',
   [ErrorCode.ERR_VK_ADOPT_REQUIRES_EMPTY]: 'err.vk_adopt_requires_empty',
+  [ErrorCode.ERR_VAULT_KEY_MISMATCH]: 'err.vault_key_mismatch',
   [ErrorCode.ERR_RESTORE_CONFLICT]: 'err.restore_conflict',
   [ErrorCode.ERR_BLOB_MISSING]: 'err.blob_missing',
   [ErrorCode.ERR_BLOB_INCOMPLETE]: 'err.blob_incomplete',

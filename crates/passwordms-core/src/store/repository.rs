@@ -3214,6 +3214,14 @@ impl Repository {
     }
 
     /// 解密一条远端变更（对端与本端共享同一 VK）。
+    ///
+    /// 【D-198】密钥包裹层解不开 ⇒ 两端 VK 已不同（这两条库不是同一条）。此处点名
+    /// `VaultKeyMismatch` 而不是把 `Crypto` 原样抛出去：一条来自**已通过握手**的对端
+    /// 记录，密钥层打不开只可能是两库密钥不同，用户需要的是「去把数据搬过来」，
+    /// 而不是一句「加密操作失败」。
+    ///
+    /// 范围**只到包裹层**：下面 `aead::open` 失败仍保留 `Crypto`——那说明密钥对了、
+    /// 条目密文本身坏了，是另一类问题，不能混成同一个提示。
     pub fn decrypt_change(&self, change: &ChangeRecord) -> CoreResult<zeroize::Zeroizing<Vec<u8>>> {
         let rid = record_id_to_bytes(&change.record_id)?;
         let aad = keys::record_aad(change.record_type, &rid);
@@ -3221,7 +3229,8 @@ impl Repository {
             nonce: change.wrapped_key_nonce.clone(),
             ct: change.wrapped_key.clone(),
         };
-        let ik = keys::unwrap_item_key(&self.vault_key, &wrapped, &aad)?;
+        let ik = keys::unwrap_item_key(&self.vault_key, &wrapped, &aad)
+            .map_err(|_| CoreError::VaultKeyMismatch)?;
         if change.nonce.len() != crate::constants::AEAD_NONCE_LEN {
             return Err(CoreError::Crypto("sync nonce".to_string()));
         }

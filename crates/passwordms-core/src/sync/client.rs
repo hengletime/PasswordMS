@@ -27,6 +27,44 @@ use crate::sync::replay::ReplayGuard;
 use crate::sync::server::{device_key_aad, to_arr32};
 use crate::sync::transport;
 
+/// 配对握手成功后，本机该如何处理 Host 下发的 VK（D-198）。
+///
+/// 这是**准入判定**，必须在落盘配对关系之前定下来：放行一条注定解不开的配对关系，
+/// 用户只会在下一次「立即同步」时收到一句「加密操作失败」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PairAdmission {
+    /// 本机 VK 已与 Host 相同（D-47 / D-62 的豁免）：**同一逻辑库**，跳过采纳，
+    /// 直接复用既有密钥完成本次交换。
+    SameVault,
+    /// 本机还没有这一组的历史：采用 Host 的 VK。失败时由 `adopt_vault_key`
+    /// 按「本地库必须为空」拒绝（`VkAdoptRequiresEmpty`）。
+    AdoptHostKey,
+    /// 本机有与该 Host 的配对记录，**但两端 VK 已经不同** —— 这两条库不是同一条
+    /// （典型成因：其中一台重装过，或恢复过别的备份）。同步不可能成功，必须拒绝。
+    RefuseMismatch,
+}
+
+/// 判定本机能否继续这次配对（D-198）。
+///
+/// 关键点：D-47 / D-62 的豁免**只能由「VK 相等」成立**。原实现写的是
+/// `list_paired_devices().any(device_id == host_id) || matches_vault_key(host_vk)`，
+/// 于是「有过记录」这一件事就足以跳过采纳——记录可以比密钥活得久（重装、恢复备份），
+/// 一旦记录还在而密钥已经换过，配对会**静默成功**，故障被推到下一次同步时才以一个
+/// 与原因无关的「加密操作失败」暴露（`tests/d198_stale_pairing_vk.rs` 复现）。
+pub fn admit_pairing(repo: &Repository, host_id: &str, host_vault_key: &[u8; 32]) -> PairAdmission {
+    if repo.matches_vault_key(host_vault_key) {
+        return PairAdmission::SameVault;
+    }
+    if repo
+        .list_paired_devices()
+        .iter()
+        .any(|d| d.device_id == host_id)
+    {
+        return PairAdmission::RefuseMismatch;
+    }
+    PairAdmission::AdoptHostKey
+}
+
 /// 配对完成后的会话上下文。
 pub struct JoinerSession {
     stream: TcpStream,
