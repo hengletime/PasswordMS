@@ -238,6 +238,48 @@ D-174 的第一版让 `remove_folder_direct` 在删壳的同一次操作里把�
   -newer <裸 exe>` 排除 `target/` 与 `src-tauri/gen/` 后**输出为空**——没有源文件或文档
   晚于 exe，说明树在构建前就冻结了。
 
+### 1.2q 最近一次完整实跑（2026-11-07 · v1.6.6 · D-202 / D-203）
+
+> 口径：`env -u NODE_OPTIONS bash scripts/gate-all.sh`，整轮墙钟 **9 分 15 秒**
+> （Rust 全量 515s 是大头），总判定 **PASS（通过 11 门 / 跳过 0 门 / 失败 0）**。
+> **锚：HEAD `6484017`，工作区含 5 处版本号升到 1.6.6（未提交）；首尾快照一致。**
+> 跑门期间没写一个字——这一点由门自己的锚自检确认，不靠自觉。
+
+| # | 门 | 本次实测（v1.6.6） | 判定 |
+|---|----|------|------|
+| 0 | 版本同步门 | 五处一致 `1.6.6`（package.json / tauri.conf.json / Cargo.toml / Cargo.lock 两处） | ✅ 3s |
+| 1 | 前端单测 | **97 文件 918/918 通过**（独立复跑取数；1.5.37 是 89/840，新增 `d202-d203-guard` 6 例等） | ✅ 6s |
+| 2 | 前端类型检查 | 0 errors / 0 warnings | ✅ 6s |
+| 3 | CSS 层叠契约 | 0 FAIL / 6 WARN（既有浅色按钮对比度，未达 AA 4.5，与上版同） | ✅ 2s |
+| 4 | fmt | 0 处差异 | ✅ 1s |
+| 5 | Rust 全量 | 通过 / 0 失败 | ✅ 515s |
+| 6 | clippy | **0 warning** | ✅ 13s |
+| 7 | 体积门-桌面 | NSIS 2.04 MB、MSI 2.88 MB（≤ 10 MB） | ✅ 7s |
+| 8 | 体积门-Android | APK 7.56 MB（≤ 12 MB） | ✅ 1s |
+
+**这一版的门为什么值得看**：11 门全过、0 跳过，是「体积门不再靠 `--allow-missing` 跳过」
+之后少见的满门——上一版（§1.2p）跑门时包还没出，两门体积是跳过的。
+
+产物实测（四件 + 说明表，三方一致 4/4）：
+
+| 产物 | 字节 | sha256 |
+|---|---|---|
+| `PasswordMS_1.6.6_x64-setup.exe` | 2,135,962 | `a5536e45…b2b2` |
+| `PasswordMS_1.6.6_x64_en-US.msi` | 3,014,656 | `cd137de5…124c` |
+| `PasswordMS-1.6.6-portable-x64.zip` | 2,517,683 | `a5a2047f…2f6e` |
+| `PasswordMS-1.6.6-arm64.apk` | 7,930,283 | `3bf0d8c8…3368` |
+
+exe `FileVersion=ProductVersion=1.6.6`；`find src crates scripts -newer <exe>` **输出为空**；
+便携 zip 内 exe 与 release exe **同哈希 `5571393a…`**（zip 有条目顶层目录
+`PasswordMS-Portable/`，`unzip -p` 必须写全路径，否则算出来是空串的哈希）；
+APK `versionCode 1006006 / versionName 1.6.6`，包内 `.so` 四条断言 4/4。
+
+**一个没做到的验证**：按老规矩要「走 API 端点把 APK 实下回来算哈希」，这一版**没做成**——
+连着两次都是进程在开始传输时被环境安全策略 `SIGTERM` 掉（纯文本的 `SHA256SUMS` 却能正常
+下回来并逐字节相同）。所以 APK 的完整性只能靠 **GitHub 服务端自己算的 digest**
+（`sha256:3bf0d8c8…`，与本地一致）来背书，不是我们本地复算的。这条要记着：
+**下次在能下载的环境里补一次实下**，别让"资产完好"这句话长期建立在服务端信任上。
+
 ### 1.2p 最近一次完整实跑（2026-11-04 13:38 起 · v1.5.37 · D-188 / D-189 / D-190）
 
 > 口径：`env -u NODE_OPTIONS bash scripts/gate-all.sh`，整轮墙钟 **8 分 48 秒**
