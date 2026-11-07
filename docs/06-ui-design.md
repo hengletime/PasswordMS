@@ -4695,7 +4695,7 @@ ok: '确定',
   但这次恰好相反——文档是对的，代码漂了。`scripts/check-e2e-quotes.mjs` 因此存在。
 - 孤儿键不是"暂时没用的东西"，是**在等一个人去引它**。它已经在走查单里被引错过一次。
 
-### 6.71 自动输入：热键唤起浮层，SendInput 代填（1.5.39 未发布）
+### 6.71 自动输入：热键唤起浮层，SendInput 代填（1.5.41 起发布）
 
 一句话：在任意程序里按全局热键（默认 `Ctrl+Alt+Space`），PasswordMS 弹一个无边框浮层
 列出登录条目，回车选定后，浮层收起、焦点切回你原来的窗口，程序用 `SendInput`
@@ -4822,16 +4822,27 @@ canonical_hotkey 校验）。设置页改键 UI 带 D-121/D-122 平台门控：�
 
 #### 6.71.5 已知限制（真机再调）
 
-- 注入节奏（6ms/字符、50ms/Token、200ms 焦点等待）是保守起点，待真机手感调参。
+- 注入节奏**已按真机调过一轮**（1.5.41，常量在 `autotype_cmd.rs:46-61`）：每个字符
+  12ms、Token 之间 50ms、切回目标窗口后等 300ms、每段文本前静默 150ms。原起点是
+  6/50/200——两处加倍都是被 Chromium 逼的：地址栏（omnibox）收到输入后会 inline
+  autocomplete 并选中补全的那截，打太快会把选中内容替换掉，表现为"网址打一半就断"；
+  `SetForegroundWindow` 是异步的，200ms 常常不够让 renderer 侧的编辑框恢复输入状态，
+  表现为"第一个字符丢在空白里"。日志里出现「文本段注入完成」再看手感，别凭感觉调。
 - 目标窗口被系统前台锁策略拒绝时（SetForegroundWindow 被拒）会误报焦点丢失；
   真机出现再加 AttachThreadInput/AllowSetForegroundWindow 前戏。
 - 五种动作是**固定模板**，尚无 per-entry 自定义序列（KeePassXC 那种每条目绑定序列
   的能力留到有真实需求再谈——现在没人要写 `{DELAY 500}{TAB 3}`）。
 - 非法 action（正常路径到不了）与密钥本身非法的 TOTP 落通用 ERR_VALIDATION →
   浮层兜底文案；不为防御路径另设专用码。
-- 热键被其他程序占用时只有保存失败 toast 一条提示路。
-- 错误码 `err.autotype_focus_lost` 暂无 i18n 键（前端按 code 显式映射，不消费
-  message_key）；如其他错误展示面需要再补。
+- 热键撞车与"被占用"**是两件事，提示也分开**：设成与另一颗热键相同的组合时在注册前
+  就拒（`err.hotkey_same_as_other`，四语言），不让它走到 `on_shortcut` 失败再被译成
+  「该热键已被其它程序占用」——占用它的其实是本程序，用户按那句提示只会反复换这颗键。
+  真被别的程序占了时仍然是保存失败 toast 一条提示路。
+- 错误码 `err.autotype_focus_lost` 的 i18n 键**已经补上了**（`zh-CN.ts` 里
+  `err.autotype_focus_lost`，四语言同键）。它和浮层按 code 映射的
+  `autotype.failed_focus` 是**刻意两层**，不许压平：浮层那一层写在浮层窗口里（用户刚
+  按完回车、眼睛就在那儿），`err.*` 这一层写给任何走到通用错误通路的地方看。措辞可以
+  不同，但都得说清"目标窗口变了、这次没打进去"。
 
 #### 6.71.6 顺手修的 D-195：导入条目的动态口令本来是坏的
 
@@ -5102,10 +5113,21 @@ Host→Joiner 方向有人读。数据阶段（Push / Done）两端都只认加�
 理由（`Reject` 帧只有 Host→Joiner 一个方向，反向没有定义）。所以文案写成「请留一台为
 准」而不是「请在两边都操作」，用户读完在扫码那台上就能把事办完。
 
-**已知残留（本轮不修，写在这里防遗忘）**：若对端这一轮**一条 live 变更都没有**、只有
-附件要传，`blob_transfer.rs` 的 `verify_blob_frame` 仍会以 `Crypto` 报错（那里的
-`open_frame` 与本地读帧共用，直接改会把「本地库损坏」也误报成「两库不同」）。配对
-判定修好之后，这条路径在正常流程里不可达。
+**附件那条路也收口了（1.6.4，D-198 第二条）**：若对端这一轮**一条 live 变更都没有**、
+只有附件要传，原先 `blob_transfer.rs` 的 `verify_blob_frame → open_frame` 仍是裸 `?`，
+于是同一个根因（两条库的 VK 不同）在附件这里被报成 `Crypto`「加密操作失败」——和 6.72
+正文里那段「两台都提示同一句话」自相矛盾。
+
+修法只动一处映射，**不动 `aead::open`**：`open_frame` 里把 `unwrap_item_key` 失败映射成
+`VaultKeyMismatch`，`aead::open` 保持裸返回。这样「库不一样」说得准，而缺片/错序/密文
+损坏仍然报 `Crypto`——不会把「本地库损坏」误标成「两库不同」。`open_frame` 与本地读帧
+共用这一点不变，语义也不冲突：本地读帧拿自己的 VK 解不开，本来就是 VK 不匹配。
+
+**守门**（`crates/passwordms-core/tests/d198_blob_vk_mismatch.rs`，2 条，正反成对）：
+`wrong_vk_reports_vault_key_mismatch_not_crypto` 拿库 A 造的合法附件帧交给库 B，断言
+`ERR_VAULT_KEY_MISMATCH` 且 `!= ERR_CRYPTO`；`corrupted_ct_stays_crypto_not_vault_key_mismatch`
+把 `ct[0] ^= 0x01` 后仍必须是 `ERR_CRYPTO`——只留前一条的话，"把所有失败都标成 VK 不匹配"
+这种过度修正照样绿。
 
 **未确认的一点**（不许当结论写）：两台机器里**是哪一台**换过库（重装 / 恢复过别的备份），
 本轮没有现场日志可以证明，需要在两台机器的 `passwordms.log` 里看

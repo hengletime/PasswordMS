@@ -682,6 +682,7 @@ export const zhTW = {
     hotkey_need_modifier: '熱鍵至少需要一個 Ctrl、Alt 或 Win 鍵（只按 Shift 會與正常輸入衝突）。',
     hotkey_repeated: '同一個修飾鍵重複了，請重新錄製。',
     hotkey_unknown_key: '這個按鍵不能當作熱鍵，請換一個。',
+    hotkey_same_as_other: '這組鍵已經用在另一顆熱鍵上了。兩顆熱鍵不能用同一個組合，請換一個。',
     hotkey_unavailable: '該熱鍵已被其他程式佔用，請換一個組合。',
     autostart_failed: '開機自動啟動設定失敗，可能被系統原則限制。',
     autotype_no_username: '這條項目沒有填寫使用者名稱，無法只輸入使用者名稱。',

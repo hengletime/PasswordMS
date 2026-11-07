@@ -802,6 +802,7 @@ export const zhCN = {
     hotkey_need_modifier: '热键至少需要一个 Ctrl、Alt 或 Win 键（只按 Shift 会和正常输入冲突）。',
     hotkey_repeated: '同一个修饰键重复了，请重新录制。',
     hotkey_unknown_key: '这个按键不能用作热键，请换一个。',
+    hotkey_same_as_other: '这组键已经用在另一颗热键上了。两颗热键不能用同一个组合，请换一个。',
     hotkey_unavailable: '该热键已被其它程序占用，请换一个组合。',
     autostart_failed: '开机自启设置失败，可能被系统策略限制。',
     // 1.5.39：自动输入的后端 message_key 面（与浮层按错误码映射的 autotype.* 是两层：

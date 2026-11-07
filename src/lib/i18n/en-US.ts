@@ -755,6 +755,8 @@ export const enUS: Messages = {
     hotkey_need_modifier: 'A hotkey needs Ctrl, Alt, or Win (Shift alone conflicts with normal typing).',
     hotkey_repeated: 'The same modifier appears twice. Record it again.',
     hotkey_unknown_key: 'That key cannot be used as a hotkey. Pick another.',
+    hotkey_same_as_other:
+      'That combination is already used by your other hotkey. The two hotkeys cannot share one combination — pick another.',
     hotkey_unavailable: 'That hotkey is already taken by another program. Pick another combination.',
     autostart_failed: 'Could not change the start-at-login setting (it may be restricted by policy).',
     autotype_no_username: 'This entry has no username, so there is nothing to type for that action.',

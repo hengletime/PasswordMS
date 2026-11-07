@@ -79,6 +79,22 @@ pub enum HotkeyReject {
     RepeatedModifier,
     /// 键名无法被注册器识别（`KeyP` 之外的东西，比如 `P`、`Foo`）。
     UnknownKey,
+    /// 与**另一颗**热键撞成同一个组合（S8 / D-201）。
+    ///
+    /// 这不是语法问题而是**语义**问题：同一个组合在系统里只能注册一次，第二颗必定
+    /// 失败，而那句失败长得像「被其它程序占了」——占它的其实是本程序。所以在注册
+    /// **之前**就拒，用户拿到的才是实情。
+    SameAsOther,
+}
+
+/// 两颗热键是否撞成同一个组合（S8 / D-201）。空串表示用户主动禁用，两颗都禁用不算撞。
+///
+/// **入参必须是 [`canonical_hotkey`] 的输出**（或空串），不能拿用户原串比：
+/// `Ctrl+Alt+Space` 与 `ctrl+alt+Space` 在注册器眼里是同一颗键，原串却不等——
+/// 拿原串比会漏掉「换个大小写写法就绕过」。
+pub fn hotkey_collides(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim(), b.trim());
+    !a.is_empty() && a == b
 }
 
 /// 把用户/前端给的键位串规范化成注册器能吃的形态。
@@ -341,6 +357,29 @@ mod tests {
         // 默认值必须过规范化——否则全新机器上自动输入热键注册不上。
         assert!(canonical_hotkey(DEFAULT_AUTOTYPE_HOTKEY).is_ok());
         assert_eq!(AppPrefs::default().autotype_hotkey, DEFAULT_AUTOTYPE_HOTKEY);
+    }
+
+    #[test]
+    fn d201_defaults_do_not_collide() {
+        // 两颗默认键必须不同：撞了的话全新机器上第二颗注册不上，用户第一次打开设置页
+        // 就看到「该热键已被其它程序占用」——占它的其实是本程序。
+        assert!(!hotkey_collides(DEFAULT_HOTKEY, DEFAULT_AUTOTYPE_HOTKEY));
+    }
+
+    #[test]
+    fn d201_collides_only_on_same_non_empty_key() {
+        assert!(hotkey_collides("ctrl+alt+KeyP", "ctrl+alt+KeyP"));
+        // 空串 = 用户主动禁用：两颗都禁用不是撞车，不许拦。
+        assert!(!hotkey_collides("", ""));
+        assert!(!hotkey_collides("   ", "   "));
+        assert!(!hotkey_collides("ctrl+alt+KeyP", ""));
+        assert!(!hotkey_collides("", "ctrl+alt+KeyP"));
+        assert!(!hotkey_collides("ctrl+alt+KeyP", "ctrl+alt+Space"));
+        // 归一之后才比：这两种写法在注册器眼里是同一颗键，原串比会漏。
+        assert!(hotkey_collides(
+            &canonical_hotkey("Ctrl+Alt+Space").unwrap(),
+            &canonical_hotkey("ctrl+alt+Space").unwrap()
+        ));
     }
 
     #[test]

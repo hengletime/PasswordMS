@@ -64,6 +64,17 @@ pub fn apply(app: &AppHandle, spec: &str) -> Result<(), ApplyError> {
 
     let previous = current_spec(app);
     let previous_autotype = previous_autotype_spec(app);
+
+    // 【S8 / D-201】两颗键撞成同一个组合：**在动系统状态之前**就拒。
+    //
+    // 为什么不能靠 register 失败兜：同一个组合系统只允许注册一次，第二颗必定失败，
+    // 那句失败被译成「该热键已被其它程序占用」——而占它的其实是本程序，用户换哪个
+    // 组合都没用（他甚至不知道该换的是"另一颗"）。在这里提前返回还有个好处：
+    // 系统状态一个字节都没动，不需要回滚。
+    if same_pair(canonical.as_deref(), autotype_canonical.as_deref()) {
+        return Err(ApplyError::Invalid(HotkeyReject::SameAsOther));
+    }
+
     match register(app, canonical.as_deref(), autotype_canonical.as_deref()) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -108,6 +119,12 @@ pub fn apply_autotype(app: &AppHandle, spec: &str) -> Result<(), ApplyError> {
     };
     let main = current_spec(app);
     let previous_autotype = previous_autotype_spec(app);
+
+    // 【S8 / D-201】与 `apply` 同一个判据、同一个理由（改的是哪一颗无关，撞了就是撞了）。
+    if same_pair(canonical.as_deref(), main.as_deref()) {
+        return Err(ApplyError::Invalid(HotkeyReject::SameAsOther));
+    }
+
     match register(app, main.as_deref(), canonical.as_deref()) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -136,12 +153,39 @@ fn previous_autotype_spec(app: &AppHandle) -> Option<String> {
     crate::prefs::canonical_hotkey(&spec).ok()
 }
 
+/// 两颗键是否撞成同一个组合（S8 / D-201）。`None` = 用户主动禁用，不算撞。
+///
+/// 判据委托给 [`crate::prefs::hotkey_collides`]：规范化之后才比，大小写/别名写法
+/// 绕不过去。
+fn same_pair(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(x), Some(y)) => crate::prefs::hotkey_collides(x, y),
+        _ => false,
+    }
+}
+
 /// 真正干活的注册。两参均为 `None` 时只注销。
 ///
 /// **两颗键成对注册**：第一参主热键、第二参自动输入热键。任何一个解析/注册失败
 /// 都整体失败（调用方会成对回滚），避免出现"主键活着、自动输入键没了"的半残态。
 fn register(app: &AppHandle, main: Option<&str>, autotype: Option<&str>) -> Result<(), String> {
     let gs = app.global_shortcut();
+
+    // 【S8 / D-201】配置里两颗键相同（手改 prefs.json、或更早版本留下的）时，
+    // **主热键照常装回去，重复的那颗跳过并留痕**：一个坏配置不该把主热键一起打死。
+    // 这不是给用户看的路径——用户改键走 `apply` / `apply_autotype`，那里在注册前
+    // 就明确拒了；这里只兜「启动装载」与「回滚」两条不经过前端的路。
+    let autotype = match (main, autotype) {
+        (Some(m), Some(a)) if crate::prefs::hotkey_collides(m, a) => {
+            crate::state::append_log(
+                app,
+                &format!("[hotkey] 自动输入热键与主热键撞成同一个组合（{a}），本次跳过它只装主键"),
+            );
+            None
+        }
+        _ => autotype,
+    };
+
     // 无差别注销：改键场景下旧键必须先失效，否则会出现"两个键都能唤起"。
     // 没注册过时这里报错也无所谓，但**不能吞掉**——它失败就是下面那步要兜的洞。
     if let Err(e) = gs.unregister_all() {
@@ -314,6 +358,21 @@ pub fn install_from_prefs(app: &AppHandle) {
             if !spec.is_empty() {
                 crate::state::append_log(app, &format!("[hotkey] 已注册 {spec}"));
             }
+        }
+        // 【S8 / D-201】旧配置把两颗键存成同一个（手改过 prefs.json，或更早版本留下的）。
+        // `apply` 会在注册前拒掉这一幕，但**启动时不能因此连主热键都不装**——它是唯一
+        // 能把窗口唤回来的东西。这里退一步：只装主键，重复的自动输入键留给用户去改
+        // （设置页现在会明确提示"两颗热键不能用同一个组合"）。
+        Err(ApplyError::Invalid(HotkeyReject::SameAsOther)) => {
+            let canonical = crate::prefs::canonical_hotkey(&spec).ok();
+            let installed = register(app, canonical.as_deref(), None);
+            crate::state::append_log(
+                app,
+                &format!(
+                    "[hotkey] 配置里两颗热键相同（{spec}）：本次只装主键（{installed:?}），\
+                     请到设置里把重复的那颗改掉"
+                ),
+            );
         }
         // 启动失败最常见的原因就是「被别的程序占了」——用户下次进设置页会看到红字，
         // 这里只留痕，不弹窗打断启动。

@@ -230,6 +230,9 @@ fn map_reject(reject: HotkeyReject) -> IpcError {
         HotkeyReject::Empty | HotkeyReject::NoModifier => "err.hotkey_need_modifier",
         HotkeyReject::RepeatedModifier => "err.hotkey_repeated",
         HotkeyReject::UnknownKey => "err.hotkey_unknown_key",
+        // 【S8 / D-201】两颗热键撞成同一个组合。必须与「被其它程序占用」分开讲：
+        // 撞车时用户要改的是**另一颗**，说成"换一个组合"会让他反复换这颗都没用。
+        HotkeyReject::SameAsOther => "err.hotkey_same_as_other",
     };
     IpcError::shell(shell_codes::ERR_HOTKEY_INVALID, key)
 }
