@@ -10,7 +10,9 @@
 //
 // ## 判定口径（三条规则，缺一条就会把动态键误判成孤儿）
 //
-// A **字面命中**：任一生产文件里出现这个键的原文。按子串判，不管引号形式。
+// A **字面命中**：任一生产文件里出现这个键的原文，且**右侧落在键边界上**（下一个字符
+//    不是 [A-Za-z0-9_]）。不是纯子串——纯子串会让 `common.no` 被 `common.none` 命中，
+//    孤儿从此隐形。引号形式不管。
 // B **动态尾巴**：键的某个**以 `.` 或 `_` 结尾**的前缀，后面紧跟 `${` / `' +` / `" +`。
 //    例：`ui.t(\`settings.bio_avail_${bio.availability}\`)` → `settings.bio_avail_*` 全算有引用。
 //    前缀必须落在 `.` / `_` 边界上：放宽成"任意前缀+`${`"会把 `attach.choose` 判成被
@@ -69,9 +71,34 @@ function dynamicPrefixHit(prefix: string): boolean {
   return corpus.some((f) => re.test(f.text));
 }
 
+/** 键名的右侧边界：下一字符若是标识符字符，说明命中的是**更长的键**。 */
+const KEY_CHAR = /[A-Za-z0-9_]/;
+
+/**
+ * 规则 A：字面命中，但命中处必须**落在键的边界上**。
+ *
+ * 不能只写 `text.includes(key)`——`common.no`（「否」）会被 `common.none`（「暂无」）
+ * 的子串命中，于是这个真孤儿一直判"在用"，从首次落地到 2026-11-07 都没被报出来。
+ * 假命中比漏报更坏：它不会让门变红，只会让门**安静地漏**。
+ *
+ * 只判右侧：键名左侧的边界在这里没有意义（`ui.t('common.no')` 前面永远是引号），
+ * 而左侧若也判，反而会在 `$` 插值等写法上误杀。
+ */
+function literalHit(key: string): boolean {
+  for (const f of corpus) {
+    let at = f.text.indexOf(key);
+    while (at !== -1) {
+      const next = f.text.charAt(at + key.length);
+      if (!KEY_CHAR.test(next)) return true;
+      at = f.text.indexOf(key, at + 1);
+    }
+  }
+  return false;
+}
+
 /** 这个键在代码里有没有落点；返回命中的规则（便于报错时说清为什么）。 */
 function coverage(key: string): 'literal' | `dynamic:${string}` | `suffix-of:${string}` | null {
-  if (corpus.some((f) => f.text.includes(key))) return 'literal';
+  if (literalHit(key)) return 'literal';
   for (let i = 0; i < key.length; i += 1) {
     const ch = key[i];
     if (ch !== '.' && ch !== '_') continue;
@@ -126,6 +153,9 @@ describe('字典 → 代码 反向扫描：孤儿键（D-194 / 审计项 7）', 
     expect(coverage('zz.probe.not.a.real.key'), '扫描器对伪造键也判"有引用"= 它根本没在看').toBeNull();
     // 不许过宽：真被引用的键必须判有引用。
     expect(coverage('common.cancel'), 'common.cancel 明明在用，却被判成孤儿').not.toBeNull();
+    // 也不许"被子串骗过去"：`common.can` 是 `common.cancel` 的真前缀，代码里没有这个键，
+    // 一旦规则 A 退回 `includes`，它就会被判"在用"——这正是 common.no 藏了两轮的原因。
+    expect(coverage('common.can'), '规则 A 失守：右侧没判键边界，子串命中被当成在用').toBeNull();
     // 规则 B：模板拼出来的键（settings.bio_avail_*）必须被放过。
     expect(coverage('settings.bio_avail_busy'), '规则 B 失效：动态前缀没被认出来').toContain('dynamic:');
     // 规则 C：受控后缀 _android 必须被放过。

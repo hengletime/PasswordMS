@@ -215,6 +215,12 @@
       <p class="pms-meta sync-net-warn">{ui.t('sync.discovery_off', { port: net.discovery_port })}</p>
     {/if}
   </div>
+
+  <!-- D-203：docs/06 §5.6 写着「列表下方常驻 sync.manual_sync_hint 行动指引」，但 D-134
+       那一版只落了「本机网络」与「记录地址」两行，这句一直没渲染——键在字典里躺到
+       反扫（D-194）才被翻出来。它说的正是「为什么连不上」的三条出路：对端锁屏要解锁
+       并保持前台、两端地址应同网段、地址长期对不上就重新扫码配对。 -->
+  <p class="pms-meta sync-hint">{ui.t('sync.manual_sync_hint')}</p>
 </div>
 
 <style>
@@ -333,6 +339,11 @@
   }
   .sync-net-warn {
     color: var(--pms-warning);
+  }
+  /* D-203：行动指引是整段话，行高要比单行 meta 松一点，否则手机上七八行挤成一坨。 */
+  .sync-hint {
+    margin: 0.75rem 0 0;
+    line-height: 1.55;
   }
   /* D-149：窄屏下「本机网络」标签与「IP / 端口」挤在同一行会折成两三行参差不齐
      （标签 4 字 + 一个 IP 就吃掉半行，多网卡时更甚）。改为上下两行：

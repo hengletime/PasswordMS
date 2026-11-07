@@ -28,23 +28,16 @@ export const zhCN = {
     close_window: '关闭窗口',
     loading: '加载中…',
     none: '暂无',
-    yes: '是',
-    no: '否',
     retry: '重试',
-    add: '新增',
-    create: '创建',
     rename: '重命名',
     remove: '移除',
-    clear: '清空',
     unknown: '未知',
     expires: '有效期',
     seconds: '{n} 秒',
     minutes: '{n} 分钟',
-    days: '{n} 天',
     items_count: '{n} 条',
   },
   lock: {
-    title: '解锁保险库',
     password_label: '主密码',
     password_placeholder: '请输入主密码',
     unlock: '解锁',
@@ -93,7 +86,6 @@ export const zhCN = {
   },
   create: {
     title: '创建保险库',
-    master_password: '主密码',
     password_label: '主密码',
     confirm_password: '确认主密码',
     confirm_placeholder: '再次输入主密码',
@@ -144,9 +136,9 @@ export const zhCN = {
     rename_title: '重命名分组',
     rename_confirm: '保存',
     delete_title: '删除分组',
-    delete_body: '该分组下的条目将被移出分组或一并移入回收站，请选择处理方式。',
+    // D-202：正文原来写着"请选择处理方式"，界面上却只有确定/取消 —— 说了一句不存在的选择。
+    delete_body: '该分组下的条目会被移出分组，不会被删除。',
     delete_to_ungrouped: '移出分组',
-    delete_to_trash: '移入回收站',
     empty: '还没有分组',
   },
   item: {
@@ -164,9 +156,6 @@ export const zhCN = {
     copy_totp: '复制动态口令',
     open_url: '打开网址',
     delete: '删除',
-    delete_perm: '彻底删除',
-    restore: '还原',
-    created: '创建于',
     updated: '更新于',
     rev: '版本',
     type_login: '登录',
@@ -194,11 +183,6 @@ export const zhCN = {
     handle_folder: '按住拖动可钉住或调整分组顺序',
   },
   editor: {
-    title_new: '新建条目',
-    title_edit: '编辑条目',
-    kind_login: '登录',
-    kind_note: '笔记',
-    kind_attachment: '附件',
     field_title: '标题',
     field_url: '网址',
     field_username: '用户名',
@@ -264,23 +248,17 @@ export const zhCN = {
     very_strong: '很强',
   },
   note: {
-    title: '标题',
     body: '正文',
     placeholder: '在此输入笔记内容…',
     too_long: '正文超过 {n} KiB 上限。',
   },
   attach: {
-    title: '附件',
-    choose: '选择文件',
-    import: '导入为附件',
+    // D-202 / D-194：此处原有 title / choose / import / size / too_large / vault_full /
+    // filename / mime 八个键，反扫确认全部零渲染点（入口已是系统文件对话框、大小由
+    // formatBytes 直出、超限与容量提示走 err.*），已四本字典同删。
     export: '导出',
     export_confirm_title: '导出附件',
     export_confirm_body: '导出后文件将以明文形式保存到磁盘，请确认存放位置安全。',
-    size: '大小',
-    too_large: '单个附件不得超过 {n} MB。',
-    vault_full: '保险库已达 {n} MB 容量上限。',
-    filename: '原始文件名',
-    mime: '类型',
     // D-53：blob 未同步时的占位态。
     pending_sync: '附件内容待同步：内容尚未从其他设备同步到本机，同步后即可导出。',
     // D-60：详情页附件区（父条目内嵌 attachments）。
@@ -317,7 +295,6 @@ export const zhCN = {
     nothing_written: '导入失败，没有写入任何数据。可以直接再点「导入」重试，不用重新选择文件。',
     mapping_known: '已识别列',
     mapping_custom: '自定义字段列',
-    encrypted_hint: '不支持加密导出文件，请导出为未加密格式。',
     // D-72：支持范围 + CSV 列清单。10 个列名与 `src/lib/import.ts` 的 `KNOWN_COLUMNS`
     // 及 core 的 `import::bitwarden_csv::KNOWN_COLUMNS` 逐项一致 —— 改列名要三处同改。
     // `type` 取值那句必须留在界面上：用户最常问的就是「我这条为什么被跳过」。
@@ -378,10 +355,8 @@ export const zhCN = {
   },
   settings: {
     title: '设置',
-    group_general: '通用',
     group_appearance: '外观',
     group_security: '安全',
-    group_generator: '生成器默认值',
     group_health: '体检阈值',
     group_about: '关于',
     group_system: '系统集成',
@@ -656,7 +631,6 @@ export const zhCN = {
     // D-130：同步两个开关改为勾选即存（不进底部保存按钮那条路）。
   },
   sync: {
-    title: '同步',
     tab_pair: '配对',
     tab_devices: '设备',
     tab_status: '状态',
@@ -735,8 +709,6 @@ export const zhCN = {
   conflict: {
     title: '冲突仲裁',
     none: '没有待处理冲突',
-    local: '本机版本',
-    remote: '远端版本',
     keep_local: '保留本机',
     take_remote: '采用远端',
     keep_both: '两者都留',

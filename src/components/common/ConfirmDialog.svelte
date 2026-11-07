@@ -31,7 +31,7 @@
           {ui.t('common.cancel')}
         </button>
         <button class="pms-btn is-danger" type="button" onclick={() => ui.resolveConfirm(true)}>
-          {ui.t('common.confirm')}
+          {ui.t(request.confirmKey ?? 'common.confirm')}
         </button>
       </div>
     </div>

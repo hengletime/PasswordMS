@@ -30,23 +30,16 @@ export const enUS: Messages = {
     close_window: 'Close window',
     loading: 'Loading…',
     none: 'None',
-    yes: 'Yes',
-    no: 'No',
     retry: 'Retry',
-    add: 'Add',
-    create: 'Create',
     rename: 'Rename',
     remove: 'Remove',
-    clear: 'Clear',
     unknown: 'Unknown',
     expires: 'Expires',
     seconds: '{n}s',
     minutes: '{n} min',
-    days: '{n} days',
     items_count: '{n} items',
   },
   lock: {
-    title: 'Unlock vault',
     password_label: 'Master password',
     password_placeholder: 'Enter master password',
     unlock: 'Unlock',
@@ -83,7 +76,6 @@ export const enUS: Messages = {
   },
   create: {
     title: 'Create vault',
-    master_password: 'Master password',
     password_label: 'Master password',
     confirm_password: 'Confirm master password',
     confirm_placeholder: 'Re-enter master password',
@@ -130,9 +122,9 @@ export const enUS: Messages = {
     rename_title: 'Rename folder',
     rename_confirm: 'Save',
     delete_title: 'Delete folder',
-    delete_body: 'Items in this folder will be moved out or sent to trash. Choose an action.',
+    // D-202: the body used to say "Choose an action" while the dialog only had OK/Cancel.
+    delete_body: 'Items in this folder will be moved out of it. Nothing is deleted.',
     delete_to_ungrouped: 'Move out',
-    delete_to_trash: 'Move to trash',
     empty: 'No folders yet',
   },
   item: {
@@ -148,9 +140,6 @@ export const enUS: Messages = {
     copy_totp: 'Copy one-time code',
     open_url: 'Open URL',
     delete: 'Delete',
-    delete_perm: 'Delete permanently',
-    restore: 'Restore',
-    created: 'Created',
     updated: 'Updated',
     rev: 'Rev',
     type_login: 'Login',
@@ -178,11 +167,6 @@ export const enUS: Messages = {
     handle_folder: 'Press and drag to pin or reorder folders',
   },
   editor: {
-    title_new: 'New item',
-    title_edit: 'Edit item',
-    kind_login: 'Login',
-    kind_note: 'Note',
-    kind_attachment: 'Attachment',
     field_title: 'Title',
     field_url: 'URL',
     field_username: 'Username',
@@ -248,23 +232,17 @@ export const enUS: Messages = {
     very_strong: 'Very strong',
   },
   note: {
-    title: 'Title',
     body: 'Body',
     placeholder: 'Type your note here…',
     too_long: 'Body exceeds the {n} KiB limit.',
   },
   attach: {
-    title: 'Attachment',
-    choose: 'Choose file',
-    import: 'Import as attachment',
+    // D-202 / D-194: title / choose / import / size / too_large / vault_full / filename /
+    // mime were all unreferenced (entry point is the system file dialog, size comes from
+    // formatBytes, limit errors live under err.*). Deleted from all four dictionaries.
     export: 'Export',
     export_confirm_title: 'Export attachment',
     export_confirm_body: 'The exported file will be written to disk in plaintext. Please make sure the location is safe.',
-    size: 'Size',
-    too_large: 'A single attachment must not exceed {n} MB.',
-    vault_full: 'The vault has reached its {n} MB capacity limit.',
-    filename: 'Original filename',
-    mime: 'Type',
     // D-53：blob 未同步时的占位态。
     pending_sync: 'Attachment content is pending sync; export will be available once it has synced.',
     // D-60：详情页附件区（父条目内嵌 attachments）。
@@ -301,7 +279,6 @@ export const enUS: Messages = {
     nothing_written: 'Import failed and nothing was written. Press Import again to retry — you do not need to pick the file again.',
     mapping_known: 'Mapped columns',
     mapping_custom: 'Custom field columns',
-    encrypted_hint: 'Encrypted export files are not supported. Export an unencrypted file instead.',
     // D-72: supported scope + CSV column list. The 10 column names must match
     // `KNOWN_COLUMNS` in src/lib/import.ts and core's `import::bitwarden_csv::KNOWN_COLUMNS`.
     // The `type` sentence has to stay on screen — "why was my row skipped" is the top question.
@@ -365,10 +342,8 @@ export const enUS: Messages = {
   },
   settings: {
     title: 'Settings',
-    group_general: 'General',
     group_appearance: 'Appearance',
     group_security: 'Security',
-    group_generator: 'Generator defaults',
     group_health: 'Health thresholds',
     group_about: 'About',
     group_system: 'System integration',
@@ -608,7 +583,6 @@ export const enUS: Messages = {
     save_failed: 'Settings could not be written; your change did not take effect. Please retry.',
   },
   sync: {
-    title: 'Sync',
     tab_pair: 'Pair',
     tab_devices: 'Devices',
     tab_status: 'Status',
@@ -686,8 +660,6 @@ export const enUS: Messages = {
   conflict: {
     title: 'Conflict resolution',
     none: 'No pending conflicts',
-    local: 'Local version',
-    remote: 'Remote version',
     keep_local: 'Keep local',
     take_remote: 'Use remote',
     keep_both: 'Keep both',

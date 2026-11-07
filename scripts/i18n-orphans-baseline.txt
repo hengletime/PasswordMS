@@ -2,42 +2,16 @@
 # 格式：每行 `键 ← 理由`；`#` 开头是注释。新增孤儿必须在这里登记并写清"为什么先留着"。
 # 被接上或已删的键必须把这一行删掉，否则 i18n-orphans.test.ts 会报「基线过期」。
 #
-# 首次落地 2026-11-07：扫描面 = src 的 .ts/.svelte（去掉字典与测试）+ src-tauri/src
-# + crates/*/src 的 .rs。字典 652 键，报出 31 条孤儿；其中 err.unknown 已按 D-194 的
-# 流程「先被反扫报出、再四本字典同删」，剩 30 条登记如下。
+# 扫描面 = src 的 .ts/.svelte（去掉字典与测试）+ src-tauri/src + crates/*/src 的 .rs。
 #
-# ── A 组：走查单在引用，界面上却没有这个渲染点（不许悄悄删） ──
-folder.delete_to_ungrouped ← 走查单 3.81/3.84 把它写成可点选项；实际删分组是单次确认 + 代码固定 to_ungrouped，界面上没有这个选项（D-202 待裁决：补选项 or 改文案）
-folder.delete_to_trash ← 同上：folder.delete_body 原文写着"请选择处理方式"，而界面只有确定/取消（D-202）
-#
-# ── B 组：附件区旧键（现走 err.* 或直接显示数据，不再用这些标签） ──
-attach.choose ← 选择附件的入口已改成系统文件对话框，这句按钮文案没有渲染点
-attach.import ← 附件导入入口未做，键留在字典里当占位
-attach.title ← 附件区标题改用 attach.section_title，此键无渲染点
-attach.filename ← 附件行直接显示文件名（数据本身），不用这句列名
-attach.mime ← 附件行直接显示 mime 值，不用这句列名
-attach.size ← 大小由 formatBytes 产出后直接显示，不用这句单位标签
-attach.too_large ← 超限提示走 err.attachment_too_large，此键无渲染点
-attach.vault_full ← 容量提示另有一套 err 键，此键无渲染点
-#
-# ── C 组：其它疑似重构遗留（删除要单独判定，别顺手一起删） ──
-common.add ← 静态扫描无引用；各页新增按钮用自己的键，替代键未逐条核实（D-202 待处置）
-common.create ← 静态扫描无引用；同上，替代键未逐条核实（D-202 待处置）
-common.days ← 静态扫描无引用；时长文案由格式化函数直出，不用这句单位标签（D-202 待处置）
-common.yes ← 静态扫描无引用；确认框统一用「确定/取消」，此键无渲染点（D-202 待处置）
-create.master_password ← 静态扫描无引用；新建库页用别的标签键，未逐条核实（D-202 待处置）
-editor.kind_attachment ← 静态扫描无引用；类型徽标由别的键渲染，未逐条核实（D-202 待处置）
-editor.kind_login ← 静态扫描无引用；同上（D-202 待处置）
-editor.kind_note ← 静态扫描无引用；同上（D-202 待处置）
-editor.title_edit ← 静态扫描无引用；编辑器标题按类型取键，未逐条核实（D-202 待处置）
-editor.title_new ← 静态扫描无引用；同上（D-202 待处置）
-import.encrypted_hint ← 静态扫描无引用；加密备份导入提示未渲染（D-202 待处置）
-item.created ← 静态扫描无引用；详情副行改用相对时间文案，未逐条核实（D-202 待处置）
-item.delete_perm ← 静态扫描无引用；彻底删除按钮用回收站自己的键（D-202 待处置）
-item.restore ← 静态扫描无引用；还原按钮用回收站自己的键（D-202 待处置）
-lock.title ← 静态扫描无引用；锁屏标题用别处的键，未逐条核实（D-202 待处置）
-note.title ← 静态扫描无引用；笔记区标题用 editor.* 的键，未逐条核实（D-202 待处置）
-settings.group_general ← 静态扫描无引用；设置分组标题用 settings.section_* 一类的键（D-202 待处置）
-settings.group_generator ← 静态扫描无引用；同上（D-202 待处置）
-sync.manual_sync_hint ← 静态扫描无引用；手动同步提示未渲染（D-202 待处置）
-sync.title ← 静态扫描无引用；同步卡标题用别处的键，未逐条核实（D-202 待处置）
+# ── 当前：0 条 ──
+# 2026-11-07 清零。当天分三批结清了全部 30 条登记：
+#   ① 4 条是**漏了渲染点**，不是遗留：`sync.manual_sync_hint`（docs/06 写明列表下方必须
+#      常驻，D-134 那版漏了 → 按 D-203 补渲染）、`folder.delete_to_ungrouped`（改成确认框
+#      主按钮词，D-202）、以及 `err.unknown`（更早按 D-194 四本同删）；
+#   ② 25 条是**真没人用**：8 个附件旧键（入口早改成系统文件对话框、大小由 formatBytes
+#      直出、超限走 err.*）+ `folder.delete_to_trash`（界面从来没有第二个选项）+
+#      `item.created`（详情页只显示更新时间）+ 14 条重构遗留 + 4 条被更长键遮住的
+#      （common.no / common.clear / conflict.local / conflict.remote）；
+#   ③ 1 条 `create.weak_hint` 更早按 D-193 删。
+# 之后新增孤儿照样要在这里登记——**空基线不等于这道门可以关**，两个方向的红还在。

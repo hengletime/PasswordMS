@@ -22,6 +22,11 @@ export interface ConfirmRequest {
   titleKey: string;
   messageKey: string;
   params?: Record<string, string | number>;
+  /**
+   * 主按钮上的键（默认 `common.confirm` = 「确定」）。D-202：当只有一个动作、而那个
+   * 动作有具体后果时，按钮就该说出后果（「移出分组」），别让用户拿「确定」去猜。
+   */
+  confirmKey?: string;
   resolve: (ok: boolean) => void;
 }
 
@@ -186,9 +191,14 @@ class UiStore {
     titleKey: string,
     messageKey: string,
     params?: Record<string, string | number>,
+    /**
+     * 主按钮文案键（可选）。不传 = 「确定」。只有**动作说得比"确定"更清楚**时才传，
+     * 别拿它去写一串解释——那是正文的活（D-202）。
+     */
+    confirmKey?: string,
   ): Promise<boolean> {
     return new Promise<boolean>((resolve): void => {
-      this.confirmRequest = { titleKey, messageKey, params, resolve };
+      this.confirmRequest = { titleKey, messageKey, params, confirmKey, resolve };
     });
   }
 

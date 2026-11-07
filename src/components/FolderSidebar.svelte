@@ -120,7 +120,14 @@
   }
 
   async function removeFolder(folderId: string, name: string): Promise<void> {
-    const ok = await ui.confirm('folder.delete_title', 'folder.delete_body', { name });
+    // D-202：确认框只有一个动作，那就让按钮说出这个动作——原来正文写着"请选择处理方式"
+    // （界面上根本没有可选项），按钮却是「确定」，等于让人闭眼按下去。
+    const ok = await ui.confirm(
+      'folder.delete_title',
+      'folder.delete_body',
+      { name },
+      'folder.delete_to_ungrouped',
+    );
     if (ok) {
       await vault.deleteFolder(folderId, 'to_ungrouped');
     }
