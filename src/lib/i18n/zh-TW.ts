@@ -603,6 +603,7 @@ export const zhTW = {
     kind_item: '條目',
     kind_folder: '分組',
     remote_deleted: '（遠端已刪除）',
+    local_deleted: '（本端已刪除）',
   },
   legal: {
     disclaimer_title: '免責聲明',

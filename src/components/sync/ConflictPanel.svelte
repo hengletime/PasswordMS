@@ -47,8 +47,15 @@
           </div>
 
           <div class="conflict-sides">
-            <div class="conflict-side">
-              <span class="pms-label">{ui.t('conflict.local_title')}</span>
+            <div class="conflict-side" class:is-deleted={conflict.local_deleted}>
+              <span class="pms-label">
+                {ui.t('conflict.local_title')}
+                {#if conflict.local_deleted}
+                  <!-- D-205：本端已删、远端改名。左侧标题是删除前的内容，不标出来会让人
+                       以为本端也要保留它（与右侧「远端已删除」对称）。 -->
+                  <span class="conflict-deleted">{ui.t('conflict.local_deleted')}</span>
+                {/if}
+              </span>
               <span class="conflict-value">{conflict.local_title}</span>
               <span class="pms-meta">{formatDateTime(conflict.local_updated_at, ui.locale)}</span>
             </div>
@@ -80,14 +87,18 @@
             {/each}
           </div>
 
-          <button
-            class="pms-btn is-primary is-sm"
-            type="button"
-            disabled={!isChoiceAllowed(conflict.record_type, sync.choiceOf(conflict.conflict_id))}
-            onclick={() => void sync.resolve(conflict.conflict_id)}
-          >
-            {ui.t('common.confirm')}
-          </button>
+          <!-- D-207：`.conflict-item` 是 flex column，按钮作为直接子项会被拉伸成整行
+               （主人原话「这个确认的按钮太长太丑了」）。包一层右对齐行，宽度回归内容宽。 -->
+          <div class="conflict-actions">
+            <button
+              class="pms-btn is-primary is-sm"
+              type="button"
+              disabled={!isChoiceAllowed(conflict.record_type, sync.choiceOf(conflict.conflict_id))}
+              onclick={() => void sync.resolve(conflict.conflict_id)}
+            >
+              {ui.t('common.confirm')}
+            </button>
+          </div>
         </li>
       {/each}
     </ul>
@@ -182,6 +193,12 @@
     display: flex;
     gap: 0.35rem;
     flex-wrap: wrap;
+  }
+  /* D-207：确认按钮独占一行但**右对齐、宽度随内容**。
+     直接挂在 column 容器上会被 align-items 拉伸成整条，是"太长太丑"的成因。 */
+  .conflict-actions {
+    display: flex;
+    justify-content: flex-end;
   }
   .conflict-choice {
     border: 1px solid var(--pms-border-strong);

@@ -366,6 +366,10 @@ pub struct ConflictDto {
     pub detected_at: i64,
     /// 远端版本是一次删除（远端快照为删除前内容，「采用远端」= 接受删除）。
     pub remote_deleted: bool,
+    /// **D-205**：与 `remote_deleted` 对称——本端已删、远端改过（本端标题是删除前的
+    /// 死亡快照）。不标出来，卡片两侧会显示成两个不同的名字，用户看不出自己这边
+    /// 其实已经删了。条目侧暂无此形态（见 core 的 `merge.rs` TODO 边界），恒为 false。
+    pub local_deleted: bool,
 }
 
 impl From<ConflictView> for ConflictDto {
@@ -381,6 +385,8 @@ impl From<ConflictView> for ConflictDto {
                 remote_updated_at: c.remote_updated_at,
                 detected_at: c.detected_at,
                 remote_deleted: c.remote_deleted,
+                // 条目侧没有 delete-vs-update 形态（merge 的 None 分支仍是旧路径）。
+                local_deleted: false,
             },
             ConflictView::Folder(c) => Self {
                 conflict_id: c.conflict_id,
@@ -392,6 +398,7 @@ impl From<ConflictView> for ConflictDto {
                 remote_updated_at: c.remote_updated_at,
                 detected_at: c.detected_at,
                 remote_deleted: c.remote_deleted,
+                local_deleted: c.local_deleted,
             },
         }
     }

@@ -34,6 +34,10 @@ pub struct ConflictEntry {
 ///
 /// `remote_deleted = true` 时 `remote_snapshot` 是**删除前的死亡快照**（与条目同一
 /// 约定），「采用远端」= 接受对端的删除。
+///
+/// D-205 新增与之对称的 `local_deleted`：**本端已删、远端改名**（存活方先发起同步
+/// 时才会走到的方向）。此时 `local_snapshot` 是墓碑里的死亡快照、`remote_snapshot`
+/// 是远端的活版本；`KeepLocal` = 确认删除，`TakeRemote` = 接受复活。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderConflictEntry {
     pub conflict_id: String,
@@ -47,6 +51,11 @@ pub struct FolderConflictEntry {
     pub resolved: bool,
     #[serde(default)]
     pub remote_deleted: bool,
+    /// D-205：本端版本是一条**删除墓碑**（`local_snapshot` 为死亡前快照）。
+    /// `serde(default)` 保证存量记录（无此字段）读回为 `false`，**不动任何 version
+    /// 字段**——旧库必须还能直接打开。
+    #[serde(default)]
+    pub local_deleted: bool,
 }
 
 /// 冲突箱的统一视图（条目 + 分组），供 UI / DTO 按同一时间线展示。

@@ -51,6 +51,23 @@ pub fn detect_folder_conflict(
     ))
 }
 
+/// D-205：本端已删 + 远端 live 变更是否构成 delete-vs-update 冲突。
+///
+/// **为什么不能复用既有的「等 rev 抑制」**：`Repository::tombstone()` 只翻墓碑标志位，
+/// **不推进 `rev` / `updated_at`**（payload 原样保留），所以墓碑的 rev 恒等于删除前
+/// 最后一版的 rev。抑制条件是 `tomb_rev >= change.rev`；而真冲突的定义恰恰相反——
+/// 远端在本端删除之后又改过一轮，`change.rev > tomb_rev`。两者互补：对真冲突，
+/// 抑制**永远为假**，于是旧实现直接 `put_folder_direct` 把远端改名当成新版本落地，
+/// 本端的删除被静默复活（存活方先发起同步时结构性必现，见
+/// `src-tauri/src/sync/server.rs` 先 `apply_changes` 后 `export_changes` 的调用顺序）。
+///
+/// 返回 `Some(dead)` = 构成冲突，`dead` 是墓碑里的死亡快照（删除前的形态）；
+/// `None` = 无墓碑，或墓碑不旧于远端（回声 / 远端变更比删除旧）→ 走原有落地路径。
+fn deleted_local_folder_conflict(repo: &Repository, change: &ChangeRecord) -> Option<Folder> {
+    let dead = repo.tombstone_folder(&change.record_id)?;
+    (change.rev > dead.rev).then_some(dead)
+}
+
 /// 「双改」判定的本体：只看 rev 与内容摘要，与记录类型无关。
 fn detect_change_conflict(
     local_rev: u64,
@@ -85,6 +102,9 @@ fn detect_change_conflict(
 ///   该墓碑是**首次到达**，不得跳过（否则常规流「同步 rev1 → 删 rev1」永远不过线）；
 /// - **删除-修改拉锯**：本端条目 rev 更高 → 墓碑密文解出死亡前快照入冲突箱
 ///   （`remote_deleted = true`，仲裁「采用远端」= 接受删除走软删）；
+/// - **删除-改名拉锯（D-205，分组）**：本端已删（持墓碑）而远端 live 变更 rev 更高
+///   → 墓碑里的死亡快照与远端活版本入冲突箱（`local_deleted = true`），**不落地、
+///   不推进 base**；`KeepLocal` = 确认删除，`TakeRemote` = 接受复活；
 /// - **常规远端删除**：软删（`trash_item_direct`，blob 保留）；
 /// - **D-98 purge 传播（C 案）**：本端无活跃条目且持有 rev ≤ 墓碑的回收站快照 →
 ///   顺带彻底删除该快照——对端 `purge_item` 以死亡快照 rev+1 重封 ITEM 墓碑过线
@@ -209,6 +229,15 @@ pub fn apply_changes(
                     None => {
                         // D-56 复活抑制：本端已删（持有 rev ≥ 变更的墓碑）→ 陈旧 live
                         // 变更不得复活条目；否则正常 put。
+                        //
+                        // TODO(D-205 边界)：条目侧同型洞见 docs/02 §3.32.5
+                        // 条目侧这里也有「本端已彻底删除（无活跃条目、持墓碑）+ 远端
+                        // 更晚改名 → 静默复活」的同型洞，但本次**不修**：
+                        // 1. 条目删除先入回收站，回收站条目仍算活跃，「本端无活跃条目」
+                        //    只发生在用户**彻底清除**之后（触发面窄于分组）；
+                        // 2. 条目冲突是三选一（含 KeepBoth），删除-复活要重新裁定
+                        //    「保留本机副本」的语义，属于独立的语义设计，不在 D-205
+                        //    这个「分组 delete-vs-update」的修复范围内扩围。
                         let suppressed = matches!(
                             repo.tombstone_rev(RECORD_TYPE_ITEM, &change.record_id),
                             Some(tomb_rev) if tomb_rev >= change.rev
@@ -265,16 +294,25 @@ pub fn apply_changes(
                                 detected_at: now_ms(),
                                 resolved: false,
                                 remote_deleted: true,
+                                // D-205：本端是活跃版本，本端侧不是墓碑。
+                                local_deleted: false,
                             };
                             repo.add_folder_conflict(entry)?;
                             report.conflicts.push(change.record_id.clone());
                         }
                         Some(local) => {
                             repo.remove_folder_direct(&local.folder_id)?;
+                            // D-205：本端原来也挂着一张冲突（旧快照），删除落地即事实解决。
+                            repo.expire_folder_conflicts_for(&change.record_id)?;
                             report.applied += 1;
                         }
                         // 本端从未有该分组（或已删）→ 删除意图已达成。
                         None => {
+                            // D-205：本端"已删"时可能正挂着一张「本端已删除 ↔ 远端改名」的
+                            // 冲突卡。对端现在也删了，两边事实已经一致——不收口的话，用户
+                            // 在 A 上会看到一条早就处理完的陈旧冲突，只能自己猜要不要再点
+                            // 一遍（走查单 3.81 的真实路径：用户在 B 上点「采用远端」）。
+                            repo.expire_folder_conflicts_for(&change.record_id)?;
                             report.skipped += 1;
                         }
                     }
@@ -323,6 +361,7 @@ pub fn apply_changes(
                                 detected_at: now_ms(),
                                 resolved: false,
                                 remote_deleted: false,
+                                local_deleted: false,
                             };
                             repo.add_folder_conflict(entry)?;
                             report.conflicts.push(change.record_id.clone());
@@ -356,6 +395,43 @@ pub fn apply_changes(
                         );
                     }
                     None => {
+                        // D-205：本端已删（持墓碑）、远端是**更晚的** live 改名 →
+                        // delete-vs-update 真冲突，进冲突箱交用户二选一，**不落地**。
+                        // 旧实现无条件 `put_folder_direct`：存活方先发起同步时，本端
+                        // 的删除被远端的改名静默复活（真机 1.6.6 走查 3.81/3.84）。
+                        //
+                        // 这里**刻意不推进 base**：墓碑 rev 冻结在删除前那一版（原因见
+                        // [`deleted_local_folder_conflict`]），一旦 base 推到远端 rev，
+                        // `tombstone_changes` 的 peer 过滤（`base.rev >= 墓碑 rev` 不导出）
+                        // 就会把墓碑永久扣下——用户在本端选「保留本端（= 确认删除）」后，
+                        // 删除意图再也传不到对端，两侧从此静默分叉。留旧 base，下一轮
+                        // 墓碑照常导出，对端会按它自己那侧的 delete-vs-update 冲突收口。
+                        if let Some(dead) = deleted_local_folder_conflict(repo, change) {
+                            // D-205 去重：该分组已有未解决卡（对端重发 / 重新配对 /
+                            // resync 重放）→ 只原地刷新远端侧，不再开一张，也不重复
+                            // 计入 report（调用方按 conflicts 计数，重复计会以为发生了
+                            // 多起事件）。
+                            if repo
+                                .refresh_folder_conflict_remote(&change.record_id, &remote)?
+                                .is_none()
+                            {
+                                let entry = FolderConflictEntry {
+                                    conflict_id: uuid::Uuid::new_v4().to_string(),
+                                    folder_id: change.record_id.clone(),
+                                    local_updated_at: dead.updated_at,
+                                    remote_updated_at: remote.updated_at,
+                                    local_snapshot: dead,
+                                    remote_snapshot: remote,
+                                    detected_at: now_ms(),
+                                    resolved: false,
+                                    remote_deleted: false,
+                                    local_deleted: true,
+                                };
+                                repo.add_folder_conflict(entry)?;
+                                report.conflicts.push(change.record_id.clone());
+                            }
+                            continue;
+                        }
                         repo.put_folder_direct(remote)?;
                         repo.expire_folder_conflicts_for(&change.record_id)?;
                         report.applied += 1;

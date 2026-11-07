@@ -107,6 +107,16 @@
         gate.trigger();
       });
     }
+    // D-204（第三次真机失败后加的第三条腿）：宿主到底有没有把 `Resumed` 发出来，
+    // 前两轮都没有留下任何证据——`emit` 的返回值被 `let _ =` 丢掉了，日志里一片空白。
+    // 而 `visibilitychange` 是 WebView **一定**会发的信号（`MainLayout.svelte:142`
+    // 的自动锁定回前台补判就靠它，已在真机端长期有效）。加这条不是重复：
+    // 事件链任意一处被吞，页面可见性这条都能把刷新叫起来。
+    document.addEventListener('visibilitychange', (): void => {
+      if (document.visibilityState === 'visible') {
+        gate.trigger();
+      }
+    });
   }
 
   /**

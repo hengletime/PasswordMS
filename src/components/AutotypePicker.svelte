@@ -114,6 +114,10 @@
     busy = true;
     try {
       await api.autotype.fill(hit.itemId, action);
+      // D-206：「使用」不能只算复制。主人日常是从浮层取用，而这条路径此前一次都不计频
+      // → 未钉住区全是 use_count=0，只能掉到按 updated_at 排，看起来"没按频率排"。
+      // 后端 `record_item_usage` 自带 60s 节流，这里 fire-and-forget（失败不影响注入回执）。
+      void api.items.recordUsage(hit.itemId).catch((): void => {});
       // 先把回执显示出来再收起：注入了却没有任何反馈，用户会怀疑是否成功而重按。
       note = { text: t('autotype.done'), tone: 'ok' };
       hideTimer = setTimeout(hideWindow, HIDE_DELAY_MS);

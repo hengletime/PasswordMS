@@ -142,6 +142,36 @@ pub fn apply_autotype(app: &AppHandle, spec: &str) -> Result<(), ApplyError> {
     }
 }
 
+/// 主热键在**解锁态**的落点（D-208，主人 2026-11-07 真机反馈后拍板）。
+///
+/// 原来是无条件 `quick_search::toggle(app)`，完全不看主窗口状态——主人原话：
+/// 「按全局热键在主窗口打开的情况也呼出了快捷窗口（是否不必要）」。人正对着主窗口
+/// 按热键，又在屏幕中央压一块小窗，等于让他把视线挪开再挪回来。分三档：
+///
+/// 1. **小窗正开着** → 收起。这一档必须排最前：否则用户看到小窗后按热键会变成
+///    "把主窗口拉到前面"，小窗留在原地再也关不掉。
+/// 2. **主窗口可见**：聚焦 ⇒ 什么都不做；只是被盖住或最小化 ⇒ 拉回前台
+///    （比弹小窗少一步，也不用重新输入关键词）。
+/// 3. **主窗口已隐藏到托盘**（不在屏幕上）⇒ 弹快速搜索小窗。这才是小窗该出场的时候。
+fn show_for_main_hotkey(app: &AppHandle) {
+    if crate::quick_search::is_visible(app) {
+        crate::quick_search::hide(app);
+        return;
+    }
+    // label 字面值与 `autotype.rs` / `quick_search.rs` 取光标时用的同一个（"main"）。
+    if let Some(main) = app.get_webview_window("main") {
+        if main.is_visible().unwrap_or(false) {
+            if main.is_focused().unwrap_or(false) {
+                // 已经在眼前，不打扰。
+                return;
+            }
+            crate::tray::show_main(app);
+            return;
+        }
+    }
+    crate::quick_search::toggle(app);
+}
+
 /// 回滚用的自动输入热键旧值：取**此刻仍在注册器里**的形态不可得，直接用配置值
 /// 归一（与 `current_spec` 同一口径——配置就是生效值的唯一来源）。
 fn previous_autotype_spec(app: &AppHandle) -> Option<String> {
@@ -227,7 +257,7 @@ fn register(app: &AppHandle, main: Option<&str>, autotype: Option<&str>) -> Resu
                 // 锁着的时候库里没有任何可取的东西，弹一个小窗等于弹一块"用不了"的板子；
                 // 而用户此刻真正要做的是输主密码，那只有主窗口有。
                 if unlocked(app) {
-                    crate::quick_search::toggle(app);
+                    show_for_main_hotkey(app);
                 } else {
                     crate::tray::show_main(app);
                 }

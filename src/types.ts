@@ -304,6 +304,8 @@ export interface ConflictDto {
   detected_at: number;
   /** 远端版本是一次删除（远端快照为删除前内容，「采用远端」= 接受删除）。 */
   remote_deleted: boolean;
+  /** D-205：本端已删、远端改名。左侧标题是删除前的死亡快照。 */
+  local_deleted: boolean;
 }
 
 /** 冲突涉及的记录类型（D-171）。 */

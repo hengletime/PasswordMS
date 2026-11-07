@@ -93,16 +93,23 @@ pub fn hide(app: &AppHandle) {
     }
 }
 
+/// 小窗当前是否显示着。
+///
+/// 抽出来给热键分流用（D-208）：主热键在主窗口可见时不再无条件弹小窗，
+/// 但"小窗正开着"这一情形仍必须是"再按一次就收起"，否则用户看到小窗后
+/// 按热键会变成"把主窗口拉到前面"，小窗留在原地关不掉。
+pub fn is_visible(app: &AppHandle) -> bool {
+    app.get_webview_window(LABEL)
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false)
+}
+
 /// 热键语义：可见则收起，不可见则唤出。
 ///
 /// 用一个键完成开与关，比"再按一次什么也不发生"或"再按一次又弹一次"都自然；
 /// 也避免用户在已经看到结果时还要去找 Esc。
 pub fn toggle(app: &AppHandle) {
-    let visible = app
-        .get_webview_window(LABEL)
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false);
-    if visible {
+    if is_visible(app) {
         hide(app);
     } else {
         show(app);

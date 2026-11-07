@@ -615,6 +615,7 @@ export const th = {
     kind_item: 'รายการ',
     kind_folder: 'โฟลเดอร์',
     remote_deleted: ' (ถูกลบจากอีกเครื่อง)',
+    local_deleted: ' (ถูกลบจากเครื่องนี้)',
   },
   legal: {
     disclaimer_title: 'ข้อปฏิเสธความรับผิด',

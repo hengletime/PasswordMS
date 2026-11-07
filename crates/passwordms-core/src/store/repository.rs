@@ -2156,6 +2156,11 @@ impl Repository {
     /// - **采用远端**：原样落地对方快照（不造新版本，否则双端互采会反复振荡）；
     ///   `remote_deleted` 时按接受删除处理——移除分组壳（其下条目是各自独立记录，
     ///   不在这里级联，与「对端删分组」的既有语义一致）。
+    /// - **`local_deleted`（D-205）**：与上述对称但方向相反——本端已删、远端改名。
+    ///   `KeepLocal` = **确认删除**：把墓碑里的死亡快照抬 rev（`max(删前 rev, 远端
+    ///   rev) + 1`）先落成活记录、再翻回墓碑，删除决定才能越过 per-peer base 过滤
+    ///   传到对端；`TakeRemote` = **接受复活**（原样落地远端活版本）。一条冲突不可能
+    ///   两端都是墓碑，但 `local_deleted` 判断写在前。
     /// - **两者都留**：分组没有这个语义（复制一个空分组壳既不可辨识、也不带上其下
     ///   条目），返回 `folder_conflict_no_keep_both`，且**冲突保持未解决**——不能让
     ///   用户以为处理过了。
@@ -2177,21 +2182,64 @@ impl Repository {
                 ));
             }
             ConflictChoice::KeepLocal => {
-                let mut winner = entry.local_snapshot.clone();
-                winner.rev = winner.rev.max(entry.remote_snapshot.rev) + 1;
-                winner.updated_at = now_ms();
-                let folder_id = winner.folder_id.clone();
-                let new_rev = winner.rev;
-                let winner_hash = folder_hash(&winner)?;
-                self.put_folder_direct(winner)?;
-                resets.push(WatermarkReset {
-                    record_id: folder_id,
-                    new_rev,
-                    new_hash: winner_hash,
-                });
+                // D-205：本端已删（`local_deleted`）、远端改名。「保留本端」= **确认
+                // 删除**，但必须落成「**再删一次、rev 压过输的那一方**」：
+                //
+                // `tombstone()` 不推进 rev，若沿用删除前那枚墓碑（rev 恒等于删前版本），
+                // 下一轮导出会被 per-peer base 过滤扣下（`base.rev >= 墓碑 rev` 不导出，
+                // 而该墓碑此前已发给过对端、base 恰等于它）——删除决定永远传不到对端，
+                // 对端那张卡原地不动，两端静默分叉。所以：取墓碑里的死亡快照，rev 抬到
+                // `max(本端删前 rev, 远端活版本 rev) + 1`，先落成活记录再翻回墓碑。
+                if entry.local_deleted {
+                    if let Some(mut dead) = self.tombstone_folder(&entry.folder_id) {
+                        dead.rev = dead.rev.max(entry.remote_snapshot.rev) + 1;
+                        dead.updated_at = now_ms();
+                        let folder_id = dead.folder_id.clone();
+                        let new_rev = dead.rev;
+                        let new_hash = folder_hash(&dead)?;
+                        self.put_folder_direct(dead)?;
+                        // `remove_folder_direct` = tombstone + 移出活跃表；新墓碑帧的
+                        // payload 就是刚写下的新 rev（`tombstone` 只翻标志位、保留 payload）。
+                        self.remove_folder_direct(&folder_id)?;
+                        resets.push(WatermarkReset {
+                            record_id: folder_id,
+                            new_rev,
+                            new_hash,
+                        });
+                    }
+                    self.expire_folder_conflicts_for(&entry.folder_id)?;
+                } else {
+                    let mut winner = entry.local_snapshot.clone();
+                    winner.rev = winner.rev.max(entry.remote_snapshot.rev) + 1;
+                    winner.updated_at = now_ms();
+                    let folder_id = winner.folder_id.clone();
+                    let new_rev = winner.rev;
+                    let winner_hash = folder_hash(&winner)?;
+                    self.put_folder_direct(winner)?;
+                    resets.push(WatermarkReset {
+                        record_id: folder_id,
+                        new_rev,
+                        new_hash: winner_hash,
+                    });
+                }
             }
             ConflictChoice::TakeRemote => {
-                if entry.remote_deleted {
+                // D-205：本端已删 + 远端改名，「采用远端」= **接受复活**：远端活版本
+                // 原样落地（不高抬 rev，与普通 TakeRemote 同口径，避免双端互采振荡）。
+                // 必须先于 `remote_deleted` 判断——一条冲突不可能两端都是墓碑，但顺序
+                // 写死更安全。
+                if entry.local_deleted {
+                    let snapshot = entry.remote_snapshot.clone();
+                    let landed_rev = snapshot.rev;
+                    let folder_id = snapshot.folder_id.clone();
+                    let landed_hash = folder_hash(&snapshot)?;
+                    self.put_folder_direct(snapshot)?;
+                    resets.push(WatermarkReset {
+                        record_id: folder_id,
+                        new_rev: landed_rev,
+                        new_hash: landed_hash,
+                    });
+                } else if entry.remote_deleted {
                     self.remove_folder_direct(&entry.folder_id)?;
                     // D-174：这条路不在同步批次里（用户在冲突箱里点的），没有批末收口，
                     // 所以删完壳必须**当场**把其下条目的悬空引用修掉——否则要等到下一次
@@ -2236,6 +2284,40 @@ impl Repository {
         self.folder_conflicts
             .insert(entry.conflict_id.clone(), entry);
         Ok(())
+    }
+
+    /// D-205：把某分组**未解决**冲突的远端侧刷新为最新一次远端变更。
+    ///
+    /// 用途：本端已删、远端改名的冲突在「同一远端版本被重复投递」（重新配对 /
+    /// 发送水位重置 / resync 重放）时不得再开一张卡——D-109 的教训是冲突箱堆积会
+    /// 让用户以为发生了多起事件、还要仲裁多遍。已有未解决卡时只刷新
+    /// `remote_snapshot` / `remote_updated_at`，保留 `detected_at` 与仲裁方向
+    /// （本端侧没变，用户仍是在同一件事上二选一）。
+    ///
+    /// 返回被刷新的 `conflict_id`；没有未解决卡 → `None`，调用方应新建一条。
+    pub fn refresh_folder_conflict_remote(
+        &mut self,
+        folder_id: &str,
+        remote: &Folder,
+    ) -> CoreResult<Option<String>> {
+        let ids: Vec<String> = self
+            .folder_conflicts
+            .values()
+            .filter(|c| c.folder_id == folder_id && !c.resolved)
+            .map(|c| c.conflict_id.clone())
+            .collect();
+        let Some(first) = ids.first().cloned() else {
+            return Ok(None);
+        };
+        for cid in ids {
+            if let Some(entry) = self.folder_conflicts.get_mut(&cid) {
+                entry.remote_snapshot = remote.clone();
+                entry.remote_updated_at = remote.updated_at;
+                let bytes = serde_json::to_vec(entry)?;
+                self.write_record(RECORD_TYPE_FOLDER_CONFLICT, &cid, 0, &bytes)?;
+            }
+        }
+        Ok(Some(first))
     }
 
     /// 写入冲突箱（供同步合并使用）。
@@ -3209,6 +3291,39 @@ impl Repository {
                 if best.is_none_or(|b| rev > b) {
                     best = Some(rev);
                 }
+            }
+        }
+        best
+    }
+
+    /// D-205：取墓碑里躺着的**死亡快照**（删除前最后的形态）。
+    ///
+    /// 与 [`Self::tombstone_rev`] 同源：同一次 `slots` 扫描、同一条「同 `(type, id)`
+    /// 多枚墓碑取 rev 最高者」规则，差别只在返回值——`tombstone_rev` 只给复活抑制
+    /// 提供 rev，这里把整条解出来，供 merge 在「本端已删 + 远端 live 变更」时当作
+    /// 冲突箱的**本端侧快照**（用户需要看到被删掉的名字才判得清该不该复活）。
+    ///
+    /// 解密/反序列化失败一律返回 `None`（与 `tombstone_rev` 的容错语义一致）：
+    /// 损坏的墓碑不能把整轮同步打断，宁可当作「没有墓碑」走原有路径。
+    pub fn tombstone_folder(&self, folder_id: &str) -> Option<Folder> {
+        let mut best: Option<Folder> = None;
+        for slot in &self.slots {
+            let frame = &slot.frame;
+            if frame.is_blob()
+                || !frame.is_tombstone()
+                || frame.record_type != RECORD_TYPE_FOLDER
+                || frame.record_id_string() != folder_id
+            {
+                continue;
+            }
+            let Ok(pt) = self.open_frame(frame) else {
+                continue;
+            };
+            let Ok(folder) = serde_json::from_slice::<Folder>(&pt) else {
+                continue;
+            };
+            if best.as_ref().is_none_or(|b| folder.rev > b.rev) {
+                best = Some(folder);
             }
         }
         best

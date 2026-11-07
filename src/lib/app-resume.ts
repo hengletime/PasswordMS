@@ -69,21 +69,39 @@ export function shouldRefreshOnResume(input: {
  * 但两次回复的到达顺序不保证，晚到的旧值会盖掉新值——这种抖动在「刚录完指纹」的
  * 场景里恰好最刺眼。
  *
+/**
  * 合并口径是**在途合并**，不是节流：查询还没回来就再来一次，直接丢掉；回来了再来，
  * 正常再查一次（真的两次切回前台，就该查两次）。
+ *
+ * D-204 补一条安全阀：`refresh()` 万一**永不 settle**（IPC 卡住、WebView 被系统冻结后
+ * 直接恢复），`inFlight` 会永久停在 true，此后每一次「回到前台」都被上面那句挡在门外
+ * ——真机表现是"只有第一次切回有效，之后怎么切都没反应"。到点强制复位，让下一次还能进来。
+ * 同时给 `refresh()` 挂 `.catch`：rejection 也要复位，否则同样卡死。
  */
-export function createResumeGate(refresh: () => Promise<void>): {
+export const RESUME_GATE_TIMEOUT_MS = 3000;
+
+export function createResumeGate(
+  refresh: () => Promise<void>,
+  options: { timeoutMs?: number } = {},
+): {
   trigger: () => void;
   isIdle: () => boolean;
 } {
+  const timeoutMs = options.timeoutMs ?? RESUME_GATE_TIMEOUT_MS;
   let inFlight = false;
   return {
     trigger: (): void => {
       if (inFlight) return;
       inFlight = true;
-      void refresh().finally(() => {
+      const guard: ReturnType<typeof setTimeout> = setTimeout((): void => {
         inFlight = false;
-      });
+      }, timeoutMs);
+      void refresh()
+        .catch((): void => {})
+        .finally((): void => {
+          clearTimeout(guard);
+          inFlight = false;
+        });
     },
     isIdle: (): boolean => !inFlight,
   };

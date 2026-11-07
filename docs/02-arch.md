@@ -2320,6 +2320,74 @@ if meta.len() != expected { return Err(IpcError::io("content_write_size_mismatch
 - **真机未验**：待主人装 1.5.2 后实测「导出 → 看文件大小 → 恢复」闭环。
   本轮**不声称已真机验证**。
 
+### 3.32 D-205：删分组 vs 改分组名，同步后分组静默复活（1.6.7，2026-11-07）
+
+#### 3.32.1 现象
+
+主人按走查单 3.81/3.84 真机实测：A 端删除分组 X，B 端把 X 改名成 Y（改名时 X 在 B 端还活着），
+然后同步。**期望**进冲突箱二选一；**实测**没有冲突，B 的改名同步到了 A，A 端分组复活成 Y。
+
+#### 3.32.2 根因：三处叠加，且由「谁先发起同步」决定成败
+
+1. **墓碑 rev 冻结**。`Repository::tombstone()` 只翻墓碑标志位，payload 原样保留，
+   **不推进 `rev` / `updated_at`**；而改分组是 `rev += 1`。所以墓碑 rev 恒等于删除前那一版。
+2. **merge 缺分支**。分组分支里 `get_folder_opt(..) == None`（本端已删）时，旧实现**无条件**
+   `put_folder_direct(remote)` 并 `applied += 1`，既不判冲突，也不尊重本端的删除。
+3. **删除意图被永久吞掉**。`tombstone_changes()` 有「该 id 仍活跃 → 其历史墓碑一律不导出」的
+   复活取代规则，一旦复活，墓碑不再发出，对端永远不知道这边删过。
+
+方向决定结果：墓碑**先**到（删除方发起）时，`local.rev > change.rev` 会正确进冲突箱；
+反过来由**存活方**先发起（`sync/server.rs` 是先 `apply_changes` 后 `export_changes`），
+删除方收到的是 live 变更、本地无活记录、墓碑只有 rev 1 —— 结构性必失败，不是概率问题。
+
+#### 3.32.3 修法：本端已删 + 远端活 ⇒ 进冲突箱，不复活
+
+- `Repository::tombstone_folder(id)`：与 `tombstone_rev` 同源（同一次 slots 扫描、同一条
+  「取 rev 最高者」规则），差别只在把整条解出来，给冲突箱当**本端侧快照**。
+- `merge::deleted_local_folder_conflict()`：`change.rev > dead.rev` 才判冲突。这条判据与既有的
+  「等 rev 抑制」（`tomb_rev >= change.rev`）正好互补 —— 抑制条件对真冲突永远为假，这就是旧实现
+  静默复活的原因。
+- `FolderConflictEntry.local_deleted: bool`（`#[serde(default)]`，**不改 version 字段**，
+  否则存量库打不开），与 `remote_deleted` 对称；冲突 DTO 同步加 `local_deleted`，
+  前端左侧标「（本端已删除）」。
+- 仲裁两路：`KeepLocal` = 确认删除；`TakeRemote` = 接受复活（原样落地远端活版本）。
+
+#### 3.32.4 为什么仲裁必须「抬 rev」
+
+这是一条容易漏掉的收敛条件。`tombstone_changes()` 有 per-peer base 过滤：`base.rev >= 墓碑 rev`
+就不导出。冲突建立之前那枚 rev=1 的墓碑已经发给过对端，`base.rev` 因此 = 1；用户仲裁完若墓碑
+rev 还是 1，**永远满足过滤条件、永远不再发** → A 认为删了、B 认为还在，两端从此静默分叉。
+
+所以「确认删除」要落成**再删一次**：取墓碑里的死亡快照，`rev = max(dead.rev, remote.rev) + 1`，
+`put_folder_direct` 落成活记录后立刻 `tombstone()` 重新翻成墓碑，并 `WatermarkReset` 让新 rev
+真的能被导出。同理，两端各自仲裁时谁赢谁就要压过对方那一版，否则会一轮一轮重新开卡。
+
+**去重**：`add_folder_conflict` 是无条件 insert，同一个 `folder_id` 每被触发一次就多一张卡。
+建冲突前先查该 folder 有没有**未解决**的分组冲突，有就原地刷新远端侧，不新增、也不重复计入
+`report.conflicts`（D-109 的教训：每轮重新报冲突就是死循环）。
+
+#### 3.32.5 已知边界：条目侧同型洞未修
+
+`merge` 的条目分支 `None` 处是同一个形状（本端已彻底删除 + 远端更晚更新 ⇒ 静默复活）。本次
+**不修**，理由两条：① 条目删除先进回收站，回收站条目仍算活跃，「本端无活跃条目」只发生在用户
+**彻底清除**之后，触发面远窄于分组；② 条目冲突是三选一（含 `KeepBoth`），删除-复活要重新裁定
+「保留本机副本」的语义，属于独立的语义设计，不该在一个「分组 delete-vs-update」的修复里扩围。
+代码里留了 `TODO(D-205 边界)` 指向本节。
+
+#### 3.32.6 对端裁决之后，本端那张卡必须自己收口
+
+走查单 3.81 的真实路径是「在 B 上同步 → 看卡片 → 点『采用远端』」——用户**不会**特意再去 A 点一次。
+但 `merge` 的分组删除分支里，本端"已经删过"走的是 `None => report.skipped += 1`，**不调
+`expire_folder_conflicts_for`**。于是 B 接受删除、A 那张 `local_deleted` 的卡原样挂着，用户下次
+打开 A 会看到一条早就处理完的陈旧冲突，只能自己猜要不要再点一遍。
+
+修法：分组删除落地的**两个出口**（`Some(local)` 真删、`None` 已经删过）都调
+`expire_folder_conflicts_for`。这与「同一个根因要在所有出口收口」是同一条纪律——只补 `Some`
+那半边，另一半照样漏；而且漏掉的偏偏是 3.81 走的那半边。
+
+判据：`d205_resolving_on_peer_side_closes_both_ends`（把这两处收口撤掉，它红在「A 端那张卡
+必须随对端裁决自动收口」）。
+
 ## 4. 文件列表及相对路径
 
 > 交付工程师寇豆码的实现清单。所有路径相对项目根 `D:/Software/PasswordMS`。

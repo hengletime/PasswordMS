@@ -722,6 +722,7 @@ export const zhCN = {
     kind_item: '条目',
     kind_folder: '分组',
     remote_deleted: '（远端已删除）',
+    local_deleted: '（本端已删除）',
   },
   // D-63：法律条款弹窗（免责声明 / 用户协议）的标题与按钮文案；
   // 正文不从 i18n 取，见 src/lib/legal-content.ts（逐条实质内容 + 统一 updated）。

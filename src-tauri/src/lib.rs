@@ -390,7 +390,18 @@ pub fn run() {
                     ..
                 } => {
                     use tauri::Emitter;
-                    let _ = app_handle.emit(APP_RESUMED_EVENT, ());
+                    // D-204：这里原来是 `let _ = …emit(…)`，成败全丢。前两轮真机失败
+                    // 之所以查不出根因（是没发出？发出没收到？收到没查？），就是因为
+                    // 这一行不留任何痕迹。resume 是低频事件，每次记一行不心疼。
+                    match app_handle.emit(APP_RESUMED_EVENT, ()) {
+                        Ok(()) => {
+                            crate::state::append_log(app_handle, "[resume] 已发出 app://resumed")
+                        }
+                        Err(e) => crate::state::append_log(
+                            app_handle,
+                            &format!("[resume] 发出 app://resumed 失败：{e}"),
+                        ),
+                    }
                 }
                 _ => {}
             });

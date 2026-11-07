@@ -673,6 +673,7 @@ export const enUS: Messages = {
     kind_item: 'Item',
     kind_folder: 'Folder',
     remote_deleted: ' (deleted remotely)',
+    local_deleted: ' (deleted locally)',
   },
   // D-63: legal dialog (disclaimer / terms) titles and button label.
   // The body text lives in src/lib/legal-content.ts, not in i18n.
