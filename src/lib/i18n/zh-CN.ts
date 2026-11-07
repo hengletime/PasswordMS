@@ -889,7 +889,6 @@ export const zhCN = {
     network_unreachable: '无法连接到对端设备：请确认两台设备连的是同一个 Wi‑Fi（同一网段）；Windows 防火墙需放行 PasswordMS（专用网络）。若对端是已锁屏或休眠的手机，它收不到任何请求——请改为在对面那台设备上点「立即同步」（手机亮着屏才发得出去）。仍失败请重新配对。',
     crypto: '加密操作失败。',
     internal: '发生内部错误。',
-    unknown: '发生未知错误。',
   },
 } as const;
 

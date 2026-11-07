@@ -756,6 +756,5 @@ export const zhTW = {
     network_unreachable: '無法連線到對方裝置：請確認兩台裝置連的是同一個 Wi‑Fi（同一網段）；Windows 防火牆需放行 PasswordMS（私人網路）。若對方是已鎖屏或休眠的手機，它收不到任何請求——請改為在對面那台裝置上點「立即同步」（手機亮著螢幕才發得出去）。仍失敗請重新配對。',
     crypto: '加密操作失敗。',
     internal: '發生內部錯誤。',
-    unknown: '發生未知錯誤。',
   },
 } as const;

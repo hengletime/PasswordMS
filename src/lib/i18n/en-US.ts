@@ -834,6 +834,5 @@ export const enUS: Messages = {
     network_unreachable: 'Cannot reach the peer device: make sure both devices are on the same Wi‑Fi network (same subnet), and that Windows Firewall allows PasswordMS (private networks). If the peer is a locked or sleeping phone it receives nothing — start the sync from that device instead (a phone must be awake to send). If it still fails, re-pair.',
     crypto: 'A cryptographic operation failed.',
     internal: 'An internal error occurred.',
-    unknown: 'An unknown error occurred.',
   },
 };
