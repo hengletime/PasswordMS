@@ -379,3 +379,44 @@ fn d205_resolving_on_peer_side_closes_both_ends() {
         "A 端那张卡必须随对端裁决自动收口，否则用户会在 A 上看到一条陈旧冲突"
     );
 }
+
+/// D-209 的前置承重断言：**确认删除之后，对端确实还欠一条变更**。
+///
+/// 为什么这条必须存在：前端在 `sync.resolve()` 末尾补了 `loadStatus()`（见
+/// `src/lib/d209-pending-after-resolve-guard.test.ts`）。如果裁决完 `export_changes`
+/// 是空的，那个刷新就是在给一个永远为 0 的数字刷新 —— 纯装饰，用户照样看不出
+/// 「还欠一次同步」。所以这里按**命令层的真实口径**复刻一遍 base 推进
+/// （`sync_cmd::resolve_conflict` 把每个对端的 base 置成 `{new_rev, new_hash}`），
+/// 再断言墓碑仍然导出。
+#[test]
+fn d209_pending_change_still_owed_after_keep_local() {
+    let (mut a, _b, folder_id, rep) = delete_vs_rename("pending-owed");
+    assert_eq!(rep.conflicts.len(), 1);
+    let conflict_id = a.folder_conflicts()[0].conflict_id.clone();
+
+    let resets = a.resolve(&conflict_id, ConflictChoice::KeepLocal);
+    assert_eq!(resets.len(), 1);
+    let new_rev = resets[0].new_rev;
+
+    // 复刻 `resolve_conflict` 命令的收尾：各对端 base 推进到 {new_rev, new_hash}。
+    // 这一步是 D-111 的防振荡措施，也是最容易顺手把「待发删除」也过滤掉的地方。
+    for r in &resets {
+        a.state.base.insert(
+            r.record_id.clone(),
+            passwordms_core::model::sync_state::BaseRev {
+                rev: r.new_rev,
+                hash: r.new_hash,
+            },
+        );
+    }
+
+    let pending = a.session.repo().expect("repo").export_changes(&a.state);
+    let owed = pending.iter().find(|c| {
+        c.record_type == passwordms_core::constants::RECORD_TYPE_FOLDER
+            && c.record_id == folder_id
+            && c.deleted
+    });
+    let owed =
+        owed.expect("确认删除后对端必须还欠这条墓碑：否则「待同步」永远是 0，前端那次刷新就是装饰");
+    assert_eq!(owed.rev, new_rev, "欠的是抬过线的新墓碑，不是旧的那枚");
+}
