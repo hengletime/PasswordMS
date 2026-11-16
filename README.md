@@ -29,7 +29,7 @@ English | [简体中文](README.zh-CN.md)
 - **Password health check**: a health score plus weak / reused / stale passwords, with thresholds (default ≤ 8 characters, 180 days) adjustable in Settings
 - **Trash**: soft delete → restore → delete permanently, kept for 30 days, attachments cleaned up alongside entries
 - **Attachments**: up to 16 per entry, ≤ 20 MB each, encrypted with the vault; export asks for confirmation first (an exported file is plaintext)
-- **Desktop conveniences**: a global hotkey that summons the window with search focused, a standalone quick-search popup (keyboard-driven, copies directly), close-to-tray, optional start-at-login
+- **Desktop conveniences**: a global hotkey that summons the window with search focused, a standalone quick-search popup (keyboard-driven, copies directly), **auto-type** (a second hotkey opens an entry overlay: `Enter` types the username and password into the focused app, `Ctrl+1~4` types only username / password / TOTP / URL), close-to-tray, optional start-at-login
 
 **Getting data in and out, and across devices**
 
@@ -37,6 +37,7 @@ English | [简体中文](README.zh-CN.md)
 - **Conflict arbitration**: when both sides changed the same entry, choose per entry — keep local / take remote / keep both. Nothing is silently overwritten.
 - **Migrating from Bitwarden**: import unencrypted JSON / CSV exports (10 columns auto-mapped), same-name folders merged, duplicates skipped, CSV template downloadable; GBK / UTF-16 encodings converted automatically
 - **Backup and restore**: export an encrypted whole-vault copy (`.vault`), restore it from the lock screen with "Restore from backup"; Settings always shows when the last successful export happened and how big it was
+- **Local auto-backup (restore points)**: before risky operations the whole vault is copied locally, and Settings lets you roll back to any of those copies (it needs the master password that copy was saved with). They live **on this machine only** — uninstalling, switching devices or clearing the data directory wipes them, so they are **not** a replacement for exporting a backup
 - **Update check**: off by default; when enabled it asks GitHub for the latest version at most once a day and sends no user data
 - **Compact the vault**: reclaim the space used by deleted attachments — and tell you how much is reclaimable before you do it
 
@@ -44,7 +45,7 @@ English | [简体中文](README.zh-CN.md)
 
 - **Two platforms**: Windows 10/11 (installer / portable) + Android 7.0+ (arm64)
 - **Four languages, three themes**: 简体中文 / 繁體中文 / English / ไทย (follows the system language), light / dark / system
-- **Tiny footprint**: desktop installer ≈ 2.0 MB, APK ≈ 7.4 MB
+- **Tiny footprint**: desktop installer ≈ 2.0 MB, APK ≈ 7.6 MB
 
 ## 📦 Download
 
@@ -111,6 +112,8 @@ Counter-based HOTP (no time period) is rejected the same way.
 | See which passwords need changing | "Password health" in the sidebar → run the check (weak / reused / stale + suggestions) |
 | Move in from another manager | Settings → Import → pick a Bitwarden JSON / CSV (a CSV template is downloadable) |
 | Grab a password in any app | Press your global hotkey → quick-search popup → arrow keys to pick → `Enter` copies the password, `Shift+Enter` copies the username |
+| Have the app type the credentials for you | Set a separate "auto-type hotkey" in Settings → press it inside the target app → pick an entry → `Enter` types username + password, `Ctrl+1~4` types only username / password / TOTP / URL |
+| Roll back after a mistake | Settings → Local auto-backup → pick a copy and restore it (needs the master password that copy was saved with; these copies stay on this machine and do not survive uninstalling) |
 | Sync phone and desktop | Sync → generate the pairing QR code (scan it on the other device) → tap "Sync now" in the Status tab |
 | Both sides edited the same entry | Sync → Conflicts → choose per entry: keep local / take remote / keep both |
 | Back up / switch machines | Settings → Export vault (you get a `.vault` encrypted copy); on the new device use "Restore from backup" on the lock screen |
