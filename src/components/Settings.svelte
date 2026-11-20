@@ -1212,8 +1212,13 @@
        而没有任何视觉区分，主人实测时踩到的正是「改了剪贴板秒数以为已经生效」。 -->
   <p class="pms-hint">{ui.t('settings.instant_hint')}</p>
 
+  <!-- D-210（1.6.9）：两列各自独立堆叠——列内卡片紧密相连，列与列不要求对齐。
+       不用 grid 行对齐，是为避免矮卡被高卡拉出锯齿状留白（主人 2026-11-20 真机截图反馈）。
+       窄屏在下方媒体块里退回单列，卡片顺序仍按 DOM 实际阅读次序。 -->
+  <div class="set-cols">
+    <div class="set-col">
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_appearance')}</h3>
+    <h3><Icon name="sun" size={17} />{ui.t('settings.group_appearance')}</h3>
     <div class="set-row">
       <span class="set-label">{ui.t('theme.label')}</span>
       <div class="set-seg" role="group" aria-label={ui.t('theme.label')}>
@@ -1273,7 +1278,7 @@
     <!-- 移动端没有托盘/全局热键/自启：整卡不渲染（D-116 口径，不给不存在的功能做广告） -->
   {:else}
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_system')}</h3>
+    <h3><Icon name="settings" size={17} />{ui.t('settings.group_system')}</h3>
     <div class="set-row">
       <span class="set-label">{ui.t('settings.hotkey')}</span>
       <button
@@ -1338,7 +1343,7 @@
   {/if}
 
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_security')}</h3>
+    <h3><Icon name="shield" size={17} />{ui.t('settings.group_security')}</h3>
     <div class="set-row">
       <label class="set-label" for="set-autolock">{ui.t('settings.auto_lock')}</label>
       <select id="set-autolock" class="pms-input set-ctl" value={autoLockMinutes} onchange={(e) => void onAutoLockChange(e)}>
@@ -1371,7 +1376,7 @@
        **不要**把这条改成「显示但置灰」——那是在为不存在的功能做广告。 -->
   {#if bio && bio.availability !== 'not_implemented'}
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_biometric')}</h3>
+    <h3><Icon name="key" size={17} />{ui.t('settings.group_biometric')}</h3>
     <!-- 信息行用 `.set-row.is-info`（§6.10）：窄屏堆叠只针对控件行，信息行不能拆两行。 -->
     <div class="set-row is-info">
       <span class="set-label">{ui.t(`settings.bio_title${bioSuffix}`)}</span>
@@ -1485,7 +1490,7 @@
   {/if}
 
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_health')}</h3>
+    <h3><Icon name="alert" size={17} />{ui.t('settings.group_health')}</h3>
     <div class="set-row">
       <label class="set-label" for="set-weak">{ui.t('settings.weak_max_len')}</label>
       <input id="set-weak" class="pms-input set-ctl" type="number" min={HEALTH_WEAK_MIN} max={HEALTH_WEAK_MAX} bind:value={draft.health.weak_max_len}
@@ -1499,14 +1504,89 @@
   </div>
 
   <div class="pms-card set-card">
-    <h3>{ui.t('import.title')}</h3>
+    <h3><Icon name="lock" size={17} />{ui.t('settings.change_password')}</h3>
+    <p class="pms-alert is-warning">
+      <Icon name="alert" size={16} />
+      <span>{ui.t('create.warning_body')}</span>
+    </p>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
+      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password"
+        oninput={clearPwdReceipt} />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
+      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password"
+        oninput={clearPwdReceipt} />
+    </div>
+    <div class="set-row">
+      <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
+      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password"
+        oninput={clearPwdReceipt} />
+    </div>
+    <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
+    {#if pwdErrorKey !== ''}
+      <!-- D-115：失败同样是常驻回执。同一张卡片上「成功留 10 分钟、失败只闪 3 秒」
+           说不通，而「旧密码输错」正是这条流程最常见的失败。 -->
+      <p class="pms-alert is-danger pwd-result" role="alert">
+        <Icon name="alert" size={16} />
+        <span>{ui.t(pwdErrorKey)}</span>
+      </p>
+    {/if}
+    {#if pwdChanged !== 'none'}
+      <!-- D-114：结果留在原地。toast 三秒就消失，不能作为改密这种高危操作唯一的回执；
+           `role="status"` 让读屏也念出来。`bio_off` 顺带解释了「快速解锁为什么没了」。 -->
+      <p class="pms-alert is-success pwd-result" role="status">
+        <Icon name="check" size={16} />
+        <span>{ui.t(pwdChanged === 'bio_off' ? `settings.password_changed_bio_off${bioSuffix}` : 'settings.password_changed')}</span>
+      </p>
+      {#if pwdBackupDetail !== null}
+        {#if pwdBackupDetail.isolateError}
+          <!-- 整体没归档：份数未知（不知道有多少），所以这条不能带数字。
+               它必须排在 `failed` 之前——那一格此时恒为 0，永远轮不到它。 -->
+          <p class="pms-alert is-danger pwd-result" role="alert">
+            <Icon name="alert" size={16} />
+            <span>{ui.t('settings.password_changed_isolate_error')}</span>
+          </p>
+        {:else if pwdBackupDetail.failed > 0}
+          <!-- 没能归档的那几份会留在当前代、被标成"当前主密码可开"，实际要用旧密码。
+               用户忘记新密码时按这个标签去试，那是他最后一次尝试——必须说出来。 -->
+          <p class="pms-alert is-danger pwd-result" role="alert">
+            <Icon name="alert" size={16} />
+            <span>{ui.t('settings.password_changed_isolate_failed', { count: pwdBackupDetail.failed })}</span>
+          </p>
+        {:else if pwdBackupDetail.count > 0}
+          <p class="pms-meta">{ui.t('settings.password_changed_detail', { count: pwdBackupDetail.count })}</p>
+        {:else if !pwdBackupDetail.saved}
+          <p class="pms-hint is-danger">{ui.t('settings.password_changed_no_backup')}</p>
+        {/if}
+      {/if}
+      <!-- B-03 两层，缺一不可：
+           ① 这一步只换「锁」不换「钥匙」——它在承认能力边界；
+           ② 旧代只防顺手牵羊，不防懂行的人——它说清"删旧代"这个动作的效力范围。
+           **没有第三层**：原来这里还有一句「新建库 + 全量导入 = 真正的换钥匙」，
+           那是假的——导出只有加密 `.vault`（整容器字节复制），而导入只认
+           Bitwarden JSON/CSV（`import/mod.rs`），且导入会静默丢附件。
+           路不存在就不能写成出口：用户照着做会发现根本做不成，而"做不到"被
+           包装成"你可以这样做"比直接说"做不到"更伤人。
+           真作废能力要等「更换钥匙」这个功能本身落地，那时再加第三层。 -->
+      <p class="pms-hint">{ui.t('settings.change_password_note_lock_only')}</p>
+      <p class="pms-hint">{ui.t('settings.change_password_note_old')}</p>
+      <p class="pms-hint">{ui.t('settings.change_password_note_no_rekey')}</p>
+    {/if}
+  </div>
+    </div>
+    <div class="set-col">
+  <!-- D-210：导入/导出是一对，放同一列相邻——语义相连，也把两列高度拉平。 -->
+  <div class="pms-card set-card">
+    <h3><Icon name="upload" size={17} />{ui.t('import.title')}</h3>
     <button class="pms-btn is-ghost" type="button" onclick={() => (importOpen = true)}>
       <Icon name="upload" size={15} />{ui.t('import.title')}
     </button>
   </div>
 
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.export_vault')}</h3>
+    <h3><Icon name="download" size={17} />{ui.t('settings.export_vault')}</h3>
     <!-- D-143：卸载/换机即清库的常驻提醒。放在卡片最顶部（在「导出的是加密副本」说明之前），
          因为它是**为什么要导出**的理由，用户先读到它才会往下读怎么导。
          文案跨平台通用：桌面卸载/换机同样需要导出，不做平台判定（也就不依赖 UA）。 -->
@@ -1556,7 +1636,7 @@
        会一起没。所以「只在本机」这句必须与状态**同屏**，不做 tooltip、不做跳转链接——
        用户看到"回滚点正常"就不再导出，而换机照样丢，那是产品主动制造的更糟处境。 -->
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.restore_point')}</h3>
+    <h3><Icon name="clock" size={17} />{ui.t('settings.restore_point')}</h3>
     <p class="pms-meta">{ui.t('settings.restore_point_hint')}</p>
     <p class="pms-alert is-warning">
       <Icon name="alert" size={16} />
@@ -1790,7 +1870,7 @@
   </div>
 
   <div class="pms-card set-card">
-    <h3>{ui.t('sync.devices')}</h3>
+    <h3><Icon name="device" size={17} />{ui.t('sync.devices')}</h3>
     {#if sync.devices.length === 0}
       <p class="pms-meta">{ui.t('sync.no_devices')}</p>
     {:else}
@@ -1808,80 +1888,7 @@
   </div>
 
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.change_password')}</h3>
-    <p class="pms-alert is-warning">
-      <Icon name="alert" size={16} />
-      <span>{ui.t('create.warning_body')}</span>
-    </p>
-    <div class="set-row">
-      <label class="set-label" for="set-pw-old">{ui.t('settings.change_password_old')}</label>
-      <input id="set-pw-old" class="pms-input set-ctl" type="password" bind:value={oldPassword} autocomplete="current-password"
-        oninput={clearPwdReceipt} />
-    </div>
-    <div class="set-row">
-      <label class="set-label" for="set-pw-new">{ui.t('settings.change_password_new')}</label>
-      <input id="set-pw-new" class="pms-input set-ctl" type="password" bind:value={newPassword} autocomplete="new-password"
-        oninput={clearPwdReceipt} />
-    </div>
-    <div class="set-row">
-      <label class="set-label" for="set-pw-new2">{ui.t('create.confirm_password')}</label>
-      <input id="set-pw-new2" class="pms-input set-ctl" type="password" bind:value={newPassword2} autocomplete="new-password"
-        oninput={clearPwdReceipt} />
-    </div>
-    <button class="pms-btn" type="button" onclick={() => void changePassword()}>{ui.t('common.confirm')}</button>
-    {#if pwdErrorKey !== ''}
-      <!-- D-115：失败同样是常驻回执。同一张卡片上「成功留 10 分钟、失败只闪 3 秒」
-           说不通，而「旧密码输错」正是这条流程最常见的失败。 -->
-      <p class="pms-alert is-danger pwd-result" role="alert">
-        <Icon name="alert" size={16} />
-        <span>{ui.t(pwdErrorKey)}</span>
-      </p>
-    {/if}
-    {#if pwdChanged !== 'none'}
-      <!-- D-114：结果留在原地。toast 三秒就消失，不能作为改密这种高危操作唯一的回执；
-           `role="status"` 让读屏也念出来。`bio_off` 顺带解释了「快速解锁为什么没了」。 -->
-      <p class="pms-alert is-success pwd-result" role="status">
-        <Icon name="check" size={16} />
-        <span>{ui.t(pwdChanged === 'bio_off' ? `settings.password_changed_bio_off${bioSuffix}` : 'settings.password_changed')}</span>
-      </p>
-      {#if pwdBackupDetail !== null}
-        {#if pwdBackupDetail.isolateError}
-          <!-- 整体没归档：份数未知（不知道有多少），所以这条不能带数字。
-               它必须排在 `failed` 之前——那一格此时恒为 0，永远轮不到它。 -->
-          <p class="pms-alert is-danger pwd-result" role="alert">
-            <Icon name="alert" size={16} />
-            <span>{ui.t('settings.password_changed_isolate_error')}</span>
-          </p>
-        {:else if pwdBackupDetail.failed > 0}
-          <!-- 没能归档的那几份会留在当前代、被标成"当前主密码可开"，实际要用旧密码。
-               用户忘记新密码时按这个标签去试，那是他最后一次尝试——必须说出来。 -->
-          <p class="pms-alert is-danger pwd-result" role="alert">
-            <Icon name="alert" size={16} />
-            <span>{ui.t('settings.password_changed_isolate_failed', { count: pwdBackupDetail.failed })}</span>
-          </p>
-        {:else if pwdBackupDetail.count > 0}
-          <p class="pms-meta">{ui.t('settings.password_changed_detail', { count: pwdBackupDetail.count })}</p>
-        {:else if !pwdBackupDetail.saved}
-          <p class="pms-hint is-danger">{ui.t('settings.password_changed_no_backup')}</p>
-        {/if}
-      {/if}
-      <!-- B-03 两层，缺一不可：
-           ① 这一步只换「锁」不换「钥匙」——它在承认能力边界；
-           ② 旧代只防顺手牵羊，不防懂行的人——它说清"删旧代"这个动作的效力范围。
-           **没有第三层**：原来这里还有一句「新建库 + 全量导入 = 真正的换钥匙」，
-           那是假的——导出只有加密 `.vault`（整容器字节复制），而导入只认
-           Bitwarden JSON/CSV（`import/mod.rs`），且导入会静默丢附件。
-           路不存在就不能写成出口：用户照着做会发现根本做不成，而"做不到"被
-           包装成"你可以这样做"比直接说"做不到"更伤人。
-           真作废能力要等「更换钥匙」这个功能本身落地，那时再加第三层。 -->
-      <p class="pms-hint">{ui.t('settings.change_password_note_lock_only')}</p>
-      <p class="pms-hint">{ui.t('settings.change_password_note_old')}</p>
-      <p class="pms-hint">{ui.t('settings.change_password_note_no_rekey')}</p>
-    {/if}
-  </div>
-
-  <div class="pms-card set-card">
-    <h3>{ui.t('settings.vault_file')}</h3>
+    <h3><Icon name="file" size={17} />{ui.t('settings.vault_file')}</h3>
     <!-- D-73：主人原话「保险库文件是什么作用？没有看到文件啊？」——
          标题没解释 + 下面空白是**双重失败**。先给一句它是什么/有什么用，再给路径与大小；
          读不到时显示「读取失败」而不是留空（空状态 = 静默兜底，把失败伪装成「本来就没有」）。 -->
@@ -1944,7 +1951,7 @@
 
   <!-- D-63：「关于」分组（需求：软件里必须有版本与作者等信息）。 -->
   <div class="pms-card set-card">
-    <h3>{ui.t('settings.group_about')}</h3>
+    <h3><Icon name="globe" size={17} />{ui.t('settings.group_about')}</h3>
     <!-- D-73：纯信息行加 `is-info`、按钮行加 `is-actions`。
          窄屏的 `.set-row { flex-direction: column }` 是**为控件行写的**（160px 固定宽在 390px 会溢出），
          它只判了 `.set-row`，于是把信息行（「作者 / hengletime」被拆成两行，读起来像两条独立信息）
@@ -2005,6 +2012,8 @@
       <button class="pms-btn is-ghost is-sm set-about-btn" type="button" onclick={() => openLegal('terms')}>
         {ui.t('settings.about_terms')}
       </button>
+    </div>
+  </div>
     </div>
   </div>
 </section>
@@ -2181,26 +2190,55 @@
 <LegalDialog bind:open={legalOpen} kind={legalKind} />
 
 <style>
+  /* D-210（v1.6.9）：桌面两列卡片布局。
+     原来 `max-width: 680px` 让宽窗口的右半屏一直空着（主人 2026-11-20 真机截图反馈：
+     「我这设置页右边空那么多干什么呢」）。外层 `.body` 是全宽 flex、`.set` 拿 flex:1，
+     本就能撑满，是这条 680px 自己把内容挤在左边。
+
+     **为什么不用 grid 行对齐**：第一版用 `display:grid` + 两列，同一行里矮卡被高卡拉出
+     锯齿状留白（主人 11-20 第二张截图：「惨不忍睹」）。参考页的做法是**两列各自独立堆叠**，
+     列内卡片紧密相连、列与列不要求底部对齐。所以改成两个 `.set-col`（flex column），
+     各列独立 flow，彻底没有行对齐的锯齿。
+     窄屏在下方**同一个**媒体块里退回单列（守门要求只有一个 max-width:767px 块）。 */
   .set {
     flex: 1;
     padding: 1.1rem;
     overflow: auto;
-    max-width: 680px;
+  }
+  .set-cols {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+  }
+  .set-col {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    min-width: 0;
   }
   .set-title {
-    margin: 0 0 1rem;
+    margin: 0 0 0.25rem;
     font-size: 1.2rem;
     font-weight: 600;
   }
   .set-card {
     padding: 1rem;
-    margin-bottom: 1rem;
+    min-width: 0; /* 长英文/库路径在窄列里不把列撑破 */
   }
+  /* 卡片标题带语义图标（鸽子下载设置页的可借鉴点）。仅布局，颜色走令牌。 */
   h3 {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
     margin: 0 0 0.7rem;
     font-size: 1rem;
     font-weight: 600;
     color: var(--pms-fg);
+  }
+  h3 :global(svg) {
+    color: var(--pms-accent);
+    flex: 0 0 auto;
   }
   .set-row {
     display: flex;
@@ -2393,8 +2431,14 @@
      ⚠️ 下面 `.set-row` 的堆叠**只适用于含控件的行**（`.set-ctl` / 输入 / 分段控件）。
      纯信息行必须加 `.is-info`、按钮行必须加 `.is-actions`、复选框行必须加 `.is-check`（D-110）在下方覆盖回来（同层叠靠源码顺序取胜）。 */
   @media (max-width: 767px) {
+    /* D-210：窄屏（手机）退回单列——`.set-cols` 由两列 grid 变一列，
+       两个 `.set-col` 顺序相接，视觉顺序与桌面 DOM 阅读次序一致。
+       卡片间距继续由 `.set-col` 的 gap:1rem 负责，不改卡片自身 margin。 */
     .set {
       padding: 0.9rem;
+    }
+    .set-cols {
+      grid-template-columns: 1fr;
     }
     .set-row {
       flex-direction: column;
