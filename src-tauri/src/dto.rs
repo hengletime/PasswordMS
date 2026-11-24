@@ -150,6 +150,14 @@ pub struct BackupPointDto {
 pub struct StatusDto {
     pub has_vault: bool,
     pub locked: bool,
+    /// **D-211**：当前数据目录（绝对路径）。锁屏页常驻显示，让用户一眼确认
+    /// 「我打开的是哪一份库」——便携版（exe 旁）与安装版（`%APPDATA%`）是两个
+    /// 完全不同的目录，而界面一模一样。
+    pub data_dir: String,
+    /// **D-211**：另一处**仍存在保险库**的目录（上一次启动用过的那一处）。
+    /// `None` = 只有当前这一处。有值时锁屏页显式告警，避免用户对着另一份库
+    /// 反复试主密码。
+    pub other_vault_dir: Option<String>,
 }
 
 /// 换主密码的结果（1.5.29 / R-5）。

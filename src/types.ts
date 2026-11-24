@@ -7,6 +7,19 @@
 export interface StatusDto {
   has_vault: boolean;
   locked: boolean;
+  /**
+   * **D-211**：当前数据目录（绝对路径）。锁屏页常驻显示。
+   *
+   * 便携版的数据在 exe 旁，安装版在 `%APPDATA%/<identifier>` —— 两个目录里的库
+   * 可以完全不同，而界面一模一样。这一个字段就是为了让用户看清自己开的是哪一份。
+   */
+  data_dir: string;
+  /**
+   * **D-211**：另一处**仍存在保险库**的目录（上一次启动用过的那一处）；`null` = 只有一处。
+   *
+   * 有值时锁屏页显式告警：用户很可能正对着另一份库反复试主密码。
+   */
+  other_vault_dir: string | null;
 }
 
 /**

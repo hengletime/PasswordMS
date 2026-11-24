@@ -224,9 +224,12 @@ pub fn biometric_unlock(
     *state.lock_session().map_err(lock_err)? = session;
     // 与主密码解锁同一套后续动作：启动持久重同步监听（D-11）。
     let _ = ensure_resync_listener(&app)?;
+    let (data_dir, other_vault_dir) = crate::state::data_dirs(&app, state.inner());
     Ok(StatusDto {
         has_vault: true,
         locked: false,
+        data_dir,
+        other_vault_dir,
     })
 }
 

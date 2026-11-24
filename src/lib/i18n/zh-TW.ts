@@ -44,6 +44,8 @@ export const zhTW = {
     create_new: '建立新保險庫',
     busy: '正在解鎖…',
     error: '解鎖失敗，請重試。',
+    data_dir: '資料目錄：{dir}',
+    other_vault: '另一處還發現一份保險庫：{dir}。如果你要找的是那份，請從那個位置啟動程式。',
     show_password: '顯示密碼',
     hide_password: '隱藏密碼',
     restore_button: '從備份還原',

@@ -41,6 +41,18 @@ PasswordMS 便携绿色版
 用新版 passwordms.exe 和 WebView2Loader.dll 覆盖旧文件即可；
 passwordms.portable 标记与数据文件保持不动。
 
+【改名 / 搬移文件夹】
+1. 先彻底退出程序：右下角托盘图标右键 → 退出。
+   （点窗口右上角的 × 只是收进托盘，程序仍在运行。）
+2. 整个文件夹一起搬，这几样缺一不可：
+   passwordms.exe、WebView2Loader.dll、passwordms.portable、
+   passwordms.vault、passwordms.identity。
+   少一个 passwordms.portable，程序就会去另一个目录找库。
+3. 搬完请检查桌面和开始菜单：如果还留着旧的 PasswordMS 图标，删掉它。
+   旧图标可能指向另一份安装版，打开的是完全不同的另一个库 ——
+   两个界面一模一样，你只会以为"密码不对、指纹也不对"。
+   程序现在会在解锁页底部显示当前数据目录，对照一下就知道打开的是哪一份。
+
 【安全提示】
 - 保险库为整卷加密（Argon2id + XChaCha20-Poly1305），但没有主密码谁也解不开 ——
   请务必牢记主密码，忘了没有任何找回手段。

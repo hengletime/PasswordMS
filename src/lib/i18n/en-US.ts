@@ -46,6 +46,8 @@ export const enUS: Messages = {
     create_new: 'Create new vault',
     busy: 'Unlocking…',
     error: 'Unlock failed, please try again.',
+    data_dir: 'Data folder: {dir}',
+    other_vault: 'Another vault was found at {dir}. If that is the one you want, start the app from that location.',
     show_password: 'Show password',
     hide_password: 'Hide password',
     // D-55 "Restore from backup" on the lock screen: entry button, overwrite warning, empty-password hint.

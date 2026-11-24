@@ -19,10 +19,14 @@ pub fn get_status(
     state: tauri::State<'_, AppState>,
 ) -> IpcResult<StatusDto> {
     let path = vault_path(&app)?;
+    // D-211：只读启动时记下的「上一次数据目录」，这里**不写盘**（每次 refresh 都调用本命令）。
+    let (data_dir, other_vault_dir) = crate::state::data_dirs(&app, state.inner());
     let session = state.lock_session().map_err(lock_err)?;
     Ok(StatusDto {
         has_vault: Session::has_vault(&path),
         locked: !session.is_unlocked(),
+        data_dir,
+        other_vault_dir,
     })
 }
 

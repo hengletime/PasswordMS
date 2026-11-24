@@ -10,7 +10,7 @@ import { ui } from './ui.svelte';
 /** 会话 store。 */
 class SessionStore {
   /** 当前状态。 */
-  status = $state<StatusDto>({ has_vault: false, locked: true });
+  status = $state<StatusDto>({ has_vault: false, locked: true, data_dir: '', other_vault_dir: null });
   /** 是否有进行中的操作。 */
   busy = $state(false);
   /** 解锁失败统一提示（不区分原因，A-05）。 */
@@ -85,7 +85,9 @@ class SessionStore {
     this.busy = true;
     try {
       await api.vault.lock();
-      this.status = { has_vault: true, locked: true };
+      // D-211：锁定时保留 data_dir / other_vault_dir —— 锁屏页要靠它们标出
+      // 「用的是哪一份库」，清空会让刚锁屏的那一屏重新失去这条线索。
+      this.status = { ...this.status, has_vault: true, locked: true };
       this.unlockError = false;
       return true;
     } catch (err) {

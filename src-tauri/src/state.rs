@@ -104,6 +104,14 @@ pub struct AppState {
     /// 用 `IsWindow` + pid 复核，无效（0 / 已销毁 / 句柄在 200ms 内被复用进别的
     /// 进程）一律报「焦点丢失」。锁定时清回 `None`。
     pub autotype_target: Mutex<Option<AutotypeTarget>>,
+    /// **D-211**：上一次启动时使用的数据目录（启动时读旧值、再写新值）。
+    ///
+    /// 便携版与安装版共用同一份 app identifier，却把数据落在两个完全不同的目录
+    /// （exe 旁 vs `%APPDATA%/<identifier>`）。用户改了文件夹名、或换了启动入口之后，
+    /// 很可能打开的是**另一份库**——而两个界面长得一模一样，解锁失败又被 A-05 统一成
+    /// 一句「解锁失败，请重试」，他自己没有任何线索判断「我开错库了」。
+    /// 锁屏页据此显式报出「另一处还有一份保险库」。
+    pub prev_data_dir: Mutex<Option<PathBuf>>,
 }
 
 /// 自动输入的目标窗口记录。
@@ -135,6 +143,7 @@ impl AppState {
             last_activity_ms: AtomicI64::new(now_ms()),
             prefs: Mutex::new(crate::prefs::AppPrefs::default()),
             autotype_target: Mutex::new(None),
+            prev_data_dir: Mutex::new(None),
         }
     }
 
@@ -231,6 +240,69 @@ pub fn data_dir(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
 /// 保险库文件路径（数据目录 / `passwordms.vault`）。
 pub fn vault_path(app: &tauri::AppHandle) -> IpcResult<PathBuf> {
     Ok(data_dir(app)?.join("passwordms.vault"))
+}
+
+/// **D-211**「上一次启动使用的数据目录」记录文件。
+///
+/// 位置刻意**不跟着数据目录走**（放 `%LOCALAPPDATA%/<identifier>/`）：它的全部意义
+/// 就是把「这次开的是哪一份库」与「上次开的是哪一份」做对比，跟着便携包搬走就废了。
+fn last_data_dir_file(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("last-data-dir.txt"))
+}
+
+/// 读上一次的数据目录，并把本次的写进去（**每次启动只调一次**，见 `lib.rs` 的 setup）。
+///
+/// 返回 `Some(旧目录)`；首次运行 / 读不到 / 内容为空一律 `None`。
+pub fn take_previous_data_dir(
+    app: &tauri::AppHandle,
+    current: &std::path::Path,
+) -> Option<PathBuf> {
+    let file = last_data_dir_file(app)?;
+    let prev = std::fs::read_to_string(&file)
+        .ok()
+        .map(|s| PathBuf::from(s.trim()))
+        .filter(|p| !p.as_os_str().is_empty());
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&file, current.to_string_lossy().as_bytes());
+    prev
+}
+
+/// 另一处**仍存在保险库**的目录（`None` = 只有当前这一处）。
+///
+/// 判据只看「那个目录里有 `passwordms.vault`」，不做递归搜索：上一次真正用过的目录
+/// 才是用户会再次误开的那个，扫全盘既慢又会把「导出/备份副本」算成另一份库。
+pub fn other_vault_dir(
+    prev: Option<&std::path::Path>,
+    current: &std::path::Path,
+) -> Option<PathBuf> {
+    let prev = prev?;
+    if prev == current {
+        return None;
+    }
+    prev.join("passwordms.vault")
+        .is_file()
+        .then(|| prev.to_path_buf())
+}
+
+/// **D-211**：状态回执要带的两个路径字段 —— `(当前数据目录, 另一处仍有库的目录)`。
+///
+/// 四个出口（`get_status` / `create_vault` / `unlock` / `biometric_unlock`）共用同一判据，
+/// 抽成一处是为了不让某条出口漏填：只读 `prev_data_dir`，**不碰会话锁**，也不写盘。
+pub fn data_dirs(app: &tauri::AppHandle, state: &AppState) -> (String, Option<String>) {
+    let Ok(dir) = data_dir(app) else {
+        return (String::new(), None);
+    };
+    let prev = state.prev_data_dir.lock().ok().and_then(|g| g.clone());
+    let other = other_vault_dir(prev.as_deref(), &dir);
+    (
+        dir.to_string_lossy().to_string(),
+        other.map(|d| d.to_string_lossy().to_string()),
+    )
 }
 
 /// 应用级配置路径（数据目录 / `prefs.json`，v1.4.10）。
@@ -592,4 +664,54 @@ pub fn spawn_auto_lock_worker(app: tauri::AppHandle) {
             let _ = tauri::Emitter::emit(&app, "autolock://locked", "idle");
         }
     });
+}
+
+/// **D-211** 的判据单测。
+///
+/// 只覆盖纯函数 [`other_vault_dir`]（`take_previous_data_dir` 要 `AppHandle`，
+/// 留给真机走查）：它决定锁屏页那句告警出不出，判错的两个方向都很贵——
+/// 漏报 = 用户继续对着另一份库试密码；误报 = 用户被一句假的「另一处还有库」推着
+/// 跑去找一个根本不该用的目录。
+#[cfg(test)]
+mod d211_tests {
+    use super::*;
+
+    fn tmp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::create_dir_all(&dir);
+        dir
+    }
+
+    /// 没有上一次记录 / 上一次与本次同目录 / 上一次那个目录里没有库 —— 三种都不该报。
+    #[test]
+    fn no_previous_or_same_dir_reports_nothing() {
+        let cur = tmp("pms-d211-cur-a");
+        assert_eq!(other_vault_dir(None, &cur), None, "首次运行不该报");
+        assert_eq!(other_vault_dir(Some(&cur), &cur), None, "同目录不该报");
+
+        let empty = tmp("pms-d211-empty");
+        assert_eq!(
+            other_vault_dir(Some(&empty), &cur),
+            None,
+            "上一次那个目录里没有 passwordms.vault 就不算另一份库"
+        );
+    }
+
+    /// 上一次的目录里确实躺着库 —— 必须报出来（这条是修复的全部价值所在）。
+    #[test]
+    fn previous_dir_with_vault_is_reported() {
+        let prev = tmp("pms-d211-prev");
+        let cur = tmp("pms-d211-cur-b");
+        let vault = prev.join("passwordms.vault");
+        std::fs::write(&vault, b"PMSVAULT").unwrap();
+
+        let got = other_vault_dir(Some(&prev), &cur);
+        assert_eq!(
+            got.as_deref(),
+            Some(prev.as_path()),
+            "必须指回上一次那个目录"
+        );
+
+        let _ = std::fs::remove_file(&vault);
+    }
 }

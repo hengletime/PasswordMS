@@ -25,9 +25,12 @@ pub fn create_vault(
     *state.lock_session().map_err(lock_err)? = session;
     // 解锁即启动持久重同步监听（D-11）。
     let _ = ensure_resync_listener(&app)?;
+    let (data_dir, other_vault_dir) = crate::state::data_dirs(&app, state.inner());
     Ok(StatusDto {
         has_vault: true,
         locked: false,
+        data_dir,
+        other_vault_dir,
     })
 }
 
@@ -39,7 +42,17 @@ pub fn unlock(
     master_password: String,
 ) -> IpcResult<StatusDto> {
     let path = vault_path(&app)?;
-    let session = Session::unlock(&path, &master_password)?;
+    // **D-211**：解锁失败此前一句日志都不留——界面上 A-05 把「密码错 / 库损坏 /
+    // 读盘失败」统一成同一句（防侧信道，这条不动），但**本机日志**必须留下来。
+    // 没有它，现场只剩用户一句「登不进去」，只能靠猜（2026-11-23 D-211 排查即如此）。
+    // `CoreError` 的 `Debug` 只含错误码与错误消息，不含密码与明文。
+    let session = match Session::unlock(&path, &master_password) {
+        Ok(s) => s,
+        Err(e) => {
+            crate::state::append_log(&app, &format!("[unlock] failed: {e:?}"));
+            return Err(e.into());
+        }
+    };
     // D-91（审查 C4）：解锁期维护失败不再静默——落文件日志（内容仅错误码，
     // CoreError Debug 已脱敏，无任何密钥/明文）。
     for warning in session.maintenance_warnings() {
@@ -48,9 +61,12 @@ pub fn unlock(
     *state.lock_session().map_err(lock_err)? = session;
     // 解锁即启动持久重同步监听（D-11）。
     let _ = ensure_resync_listener(&app)?;
+    let (data_dir, other_vault_dir) = crate::state::data_dirs(&app, state.inner());
     Ok(StatusDto {
         has_vault: true,
         locked: false,
+        data_dir,
+        other_vault_dir,
     })
 }
 

@@ -20,6 +20,20 @@
   let restoring = $state(false);
 
   /**
+   * **D-211**：把数据目录压成「…\最后两段」再显示。
+   *
+   * 为什么不直接铺完整路径：Windows 路径里没有空格，浏览器只能在任意字符处硬断——
+   * 实测把 `Local\Temp` 断成了 `Local\Te` + `mp\...`，反而比不显示更难读。
+   * 而真正能区分「哪一份库」的恰恰是末尾两段（`Tools\PasswordMS` 对
+   * `Roaming\com.passwordms.app`）。完整路径挂在 `title` 上，悬停即见。
+   */
+  function shortPath(p: string): string {
+    const parts = p.split(/[\\/]+/).filter(Boolean);
+    if (parts.length <= 2) return p;
+    return `…\\${parts.slice(-2).join('\\')}`;
+  }
+
+  /**
    * 快速解锁按钮的显示条件（`docs/08` §4.5）。
    *
    * **只有 `ready` 才显示**：`stale` / `corrupt` / `absent` 一律不显示——失效的封印点了
@@ -199,6 +213,14 @@
       </button>
     </form>
 
+    <!-- 另一处还有库：这不是错误，是「你可能开错门了」。用告警色、左对齐、不淡化 ——
+         它必须被看见；文案给的是出路，不是责怪。 -->
+    {#if session.status.other_vault_dir}
+      <p class="lock-data-dir is-warn" role="alert" title={session.status.other_vault_dir}>
+        {ui.t('lock.other_vault', { dir: shortPath(session.status.other_vault_dir) })}
+      </p>
+    {/if}
+
     {#if canBiometricUnlock}
       <!-- 快速解锁：只在「本机已开启且平台可用」时出现，位置紧贴主解锁按钮之下
            （视觉上属于同一组入口，而不是和「创建新库」并列的次要动作）。 -->
@@ -224,6 +246,18 @@
     <button class="pms-btn is-ghost is-block lock-restore" type="button" disabled={session.busy || restoring} onclick={() => void restoreFromBackup()}>
       <Icon name="upload" size={15} />{ui.t('lock.restore_button')}
     </button>
+
+    <!-- D-211：当前数据目录 —— 卡片页脚，排在所有操作之后。
+         便携版的数据在 exe 旁、安装版在 `%APPDATA%` —— 两个目录里可以是两份完全
+         不同的库，而界面一模一样；用户换了启动入口（改名后自启失效、只好去点桌面
+         图标是最常见的路径）就会对着另一份库反复试主密码，失败提示又被 A-05 统一成
+         一句「解锁失败，请重试」，他自己没有任何线索。这一行就是那条线索。
+         刻意放在最底部并压淡：它是"需要时才去查"的信息，不是每次解锁都要读的提示。 -->
+    {#if session.status.data_dir}
+      <p class="lock-data-dir" title={session.status.data_dir}>
+        {ui.t('lock.data_dir', { dir: shortPath(session.status.data_dir) })}
+      </p>
+    {/if}
   </div>
 </main>
 
@@ -293,5 +327,31 @@
     justify-content: flex-end;
     gap: 0.35rem;
     padding-right: 2px;
+  }
+
+  /* D-211：数据目录 —— 卡片页脚。
+     ① 压到最底下并居中，像"注脚"而不是"提示"；
+     ② 刻意最淡（opacity 0.62）：它是需要时才翻的信息，抢眼反而让人以为出了问题；
+     ③ 只显示末尾两段（见 `shortPath`），完整路径挂在 title 上。 */
+  .lock-data-dir {
+    margin: 1.2rem 0 0;
+    padding: 0 0.15rem;
+    font-size: 0.7rem;
+    line-height: 1.5;
+    letter-spacing: 0.01em;
+    color: var(--pms-muted);
+    text-align: center;
+    opacity: 0.62;
+    overflow-wrap: break-word;
+  }
+  /* 「另一处还有库」是**必须被看见**的一条，不能跟着淡化：
+     左对齐、告警色、字号略大、不透明度拉满。 */
+  .lock-data-dir.is-warn {
+    margin-top: 0.9rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--pms-danger);
+    text-align: left;
+    opacity: 1;
   }
 </style>

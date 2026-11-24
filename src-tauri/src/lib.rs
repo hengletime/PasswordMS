@@ -207,6 +207,16 @@ pub fn run() {
             #[cfg(windows)]
             crate::platform::note_main_window(app.handle());
             load_prefs(app.handle());
+            // **D-211**：把「上一次启动用的数据目录」留在 AppState，再写入本次的。
+            // 便携版（exe 旁）与安装版（`%APPDATA%`）的数据目录完全不同、界面却一模一样，
+            // 用户换了启动入口后会对着另一份库反复试主密码。锁屏页据此显式告警。
+            // 写在 setup 而不是 `get_status`：后者每次 refresh 都调用，不该反复写盘。
+            if let Ok(dir) = crate::state::data_dir(app.handle()) {
+                let prev = crate::state::take_previous_data_dir(app.handle(), &dir);
+                if let Ok(mut g) = app.state::<AppState>().prev_data_dir.lock() {
+                    *g = prev;
+                }
+            }
             // 托盘失败不阻断启动：只是没有托盘图标（关窗会退化成"必须用托盘退出"的
             // 反面——所以同时把 hotkey 也跳过，避免"热键唤不出窗口又没法从托盘恢复"）。
             #[cfg(desktop)]
