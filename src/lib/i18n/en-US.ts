@@ -579,6 +579,8 @@ export const enUS: Messages = {
     update_uptodate: 'You are on the latest version',
     update_available: 'New version available: v{version}',
     update_failed: 'Check failed. Please try again later.',
+    update_fail_network: 'Could not reach GitHub (network unreachable or timed out). Already retried; try another network, or use "Get the new version" below.',
+    update_fail_rate_limited: 'GitHub is rate-limiting requests from this network. It usually clears within an hour; use "Get the new version" below in the meantime.',
     update_download: 'Get the new version',
     saved: 'Settings saved',
     instant_hint: 'Changes here take effect immediately — there is no Save button to press.',

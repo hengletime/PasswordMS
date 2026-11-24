@@ -56,7 +56,7 @@
   import { ui } from '../lib/stores/ui.svelte';
   import {
     UPDATE_RELEASES_URL,
-    fetchLatestVersion,
+    fetchLatestVersionWithRetry,
     isAutoCheckEnabled,
     markAutoChecked,
     pendingUpdateVersion,
@@ -64,6 +64,7 @@
     setPendingUpdate,
     shouldAutoCheck,
     type UpdateCheckStorage,
+    type UpdateFailure,
   } from '../lib/update-check';
   import { runVaultExport } from '../lib/vault-export';
   import { isSafeUrl } from '../lib/url-safety';
@@ -754,6 +755,25 @@
   let updateEnabled = $state(false);
   /** idle / checking / uptodate / available / failed。 */
   let updateState = $state<'idle' | 'checking' | 'uptodate' | 'available' | 'failed'>('idle');
+  /**
+   * **D-212**：上一次检查失败的原因。只在 `updateState === 'failed'` 时有意义。
+   *
+   * 之前失败只有一句「检查失败，请稍后重试」，用户分不清是网络断了、GitHub 限流了、
+   * 还是程序坏了；实测本机到 api.github.com 的连通性是抖的，重试往往就能过。
+   */
+  let updateFailure = $state<UpdateFailure | null>(null);
+
+  /** 失败原因 → 字典真键（显式映射，不做模板拼键）。`other` 复用原有文案。 */
+  function updateFailKey(failure: UpdateFailure | null): string {
+    switch (failure) {
+      case 'network':
+        return 'settings.update_fail_network';
+      case 'rate_limited':
+        return 'settings.update_fail_rate_limited';
+      default:
+        return 'settings.update_failed';
+    }
+  }
   /** 查到的新版本号（available 时显示）。 */
   let updateLatest = $state<string | null>(null);
   /** 防重入。刻意用**非响应式**变量：$effect 会追踪同步读取的 $state，
@@ -767,7 +787,10 @@
     }
     checkInFlight = true;
     updateState = 'checking';
-    const result = await fetchLatestVersion(window.fetch.bind(window), appVersion);
+    // D-212：带重试。本机到 api.github.com 的通断在抖（实测 6 次里 4 次超时），
+    // 重试一次往往就过——发布脚本靠的就是这个。
+    const attempt = await fetchLatestVersionWithRetry(window.fetch.bind(window), appVersion);
+    const result = attempt.result;
     if (auto) {
       markAutoChecked(updateStorage(), result?.hasUpdate ? result.latestVersion : null);
     } else if (result !== null) {
@@ -776,12 +799,16 @@
       setPendingUpdate(updateStorage(), result.hasUpdate ? result.latestVersion : null);
     }
     if (result === null) {
+      // D-212：记下失败原因，界面据此说清「该等还是该换网」。
+      updateFailure = attempt.failure;
       // 手动检查失败才显式提示；自动检查静默（GitHub 不可达不该打扰用户）。
       updateState = auto ? 'idle' : 'failed';
     } else if (result.hasUpdate) {
+      updateFailure = null;
       updateLatest = result.latestVersion;
       updateState = 'available';
     } else {
+      updateFailure = null;
       updateLatest = null;
       updateState = 'uptodate';
     }
@@ -1992,7 +2019,14 @@
     {:else if updateState === 'uptodate'}
       <p class="pms-meta">{ui.t('settings.update_uptodate')}</p>
     {:else if updateState === 'failed'}
-      <p class="pms-hint">{ui.t('settings.update_failed')}</p>
+      <p class="pms-hint">{ui.t(updateFailKey(updateFailure))}</p>
+      <!-- D-212：失败时给一条**不经过 API** 的兜底——浏览器能打开就说明只是接口端点抖，
+           用户不必干等。按钮复用「前往下载」，不新增文案。 -->
+      <div class="set-row is-actions">
+        <button class="pms-btn is-ghost is-sm" type="button" onclick={() => void openReleases()}>
+          <Icon name="external" size={14} />{ui.t('settings.update_download')}
+        </button>
+      </div>
     {/if}
     <div class="set-row is-actions">
       <button

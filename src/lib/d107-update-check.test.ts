@@ -6,6 +6,7 @@ import {
   AUTO_CHECK_INTERVAL_MS,
   compareVersions,
   fetchLatestVersion,
+  fetchLatestVersionWithRetry,
   isAutoCheckEnabled,
     markAutoChecked,
     pendingUpdateVersion,
@@ -149,5 +150,79 @@ describe('D-142 暂存版本必须按当前版本过滤', () => {
     const s = memoryStorage();
     setPendingUpdate(s, 'v1.5');
     expect(pendingUpdateVersion(s, '1.5.0')).toBeNull();
+  });
+});
+
+// D-212：重试与失败原因分类。
+//
+// 这组用例的变异点很明确——把重试循环删掉，`attempts === 3` 的两条会红；把
+// 403 也放进重试，`attempts === 1` 那条会红；catch 里不分类（统一 other），
+// `network` 那条会红。写不出红的用例是装饰，这三条都能变红。
+describe('D-212 fetchLatestVersionWithRetry', () => {
+  const noSleep = async (): Promise<void> => {};
+
+  const okFetch = (tag: string) =>
+    (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ tag_name: tag }),
+    })) as unknown as typeof fetch;
+
+  const statusFetch = (status: number) =>
+    (async () => ({
+      ok: false,
+      status,
+      json: async () => ({}),
+    })) as unknown as typeof fetch;
+
+  const throwingFetch = (async () => {
+    throw new TypeError('Failed to fetch');
+  }) as unknown as typeof fetch;
+
+  it('一次成功：attempts=1，failure 为 null', async () => {
+    const a = await fetchLatestVersionWithRetry(okFetch('v9.9.9'), '1.6.10', { sleep: noSleep });
+    expect(a.result?.latestVersion).toBe('9.9.9');
+    expect(a.failure).toBeNull();
+    expect(a.attempts).toBe(1);
+  });
+
+  it('前两次网络失败、第三次成功：attempts=3 且拿到结果', async () => {
+    let n = 0;
+    const flaky = (async () => {
+      n += 1;
+      if (n < 3) {
+        throw new TypeError('Failed to fetch');
+      }
+      return { ok: true, status: 200, json: async () => ({ tag_name: 'v9.9.9' }) };
+    }) as unknown as typeof fetch;
+    const a = await fetchLatestVersionWithRetry(flaky, '1.6.10', { sleep: noSleep });
+    expect(a.result?.latestVersion).toBe('9.9.9');
+    expect(a.attempts).toBe(3);
+  });
+
+  it('一直网络失败：failure=network，attempts=3（1 次 + 2 次重试）', async () => {
+    const a = await fetchLatestVersionWithRetry(throwingFetch, '1.6.10', { sleep: noSleep });
+    expect(a.result).toBeNull();
+    expect(a.failure).toBe('network');
+    expect(a.attempts).toBe(3);
+  });
+
+  it('403 限流：不重试（attempts=1），failure=rate_limited', async () => {
+    const a = await fetchLatestVersionWithRetry(statusFetch(403), '1.6.10', { sleep: noSleep });
+    expect(a.result).toBeNull();
+    expect(a.failure).toBe('rate_limited');
+    expect(a.attempts).toBe(1);
+  });
+
+  it('500：failure=other，且会重试到底', async () => {
+    const a = await fetchLatestVersionWithRetry(statusFetch(500), '1.6.10', { sleep: noSleep });
+    expect(a.failure).toBe('other');
+    expect(a.attempts).toBe(3);
+  });
+
+  it('tag 不合法（非版本号）：failure=other', async () => {
+    const a = await fetchLatestVersionWithRetry(okFetch('latest'), '1.6.10', { sleep: noSleep });
+    expect(a.result).toBeNull();
+    expect(a.failure).toBe('other');
   });
 });

@@ -91,7 +91,7 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(block ?? '').toContain('flex-direction: column');
   });
 
-  it('纯信息行共 9 条 is-info（关于组 3 + 压缩体积 2 + 快速解锁 1 + 回滚点 3）、按钮行 2 条 is-actions', () => {
+  it('纯信息行共 9 条 is-info（关于组 3 + 压缩体积 2 + 快速解锁 1 + 回滚点 3）、按钮行 3 条 is-actions', () => {
     // 标记在 markup 里是空格分隔的 class 串（`class="set-row is-info"`），与 CSS 的 `.set-row.is-info` 不同形。
     //
     // 计数从 3 改成 5 是 **D-76 的有意变更**（不是为了让测试变绿而放宽）：
@@ -114,7 +114,10 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     expect(infoRows).toHaveLength(6);
     // 计数 1 → 2 是 **D-107 的有意变更**：「关于」卡片新增更新检查区块，
     // 「前往下载」按钮行同样是按钮行，窄屏必须横向排布（避开窄屏堆叠）。
-    expect(actionRows).toHaveLength(2);
+    // **D-212（v1.6.11）**：2 → 3。检查更新失败时多一个「前往下载」按钮行 ——
+    // 它是**不经过 API 的兜底**（API 端点在抖时，浏览器仍能打开 Releases 页）。
+    // 它能进这一批是因为它确实是一行操作按钮，必须走窄屏堆叠。
+    expect(actionRows).toHaveLength(3);
   });
 
   it('复选框行共 2 条 is-check（D-110：更新检查；v1.4.10：开机自启）', () => {
@@ -144,12 +147,13 @@ describe('Settings.svelte —— 行类型三分（D-73 同轮 / v2.13）', () =
     // **B-03（v1.5.29）**：标记行 10 → 13（9 is-info + 2 is-actions + 2 is-check）。
     // **D-179（v1.5.32）**：13 → 11。本机自动备份那三行 is-info 改成 `.pms-hint` 段落。
     // **D-180（v1.5.32）**：+1（自动清理开关，is-check）。
-    // 净变动 13 → 11 = 6 is-info + 2 is-actions + 3 is-check。
+    // **D-212（v1.6.11）**：+1（检查更新失败时的「前往下载」按钮行，is-actions）。
+    // 净变动 13 → 12 = 6 is-info + 3 is-actions + 3 is-check。
     expect(plainRows.length).toBeGreaterThanOrEqual(8);
-    expect(plainRows.length + 11).toBe(totalRows.length);
+    expect(plainRows.length + 12).toBe(totalRows.length);
     // 白色名单外不许出现别的 `is-*` 变体（例如 `is-buttons` 这种手滑写法）。
     const anyVariant = SRC.match(/class="set-row is-[a-z-]+"/g) ?? [];
-    expect(anyVariant).toHaveLength(11);
+    expect(anyVariant).toHaveLength(12);
   });
 
   it('覆盖规则在同一个移动端媒体块内，且都在一刀切 `.set-row` 之后（层叠顺序）', () => {

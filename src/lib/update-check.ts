@@ -66,8 +66,74 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/** 一次检查失败的原因分类（D-212）。 */
+export type UpdateFailure = 'network' | 'rate_limited' | 'other';
+
+/** 带重试的检查结果。 */
+export interface UpdateAttempt {
+  /** 成功时的结果；失败为 `null`。 */
+  result: UpdateCheckResult | null;
+  /** 失败原因；成功为 `null`。 */
+  failure: UpdateFailure | null;
+  /** 实际发出的请求次数（1..=1+retries）。 */
+  attempts: number;
+}
+
+/** 默认重试次数（不含首次）与间隔。 */
+export const UPDATE_RETRY_TIMES = 2;
+export const UPDATE_RETRY_DELAY_MS = 1000;
+
+/** 单次请求的结果：要么拿到版本，要么拿到失败分类。 */
+type AttemptOutcome = { result: UpdateCheckResult } | { failure: UpdateFailure };
+
 /**
- * 查询 GitHub 最新版本。任何失败（网络 / 限流 / 结构变化）都返回 `null`——
+ * 发一次请求并分类结果。
+ *
+ * 分类的意义（D-212）：界面上「检查更新失败」这一句什么都不说明——用户不知道该等、
+ * 该换网、还是该点下载页。三类里**只有网络抖动值得重试**；限流按小时恢复，重试既
+ * 没用又多打请求。
+ */
+async function attemptOnce(
+  fetchFn: typeof fetch,
+  currentVersion: string,
+): Promise<AttemptOutcome> {
+  let res: Response;
+  try {
+    res = await fetchFn(UPDATE_API_URL, {
+      headers: { Accept: 'application/vnd.github+json' },
+    });
+  } catch {
+    // fetch 抛异常 = 连不上（超时 / DNS / TLS / 代理整条断掉）。
+    return { failure: 'network' };
+  }
+  if (!res.ok) {
+    // 403/429 = GitHub 未认证限流（60 次/小时/IP）；其余 4xx/5xx 归 other。
+    return { failure: res.status === 403 || res.status === 429 ? 'rate_limited' : 'other' };
+  }
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    return { failure: 'other' };
+  }
+  const tag =
+    typeof data === 'object' && data !== null && 'tag_name' in data
+      ? (data as { tag_name: unknown }).tag_name
+      : null;
+  if (typeof tag !== 'string' || !/^\d/.test(tag.replace(/^v/i, ''))) {
+    return { failure: 'other' };
+  }
+  const latestVersion = tag.replace(/^v/i, '');
+  return {
+    result: {
+      latestVersion,
+      hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
+    },
+  };
+}
+
+/**
+ * 查询 GitHub 最新版本（单次）。任何失败（网络 / 限流 / 结构变化）都返回 `null`——
  * 更新检查是增强路径，绝不能变成新的报错源。
  *
  * @param fetchFn 网络函数（组件注入真实 `fetch`，测试注入替身）
@@ -77,29 +143,48 @@ export async function fetchLatestVersion(
   fetchFn: typeof fetch,
   currentVersion: string,
 ): Promise<UpdateCheckResult | null> {
-  try {
-    const res = await fetchFn(UPDATE_API_URL, {
-      headers: { Accept: 'application/vnd.github+json' },
-    });
-    if (!res.ok) {
-      return null;
+  const outcome = await attemptOnce(fetchFn, currentVersion);
+  return 'result' in outcome ? outcome.result : null;
+}
+
+/**
+ * 查询最新版本，**失败自动重试**，并带回失败原因（D-212）。
+ *
+ * 为什么需要：本机到 `api.github.com` 的连通性是抖的（2026-11-24 实测 6 次里 4 次
+ * 在 10–20 秒上超时，而同一天成功的那次配额还剩 58/60）。发布脚本靠重试能把同一份
+ * 包传上去，检查更新也该有同样的耐心。
+ *
+ * 限流不重试：配额按小时恢复，重试只会多打请求、还让用户多等两秒。
+ */
+export async function fetchLatestVersionWithRetry(
+  fetchFn: typeof fetch,
+  currentVersion: string,
+  opts: {
+    retries?: number;
+    delayMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+  } = {},
+): Promise<UpdateAttempt> {
+  const retries = opts.retries ?? UPDATE_RETRY_TIMES;
+  const delayMs = opts.delayMs ?? UPDATE_RETRY_DELAY_MS;
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  let attempts = 0;
+  let lastFailure: UpdateFailure = 'other';
+  for (let i = 0; i <= retries; i += 1) {
+    attempts += 1;
+    const outcome = await attemptOnce(fetchFn, currentVersion);
+    if ('result' in outcome) {
+      return { result: outcome.result, failure: null, attempts };
     }
-    const data: unknown = await res.json();
-    const tag =
-      typeof data === 'object' && data !== null && 'tag_name' in data
-        ? (data as { tag_name: unknown }).tag_name
-        : null;
-    if (typeof tag !== 'string' || !/^\d/.test(tag.replace(/^v/i, ''))) {
-      return null;
+    lastFailure = outcome.failure;
+    if (outcome.failure === 'rate_limited') {
+      break;
     }
-    const latestVersion = tag.replace(/^v/i, '');
-    return {
-      latestVersion,
-      hasUpdate: compareVersions(latestVersion, currentVersion) > 0,
-    };
-  } catch {
-    return null;
+    if (i < retries) {
+      await sleep(delayMs);
+    }
   }
+  return { result: null, failure: lastFailure, attempts };
 }
 
 /** 是否开启自动检查（默认关，方案 B）。 */

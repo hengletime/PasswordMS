@@ -629,6 +629,9 @@ export const zhCN = {
     update_uptodate: '已是最新版本',
     update_available: '发现新版本 v{version}',
     update_failed: '检查失败，请稍后重试。',
+    // D-212：失败原因分开说——用户才知道该等、该换网，还是直接点下载页。
+    update_fail_network: '连不上 GitHub（网络不通或超时）。已经自动重试过；可以换条网络再试，或直接点下面的“前往下载”。',
+    update_fail_rate_limited: 'GitHub 暂时限流（这个网络的请求次数用完了），通常一小时左右自动恢复。着急的话点下面的“前往下载”。',
     update_download: '前往下载',
     saved: '设置已保存',
     instant_hint: '这里的改动都会立即生效，不需要再点保存。',

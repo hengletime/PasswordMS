@@ -521,6 +521,8 @@ export const zhTW = {
     update_uptodate: '已是最新版本',
     update_available: '發現新版本 v{version}',
     update_failed: '檢查失敗，請稍後重試。',
+    update_fail_network: '連不上 GitHub（網路不通或逾時）。已經自動重試過；可以換條網路再試，或直接點下面的“前往下載”。',
+    update_fail_rate_limited: 'GitHub 暫時限流（這個網路的請求次數用完了），通常一小時左右自動恢復。趕時間的話點下面的“前往下載”。',
     update_download: '前往下載',
     saved: '設定已儲存',
     instant_hint: '這裡的改動都會立即生效，不需要再點儲存。',
